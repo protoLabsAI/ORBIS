@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+*.crt
+*.key
+.env
+.env.*
+!.env.example
+
+# Node / VitePress
+# NB: package-lock.json IS committed — required by `npm ci` in docs workflow.
+node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/

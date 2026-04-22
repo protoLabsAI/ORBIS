@@ -1,0 +1,50 @@
+[project]
+name = "protovoice"
+version = "0.12.1"
+description = "Duplex voice agent on Pipecat — Whisper STT + Qwen LLM + Fish/Kokoro TTS"
+requires-python = ">=3.11"
+dependencies = [
+    # Pipecat + transports
+    "pipecat-ai[webrtc,silero,openai]>=1.0",
+    # Local model runtimes
+    "torch>=2.5",
+    "transformers>=4.46",
+    "accelerate",
+    "kokoro>=0.9",
+    "vllm>=0.18",
+    # Web + I/O
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "python-dotenv",
+    "httpx",
+    "soundfile",
+    "soxr",
+    "numpy",
+    "pyyaml",
+    "ddgs",
+    # Observability
+    "langfuse>=3.0",
+]
+
+[project.optional-dependencies]
+# Heavy / opt-in audio quality extras. Install only when the matching
+# env (NOISE_FILTER, SMART_TURN) is enabled.
+rnnoise = ["pipecat-ai[rnnoise]"]
+smart-turn = ["pipecat-ai[local-smart-turn]"]
+audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
+
+[project.scripts]
+protovoice = "app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # pipecat imports audioop — flagged by Python 3.13 but we're on 3.12.
+    "ignore::DeprecationWarning:pipecat",
+]

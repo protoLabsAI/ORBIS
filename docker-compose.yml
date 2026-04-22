@@ -1,0 +1,79 @@
+# protoVoice — one-command deploy
+#
+#   docker compose up -d
+#
+# Services:
+#   - protovoice   (GPU 0)   WebRTC UI + Whisper + Kokoro + routing vLLM
+#   - fish-speech  (GPU 1)   Fish Audio S2-Pro TTS sidecar — default backend
+#
+# Use `TTS_BACKEND=kokoro docker compose up protovoice` to run without Fish.
+
+services:
+  fish-speech:
+    # Built from ~/dev/fish-speech checkout — has the .venv + checkpoints.
+    build:
+      context: ../fish-speech
+      dockerfile: ${PWD}/Dockerfile.fish
+    container_name: protovoice-fish
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "${FISH_PORT:-8092}:8092"
+    volumes:
+      - ${FISH_REFERENCES_DIR:-/mnt/data/fish-references}:/app/references
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${FISH_GPU:-1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${FISH_GPU:-1}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8092/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+  protovoice:
+    build: .
+    container_name: protovoice
+    restart: unless-stopped
+    runtime: nvidia
+    depends_on:
+      # Only required when TTS_BACKEND=fish (the default).
+      fish-speech:
+        condition: service_started
+    ports:
+      - "${PORT:-7866}:7866"
+    volumes:
+      - ${HF_HOME:-/mnt/models/huggingface}:/models
+    # env_file picks up secrets like WORKSTACEAN_API_KEY / AVA_API_KEY that
+    # aren't enumerated below — don't require a compose edit for every new
+    # delegate key.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${PROTOVOICE_GPU:-0}
+      - HF_HOME=/models
+      - PORT=7866
+      - VLLM_PORT=8100
+      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3.5-4B}
+      - WHISPER_MODEL=${WHISPER_MODEL:-openai/whisper-large-v3-turbo}
+      - TTS_BACKEND=${TTS_BACKEND:-fish}
+      - FISH_URL=${FISH_URL:-http://fish-speech:8092}
+      - FISH_REFERENCE_ID=${FISH_REFERENCE_ID:-}
+      - KOKORO_VOICE=${KOKORO_VOICE:-af_heart}
+      - SYSTEM_PROMPT=${SYSTEM_PROMPT:-}
+      - START_VLLM=${START_VLLM:-1}
+      - LLM_URL=${LLM_URL:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PROTOVOICE_GPU:-0}"]
+              capabilities: [gpu]

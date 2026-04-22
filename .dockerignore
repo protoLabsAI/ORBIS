@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.venv
+.git
+*.egg-info
+*.crt
+*.key
+web/node_modules
+web/dist
+web/.cache

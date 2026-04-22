@@ -1,0 +1,140 @@
+name: 'Prepare Release'
+
+# Runs after any non-release PR merges to main, OR manually.
+# Bumps the version in pyproject.toml, opens a prepare-release/vX.Y.Z
+# branch, commits it as "chore: release vX.Y.Z", auto-merges back to
+# main once CI passes, and pushes the semver tag. The tag push is what
+# triggers release.yml — it builds the stable semver Docker image,
+# creates the GitHub release.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: 'Preview only — no branch or PR created'
+        type: boolean
+        default: false
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    # Guards:
+    # - repo-scope: don't run in forks
+    # - workflow_dispatch always runs
+    # - PR merge runs only if merged=true AND title doesn't start with
+    #   "chore: release" — this is the self-loop cutoff. The release PR
+    #   merging its own bump must NOT kick off another bump.
+    if: >-
+      github.repository == 'protoLabsAI/protoVoice' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event.pull_request.merged == true &&
+          !startsWith(github.event.pull_request.title, 'chore: release')
+        )
+      )
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # GH_PAT required (not GITHUB_TOKEN) so the tag push at the end
+          # of this job can trigger release.yml — the default token can't
+          # fire downstream workflows.
+          token: ${{ secrets.GH_PAT }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bump version
+        run: python scripts/version.py ${{ inputs.bump || 'patch' }}
+
+      - name: Read new version
+        id: version
+        run: |
+          V=$(python -c "
+          import re, pathlib
+          m = re.search(r'version\s*=\s*\"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text())
+          print(m.group(1))
+          ")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Preview (dry run)
+        if: inputs.dry_run == true
+        run: |
+          echo "New version: v${{ steps.version.outputs.version }}"
+          git diff pyproject.toml
+
+      - name: Create release branch + PR
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BRANCH="prepare-release/v${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "${BRANCH}"
+          git add pyproject.toml
+          git commit -m "chore: release v${VERSION}"
+          git push origin "${BRANCH}"
+
+          PR_URL=$(gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: release v${VERSION}" \
+            --body "Automated version bump to \`v${VERSION}\`.")
+          echo "PR: ${PR_URL}"
+
+          # Try `--auto` first; fall back to direct squash if auto-merge
+          # isn't enabled (no branch protection / nothing to wait on).
+          if ! gh pr merge "${PR_URL}" --squash --auto 2>/tmp/merge-err; then
+            echo "Auto-merge not enabled (expected on repos without branch"
+            echo "protection or PRs with no pending checks):"
+            sed 's/^/  /' /tmp/merge-err
+            echo "Falling back to direct squash merge."
+            gh pr merge "${PR_URL}" --squash
+          fi
+
+          # Poll until merged (CI must pass first; timeout 10 min)
+          echo "Waiting for PR to merge…"
+          for i in $(seq 1 120); do
+            STATE=$(gh pr view "${PR_URL}" --json state -q .state)
+            if [ "$STATE" = "MERGED" ]; then
+              echo "PR merged."
+              break
+            fi
+            if [ "$i" -eq 120 ]; then
+              echo "Timeout waiting for PR to merge." && exit 1
+            fi
+            sleep 5
+          done
+
+          # Push the semver tag — this is what triggers release.yml.
+          # Tag is cut from the merged main commit (which already
+          # includes the bump), so release.yml sees the correct SHA.
+          git fetch origin main
+          git tag -a "v${VERSION}" "origin/main" -m "v${VERSION}"
+          git push origin "v${VERSION}"
+          echo "Tagged v${VERSION} → release.yml will fire"

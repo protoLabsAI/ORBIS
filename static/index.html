@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>protoVoice</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-0: #0a0a0a;
+      --bg-1: rgba(10, 10, 10, 0.92);
+      --fg: #fafafa;
+      --fg-muted: #a1a1a1;
+      --fg-subtle: #737373;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
+      --accent: #fafafa;
+      --radius: 6px;
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: #000; color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", sans-serif;
+      font-size: 14px; line-height: 1.5;
+      overflow: hidden;
+    }
+    audio { display: none; }
+
+    /* --- Orb = the viewport -------------------------------------------- */
+    #viz { position: fixed; inset: 0; z-index: 0; }
+    #viz canvas {
+      display: block; width: 100% !important; height: 100% !important;
+      cursor: grab; touch-action: none;
+    }
+    #viz canvas:active { cursor: grabbing; }
+
+    /* --- Hamburger ----------------------------------------------------- */
+    #menu-toggle {
+      position: fixed; top: 1rem; right: 1rem; z-index: 25;
+      width: 2.25rem; height: 2.25rem; padding: 0;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      gap: 4px; cursor: pointer;
+      transition: background 120ms, border-color 120ms;
+    }
+    #menu-toggle:hover { border-color: var(--fg-subtle); }
+    #menu-toggle span {
+      display: block; width: 0.95rem; height: 1.5px; background: var(--fg);
+      border-radius: 2px;
+      transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+                  opacity 180ms;
+    }
+    #menu-toggle[aria-expanded="true"] span:nth-child(1) {
+      transform: translateY(5.5px) rotate(45deg);
+    }
+    #menu-toggle[aria-expanded="true"] span:nth-child(2) { opacity: 0; }
+    #menu-toggle[aria-expanded="true"] span:nth-child(3) {
+      transform: translateY(-5.5px) rotate(-45deg);
+    }
+
+    /* --- Drawer -------------------------------------------------------- */
+    #drawer {
+      position: fixed; top: 0; right: 0; z-index: 20;
+      width: 22rem; max-width: 92vw; height: 100vh;
+      background: var(--bg-1);
+      -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+      border-left: 1px solid var(--border);
+      transform: translateX(100%);
+      transition: transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
+      overflow-y: auto; box-sizing: border-box;
+    }
+    #drawer[aria-hidden="false"] { transform: translateX(0); }
+    #drawer::-webkit-scrollbar { width: 8px; }
+    #drawer::-webkit-scrollbar-thumb {
+      background: var(--border-strong); border-radius: 9999px;
+    }
+
+    .drawer-inner {
+      padding: 3.75rem 1.25rem 1.5rem;
+      display: flex; flex-direction: column; gap: 1.25rem;
+    }
+    .drawer-inner h1 {
+      margin: 0; font-size: 1rem; font-weight: 600;
+      letter-spacing: -0.01em; color: var(--fg);
+    }
+    .drawer-inner h1 + p {
+      margin: 0.25rem 0 0; font-size: 0.8125rem;
+      color: var(--fg-muted); line-height: 1.45;
+    }
+
+    .section {
+      display: flex; flex-direction: column; gap: 0.625rem;
+    }
+    .section + .section {
+      padding-top: 1.125rem;
+      border-top: 1px solid var(--border);
+    }
+    .section-label {
+      font-size: 0.6875rem; font-weight: 500;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--fg-subtle);
+      margin: 0 0 0.125rem;
+    }
+
+    /* --- Primitives ---------------------------------------------------- */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 2.25rem; padding: 0 1rem;
+      background: var(--fg); color: var(--bg-0);
+      border: 0; border-radius: var(--radius);
+      font-weight: 500; font-size: 0.8125rem; font-family: inherit;
+      cursor: pointer; transition: opacity 120ms;
+      align-self: start;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn.ghost {
+      background: transparent; color: var(--fg);
+      border: 1px solid var(--border-strong);
+    }
+    .btn.ghost:hover { border-color: var(--fg-subtle); opacity: 1; }
+
+    select, input[type="text"], input[type="file"], textarea {
+      background: transparent; color: var(--fg);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      padding: 0.375rem 0.5rem; font-size: 0.8125rem;
+      font-family: inherit; line-height: 1.3;
+      width: 100%; box-sizing: border-box;
+      transition: border-color 120ms;
+    }
+    select:hover, input:hover, textarea:hover {
+      border-color: var(--fg-subtle);
+    }
+    select:focus, input:focus, textarea:focus {
+      outline: 0; border-color: var(--fg);
+    }
+    textarea { resize: vertical; min-height: 3.5em; font-family: ui-sans-serif, system-ui, sans-serif; }
+    select { cursor: pointer; }
+
+    input[type="color"] {
+      -webkit-appearance: none; appearance: none;
+      height: 1.75rem; width: 2.5rem;
+      padding: 2px; background: transparent;
+      border: 1px solid var(--border-strong);
+      border-radius: calc(var(--radius) - 2px);
+      cursor: pointer;
+    }
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
+    input[type="color"]::-moz-color-swatch { border: 0; border-radius: 2px; }
+
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 2px; padding: 0;
+      background: var(--border-strong); border: 0; border-radius: 9999px;
+      outline: none; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 14px; height: 14px; background: var(--fg);
+      border-radius: 9999px; border: 0; cursor: pointer;
+      transition: transform 120ms;
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 14px; height: 14px; background: var(--fg);
+      border-radius: 9999px; border: 0; cursor: pointer;
+    }
+    input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+    input[type="range"]:hover::-moz-range-thumb    { transform: scale(1.15); }
+
+    /* --- Form rows ----------------------------------------------------- */
+    .field {
+      display: grid;
+      grid-template-columns: 6.5rem 1fr;
+      gap: 0.625rem;
+      align-items: center;
+      min-height: 1.75rem;
+    }
+    .field label {
+      font-size: 0.75rem; color: var(--fg-muted);
+      white-space: nowrap;
+    }
+    .field .slider-row {
+      display: grid;
+      grid-template-columns: 1fr 3rem;
+      gap: 0.625rem;
+      align-items: center;
+    }
+    .field .slider-value {
+      font-size: 0.6875rem; color: var(--fg-subtle);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    .field .color-row {
+      display: grid;
+      grid-template-columns: 2.5rem 1fr;
+      gap: 0.5rem; align-items: center;
+    }
+    .field .color-row input[type="text"] {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+
+    /* --- Button row ---------------------------------------------------- */
+    .btn-row {
+      display: flex; gap: 0.5rem; flex-wrap: wrap;
+    }
+    .btn.sm {
+      height: 1.75rem; padding: 0 0.625rem;
+      font-size: 0.75rem; border-radius: calc(var(--radius) - 1px);
+    }
+    .btn.icon {
+      height: 1.75rem; width: 1.75rem; padding: 0;
+      font-size: 0.875rem; line-height: 1;
+    }
+    .saved-row {
+      display: grid;
+      grid-template-columns: 1fr 1.75rem;
+      gap: 0.375rem; align-items: center;
+    }
+
+    /* --- Tabs ---------------------------------------------------------- */
+    .tabs-list {
+      display: grid; grid-template-columns: 1fr 1fr;
+      padding: 3px; gap: 2px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .tabs-list [role="tab"] {
+      padding: 0.4rem 0.75rem;
+      background: transparent; border: 0;
+      border-radius: calc(var(--radius) - 2px);
+      color: var(--fg-muted);
+      font-size: 0.8125rem; font-family: inherit; font-weight: 500;
+      cursor: pointer;
+      transition: background 120ms, color 120ms;
+    }
+    .tabs-list [role="tab"]:hover { color: var(--fg); }
+    .tabs-list [role="tab"][aria-selected="true"] {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--fg);
+    }
+    .tab-panel {
+      display: flex; flex-direction: column; gap: 1.25rem;
+    }
+    .tab-panel[hidden] { display: none; }
+
+    /* --- Collapsible --------------------------------------------------- */
+    details.clone { display: flex; flex-direction: column; gap: 0.625rem; }
+    details.clone summary {
+      cursor: pointer; user-select: none;
+      font-size: 0.75rem; color: var(--fg-muted);
+      padding: 0.25rem 0;
+      list-style: none;
+      display: flex; align-items: center; gap: 0.375rem;
+    }
+    details.clone summary::-webkit-details-marker { display: none; }
+    details.clone summary::before {
+      content: "›"; display: inline-block;
+      transition: transform 150ms;
+      font-size: 1rem; line-height: 1; color: var(--fg-subtle);
+    }
+    details.clone[open] summary::before { transform: rotate(90deg); }
+    details.clone summary:hover { color: var(--fg); }
+    .clone-form {
+      display: grid; gap: 0.5rem;
+      padding: 0.75rem; margin-top: 0.25rem;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .clone-form label {
+      display: flex; flex-direction: column; gap: 0.3rem;
+      font-size: 0.75rem; color: var(--fg-muted);
+    }
+    .clone-status {
+      font-size: 0.6875rem; color: var(--fg-subtle);
+      min-height: 1.1em;
+    }
+
+    /* --- Floating helper text — single element for all statuses --------- */
+    #status-pill {
+      position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%);
+      z-index: 15;
+      font-size: 0.75rem;
+      color: var(--fg-subtle);
+      letter-spacing: 0.04em;
+      text-transform: lowercase;
+      pointer-events: none;
+      transition: opacity 400ms ease;
+    }
+    #status-pill:empty { opacity: 0; }
+  </style>
+</head>
+<body>
+  <div id="viz"></div>
+
+  <button id="menu-toggle" aria-label="Toggle menu" aria-expanded="false">
+    <span></span><span></span><span></span>
+  </button>
+
+  <aside id="drawer" aria-hidden="true">
+    <div class="drawer-inner">
+      <div>
+        <h1>protoVoice</h1>
+        <p>Double-click the orb to start or stop. Drag to spin. Hold to light up.</p>
+      </div>
+
+      <button id="btn" class="btn">Start</button>
+
+      <div role="tablist" class="tabs-list" aria-label="Settings">
+        <button role="tab" id="tab-voice" aria-selected="true"
+                aria-controls="panel-voice" data-panel="voice">Voice</button>
+        <button role="tab" id="tab-orb" aria-selected="false"
+                aria-controls="panel-orb" data-panel="orb">Orb</button>
+      </div>
+
+      <div role="tabpanel" id="panel-voice" class="tab-panel" aria-labelledby="tab-voice">
+        <div class="section">
+          <div class="section-label">Session</div>
+          <div class="field">
+            <label for="skill">Skill</label>
+            <select id="skill" title="Applies on next Start"></select>
+          </div>
+          <div class="field">
+            <label for="verbosity">Verbosity</label>
+            <select id="verbosity">
+              <option value="silent">silent</option>
+              <option value="brief" selected>brief</option>
+              <option value="narrated">narrated</option>
+              <option value="chatty">chatty</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="section">
+          <details class="clone">
+            <summary>Clone a new voice</summary>
+            <form class="clone-form" id="clone-form">
+              <label>Audio sample (10–30 s)
+                <input type="file" id="clone-audio" accept="audio/*" required>
+              </label>
+              <label>Slug
+                <input type="text" id="clone-slug" placeholder="e.g. alex" required
+                  pattern="[a-z0-9][a-z0-9\-_]{1,63}">
+              </label>
+              <label>Display name (optional)
+                <input type="text" id="clone-name" placeholder="e.g. Alex">
+              </label>
+              <label>Transcript (leave empty to auto-transcribe)
+                <textarea id="clone-transcript" placeholder="Exactly what the clip says."></textarea>
+              </label>
+              <label>Description (optional)
+                <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
+              </label>
+              <button type="submit" class="btn ghost">Clone voice</button>
+              <div class="clone-status" id="clone-status"></div>
+            </form>
+          </details>
+        </div>
+      </div>
+
+      <div role="tabpanel" id="panel-orb" class="tab-panel" aria-labelledby="tab-orb" hidden>
+        <div class="section">
+          <div class="section-label">Preset</div>
+        <div class="field">
+          <label for="viz-preset">Palette</label>
+          <select id="viz-preset">
+            <option value="Aurora" selected>Aurora</option>
+            <option value="Ember">Ember</option>
+            <option value="Citrus">Citrus</option>
+            <option value="Forest">Forest</option>
+            <option value="Noir">Noir</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="custom-preset">Saved</label>
+          <div class="saved-row">
+            <select id="custom-preset"><option value="">—</option></select>
+            <button id="delete-custom" class="btn ghost icon" title="Delete saved preset" aria-label="Delete saved preset">×</button>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="save-custom" class="btn sm">Save as…</button>
+          <button id="randomize" class="btn ghost sm" title="Random colors + params">Randomize</button>
+          <button id="copy-config" class="btn ghost sm" title="Copy current config as a PRESETS entry">Copy config</button>
+          <button id="reset-preset" class="btn ghost sm">Reset to palette</button>
+        </div>
+      </div>
+
+      <div class="section" id="section-color">
+        <div class="section-label">Color</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-energy">
+        <div class="section-label">Energy</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-motion">
+        <div class="section-label">Motion</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-fractal">
+        <div class="section-label">Fractal</div>
+        <!-- filled by JS -->
+      </div>
+
+      <div class="section" id="section-perf">
+        <div class="section-label">Performance</div>
+        <!-- filled by JS -->
+      </div>
+      </div><!-- /panel-orb -->
+    </div>
+  </aside>
+
+  <div id="status-pill">double-click the orb to start</div>
+  <audio id="audio" autoplay></audio>
+
+  <script type="module">
+    import { VoiceOrb, PRESETS } from '/static/viz.js';
+
+    const PALETTE_NAMES = new Set(Object.keys(PRESETS));
+    const orb = new VoiceOrb(document.getElementById('viz'), { preset: 'Aurora' });
+    window.__orb = orb;
+
+    // --- Drawer toggle ---------------------------------------------------
+    const drawer = document.getElementById('drawer');
+    const toggle = document.getElementById('menu-toggle');
+    toggle.addEventListener('click', () => {
+      const open = drawer.getAttribute('aria-hidden') === 'true';
+      drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+
+    // --- Tabs ------------------------------------------------------------
+    const STORAGE_TAB = 'protoVoice.tab';
+    const tabs = document.querySelectorAll('[role="tab"]');
+    const panels = document.querySelectorAll('.tab-panel');
+    const selectTab = (name) => {
+      tabs.forEach(t => t.setAttribute('aria-selected',
+        t.dataset.panel === name ? 'true' : 'false'));
+      panels.forEach(p => { p.hidden = p.id !== `panel-${name}`; });
+      try { localStorage.setItem(STORAGE_TAB, name); } catch (_) {}
+    };
+    tabs.forEach(t => t.addEventListener('click', () => selectTab(t.dataset.panel)));
+    try {
+      const saved = localStorage.getItem(STORAGE_TAB);
+      if (saved === 'voice' || saved === 'orb') selectTab(saved);
+    } catch (_) {}
+
+    // --- Slider / color factories ---------------------------------------
+    const paramInputs = {};   // key → (value) => updates the UI display
+    const fieldSpecs = [];    // {kind, key, min, max, step} — drives randomize
+
+    function formatValue(v, step) {
+      const n = Number(v);
+      if (Number.isInteger(step)) return String(Math.round(n));
+      const decimals = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+      return n.toFixed(decimals);
+    }
+
+    function createSlider(container, { key, label, min, max, step }) {
+      fieldSpecs.push({ kind: 'slider', key, min, max, step });
+      const field = document.createElement('div');
+      field.className = 'field';
+      const lbl = document.createElement('label');
+      lbl.htmlFor = `ctrl-${key}`;
+      lbl.textContent = label;
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.id = `ctrl-${key}`;
+      input.min = min; input.max = max; input.step = step;
+      input.value = orb.basePreset[key];
+      const display = document.createElement('span');
+      display.className = 'slider-value';
+      display.textContent = formatValue(input.value, step);
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        orb.setParam(key, v);
+        display.textContent = formatValue(v, step);
+      });
+      row.append(input, display);
+      field.append(lbl, row);
+      container.appendChild(field);
+      paramInputs[key] = v => {
+        input.value = v;
+        display.textContent = formatValue(v, step);
+      };
+    }
+
+    function createColor(container, { key, label }) {
+      fieldSpecs.push({ kind: 'color', key });
+      const field = document.createElement('div');
+      field.className = 'field';
+      const lbl = document.createElement('label');
+      lbl.textContent = label;
+      const row = document.createElement('div');
+      row.className = 'color-row';
+      const swatch = document.createElement('input');
+      swatch.type = 'color';
+      swatch.value = orb.basePreset[key];
+      const hex = document.createElement('input');
+      hex.type = 'text';
+      hex.value = orb.basePreset[key];
+      const sync = (v) => {
+        if (!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+        orb.setParam(key, v);
+        swatch.value = v;
+        hex.value = v.toLowerCase();
+      };
+      swatch.addEventListener('input', () => sync(swatch.value));
+      hex.addEventListener('change', () => sync(hex.value));
+      row.append(swatch, hex);
+      field.append(lbl, row);
+      container.appendChild(field);
+      paramInputs[key] = v => {
+        swatch.value = v;
+        hex.value = v.toLowerCase();
+      };
+    }
+
+    // --- Mount all controls (ranges straight from the CodePen) ---------
+    const colorSec = document.getElementById('section-color');
+    createColor(colorSec, { key: 'primaryEnergy',   label: 'Primary' });
+    createColor(colorSec, { key: 'secondaryEnergy', label: 'Secondary' });
+
+    const energySec = document.getElementById('section-energy');
+    createSlider(energySec, { key: 'density',              label: 'Density',        min: 0.1, max: 3.0,  step: 0.1   });
+    createSlider(energySec, { key: 'atmosphereGlow',       label: 'Glow',           min: 0.0, max: 5.0,  step: 0.01  });
+    createSlider(energySec, { key: 'atmosphereLevel',      label: 'Halo thickness', min: 0.1, max: 1.0,  step: 0.01  });
+    createSlider(energySec, { key: 'atmosphereScale',      label: 'Halo scale',     min: 1.0, max: 1.1,  step: 0.001 });
+    createSlider(energySec, { key: 'chromaticAberration',  label: 'Aberration',     min: 0.0, max: 0.05, step: 0.001 });
+
+    const motionSec = document.getElementById('section-motion');
+    createSlider(motionSec, { key: 'speed',         label: 'Internal speed', min: 0.1, max: 3.0, step: 0.1  });
+    createSlider(motionSec, { key: 'orbRotation',   label: 'Auto-rotation',  min: 0.0, max: 1.0, step: 0.01 });
+    createSlider(motionSec, { key: 'internalAnim',  label: 'Anim speed',     min: 0.0, max: 2.0, step: 0.01 });
+
+    const fractalSec = document.getElementById('section-fractal');
+    createSlider(fractalSec, { key: 'fractalIters',  label: 'Iterations', min: 2,    max: 12,  step: 1    });
+    createSlider(fractalSec, { key: 'fractalScale',  label: 'Scale',      min: 0.3,  max: 1.5, step: 0.01 });
+    createSlider(fractalSec, { key: 'fractalDecay',  label: 'Decay',      min: -25,  max: -5,  step: 0.1  });
+    createSlider(fractalSec, { key: 'smoothness',    label: 'Smoothness', min: 0.0,  max: 0.15,step: 0.001});
+    createSlider(fractalSec, { key: 'asymmetry',     label: 'Asymmetry',  min: 0.0,  max: 1.0, step: 0.01 });
+
+    const perfSec = document.getElementById('section-perf');
+    createSlider(perfSec, { key: 'dpr', label: 'Resolution', min: 0.1, max: 2.0, step: 0.1 });
+
+    // --- Persistence ----------------------------------------------------
+    const STORAGE_PARAMS  = 'protoVoice.params';
+    const STORAGE_PALETTE = 'protoVoice.palette';
+    const STORAGE_CUSTOM  = 'protoVoice.customPresets';
+
+    const syncAllInputs = () => {
+      const p = orb.getParams();
+      for (const [k, apply] of Object.entries(paramInputs)) {
+        if (k in p) apply(p[k]);
+      }
+    };
+
+    let _saveTimer = null;
+    const scheduleSave = () => {
+      clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(() => {
+        try { localStorage.setItem(STORAGE_PARAMS, JSON.stringify(orb.getParams())); } catch (_) {}
+      }, 250);
+    };
+
+    // Wrap setParam to auto-save on any edit without touching viz.js.
+    const _origSetParam = orb.setParam.bind(orb);
+    orb.setParam = (k, v) => { _origSetParam(k, v); scheduleSave(); };
+
+    // --- Palette dropdown -----------------------------------------------
+    const vizEl = document.getElementById('viz-preset');
+    const applyPalette = (name, { save = true } = {}) => {
+      orb.setPreset(name);
+      syncAllInputs();
+      if (save) {
+        try {
+          localStorage.setItem(STORAGE_PALETTE, name);
+          localStorage.removeItem(STORAGE_PARAMS);   // palette is the new baseline
+        } catch (_) {}
+      }
+    };
+    vizEl.addEventListener('change', () => applyPalette(vizEl.value));
+
+    // --- Reset to palette ----------------------------------------------
+    document.getElementById('reset-preset').addEventListener('click', () => {
+      applyPalette(vizEl.value);
+      // Also clear the "Saved" selection since we're no longer on one.
+      document.getElementById('custom-preset').value = "";
+    });
+
+    // --- Randomize ------------------------------------------------------
+    const randomHex = () =>
+      '#' + Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, '0');
+    const randomSliderValue = ({ min, max, step }) => {
+      const steps = Math.max(1, Math.round((max - min) / step));
+      const n = Math.floor(Math.random() * (steps + 1));
+      const v = min + n * step;
+      // Snap to step to kill float-accumulation fuzz (e.g. 0.300000004 → 0.3).
+      return Number.isInteger(step) ? Math.round(v) : Number(v.toFixed(4));
+    };
+    document.getElementById('randomize').addEventListener('click', () => {
+      for (const spec of fieldSpecs) {
+        const v = spec.kind === 'color' ? randomHex() : randomSliderValue(spec);
+        _origSetParam(spec.key, v);
+      }
+      syncAllInputs();
+      try { localStorage.setItem(STORAGE_PARAMS, JSON.stringify(orb.getParams())); } catch (_) {}
+      // No longer on a saved preset.
+      document.getElementById('custom-preset').value = "";
+    });
+
+    // --- Copy current config as a PRESETS entry -------------------------
+    const copyBtn = document.getElementById('copy-config');
+    const formatPresetValue = (v, spec) => {
+      if (spec.kind === 'color') return `'${v}'`;
+      if (Number.isInteger(spec.step)) return String(Math.round(v));
+      return String(Number(v));
+    };
+    copyBtn.addEventListener('click', async () => {
+      const p = orb.getParams();
+      const body = fieldSpecs
+        .map(s => `    ${s.key}: ${formatPresetValue(p[s.key], s)},`)
+        .join('\n');
+      const text = `  NewPreset: {\n${body}\n  },`;
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; }
+      catch (_) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { ok = document.execCommand('copy'); } catch (_) {}
+        ta.remove();
+      }
+      const orig = copyBtn.textContent;
+      copyBtn.textContent = ok ? 'Copied' : 'Copy failed';
+      setTimeout(() => { copyBtn.textContent = orig; }, 1200);
+    });
+
+    // --- Saved custom presets -------------------------------------------
+    const customEl = document.getElementById('custom-preset');
+    const loadCustomMap = () => {
+      try { return JSON.parse(localStorage.getItem(STORAGE_CUSTOM) || '{}'); }
+      catch (_) { return {}; }
+    };
+    const writeCustomMap = (m) => {
+      try { localStorage.setItem(STORAGE_CUSTOM, JSON.stringify(m)); } catch (_) {}
+    };
+    const refreshCustom = (selectName = "") => {
+      const m = loadCustomMap();
+      customEl.innerHTML = '<option value="">—</option>';
+      for (const name of Object.keys(m).sort()) {
+        const opt = document.createElement('option');
+        opt.value = name; opt.textContent = name;
+        if (name === selectName) opt.selected = true;
+        customEl.appendChild(opt);
+      }
+    };
+    customEl.addEventListener('change', () => {
+      const name = customEl.value;
+      if (!name) return;
+      const m = loadCustomMap();
+      const payload = m[name];
+      if (!payload) return;
+      // A saved preset includes a palette + full params snapshot.
+      if (payload.palette) {
+        vizEl.value = payload.palette;
+        orb.setPreset(payload.palette);   // direct — we'll overlay params next
+      }
+      for (const [k, v] of Object.entries(payload.params || {})) {
+        _origSetParam(k, v);              // skip the save wrapper; we save once below
+      }
+      syncAllInputs();
+      try {
+        localStorage.setItem(STORAGE_PARAMS, JSON.stringify(orb.getParams()));
+        if (payload.palette) localStorage.setItem(STORAGE_PALETTE, payload.palette);
+      } catch (_) {}
+    });
+    document.getElementById('save-custom').addEventListener('click', () => {
+      const name = (prompt('Save preset as:') || '').trim();
+      if (!name) return;
+      const m = loadCustomMap();
+      m[name] = { palette: vizEl.value, params: orb.getParams() };
+      writeCustomMap(m);
+      refreshCustom(name);
+    });
+    document.getElementById('delete-custom').addEventListener('click', () => {
+      const name = customEl.value;
+      if (!name) return;
+      if (!confirm(`Delete preset "${name}"?`)) return;
+      const m = loadCustomMap();
+      delete m[name];
+      writeCustomMap(m);
+      refreshCustom();
+    });
+
+    // --- Boot-time hydration --------------------------------------------
+    (function hydrate() {
+      refreshCustom();
+      let palette = null;
+      try { palette = localStorage.getItem(STORAGE_PALETTE); } catch (_) {}
+      if (palette && PALETTE_NAMES.has(palette)) {
+        vizEl.value = palette;
+        orb.setPreset(palette);
+      }
+      let saved = null;
+      try {
+        const raw = localStorage.getItem(STORAGE_PARAMS);
+        if (raw) saved = JSON.parse(raw);
+      } catch (_) {}
+      if (saved) {
+        for (const [k, v] of Object.entries(saved)) {
+          if (k in orb.basePreset) _origSetParam(k, v);
+        }
+      }
+      syncAllInputs();
+    })();
+
+    // --- WebRTC ---------------------------------------------------------
+    const btn = document.getElementById("btn");
+    const audioEl = document.getElementById("audio");
+    const statusEl = document.getElementById("status-pill");
+    const IDLE_HINT = "double-click the orb to start";
+
+    let _transientTimer = null;
+    const clearTransient = () => {
+      if (_transientTimer) { clearTimeout(_transientTimer); _transientTimer = null; }
+    };
+    const setStatus = (t) => { clearTransient(); statusEl.textContent = t; };
+    const setTransientStatus = (text, seconds = 3) => {
+      clearTransient();
+      statusEl.textContent = text;
+      _transientTimer = setTimeout(() => {
+        _transientTimer = null;
+        statusEl.textContent = "";
+      }, seconds * 1000);
+    };
+
+    let pc = null;
+    let localStream = null;
+    let session = 'idle';    // 'idle' | 'starting' | 'live'
+
+    const sendIceCandidate = async (pc, candidate) => {
+      await fetch("/api/offer", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pc_id: pc.pc_id,
+          candidates: [{
+            candidate: candidate.candidate,
+            sdp_mid: candidate.sdpMid,
+            sdp_mline_index: candidate.sdpMLineIndex,
+          }],
+        }),
+      });
+    };
+
+    const start = async () => {
+      if (session !== 'idle') return;
+      session = 'starting';
+      btn.disabled = true;
+      setStatus("requesting mic...");
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (_e) {
+        setStatus("mic denied");
+        btn.disabled = false;
+        session = 'idle';
+        setTimeout(() => { if (session === 'idle') setStatus(IDLE_HINT); }, 2000);
+        return;
+      }
+
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+      pc.pendingIceCandidates = [];
+      pc.canSendIceCandidates = false;
+
+      pc.ontrack = (e) => {
+        if (e.track.kind === "audio") {
+          audioEl.srcObject = e.streams[0];
+          orb.attachStream(e.streams[0], 'remote');
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        // Happy-path transitions (connecting → connected) are already
+        // covered by the transient "connected — speak" status set below.
+        // Only override the status for terminal bad states.
+        if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+          setStatus(pc.connectionState);
+          stop();
+        }
+      };
+      pc.onicecandidate = async (e) => {
+        if (!e.candidate) return;
+        if (pc.canSendIceCandidates && pc.pc_id) {
+          await sendIceCandidate(pc, e.candidate);
+        } else {
+          pc.pendingIceCandidates.push(e.candidate);
+        }
+      };
+
+      pc.addTransceiver(localStream.getAudioTracks()[0], { direction: "sendrecv" });
+      pc.addTransceiver("video", { direction: "sendrecv" });
+
+      orb.attachStream(localStream, 'local');
+
+      await pc.setLocalDescription(await pc.createOffer());
+      setStatus("negotiating...");
+      const res = await fetch("/api/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type,
+        }),
+      });
+      const answer = await res.json();
+      pc.pc_id = answer.pc_id;
+      await pc.setRemoteDescription(answer);
+
+      pc.canSendIceCandidates = true;
+      for (const c of pc.pendingIceCandidates) await sendIceCandidate(pc, c);
+      pc.pendingIceCandidates = [];
+
+      setTransientStatus("connected — speak", 3);
+      session = 'live';
+      btn.textContent = "Stop";
+      btn.disabled = false;
+    };
+
+    const stop = () => {
+      if (session === 'idle') return;
+      if (pc) { pc.close(); pc = null; }
+      if (localStream) { for (const t of localStream.getTracks()) t.stop(); localStream = null; }
+      audioEl.srcObject = null;
+      orb.detachStream('local');
+      orb.detachStream('remote');
+      btn.textContent = "Start";
+      btn.disabled = false;
+      session = 'idle';
+      setStatus(IDLE_HINT);
+    };
+
+    const toggleSession = () => {
+      if (session === 'idle') start();
+      else if (session === 'live') stop();
+    };
+
+    btn.onclick = toggleSession;
+    document.getElementById('viz').addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      toggleSession();
+    });
+
+    // --- Verbosity -------------------------------------------------------
+    const verbEl = document.getElementById("verbosity");
+    fetch("/api/verbosity")
+      .then(r => r.json())
+      .then(j => { if (j.verbosity) verbEl.value = j.verbosity; })
+      .catch(() => {});
+    verbEl.addEventListener("change", async () => {
+      await fetch("/api/verbosity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level: verbEl.value }),
+      });
+    });
+
+    // --- Skills ----------------------------------------------------------
+    const skillEl = document.getElementById("skill");
+    async function refreshSkills(selectSlug) {
+      const j = await fetch("/api/skills").then(r => r.json()).catch(() => ({skills: []}));
+      skillEl.innerHTML = "";
+      (j.skills || []).forEach(s => {
+        const opt = document.createElement("option");
+        opt.value = s.slug;
+        opt.textContent = s.name;
+        if (s.description) opt.title = s.description;
+        if (s.slug === (selectSlug || j.active)) opt.selected = true;
+        skillEl.appendChild(opt);
+      });
+    }
+    refreshSkills();
+    skillEl.addEventListener("change", async () => {
+      await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: skillEl.value }),
+      });
+    });
+
+    // --- Voice clone -----------------------------------------------------
+    const cloneForm = document.getElementById("clone-form");
+    const cloneStatus = document.getElementById("clone-status");
+    cloneForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const audio = document.getElementById("clone-audio").files[0];
+      const slug = document.getElementById("clone-slug").value.trim();
+      const name = document.getElementById("clone-name").value.trim();
+      const transcript = document.getElementById("clone-transcript").value.trim();
+      const description = document.getElementById("clone-description").value.trim();
+      if (!audio || !slug) { cloneStatus.textContent = "audio + slug required"; return; }
+      cloneStatus.textContent = transcript ? "uploading..." : "uploading + auto-transcribing...";
+      const fd = new FormData();
+      fd.append("audio", audio);
+      fd.append("slug", slug);
+      if (name) fd.append("name", name);
+      if (transcript) fd.append("transcript", transcript);
+      if (description) fd.append("description", description);
+      try {
+        const resp = await fetch("/api/voice/clone", { method: "POST", body: fd });
+        const j = await resp.json();
+        if (j.error) {
+          cloneStatus.textContent = "error: " + j.error;
+          return;
+        }
+        const hint = j.auto_transcribed ? ` (transcribed: "${j.transcript.slice(0,60)}${j.transcript.length>60?'…':''}")` : "";
+        cloneStatus.textContent = `✓ cloned as ${j.name}${hint}`;
+        await refreshSkills(j.slug);
+        cloneForm.reset();
+      } catch (err) {
+        cloneStatus.textContent = "error: " + err;
+      }
+    });
+  </script>
+</body>
+</html>

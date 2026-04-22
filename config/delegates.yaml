@@ -1,0 +1,51 @@
+# Delegate registry — consumed by agent/delegates.py.
+#
+# The agent's `delegate_to(target, query)` tool picks one of these by
+# name. Each delegate has a `description` the LLM uses to decide which
+# target fits a question.
+#
+# Two `type`s supported:
+#   a2a    — JSON-RPC `message/send` to another agent in the protoLabs fleet
+#   openai — chat-completions to any OpenAI-compatible /v1 endpoint
+#
+# Add as many as you want. Empty list = `delegate_to` is not registered.
+
+delegates:
+  # ─── Ava — chief of staff on workstacean ────────────────────────────
+  # A2A flip (F7) is code-ready: a2a/client.py sends messageId and is
+  # spec-tolerant (falls back to status.message when artifacts is empty).
+  # Held on type=openai because of two bugs on protoWorkstacean's /a2a:
+  #   1. message/send routes to protoBot instead of ava
+  #   2. message/stream intermittently returns an upstream "Cannot POST /"
+  #      404 as the reply text
+  # Tracked: https://github.com/protoLabsAI/protoWorkstacean/issues/471
+  # When both land, swap the block below:
+  #
+  #   type: a2a
+  #   url: https://ava.proto-labs.ai/a2a
+  #   auth: { scheme: apiKey, credentialsEnv: WORKSTACEAN_API_KEY }
+  - name: ava
+    description: >-
+      Chief of staff for the protoLabs fleet. Best for project status
+      reports (sitreps), coordination across other agents, planning a
+      feature, bug triage, and anything that needs a wider look across
+      the board, CI, and incidents. Has her own sub-agents and
+      delegation authority.
+    type: openai
+    url: https://ava.proto-labs.ai/v1
+    model: ava
+    api_key_env: WORKSTACEAN_API_KEY
+
+  # ─── Add more delegates here as you wire them up ────────────────────
+  # Example — a heavy reasoning model through the LiteLLM gateway:
+  #
+  # - name: opus
+  #   description: >-
+  #     Heavy reasoning model. Use when the user wants analysis,
+  #     summarization, or a thorough explanation of a topic.
+  #   type: openai
+  #   url: http://gateway:4000/v1
+  #   model: claude-opus-4-6
+  #   api_key_env: LITELLM_MASTER_KEY
+  #   system_prompt: >-
+  #     You are a research assistant. Answer thoroughly but concisely.

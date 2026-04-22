@@ -1,0 +1,126 @@
+name: 'Release'
+
+# Triggered by a push of a vX.Y.Z tag (cut by prepare-release.yml).
+# Builds and pushes the stable semver Docker tags and creates a GitHub
+# release with filtered commit notes. Rolling `latest` is handled by
+# docker-publish.yml on main pushes, not here.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.1)'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: protolabsai/protovoice
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.repository == 'protoLabsAI/protoVoice'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      # ── Version ───────────────────────────────────────────────────────────────
+
+      - name: Read version
+        id: version
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # ── Docker ────────────────────────────────────────────────────────────────
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` is pushed on every main merge by docker-publish.yml;
+          # this workflow only adds the stable semver pins.
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
+          labels: |
+            org.opencontainers.image.title=protovoice
+            org.opencontainers.image.description=protoVoice — full-duplex voice agent on Pipecat
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          provenance: true
+          sbom: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+
+      - name: Attest build provenance
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # ── GitHub Release ────────────────────────────────────────────────────────
+
+      - name: Generate release notes
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          NOTES=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq '.body' 2>/dev/null || echo "")
+          # Strip chore/docs noise lines from the auto-generated body
+          FILTERED=$(echo "$NOTES" | grep -Eiv '^\* (chore|docs):' || echo "$NOTES")
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$FILTERED"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --notes "${{ steps.notes.outputs.notes }}"
