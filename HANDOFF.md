@@ -119,8 +119,13 @@ before declaring a release.
 #### Packaging
 
 - [x] Docker image builds (restored post-carve)
-- [ ] `docker compose up` boots without Fish sidecar
-- [ ] `docker compose --profile fish up` activates Fish
+- [x] `docker compose up` boots on a GPU host (NVIDIA toolkit present);
+  `torch.cuda.is_available()` is True inside the container; Whisper
+  loads on `cuda`
+- [x] `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up`
+  boots on a box without the NVIDIA toolkit; voice still works on CPU
+- [ ] `docker compose --profile fish up` activates Fish (unchanged from
+  seed; not verified post-carve)
 - [ ] First release tag (`v0.1.0`) triggers release.yml cleanly
 - [ ] `GH_PAT` set for `prepare-release.yml` auto-bump (was broken
   on protoVoice; status in ORBIS unknown)

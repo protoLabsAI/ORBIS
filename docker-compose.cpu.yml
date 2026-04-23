@@ -1,0 +1,23 @@
+# CPU-only override for hosts without an NVIDIA GPU / container-toolkit.
+#
+# The default `docker-compose.yml` reserves GPU 0 so Whisper STT + Kokoro
+# TTS run on CUDA. On a laptop or CPU-only box those directives cause the
+# container to refuse to start. Layer this override on top to drop them:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+#
+# Voice still works; it's just slower (CPU Whisper is several seconds per
+# utterance, CPU Kokoro first-synth warmup is 30-60s).
+
+services:
+  orbis:
+    # Use the default OCI runtime instead of nvidia. Compose can't remove
+    # a top-level scalar via override, so we replace it.
+    runtime: runc
+    deploy:
+      resources:
+        reservations:
+          # !reset tag makes compose replace the list from the base file
+          # instead of appending to it — otherwise the nvidia reservation
+          # from docker-compose.yml stays in force.
+          devices: !reset []

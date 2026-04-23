@@ -268,6 +268,28 @@ mirror) now has more surface to mirror. Task #59 (hatch animation)
 benefits from the state-authoring tooling because hatch is a
 state-transition timeline.
 
+## Amendment — 2026-04-23: docker default is GPU-first
+
+The original "no GPU dependency" statement in § TTS providers is still
+true for kokoro itself — it runs fine on CPU. But the default docker
+path now reserves an NVIDIA GPU for the orbis service so Whisper STT
+and Kokoro both run on CUDA. Reason: CPU Whisper is multi-second per
+utterance — the single biggest latency source in a turn. Voice-first
+as a product promise is unreachable without that acceleration.
+
+- **Default:** `docker compose up` requires an NVIDIA GPU + driver ≥
+  570 + `nvidia-container-toolkit`. Torch is pinned to a `+cu128`
+  wheel in the Dockerfile so it matches the container's CUDA 12.8
+  base image.
+- **CPU-only override:** `docker-compose.cpu.yml` strips the GPU
+  reservation (`!reset []` on the device list) and swaps `runtime`
+  back to `runc`. Users layer it with `-f`:
+  `docker compose -f docker-compose.yml -f docker-compose.cpu.yml up`.
+  The app still works, it's just slower.
+- **Native `python app.py`** is unchanged and remains fully CPU-
+  viable — no toolkit requirement, no override file. The GPU-first
+  posture is strictly a docker concern.
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:

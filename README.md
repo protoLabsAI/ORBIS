@@ -47,7 +47,12 @@ architectural snapshot.
 Requirements: Python 3.11+, Bun or npm, and an LLM endpoint (any of
 OpenAI / Anthropic / Groq / DeepSeek / Ollama / LM Studio / LiteLLM
 gateway / etc. — see the setup wizard for the full preset list).
-Kokoro TTS runs CPU-only and is the default; no GPU required.
+Everything — including Whisper STT + Kokoro TTS — runs on CPU by
+default, so no GPU is required. A CUDA GPU is strongly recommended
+for real-time voice though: it drops Whisper latency from ~seconds to
+<200 ms per utterance and trims the first-synth Kokoro warmup from
+30-60s down to a second or two. See [Docker — with / without GPU](#docker--with--without-gpu)
+below.
 
 ```bash
 # One-time
@@ -66,11 +71,36 @@ presets, with live "test connection" + model-list fetch + Ollama /
 LM Studio auto-detect if they're running), pick a starter orb, hatch.
 Ends in the main app ready to double-click-to-talk.
 
-One-shot with Docker Compose (kokoro default, no Fish sidecar):
+### Docker — with / without GPU
+
+The default `docker-compose.yml` reserves GPU 0 so Whisper STT +
+Kokoro TTS run on CUDA. It assumes:
+
+- an NVIDIA GPU visible to the host
+- NVIDIA driver ≥ 570 (CUDA 12.8 compatible — the torch wheel baked
+  into the image is pinned to `+cu128` to match)
+- [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  installed (`nvidia-ctk` on `PATH`, `nvidia-container-runtime`
+  registered with dockerd)
+
+With that in place:
 
 ```bash
-docker compose up
+docker compose up                       # GPU path (default)
 ```
+
+On a CPU-only host (laptop, shared box with no NVIDIA card, etc.),
+layer the CPU override on top — it drops the GPU reservation + runtime
+hint so the container boots without the toolkit:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
+```
+
+Voice still works; it's just slower on CPU (see the latency numbers
+in the requirements note above). Fish TTS is opt-in via the `fish`
+profile — unrelated to this GPU switch, see `docker-compose.yml` for
+that service.
 
 Tailnet hosting: `sudo tailscale serve --bg --https=8443 http://127.0.0.1:7866`
 and point your phone / other devices at the tailnet URL. The Drawer
