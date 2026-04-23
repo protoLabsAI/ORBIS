@@ -14,6 +14,7 @@ import './plugins/status-pill';
 import './plugins/orb-settings';
 import './plugins/voice-panel';
 import './plugins/setup-wizard';
+import './plugins/mood';
 
 function App() {
   const clientRef = useRef<PipecatClient | null>(null);
