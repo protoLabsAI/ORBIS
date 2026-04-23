@@ -146,42 +146,15 @@ load_users(CONFIG_DIR / "users.yaml")
 _DELEGATES_YAML = Path(os.environ.get("DELEGATES_YAML", "config/delegates.yaml"))
 _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
-# Stub persona while the new single-persona module is designed — keeps
-# run_bot / text_agent / A2A handler working after the skills system
-# was removed. Subsequent commits replace this with a proper persona
-# loader (single SOUL-like file, no catalog).
-from types import SimpleNamespace as _PersonaNS
-
-_SYSTEM_PROMPT_ENV_OVERRIDE = os.environ.get("SYSTEM_PROMPT") or None
-_DEFAULT_PERSONA_TEXT = (
-    "You are ORBIS — an AI companion. You're primarily a router to the "
-    "user's configured agents via the delegate_to tool; you chat, remember, "
-    "and have personality, but heavy reasoning you hand off. Keep replies "
-    "brief, warm, and spoken aloud."
-)
-
-_ACTIVE_PERSONA = _PersonaNS(
-    slug="orbis",
-    name="ORBIS",
-    description="",
-    system_prompt=_DEFAULT_PERSONA_TEXT,
-    temperature=float(os.environ.get("LLM_TEMPERATURE", "0.7")),
-    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "150")),
-    tts_backend=None,
-    voice=None,
-    delegates=None,
-    behavior={},
-    llm=None,
-    filler_verbosity=None,
-    tools=[],
-    viz={},
-)
+# Single ORBIS persona loaded from config/orbis.yaml (see agent/persona.py).
+# Module-level cache refreshes via reload_persona().
+from agent.persona import get_active_persona, reload_persona  # noqa: E402
 
 
 def _active_skill(user_id: str = "default"):
-    """Return the single ORBIS persona. Shim kept so callers that
-    expect a Skill-shaped object keep working until they're rewritten."""
-    return _ACTIVE_PERSONA
+    """Return the single ORBIS persona. Name kept (Skill-shaped signature)
+    until all call sites are renamed to `get_active_persona()` directly."""
+    return get_active_persona()
 
 
 def _recall_block(user_id: str, skill_slug: str = "orbis") -> str:
@@ -306,11 +279,11 @@ def _effective_prompt(
     """Compose the system prompt = persona + TOOL USE block.
 
     ``skill`` is kept as a positional arg for call-site compatibility
-    with the skills-system era. It accepts the _ACTIVE_PERSONA stub
-    (duck-typed) for now. The env override (``SYSTEM_PROMPT``) still
-    wins over the persona text if set.
+    with the skills-system era. It accepts the Persona dataclass
+    (duck-typed). SYSTEM_PROMPT env override is applied inside the
+    Persona loader, so skill.system_prompt already reflects it.
     """
-    base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
+    base = skill.system_prompt
     plan = plan_block(verbosity)
     recall = _recall_block(user_id, getattr(skill, "slug", "orbis"))
     return (
@@ -993,7 +966,7 @@ async def health():
         "delegates": [
             {"name": d.name, "type": d.type} for d in _DELEGATES.all()
         ],
-        "persona": _ACTIVE_PERSONA.slug,
+        "persona": get_active_persona().slug,
         "audio": {
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
@@ -1055,12 +1028,19 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
 
     Safe mid-session — delegate lookup happens per `delegate_to()` call,
     so in-flight sessions see the new registry on their next dispatch.
-    Skills with `delegates:` filters re-apply the filter at next session
-    start (filter is captured per run_bot). Returns the post-reload
-    delegate name list.
     """
     names = _DELEGATES.reload()
     return {"ok": True, "delegates": names}
+
+
+@app.post("/api/persona/reload")
+async def reload_persona_endpoint(user: User = Depends(require_user)):
+    """Re-read config/orbis.yaml from disk.
+
+    Applied on the next voice session (persona is snapshotted at
+    connect time). Returns the loaded persona's slug + name."""
+    persona = reload_persona()
+    return {"ok": True, "slug": persona.slug, "name": persona.name}
 
 
 def _serve_react() -> bool:
@@ -1114,7 +1094,7 @@ register_a2a_routes(
     app,
     text_agent=text_agent,
     delivery_provider=lambda: user_state_for(_A2A_USER_ID).active_delivery,
-    skill_slug_provider=lambda: _ACTIVE_PERSONA.slug,
+    skill_slug_provider=lambda: get_active_persona().slug,
     user_id_provider=lambda: _A2A_USER_ID,
 )
 
