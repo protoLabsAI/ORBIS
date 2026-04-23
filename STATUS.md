@@ -1,125 +1,220 @@
-# Status — pickup for next session
+# STATUS — current snapshot
 
-Updated after v0.12.1. Branch: `main`.
+*Last updated 2026-04-23. Branch: `main`.*
+
+This file is a point-in-time pickup doc. Always up-to-date; read this
+first on any resume before digging into code.
 
 ## TL;DR
 
-Multi-tenant Phase 1.5 shipped across v0.11.0 → v0.12.1: API-key auth, per-user state, role-based access (`admin` vs `user`), skill-access control via `allowed_skills`, per-user `pinned_viz`, and dedicated orb viz per skill. First test suite in the repo landed with v0.12.1 (33 tests, pytest). Running at `https://protolabs.taild25506.ts.net/`; containers at `ghcr.io/protolabsai/protovoice:v0.12.1` + `:latest`.
+ORBIS is a voice-first AI companion — an orb that talks back in real
+time, remembers you across sessions, and delegates heavy reasoning to
+your configured agents. Single-owner, tailnet-hostable, SQLite-backed
+memory + personality, pipecat voice pipeline with kokoro default TTS.
+
+Repo is in a **runnable, reviewable** state — 35 commits in, 23/23
+planned tasks complete. Backend spine + full frontend (setup wizard,
+drawer panels, hatch animation, orb plugins) all shipped. Live boot
++ real WebRTC verification still to do by a human.
 
 ## Where we are
 
-### Deployed
-- `https://protolabs.taild25506.ts.net/` (tailnet-only, ava Blackwell node, Fish S2-Pro TTS, Qwen 3.6-35B via host vLLM on `:8000`).
-- Docker images: `ghcr.io/protolabsai/protovoice:v0.12.1`, `:0.12`, `:latest`.
-- Docs: `https://protolabsai.github.io/protoVoice/` — pages rebuilt on every main push.
+### Codebase
 
-### Recent releases
-- **v0.12.1** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.1)) — greenfield rename `pinned_skill` → `allowed_skills: list[str]`. Filtered dropdown for non-admins; single-element list keeps the read-only-chip behavior. First test suite (`tests/`, 33 passing — unit + TestClient integration).
-- **v0.12.0** ([release](https://github.com/protoLabsAI/protoVoice/releases/tag/v0.12.0)) — role-based access (`admin` vs `user`), `pinned_viz`, `POST /api/admin/skills`, per-skill `viz:` block with client auto-apply.
-- **v0.11.0** — API-key auth, Infisical/YAML roster, per-user skill/verbosity/delivery/tracer/filler state, session memory at `{SESSION_STORE_DIR}/{user_id}/{skill_slug}.txt`, Langfuse spans stamped with `user_id` + `session_id`.
+- **Repo:** [github.com/protoLabsAI/ORBIS](https://github.com/protoLabsAI/ORBIS)
+- **Branch:** `main`
+- **Tests:** 104 passing (`pytest`), zero failures
+- **Build:** frontend typechecks locally; not yet verified on clean
+  bun install in CI (frontend hasn't been wired into the release
+  pipeline yet — see [HANDOFF.md](./HANDOFF.md))
+- **Dockerfile:** builds stage-1 web via bun, stage-2 Python runtime;
+  needs a live verify after the deps trim
+- **Release pipeline:** `.github/workflows/` retargeted to
+  `protoLabsAI/ORBIS` + `ghcr.io/protolabsai/orbis`; not yet fired
+  (no tag cut)
 
-### What's in the multi-tenant model today
+### What's shipped
 
-| Layer | Behavior |
-|:---|:---|
-| Auth | `X-API-Key` or `Authorization: Bearer`; roster from Infisical (primary) → `config/users.yaml` (fallback) → empty = single-user fallback (synthetic `default` user, runs as admin). |
-| Roles | `user` (default, constrained) vs `admin` (unconstrained, can edit other users via `POST /api/admin/skills`). |
-| Skill access | `allowed_skills: [a, b]` on a user entry filters `/api/skills` and 403s disallowed slugs on POST. Single-element list → read-only chip in UI. Omit for unconstrained. Admins ignore it. |
-| Orb viz | `skill.viz` (variant + palette + params) applies on skill switch; `user.pinned_viz` on the roster overrides. Non-admins don't see the Orb tab in the drawer. |
-| Per-user state | Skill, verbosity, delivery controller, tracer, filler state, session memory paths — all keyed by `user.id`. ContextVars carry `current_user_id` / `current_session_id` across async boundaries. |
-| Admin API | `POST /api/admin/skills` to set any user's mutable active skill. No runtime pin mutation API yet — edit the YAML + `POST /api/users/reload` for persistent access-list changes. |
+**Backend spine**
+- Single-persona loader (`config/orbis.yaml`) replacing the
+  protoVoice skills catalog
+- Single-owner API-key auth; tailnet-hosted multi-device by design
+- Pipecat voice pipeline untouched from seed; kokoro default TTS
+- SQLite memory backend — sessions (FTS5), facts (bi-temporal +
+  90-day half-life decay), personality axes, mood, entitlement cache
+- Personality rendering into prompt + post-session drift analyzer
+  (small-LLM call, silent on failure)
+- Soft-neglect mood shifts over days of silence
+- Tool surface scoped to `delegate_to` + 5 orb self-modification
+  tools + `adjust_personality` for directable drift
+- TTS pluggable: kokoro / openai-compat / elevenlabs / fish
 
-### What's still deferred
+**API surface** (`/api/*`, auth-gated except where noted)
+- `whoami`, `verbosity`, `persona/reload`, `users/reload`
+- `starter_orbs` (unauth — wizard uses before auth is set)
+- `config` (GET/POST with typed validation)
+- `personality` (mood + axes + drift events + session stats)
+- `orb/select_starter` (wizard commits pick)
+- `entitlement`, `entitlement/checkout`
+- `stripe/webhook` (unauth, signature-verified)
+- `offer` (WebRTC signalling)
+- `delegates/reload`
 
-| Item | Why deferred | Notes |
-|---|---|---|
-| Admin CRUD UI (add/edit/remove users from drawer) | Scope — YAML-edit-and-reload works today | Needs a writable roster backend + admin-only drawer tab |
-| Frontend API-key paste field + 401 handling | Single-user fallback keeps dev unblocked | Small lift; gate on when the tailnet installs multiple users |
-| True per-caller A2A inbound auth | Shared `A2A_AUTH_TOKEN` + `A2A_USER_ID` default works for the fleet | Land when A2A goes public-exposed |
-| `/a2a/push` target-user via per-session token | Same as above | |
-| `GH_PAT` secret on the repo | Prevents `prepare-release.yml` from auto-running on PR merge | Manual tag cut works today (commit → push → annotated tag → push tag); re-enable the workflow by adding the secret |
-| Prometheus / HF Spaces / E2E | Observability + deploy polish | v0.13+ |
-| Collectible orbs + MTX | Scope moved to a separate app | Not a protoVoice feature |
+**Frontend**
+- Setup wizard (welcome → access → pick → done → hatch) as a
+  full-screen first-run overlay
+- Hatch animation (3.6s scripted CSS reveal)
+- Drawer with Voice + Orb tabs; Voice tab has Agent, Profile, Access
+  panels
+- API-key field with password input + `whoami` verification
+- Personality panel surfacing mood, top axes, session stats, recent
+  drift
+- Mood polling plugin (subscribable via `useMood()`)
+- Orb plugin system (Fractal, Nebula, Crystal, Particles variants)
+  unchanged from seed
 
-## Tests
+### Config files shipped
 
-First suite landed in v0.12.1.
+- `config/orbis.example.yaml` — persona + voice + orb starter
+- `config/starter_orbs.yaml` — the curated 8-orb pool
+- `config/users.example.yaml` — owner credential shape
+- `config/delegates.yaml` — A2A + OpenAI-compat targets
+- `.env.example` — env vars (LLM, TTS, Stripe, tracing, etc.)
 
-```bash
-# From repo root:
-.venv/bin/python -m pytest              # 33 passing, ~3s
+## Not yet done
+
+Nothing is formally on the task list — but these are the obvious
+follow-ups flagged across commits:
+
+- **State + mood authoring editor** — `moodStore` polls, but no
+  variant subscribes yet. Per-variant uniform mappings are still
+  to build. Authoring UI (drag a slider, see the orb react, save
+  the delta) is the full realization of DECISIONS.md's amendment.
+- **`_active_skill()` → `get_active_persona()` rename** — the
+  compatibility shim works but the naming is stale in app.py and
+  a2a/server.py.
+- **Live-boot verification** — the Python imports clean and
+  frontend builds locally, but a real WebRTC session against a
+  running LLM hasn't been smoke-tested end-to-end yet.
+- **Docs rebuild** — `docs/` got purged in the demolition; only
+  `docs/orb-visualizer.md` survives. Worth authoring a small guide
+  set (setup, persona config, delegate config, state/mood editor)
+  once the product stabilizes.
+- **CI hookup for the new deps trim** — `pyproject.toml` lost vllm
+  + ddgs; worth confirming the Dockerfile build + a pytest run
+  cleanly in a fresh container.
+
+See [HANDOFF.md](./HANDOFF.md) for the full QA checklist and
+open-design questions.
+
+## Module map
+
 ```
+agent/                         voice-pipeline quality + agent glue
+  persona.py                   single-persona loader from orbis.yaml
+  personality.py               prompt rendering + drift analyzer
+  neglect.py                   soft-neglect mood shifts
+  starter_orbs.py              curated pool loader
+  config_store.py              read/write + schema validation
+  entitlement.py               Stripe checkout / webhook / refresh
+  tools.py                     delegate_to + 5 orb tools + adjust_personality
+  delegates.py                 A2A + OpenAI-compat unified dispatch
+  filler.py / delivery.py      voice-pipeline natural-filler machinery
+  backchannel.py / micro_ack.py / bargein.py
+  session_store.py             orphan deliveries + legacy text summaries
+  tracing.py                   Langfuse integration
+  user_state.py                per-user runtime state
 
-- `tests/test_users.py` — 17 unit tests for `auth/users.py`: `User.allows_skill()` truth table, YAML parsing edge cases (empty list, non-list, stripped/dropped entries, unknown role, malformed pinned_viz), `by_id` lookup, reload flow.
-- `tests/test_endpoints.py` — 16 FastAPI TestClient integration tests: `/api/whoami` shape, `/api/skills` filtering + `locked` flag, active-slug drift-to-first-allowed, POST permit/deny paths, admin-only `/api/admin/skills`.
-- `pyproject.toml` has `[tool.pytest.ini_options]` pointing at `tests/`; `audioop` DeprecationWarning filtered (pipecat imports it on Python 3.12).
+auth/                          single-owner API-key auth
+  users.py                     User + UserRegistry + require_user
+  context.py                   current_user_id / current_session_id ContextVars
+  infisical.py                 optional Infisical secret fetch
+  __init__.py
 
-No CI runner wired yet — tests run locally. Adding a `pytest.yml` workflow is the obvious next step if multi-person collaboration picks up.
+a2a/                           A2A inbound + outbound
+  server.py                    /a2a routes + webhook handlers
+  client.py                    outbound dispatcher
 
-## Waiting on external
+voice/                         STT + TTS pipecat adapters
+  stt.py                       Whisper (local or OpenAI-compat)
+  tts/__init__.py              provider dispatch
+  tts/kokoro.py                default (CPU)
+  tts/openai.py                OpenAI-compat
+  tts/elevenlabs.py            native WebSocket
+  tts/fish.py                  opt-in sidecar
 
-### Workstacean
-1. **F7 ava delegate flip** — code-complete on our side. Held at `type: openai` pending [protoWorkstacean#471](https://github.com/protoLabsAI/protoWorkstacean/issues/471): (a) `message/send` routes to protoBot instead of ava, (b) `message/stream` intermittently returns `Cannot POST /` 404. When resolved, edit `config/delegates.yaml`, swap the commented a2a block for the openai one.
-2. **Tracing contract implementation** — [`docs/reference/tracing-contract.md`](https://protolabsai.github.io/protoVoice/reference/tracing-contract/) defines `Langfuse-Trace-Id` / `Langfuse-Session-Id` / `Langfuse-Parent-Observation-Id`. Until they implement "continue, don't create" in their `/a2a` handler, headers attach but traces don't stitch across the fleet.
+memory/                        SQLite memory backend (new in ORBIS)
+  db.py                        Memory facade + schema + migrations
+  sessions.py                  SessionsDAL (FTS5)
+  facts.py                     FactsDAL (bi-temporal, half-life decay)
+  personality.py               PersonalityDAL (axes + events + mood)
+  entitlement.py               EntitlementDAL (cache)
 
-### Langfuse config
-Not wired yet — code fails open when `LANGFUSE_*` env is unset. When ready:
+web/src/
+  App.tsx                      side-effect imports; top-level PipecatClient
+  voice/                       pipecat client + state bridge
+  components/Drawer.tsx        Sheet + Voice/Orb tabs
+  plugins/
+    orb/                       R3F orb + variants + store + broadcast bus
+    orb-settings/              params editor (in drawer Orb tab)
+    voice-panel/               Agent + Profile + Access panels
+    status-pill/               connection status indicator
+    setup-wizard/              first-run flow + hatch animation
+    mood/                      polling store + useMood() hook
+  auth/                        apiKey store + useApiKey hook
+  lib/api.ts                   typed /api/* fetch wrappers
+
+config/                        user-editable YAML
+tests/                         pytest: 104 cases, all green
+docs/                          orb-visualizer.md only (rest were purged)
 ```
-LANGFUSE_HOST=http://ava:3000
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-```
-In `.env` or the deployment env. No code changes needed.
-
-## Repo layout (quick reference)
-
-- `auth/` — UserRegistry, Infisical fetch, require_user / require_admin, ContextVars
-- `agent/` — per-user state, tracing, session_store, filler generator, delivery controller
-- `skills/` — YAML loader with `extends:` inheritance, models
-- `app.py` — FastAPI routes, RTVI wiring, Pipecat pipeline builder
-- `a2a/` — inbound + outbound A2A (JSON-RPC, `message/send` + `message/stream`)
-- `web/` — bun + Vite 6 + React 19 + shadcn/ui + Tailwind 4, PWA
-  - `src/voice/` — Pipecat client wiring + derived voice-state store
-  - `src/plugins/{orb,orb-settings,status-chip,status-pill,voice-panel}` — each registers via `registerPlugin({ id, slots })`
-  - `src/auth/` — whoami store + selectors (`isAdmin`, `isSkillLocked`, `isVizLocked`)
-  - `src/lib/api.ts` — typed fetches for `/api/*`
-- `config/skills/*.yaml` — skill catalog (`viz:` block per skill optional)
-- `config/users.yaml` — roster (with `allowed_skills`, `pinned_viz`, `role`); copy `users.example.yaml`
-- `tests/` — pytest suite (users + endpoints)
-
-## Known tripwires (things NOT to change lightly)
-
-- **Don't touch getUserMedia constraints.** Disabling AGC/NS/EC breaks server VAD.
-- **Don't reintroduce a hand-rolled memory pruner.** Pipecat's `LLMContextSummarizer` is the right primitive.
-- **Don't remove `messageId`** from outbound A2A calls. Spec-required; workstacean enforces.
-- **Don't forget `uTime` + `orb.rotation` wrap** — GLSL float32 precision degrades after ~10 min; wrap at 2π·N.
-- **Don't touch `append_to_context=False`** on filler / backchannel / delivery `TTSSpeakFrame`s — without it the LLM riffs on its own fillers.
-- **`DEFAULT_USER` is admin on purpose.** Single-user fallback keeps dev unconstrained; don't "fix" it to `user` without adding a way out.
 
 ## Quick-start
 
 ```bash
-cd ~/dev/protoVoice
-git status && git log --oneline -5
+cd ~/path/to/ORBIS
 
-# Health + smoke
-curl -sS https://protolabs.taild25506.ts.net/healthz | jq .
+# One-time
+cp .env.example .env                             # edit LLM_URL, keys
+cp config/orbis.example.yaml config/orbis.yaml   # optional
+cp config/users.example.yaml config/users.yaml   # tailnet hosting only
+
+# Run dev
+cd web && bun install && bun run dev             # :5173
+python app.py                                    # :7866
 
 # Tests
-.venv/bin/python -m pytest
-
-# Release flow (manual — GH_PAT not set on repo)
-python3 scripts/version.py {patch|minor|major}
-git add pyproject.toml && git commit -m "chore: release v<x.y.z>"
-git tag -a v<x.y.z> -m "<annotation>" HEAD
-git push origin main && git push origin v<x.y.z>
-# → release.yml builds semver images + creates GH release
-# → docker-publish.yml refreshes :latest on main push
+.venv/bin/python -m pytest                       # 104 passing
 ```
+
+## Known tripwires (don't change lightly)
+
+Carried forward from the protoVoice seed — these are hard-won
+discoveries, still relevant:
+
+- **Browser mic constraints stay at defaults** (AGC/NS/EC on).
+  Disabling them broke server VAD.
+- **`append_to_context=False`** on every out-of-band TTSSpeakFrame
+  (filler, backchannel, delivery). Without it the LLM riffs on its
+  own fillers.
+- **`cancel_on_interruption=True`** default for sync tools.
+- **Fractal orb rotation + uTime wrap at 2π·N** to avoid float32
+  precision drift after ~10 min.
+- **FTS5 is required** in the SQLite build — ORBIS refuses to start
+  without it.
+- **Stripe webhook endpoint is unauth** on purpose — signature
+  verification is the auth. Don't wrap it in `require_user`.
+- **`_active_skill()` is a compat shim** returning the Persona. The
+  name is stale; don't mistake it for a surviving piece of the
+  skills system.
 
 ## One-line rollback
 
+The repo history doesn't carry tags yet. The initial squashed seed
+is commit `25bcc9d` (the very first); checking out that commit puts
+you back to the unmodified protoVoice v0.12.1 seed before the
+demolition.
+
 ```bash
-git checkout v0.11.0    # last pre-roles tag
-docker compose up -d --no-deps --force-recreate protovoice
+git checkout 25bcc9d    # seed state, pre-carve
 ```

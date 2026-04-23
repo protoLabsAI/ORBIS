@@ -175,12 +175,23 @@ dashboard webhook at `POST https://<your-host>/api/stripe/webhook`.
 cd web && bun run build           # type-check + build frontend
 ```
 
-## Contributing
+## Project docs
 
-- [DECISIONS.md](./DECISIONS.md) — architecture snapshot, frozen.
-  Amendments are additive (don't silently change direction).
-- [docs/orb-visualizer.md](./docs/orb-visualizer.md) — engineering
-  reference for the orb plugin system inherited from protoVoice.
+All in-repo; read in this order on a cold pickup:
+
+1. **[STATUS.md](./STATUS.md)** — current snapshot. Where the
+   codebase is, module map, what's shipped vs still pending.
+   Always up to date.
+2. **[DECISIONS.md](./DECISIONS.md)** — frozen architecture
+   decisions. Amendments are additive; don't silently change
+   direction.
+3. **[HANDOFF.md](./HANDOFF.md)** — QA checklist, known open
+   questions, and ordered next steps. Written for a teammate (or
+   tomorrow-you) picking ORBIS up fresh.
+4. **[docs/orb-visualizer.md](./docs/orb-visualizer.md)** —
+   engineering reference for the orb plugin system inherited from
+   protoVoice (variant registry, shared signal bus, palette system,
+   field types).
 
 Seed provenance: this repo started as a squashed fork of
 [protoLabsAI/protoVoice](https://github.com/protoLabsAI/protoVoice)
