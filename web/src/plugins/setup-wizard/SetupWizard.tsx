@@ -5,7 +5,7 @@ import { api, type StarterOrb, UnauthorizedError } from '@/lib/api';
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
-type Step = 'welcome' | 'auth' | 'pick' | 'done';
+type Step = 'welcome' | 'auth' | 'pick' | 'done' | 'hatching';
 
 /**
  * First-run setup wizard. Detects "no setup done yet" via a
@@ -42,6 +42,10 @@ export function SetupWizard() {
 function WizardFlow({ onFinish }: { onFinish: () => void }) {
   const [step, setStep] = useState<Step>('welcome');
 
+  if (step === 'hatching') {
+    return <HatchAnimation onDone={onFinish} />;
+  }
+
   return (
     <div className="min-h-full flex items-center justify-center p-6">
       <div className="w-full max-w-xl">
@@ -60,7 +64,9 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
               onBack={() => setStep('auth')}
             />
           )}
-          {step === 'done' && <DoneStep onFinish={onFinish} />}
+          {step === 'done' && (
+            <DoneStep onFinish={() => setStep('hatching')} />
+          )}
         </div>
       </div>
     </div>
@@ -71,7 +77,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 
 function StepIndicator({ current }: { current: Step }) {
   const order: Step[] = ['welcome', 'auth', 'pick', 'done'];
-  const idx = order.indexOf(current);
+  const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
       {order.map((s, i) => (
@@ -262,6 +268,68 @@ function DoneStep({ onFinish }: { onFinish: () => void }) {
         profile.
       </p>
       <Button onClick={onFinish}>Let it hatch</Button>
+    </div>
+  );
+}
+
+/**
+ * Hatch animation — a scripted 3-beat reveal:
+ *   0.0-0.8s  black with a slow-pulse dot (the seed)
+ *   0.8-2.4s  dot expands + soft flare
+ *   2.4-3.6s  flare fades, main-app orb bleeds through
+ *   3.6s+     dismiss; orb takes over
+ *
+ * Pure CSS animation — no shader work. A richer version (per-variant
+ * shader-driven hatch) is tracked as a follow-up once the state/mood
+ * authoring editor is in; for now this "dark → flare → reveal"
+ * sequence is the minimum viable hatch that still feels like *an
+ * event* and not just a close-the-wizard transition.
+ */
+function HatchAnimation({ onDone }: { onDone: () => void }) {
+  useEffect(() => {
+    const t = window.setTimeout(onDone, 3600);
+    return () => window.clearTimeout(t);
+  }, [onDone]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-[#0a0a0a] flex items-center justify-center pointer-events-none orbis-hatch-fade"
+      aria-label="Hatching"
+    >
+      <div className="relative w-48 h-48">
+        <div className="orbis-hatch-seed absolute inset-0 rounded-full" />
+        <div className="orbis-hatch-flare absolute inset-0 rounded-full" />
+      </div>
+      <style>{`
+        @keyframes orbis-hatch-fade {
+          0% { opacity: 1; }
+          82% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        @keyframes orbis-hatch-seed {
+          0% { transform: scale(0.08); opacity: 0.6; filter: blur(2px); }
+          30% { transform: scale(0.14); opacity: 0.9; filter: blur(1px); }
+          60% { transform: scale(0.5); opacity: 1; filter: blur(0px); }
+          100% { transform: scale(1); opacity: 0; }
+        }
+        @keyframes orbis-hatch-flare {
+          0% { transform: scale(0.1); opacity: 0; }
+          55% { transform: scale(0.6); opacity: 0; }
+          70% { transform: scale(1.4); opacity: 0.85; filter: blur(12px); }
+          100% { transform: scale(3.4); opacity: 0; filter: blur(24px); }
+        }
+        .orbis-hatch-fade {
+          animation: orbis-hatch-fade 3.6s ease-out forwards;
+        }
+        .orbis-hatch-seed {
+          background: radial-gradient(circle, rgba(245,158,11,0.95) 0%, rgba(245,158,11,0.2) 55%, transparent 75%);
+          animation: orbis-hatch-seed 3.2s cubic-bezier(.45,0,.25,1) forwards;
+        }
+        .orbis-hatch-flare {
+          background: radial-gradient(circle, rgba(251,191,36,0.9) 0%, rgba(245,158,11,0.35) 40%, transparent 70%);
+          animation: orbis-hatch-flare 3.2s cubic-bezier(.2,0,.2,1) forwards;
+        }
+      `}</style>
     </div>
   );
 }
