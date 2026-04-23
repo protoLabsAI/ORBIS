@@ -7,9 +7,9 @@
  * the broadcast helpers (applyParam / applyPreset / setVariant).
  *
  * Hydration:
- *   - variantId: localStorage `protoVoice.orb.variant`, default 'fractal'
- *   - palette:   localStorage `protoVoice.palette`, default variant.defaultPalette
- *   - params:    localStorage `protoVoice.params` layered on the palette
+ *   - variantId: localStorage `orbis.orb.variant`, default 'fractal'
+ *   - palette:   localStorage `orbis.palette`, default variant.defaultPalette
+ *   - params:    localStorage `orbis.params` layered on the palette
  */
 
 import { variantRegistry } from './variants/registry';
@@ -21,7 +21,7 @@ import {
   saveParams,
 } from './storage';
 
-const STORAGE_VARIANT = 'protoVoice.orb.variant';
+const STORAGE_VARIANT = 'orbis.orb.variant';
 
 export interface OrbStateSnapshot {
   variantId: string;

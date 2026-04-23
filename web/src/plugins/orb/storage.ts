@@ -3,9 +3,9 @@
  * static/index.html contract so existing user data carries over.
  */
 
-export const STORAGE_PARAMS  = 'protoVoice.params';
-export const STORAGE_PALETTE = 'protoVoice.palette';
-export const STORAGE_CUSTOM  = 'protoVoice.customPresets';
+export const STORAGE_PARAMS  = 'orbis.params';
+export const STORAGE_PALETTE = 'orbis.palette';
+export const STORAGE_CUSTOM  = 'orbis.customPresets';
 
 export type CustomPresetPayload = {
   palette: string;
