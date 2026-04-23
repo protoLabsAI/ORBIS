@@ -238,6 +238,36 @@ Concrete carve list (enforced by subsequent commits):
 - Stripe integration specifics (cache TTL, webhook exact shape)
 - Pluggable-TTS layer wire-up specifics
 
+## Amendment — 2026-04-23: orb state + mood authoring
+
+The orb's visual reacts to both voice state and mood. Authoring those
+reactions needs to be a first-class editor surface.
+
+- **Voice states** are `idle`, `listening`, `thinking`, `speaking`.
+  "Breathing" is not a separate state — it's the ambient animation
+  layer present in all four, with per-state intensity.
+- **Mood dimensions** are `valence`, `arousal`, `guardedness` (see
+  memory/personality.py). Each is in [-1, +1] and drives shader
+  uniform deltas.
+- **Preset shape is deltas, not absolutes.** A preset stores
+  `(variant, palette, base_params)` plus `state_overrides` (per voice
+  state) and `mood_overrides` (per mood dim) as deltas applied on
+  top of base. This composes cleanly — a speaking+cynical orb is
+  base + speaking delta + cynical delta, not a separately-authored
+  (speaking, cynical) cell.
+- **Editor gating:** the full state/mood authoring editor is part of
+  the paid customization unlock. Free tier runs a starter preset
+  that's pre-authored; free users don't get the authoring tool.
+- **Config file stays one.** `config/orbis.yaml` grows to hold
+  `state_overrides` + `mood_overrides` per preset rather than
+  adding a second file.
+
+Task impact: task #53 (mood + visual reflection) is now the
+reflection engine *plus* the authoring editor. Task #55 (config UI
+mirror) now has more surface to mirror. Task #59 (hatch animation)
+benefits from the state-authoring tooling because hatch is a
+state-transition timeline.
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:
