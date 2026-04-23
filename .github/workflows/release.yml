@@ -27,8 +27,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-      id-token: write
-      attestations: write
 
     steps:
       - uses: actions/checkout@v4
@@ -107,15 +105,14 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.version }}
 
-      - name: Attest build provenance
-        continue-on-error: true
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
       # ── GitHub Release ────────────────────────────────────────────────────────
+      #
+      # `actions/attest-build-provenance` previously lived here but
+      # requires either a public repo or GitHub Advanced Security on a
+      # paid org plan. Neither applies to ORBIS today — the step just
+      # logged a red 403 every release for no practical gain. Inline
+      # buildkit provenance (`provenance: true` on docker/build-push
+      # above) still attaches SLSA metadata to the image manifest.
 
       - name: Generate release notes
         id: notes
