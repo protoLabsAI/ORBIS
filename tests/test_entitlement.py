@@ -192,3 +192,19 @@ def test_entitlement_state_shape(mem: Memory, configured_env):
     assert "customization" in state
     assert state["customization"]["active"] is False
     assert state["customization"]["configured"] is True
+
+
+def test_entitlement_state_dev_mode_active(
+    mem: Memory, monkeypatch: pytest.MonkeyPatch,
+):
+    """Unconfigured Stripe → state reports active=True so the UI mirrors
+    the open-by-default gate (has_customization)."""
+    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
+    import importlib
+    from agent import entitlement
+    importlib.reload(entitlement)
+    state = entitlement.entitlement_state(mem)
+    assert state["customization"]["active"] is True
+    assert state["customization"]["configured"] is False

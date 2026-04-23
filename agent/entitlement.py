@@ -224,10 +224,15 @@ def refresh_from_stripe(mem) -> dict:
 
 
 def entitlement_state(mem) -> dict:
-    """Return current entitlement state for the UI."""
+    """Return current entitlement state for the UI.
+
+    ``active`` mirrors ``has_customization`` so the UI sees the same gate
+    the backend enforces — including the dev-open fallback when Stripe
+    isn't configured.
+    """
     return {
         "customization": {
-            "active": mem.entitlement.is_active("customization"),
+            "active": has_customization(mem),
             "configured": configured(),
         },
     }
