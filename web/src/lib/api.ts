@@ -31,6 +31,7 @@ export type OrbisConfig = {
   persona?: {
     slug?: string;
     name?: string;
+    user_name?: string;
     system_prompt?: string;
     system_prompt_file?: string;
     temperature?: number;
@@ -40,6 +41,13 @@ export type OrbisConfig = {
   voice?: {
     tts_backend?: 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
     voice?: string;
+  };
+  llm?: {
+    url?: string;
+    model?: string;
+    api_key?: string;
+    api_key_env?: string;
+    extra_body?: Record<string, unknown> | null;
   };
   orb?: {
     variant?: string;

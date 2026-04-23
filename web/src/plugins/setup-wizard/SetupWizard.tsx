@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { apiKeyStore } from '@/auth/apiKey';
-import { api, type StarterOrb, UnauthorizedError } from '@/lib/api';
+import { api, type StarterOrb } from '@/lib/api';
+import { OrbPreviewModal } from './OrbPreviewModal';
+import { paletteColors } from './paletteColors';
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
-type Step = 'welcome' | 'auth' | 'pick' | 'done' | 'hatching';
+type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'done' | 'hatching';
 
 /**
  * First-run setup wizard. Detects "no setup done yet" via a
@@ -51,17 +52,23 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
       <div className="w-full max-w-xl">
         <StepIndicator current={step} />
         <div className="mt-8">
-          {step === 'welcome' && <WelcomeStep onNext={() => setStep('auth')} />}
-          {step === 'auth' && (
-            <AuthStep
-              onNext={() => setStep('pick')}
+          {step === 'welcome' && <WelcomeStep onNext={() => setStep('names')} />}
+          {step === 'names' && (
+            <NamesStep
+              onNext={() => setStep('llm')}
               onBack={() => setStep('welcome')}
+            />
+          )}
+          {step === 'llm' && (
+            <LLMStep
+              onNext={() => setStep('pick')}
+              onBack={() => setStep('names')}
             />
           )}
           {step === 'pick' && (
             <PickStep
               onNext={() => setStep('done')}
-              onBack={() => setStep('auth')}
+              onBack={() => setStep('llm')}
             />
           )}
           {step === 'done' && (
@@ -76,7 +83,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 // ── Indicator ──────────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: Step }) {
-  const order: Step[] = ['welcome', 'auth', 'pick', 'done'];
+  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'done'];
   const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
@@ -112,67 +119,269 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   );
 }
 
-function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [key, setKey] = useState<string>(apiKeyStore.get() ?? '');
+function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [userName, setUserName] = useState('');
+  const [orbName, setOrbName] = useState('ORBIS');
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
 
   const onContinue = async () => {
+    setSaving(true);
     setError(null);
-    if (!key.trim()) {
-      // Allow skipping on single-user installs. Server will accept
-      // anonymously when config/users.yaml is absent.
-      apiKeyStore.clear();
-      onNext();
-      return;
-    }
-    setChecking(true);
-    apiKeyStore.set(key);
     try {
-      await api.whoami();
+      await api.putConfig({
+        persona: {
+          name: orbName.trim() || 'ORBIS',
+          user_name: userName.trim(),
+        },
+      });
       onNext();
     } catch (e) {
-      setChecking(false);
-      if (e instanceof UnauthorizedError) {
-        setError(
-          'That key doesn\'t match. Check config/users.yaml on the server.'
-        );
-      } else {
-        // Network errors etc. — let the user proceed; they can fix
-        // the key later from the drawer.
-        setError(
-          'Could not reach the server to verify. Saved locally; continue anyway or go back.'
-        );
-      }
+      setSaving(false);
+      setError(String((e as Error).message ?? e));
     }
   };
 
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-lg text-zinc-200">Access</h2>
+        <h2 className="text-lg text-zinc-200">Introductions</h2>
         <p className="text-sm text-zinc-500 max-w-md mx-auto">
-          If you're hosting on a tailnet, paste your owner API key from
-          <code className="mx-1 text-xs text-zinc-400">config/users.yaml</code>.
-          Leave empty if you're running standalone.
+          Both fields are optional — the orb will still work without
+          them, just more generically.
         </p>
       </div>
-      <div className="space-y-2">
-        <input
-          type="password"
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
-          placeholder="pv_ak_... (optional)"
-          className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600"
-          autoComplete="off"
-          spellCheck={false}
-        />
+
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">
+            Your name — what the orb should call you
+          </label>
+          <input
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder="Alice"
+            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">
+            Orb's name — what you'll call the orb
+          </label>
+          <input
+            value={orbName}
+            onChange={(e) => setOrbName(e.target.value)}
+            placeholder="ORBIS"
+            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <div className="text-[11px] text-zinc-600 mt-1">
+            Defaults to ORBIS. Rename to whatever suits.
+          </div>
+        </div>
+
         {error && <div className="text-xs text-red-400">{error}</div>}
       </div>
+
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onContinue} disabled={checking}>
-          {checking ? 'Checking…' : key.trim() ? 'Continue' : 'Skip'}
+        <Button onClick={onContinue} disabled={saving}>
+          {saving ? 'Saving…' : 'Continue'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type LLMProvider = 'openai' | 'anthropic' | 'groq' | 'gateway' | 'local' | 'custom';
+
+interface LLMPreset {
+  id: LLMProvider;
+  label: string;
+  url: string;
+  model: string;
+  needsKey: boolean;
+  keyPlaceholder?: string;
+  blurb: string;
+}
+
+const LLM_PRESETS: LLMPreset[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    url: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    needsKey: true,
+    keyPlaceholder: 'sk-...',
+    blurb: 'Fast + cheap. A few cents per hour of chatter.',
+  },
+  {
+    id: 'anthropic',
+    label: 'Anthropic',
+    url: 'https://api.anthropic.com/v1',
+    model: 'claude-haiku-4-5',
+    needsKey: true,
+    keyPlaceholder: 'sk-ant-...',
+    blurb: 'Claude Haiku. Great personality, slightly pricier.',
+  },
+  {
+    id: 'groq',
+    label: 'Groq',
+    url: 'https://api.groq.com/openai/v1',
+    model: 'llama-3.1-8b-instant',
+    needsKey: true,
+    keyPlaceholder: 'gsk_...',
+    blurb: 'Blazing fast, near-free. Smaller model.',
+  },
+  {
+    id: 'gateway',
+    label: 'LiteLLM / gateway',
+    url: 'http://localhost:4000/v1',
+    model: 'gpt-4o-mini',
+    needsKey: true,
+    keyPlaceholder: 'gateway master key',
+    blurb: 'Any OpenAI-compatible gateway you run.',
+  },
+  {
+    id: 'local',
+    label: 'Local (vLLM)',
+    url: 'http://127.0.0.1:8100/v1',
+    model: 'Qwen/Qwen3.5-4B',
+    needsKey: false,
+    blurb: 'Offline. Run your own vLLM / LM Studio / ollama.',
+  },
+  {
+    id: 'custom',
+    label: 'Custom',
+    url: '',
+    model: '',
+    needsKey: true,
+    keyPlaceholder: 'api key (optional)',
+    blurb: 'Paste your own URL + model.',
+  },
+];
+
+function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [provider, setProvider] = useState<LLMProvider>('openai');
+  const [url, setUrl] = useState(LLM_PRESETS[0].url);
+  const [model, setModel] = useState(LLM_PRESETS[0].model);
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const current = LLM_PRESETS.find((p) => p.id === provider) ?? LLM_PRESETS[0];
+
+  const pickProvider = (next: LLMProvider) => {
+    setProvider(next);
+    const preset = LLM_PRESETS.find((p) => p.id === next) ?? LLM_PRESETS[0];
+    setUrl(preset.url);
+    setModel(preset.model);
+  };
+
+  const onContinue = async () => {
+    setError(null);
+    if (!url.trim() || !model.trim()) {
+      setError('URL and model are both required.');
+      return;
+    }
+    if (current.needsKey && !apiKey.trim() && provider !== 'custom') {
+      setError(`${current.label} needs an API key.`);
+      return;
+    }
+    setSaving(true);
+    try {
+      const llm: Record<string, string> = { url: url.trim(), model: model.trim() };
+      if (apiKey.trim()) llm.api_key = apiKey.trim();
+      await api.putConfig({ llm: llm as never });
+      onNext();
+    } catch (e) {
+      setSaving(false);
+      setError(String((e as Error).message ?? e));
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center space-y-2">
+        <h2 className="text-lg text-zinc-200">Router brain</h2>
+        <p className="text-sm text-zinc-500 max-w-md mx-auto">
+          Small + fast is the right pick — this LLM handles
+          conversation + routing decisions. Heavy reasoning comes from
+          whatever agent you delegate to.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {LLM_PRESETS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => pickProvider(p.id)}
+            className={
+              'p-3 text-left rounded-md border transition-colors ' +
+              (provider === p.id
+                ? 'border-amber-500/60 bg-amber-500/5'
+                : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+            }
+          >
+            <div className="text-sm text-zinc-200">{p.label}</div>
+            <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">
+              {p.blurb}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">URL</label>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://api.openai.com/v1"
+            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+            spellCheck={false}
+          />
+        </div>
+        <div>
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">Model</label>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="gpt-4o-mini"
+            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+            spellCheck={false}
+          />
+        </div>
+        {current.needsKey && (
+          <div>
+            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">API key</label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={current.keyPlaceholder}
+              className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <div className="text-[11px] text-zinc-600 mt-1">
+              Stored in <code>config/orbis.yaml</code> on your machine.
+              Never sent to protoLabsAI.
+            </div>
+          </div>
+        )}
+        {error && <div className="text-xs text-red-400">{error}</div>}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" onClick={onBack}>Back</Button>
+        <Button onClick={onContinue} disabled={saving}>
+          {saving ? 'Saving…' : 'Continue'}
         </Button>
       </div>
     </div>
@@ -182,6 +391,7 @@ function AuthStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
 function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const [starters, setStarters] = useState<StarterOrb[] | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<StarterOrb | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
 
@@ -191,12 +401,11 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
       .catch((e) => setError(String((e as Error).message ?? e)));
   }, []);
 
-  const onConfirm = async () => {
-    if (!chosen) return;
+  const commitPick = async (slug: string) => {
     setCommitting(true);
     setError(null);
     try {
-      await api.selectStarter(chosen);
+      await api.selectStarter(slug);
       onNext();
     } catch (e) {
       setCommitting(false);
@@ -204,13 +413,18 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
     }
   };
 
+  const onConfirm = async () => {
+    if (!chosen) return;
+    commitPick(chosen);
+  };
+
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Pick your orb</h2>
         <p className="text-sm text-zinc-500 max-w-md mx-auto">
-          This is your starter. Its look is yours until you unlock the
-          full editor — it becomes part of how the orb feels.
+          This is your starter. Tap a card to pick, or open a preview
+          to see it live and drag to rotate.
         </p>
       </div>
 
@@ -225,25 +439,13 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {starters.map((s) => (
-            <button
+            <StarterCard
               key={s.slug}
-              type="button"
-              onClick={() => setChosen(s.slug)}
-              className={
-                'flex flex-col items-start text-left p-3 rounded-lg border transition-colors ' +
-                (chosen === s.slug
-                  ? 'border-amber-500/60 bg-amber-500/5'
-                  : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
-              }
-            >
-              <div className="text-sm text-zinc-200">{s.name}</div>
-              <div className="text-[11px] text-zinc-500 mt-1 line-clamp-3">
-                {s.description}
-              </div>
-              <div className="text-[10px] text-zinc-600 mt-2 uppercase tracking-wider">
-                {s.variant} · {s.palette}
-              </div>
-            </button>
+              starter={s}
+              selected={chosen === s.slug}
+              onSelect={() => setChosen(s.slug)}
+              onPreview={() => setPreviewing(s)}
+            />
           ))}
         </div>
       )}
@@ -253,6 +455,69 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
         <Button onClick={onConfirm} disabled={!chosen || committing}>
           {committing ? 'Saving…' : 'Continue'}
         </Button>
+      </div>
+
+      {previewing && (
+        <OrbPreviewModal
+          starter={previewing}
+          onClose={() => setPreviewing(null)}
+          onConfirm={() => {
+            setPreviewing(null);
+            commitPick(previewing.slug);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function StarterCard({
+  starter, selected, onSelect, onPreview,
+}: {
+  starter: StarterOrb;
+  selected: boolean;
+  onSelect: () => void;
+  onPreview: () => void;
+}) {
+  const { primary, secondary } = paletteColors(starter.variant, starter.palette);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
+      className={
+        'relative flex flex-col items-start text-left p-3 rounded-lg border transition-colors cursor-pointer ' +
+        (selected
+          ? 'border-amber-500/60 bg-amber-500/5'
+          : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+      }
+    >
+      {/* Gradient swatch derived from the palette's primary/secondary
+          energy colors. Cheap visual hint — the actual shader is one
+          click away via the preview button. */}
+      <div
+        aria-hidden
+        className="relative w-full aspect-square rounded-md mb-3 overflow-hidden border border-zinc-800/60"
+        style={{
+          background: `radial-gradient(circle at 35% 35%, ${primary} 0%, ${secondary} 55%, #0a0a0a 100%)`,
+        }}
+      >
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onPreview(); }}
+          className="absolute bottom-1.5 right-1.5 h-7 px-2 text-[10px] uppercase tracking-wider rounded-md bg-black/60 hover:bg-black/80 text-zinc-200 backdrop-blur-sm border border-white/10 transition-colors"
+          aria-label={`Preview ${starter.name}`}
+        >
+          Preview
+        </button>
+      </div>
+      <div className="text-sm text-zinc-200">{starter.name}</div>
+      <div className="text-[11px] text-zinc-500 mt-1 line-clamp-2">
+        {starter.description}
+      </div>
+      <div className="text-[10px] text-zinc-600 mt-2 uppercase tracking-wider">
+        {starter.variant} · {starter.palette}
       </div>
     </div>
   );
