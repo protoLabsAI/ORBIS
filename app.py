@@ -116,7 +116,7 @@ from agent.tools import (
     register_tools,
     run_text_tool,
 )
-from auth import load_users, require_admin, require_user, user_registry
+from auth import load_users, require_user, user_registry
 from auth.users import DEFAULT_USER, User
 from auth.context import current_session_id, current_user_id
 from agent.user_state import active_user_states, user_state_for, UserState
@@ -988,7 +988,7 @@ async def health():
         "stt_backend": STT_BACKEND,
         "tts_backend": TTS_BACKEND,
         "auth_source": user_registry.source,
-        "user_count": len(user_registry.all()) if not user_registry.single_user_mode() else 0,
+        "owner_configured": not user_registry.single_user_mode(),
         "active_sessions": len(active_user_states()),
         "delegates": [
             {"name": d.name, "type": d.type} for d in _DELEGATES.all()
@@ -1014,19 +1014,11 @@ async def metrics(user: User = Depends(require_user)):
 
 @app.get("/api/whoami")
 async def whoami(user: User = Depends(require_user)):
-    """Returns the caller's resolved user id + display name + role +
-    pinned persona/viz. Clients use this to confirm their API key is
-    valid, show the user their name, and adapt the drawer UI based on
-    role (admins see the skill selector + orb-settings; pinned regular
-    users don't)."""
+    """Return the resolved owner. Clients call this at boot to confirm
+    their API key is valid and get the display name for UI chrome."""
     return {
         "id": user.id,
         "display_name": user.display_name,
-        "role": user.role,
-        "allowed_skills": (
-            list(user.allowed_skills) if user.allowed_skills is not None else None
-        ),
-        "pinned_viz": user.pinned_viz,
         "auth_source": user_registry.source,
     }
 

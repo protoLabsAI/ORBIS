@@ -1,7 +1,8 @@
-"""Unit tests for auth.users — roster parsing, roles, allowed_skills.
+"""Unit tests for the single-owner auth primitive.
 
-These tests exercise UserRegistry directly, with YAML content written to
-a tempfile. No network, no Infisical, no FastAPI.
+ORBIS has one owner per install. These tests cover the owner roster
+parsing and key resolution; the old multi-tenant / roles /
+allowed_skills tests are gone with that machinery.
 """
 
 from __future__ import annotations
@@ -13,8 +14,6 @@ import pytest
 
 from auth.users import (
     DEFAULT_USER,
-    ROLE_ADMIN,
-    ROLE_USER,
     User,
     UserRegistry,
 )
@@ -26,86 +25,64 @@ def _write_yaml(tmp_path: Path, body: str) -> Path:
     return p
 
 
-# --- User.allows_skill --------------------------------------------------------
-
-def _user(role: str = ROLE_USER, allowed: tuple[str, ...] | None = None) -> User:
-    return User(
-        id="u",
-        display_name="U",
-        api_key_hash="h",
-        role=role,
-        allowed_skills=allowed,
-    )
-
-
-def test_admin_allows_any_skill():
-    u = _user(role=ROLE_ADMIN, allowed=("only-this",))
-    assert u.allows_skill("anything")
-    assert u.allows_skill("only-this")
-
-
-def test_user_with_no_allowed_list_allows_any_skill():
-    u = _user(role=ROLE_USER, allowed=None)
-    assert u.allows_skill("chef")
-    assert u.allows_skill("josh")
-
-
-def test_user_with_allowed_list_restricts():
-    u = _user(allowed=("chef", "josh"))
-    assert u.allows_skill("chef")
-    assert u.allows_skill("josh")
-    assert not u.allows_skill("default")
-
-
-def test_user_with_single_allowed_is_effectively_locked():
-    u = _user(allowed=("josh",))
-    assert u.allows_skill("josh")
-    assert not u.allows_skill("chef")
-
-
-# --- UserRegistry YAML parsing ------------------------------------------------
+# --- Fallback / empty-registry behavior --------------------------------------
 
 def test_empty_registry_is_single_user_mode(tmp_path: Path):
     reg = UserRegistry(tmp_path / "missing.yaml", auto_load=True)
     assert reg.single_user_mode()
     assert reg.source == "empty"
-    assert reg.by_id("default") is DEFAULT_USER
-    assert DEFAULT_USER.is_admin  # fallback runs as admin
+    assert reg.owner() is None
 
 
-def test_registry_loads_users_with_roles_and_allowed_skills(tmp_path: Path):
+def test_default_user_is_synthetic_owner():
+    assert DEFAULT_USER.id == "default"
+    assert DEFAULT_USER.api_key_hash == ""
+
+
+# --- Owner loading -----------------------------------------------------------
+
+def test_registry_loads_single_owner(tmp_path: Path):
     yaml_path = _write_yaml(tmp_path, """
         users:
           - id: alice
-            api_key: pv_ak_alice
+            api_key: pv_ak_alice_secret
             display_name: Alice
-            allowed_skills: [josh, chef]
-          - id: bob
-            api_key: pv_ak_bob
-            display_name: Bob
-            role: admin
     """)
     reg = UserRegistry(yaml_path, auto_load=True)
     assert not reg.single_user_mode()
     assert reg.source == "file"
-
-    alice = reg.resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.id == "alice"
-    assert alice.role == ROLE_USER
-    assert alice.allowed_skills == ("josh", "chef")
-    assert alice.allows_skill("josh")
-    assert alice.allows_skill("chef")
-    assert not alice.allows_skill("default")
-
-    bob = reg.resolve("pv_ak_bob")
-    assert bob is not None
-    assert bob.is_admin
-    assert bob.allowed_skills is None  # admin, no constraint
-    assert bob.allows_skill("anything")
+    owner = reg.owner()
+    assert owner is not None
+    assert owner.id == "alice"
+    assert owner.display_name == "Alice"
 
 
-def test_registry_rejects_unknown_key(tmp_path: Path):
+def test_owner_display_name_defaults_to_id(tmp_path: Path):
+    yaml_path = _write_yaml(tmp_path, """
+        users:
+          - id: bob
+            api_key: pv_ak_bob
+    """)
+    owner = UserRegistry(yaml_path, auto_load=True).owner()
+    assert owner is not None
+    assert owner.display_name == "bob"
+
+
+# --- Key resolution ----------------------------------------------------------
+
+def test_correct_key_resolves_to_owner(tmp_path: Path):
+    yaml_path = _write_yaml(tmp_path, """
+        users:
+          - id: alice
+            api_key: pv_ak_alice_secret
+    """)
+    reg = UserRegistry(yaml_path, auto_load=True)
+    user = reg.resolve("pv_ak_alice_secret")
+    assert user is not None
+    assert user.id == "alice"
+
+
+def test_wrong_key_resolves_to_none(tmp_path: Path):
     yaml_path = _write_yaml(tmp_path, """
         users:
           - id: alice
@@ -117,132 +94,50 @@ def test_registry_rejects_unknown_key(tmp_path: Path):
     assert reg.resolve("") is None
 
 
-def test_allowed_skills_missing_means_unconstrained(tmp_path: Path):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-    """)
-    alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.allowed_skills is None
-    assert alice.allows_skill("any-slug")
+def test_resolve_in_fallback_mode_returns_none(tmp_path: Path):
+    reg = UserRegistry(tmp_path / "missing.yaml", auto_load=True)
+    # In fallback, resolve always returns None — the app layer uses
+    # single_user_mode() to skip auth entirely, not resolve().
+    assert reg.resolve("any-key") is None
 
 
-def test_empty_allowed_skills_list_treated_as_unconstrained(
+# --- Multiple-entry guardrail ------------------------------------------------
+
+def test_multiple_entries_logs_warning_and_keeps_first(
     tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ):
-    # Empty list is almost always a mistake — we log + treat as None
-    # so the user isn't soft-locked out of every skill.
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            allowed_skills: []
-    """)
-    with caplog.at_level("WARNING"):
-        alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.allowed_skills is None
-    assert any("allowed_skills is empty" in r.message for r in caplog.records)
-
-
-def test_non_list_allowed_skills_is_ignored(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            allowed_skills: josh
-    """)
-    with caplog.at_level("WARNING"):
-        alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.allowed_skills is None
-    assert any("must be a list" in r.message for r in caplog.records)
-
-
-def test_allowed_skills_strips_and_drops_empty_entries(tmp_path: Path):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            allowed_skills: ["  josh  ", "", "chef"]
-    """)
-    alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.allowed_skills == ("josh", "chef")
-
-
-def test_unknown_role_defaults_to_user(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            role: wizard
-    """)
-    with caplog.at_level("WARNING"):
-        alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.role == ROLE_USER
-    assert any("unknown role" in r.message for r in caplog.records)
-
-
-def test_pinned_viz_must_be_mapping(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture,
-):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            pinned_viz: "not-a-dict"
-    """)
-    with caplog.at_level("WARNING"):
-        alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.pinned_viz is None
-    assert any("pinned_viz must be a mapping" in r.message for r in caplog.records)
-
-
-def test_pinned_viz_accepted_as_mapping(tmp_path: Path):
-    yaml_path = _write_yaml(tmp_path, """
-        users:
-          - id: alice
-            api_key: pv_ak_alice
-            pinned_viz:
-              palette: Noir
-    """)
-    alice = UserRegistry(yaml_path, auto_load=True).resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.pinned_viz == {"palette": "Noir"}
-
-
-def test_by_id_lookup(tmp_path: Path):
     yaml_path = _write_yaml(tmp_path, """
         users:
           - id: alice
             api_key: pv_ak_alice
           - id: bob
             api_key: pv_ak_bob
-            role: admin
     """)
-    reg = UserRegistry(yaml_path, auto_load=True)
-    assert reg.by_id("alice") is not None
-    assert reg.by_id("bob") is not None
-    assert reg.by_id("charlie") is None
+    with caplog.at_level("WARNING"):
+        reg = UserRegistry(yaml_path, auto_load=True)
+    owner = reg.owner()
+    assert owner is not None
+    assert owner.id == "alice"  # first entry wins
+    assert any("single-owner" in r.message for r in caplog.records)
 
 
-def test_by_id_falls_back_to_default_in_single_user_mode(tmp_path: Path):
-    reg = UserRegistry(tmp_path / "missing.yaml", auto_load=True)
-    # Single-user mode: 'default' resolves to DEFAULT_USER.
-    assert reg.by_id("default") is DEFAULT_USER
-    # Unknown id still returns None (DEFAULT_USER is a sentinel, not a
-    # catch-all).
-    assert reg.by_id("alice") is None
+# --- Malformed input ---------------------------------------------------------
 
+def test_missing_id_or_key_logs_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+):
+    yaml_path = _write_yaml(tmp_path, """
+        users:
+          - id: ""
+            api_key: pv_ak_oops
+    """)
+    with caplog.at_level("WARNING"):
+        reg = UserRegistry(yaml_path, auto_load=True)
+    assert reg.owner() is None
+    assert any("malformed" in r.message for r in caplog.records)
+
+
+# --- Reload ------------------------------------------------------------------
 
 def test_reload_reflects_roster_changes(tmp_path: Path):
     yaml_path = _write_yaml(tmp_path, """
@@ -251,18 +146,26 @@ def test_reload_reflects_roster_changes(tmp_path: Path):
             api_key: pv_ak_alice
     """)
     reg = UserRegistry(yaml_path, auto_load=True)
-    assert [u.id for u in reg.all()] == ["alice"]
+    assert reg.owner().id == "alice"
 
     yaml_path.write_text(textwrap.dedent("""
         users:
-          - id: alice
-            api_key: pv_ak_alice
-            allowed_skills: [josh]
           - id: bob
             api_key: pv_ak_bob
-            role: admin
     """).lstrip())
-    assert sorted(reg.reload()) == ["alice", "bob"]
-    alice = reg.resolve("pv_ak_alice")
-    assert alice is not None
-    assert alice.allowed_skills == ("josh",)
+    ids = reg.reload()
+    assert ids == ["bob"]
+    assert reg.owner().id == "bob"
+
+
+# --- User.hash_key sanity ----------------------------------------------------
+
+def test_hash_key_is_deterministic():
+    a = User.hash_key("pv_ak_test")
+    b = User.hash_key("pv_ak_test")
+    assert a == b
+    assert len(a) == 64  # sha256 hex
+
+
+def test_hash_key_differs_per_key():
+    assert User.hash_key("pv_ak_a") != User.hash_key("pv_ak_b")

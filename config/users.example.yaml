@@ -1,32 +1,17 @@
-# protoVoice user roster — API-key auth.
+# ORBIS owner credential.
 #
-# Copy this file to `config/users.yaml` and populate with real keys to
-# enable multi-tenant mode. Missing / empty file = single-user fallback
-# (no auth enforced).
+# Copy this file to `config/users.yaml` and set a real API key to
+# enable auth. ORBIS is single-owner — only the first entry is read;
+# additional entries are ignored with a warning.
 #
-# Generate keys with: python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"
+# Skip this file entirely (don't create config/users.yaml) to run
+# without auth — fine for localhost / standalone dev. The moment the
+# file exists with a valid entry, auth is enforced on every /api/*.
+#
+# Generate a key:
+#   python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"
 
 users:
-  # Regular user with access to two skills — their dropdown is filtered
-  # to just these, and /api/skills returns 403 for anything else.
-  - id: alice
-    api_key: pv_ak_REPLACE_ME_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    display_name: Alice
-    allowed_skills: [josh, chef]
-
-  # Single-skill user — the client collapses the dropdown to a
-  # read-only chip. Useful for kiosks / dedicated deployments.
-  - id: carol
-    api_key: pv_ak_REPLACE_ME_ccccccccccccccccccccccccccccccccc
-    display_name: Carol
-    allowed_skills: [josh]
-    # Also force a specific orb viz for this user.
-    pinned_viz:
-      palette: Noir
-
-  # Admin — unconstrained. Can switch to any skill, edit orb viz,
-  # POST /api/admin/skills to set other users' active skills.
-  - id: bob
-    api_key: pv_ak_REPLACE_ME_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    display_name: Bob
-    role: admin
+  - id: owner
+    api_key: pv_ak_REPLACE_ME_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    display_name: Your Name
