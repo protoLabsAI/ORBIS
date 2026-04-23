@@ -93,6 +93,7 @@ class _NullSpan:
     def update(self, **_kwargs): return self
     def end(self, **_kwargs): return None
     def score(self, *_args, **_kwargs): return None
+    def create_event(self, *_args, **_kwargs): return None
     def start_observation(self, *_args, **_kwargs): return _NullSpan()
     # Context-manager variant used by `tracing.span(...)`.
     @contextmanager
@@ -213,21 +214,25 @@ def continue_trace(
 # Deferred imports so this module stays cheap when Langfuse is off.
 def _frame_types():
     from pipecat.frames.frames import (
+        BotStartedSpeakingFrame,
         BotStoppedSpeakingFrame,
         FunctionCallCancelFrame,
         FunctionCallInProgressFrame,
         FunctionCallResultFrame,
         LLMFullResponseEndFrame,
         LLMFullResponseStartFrame,
+        LLMTextFrame,
         TranscriptionFrame,
         UserStoppedSpeakingFrame,
     )
     return {
         "UserStoppedSpeakingFrame": UserStoppedSpeakingFrame,
+        "BotStartedSpeakingFrame": BotStartedSpeakingFrame,
         "BotStoppedSpeakingFrame": BotStoppedSpeakingFrame,
         "TranscriptionFrame": TranscriptionFrame,
         "LLMFullResponseStartFrame": LLMFullResponseStartFrame,
         "LLMFullResponseEndFrame": LLMFullResponseEndFrame,
+        "LLMTextFrame": LLMTextFrame,
         "FunctionCallInProgressFrame": FunctionCallInProgressFrame,
         "FunctionCallResultFrame": FunctionCallResultFrame,
         "FunctionCallCancelFrame": FunctionCallCancelFrame,
@@ -265,6 +270,10 @@ class TurnTracer:
         # Span handles — keyed so we can close them on matching frames.
         self._llm_span: Any = None
         self._tool_spans: dict[str, Any] = {}  # tool_call_id → span
+        # Streaming-visibility markers (first text / first audio of this
+        # turn). Populated once per turn; cleared on close.
+        self._llm_first_text_seen: bool = False
+        self._bot_first_audio_seen: bool = False
 
     def get_current_trace(self) -> Any:
         """Other code pulls this to add spans under the active turn."""
@@ -298,8 +307,45 @@ class TurnTracer:
                         as_type="generation",
                         input=self._last_transcript,
                     )
+                    self._llm_first_text_seen = False
                 except Exception as e:
                     logger.warning(f"[tracing] llm span open failed: {e}")
+
+        elif isinstance(frame, F["LLMTextFrame"]):
+            # First streamed token of this turn — stamp completion_start_time
+            # on the generation span so the trace shows time-to-first-token.
+            # This makes "is the LLM streaming?" visible at a glance: the gap
+            # between span start and completion_start_time is TTFT; the gap
+            # from there to span end is the streaming tail.
+            if (
+                self._llm_span is not None
+                and not self._llm_first_text_seen
+                and getattr(frame, "text", "")
+            ):
+                self._llm_first_text_seen = True
+                try:
+                    from datetime import datetime, timezone
+                    self._llm_span.update(completion_start_time=datetime.now(timezone.utc))
+                except Exception as e:
+                    logger.warning(f"[tracing] llm first-token mark failed: {e}")
+
+        elif isinstance(frame, F["BotStartedSpeakingFrame"]):
+            # First audio of this turn — mark on the trace so we can tell
+            # at a glance whether TTS started streaming during the LLM
+            # window (healthy) or waited for LLM to finish (problem).
+            if (
+                self._current_trace is not None
+                and not self._bot_first_audio_seen
+            ):
+                self._bot_first_audio_seen = True
+                try:
+                    from datetime import datetime, timezone
+                    self._current_trace.create_event(
+                        name="tts.first_audio",
+                        metadata={"at": datetime.now(timezone.utc).isoformat()},
+                    )
+                except Exception as e:
+                    logger.warning(f"[tracing] bot first-audio mark failed: {e}")
 
         elif isinstance(frame, F["LLMFullResponseEndFrame"]):
             if self._llm_span is not None:
@@ -369,6 +415,8 @@ class TurnTracer:
         self._llm_span = None
         self._llm_response_closed = False
         self._bot_stopped = False
+        self._llm_first_text_seen = False
+        self._bot_first_audio_seen = False
 
 
 def _preview(value: Any, max_len: int = 500) -> Any:
