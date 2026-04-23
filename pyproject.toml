@@ -23,8 +23,10 @@ dependencies = [
     "soxr",
     "numpy",
     "pyyaml",
-    # Observability
-    "langfuse>=3.0",
+    # Observability. Pinned <3 — agent/tracing.py uses the v2 client.trace
+    # / trace.span / trace.update surface that was removed in the v3 OTEL
+    # redesign. Upgrading to 3.x/4.x is a follow-up (see HANDOFF).
+    "langfuse>=2,<3",
 ]
 
 [project.optional-dependencies]

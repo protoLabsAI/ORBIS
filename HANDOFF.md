@@ -132,6 +132,14 @@ before declaring a release.
 
 ## Known issues / rough edges
 
+- **Langfuse v2 → v3/v4 migration.** `agent/tracing.py` uses the v2
+  `client.trace()` / `trace.span()` / `trace.update()` surface, which
+  the v3 OTEL redesign removed. pyproject is currently pinned
+  `langfuse>=2,<3` to keep voice tracing working. Migrating to v4
+  means switching to `client.start_observation()` / `update_current_*()`
+  / context-manager-based spans — the overall trace→span→end shape
+  stays, but every call site changes. Medium-sized, no functional
+  blocker while pinned.
 - **`_active_skill()` naming shim.** `app.py` + `a2a/server.py`
   still reference `skill_slug_provider` / `_active_skill()` —
   compat shims returning the Persona. Functional but confusing; due
