@@ -331,9 +331,15 @@ def _effective_prompt(
     (duck-typed). SYSTEM_PROMPT env override is applied inside the
     Persona loader, so skill.system_prompt already reflects it.
     """
+    from agent.personality import render_personality_block
     base = skill.system_prompt
     plan = plan_block(verbosity)
     recall = _recall_block(user_id)
+    try:
+        personality = render_personality_block(get_memory())
+    except Exception as e:
+        logger.warning(f"[personality] render failed: {e}")
+        personality = ""
     return (
         base
         + "\n\n"
@@ -343,6 +349,7 @@ def _effective_prompt(
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
+        + (("\n\n" + personality) if personality else "")
         + (("\n\n" + recall) if recall else "")
     )
 
@@ -916,6 +923,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         state = user_state_for(user_id)
 
         # Persist the session to SQLite so prior_n() sees it next boot.
+        turns_for_analyzer: list[dict] = []
         try:
             mem = get_memory()
             sid = state.active_session_id or ""
@@ -923,26 +931,46 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
                 # Extract user+assistant turns + derive final_output from
                 # the live context. Tool calls aren't timing-instrumented
                 # here; leave tool_calls empty for now.
-                turns: list[dict] = []
                 final_output: str | None = None
                 for msg in context.messages:
                     role = msg.get("role")
                     content = msg.get("content")
                     if role in ("user", "assistant") and isinstance(content, str) and content:
-                        turns.append({"role": role, "content": content})
+                        turns_for_analyzer.append({"role": role, "content": content})
                         if role == "assistant":
                             final_output = content
                 mem.sessions.add(
                     session_id=sid,
                     started_at=None,  # DAL fills _now() when None
                     ended_at=None,
-                    messages=turns,
+                    messages=turns_for_analyzer,
                     tool_calls=[],
                     final_output=final_output,
                     trace_id=getattr(turn_tracer, "trace_id", None),
                 )
         except Exception as e:
             logger.warning(f"[memory] session persist failed: {e}")
+
+        # Kick off post-session personality-drift analysis in the
+        # background. Uses the session-level LLM endpoint; failures
+        # are silent. Doesn't block the disconnect teardown.
+        async def _run_drift_analysis() -> None:
+            try:
+                from agent.personality import analyze_session_drift, apply_drift
+                deltas = await analyze_session_drift(
+                    turns_for_analyzer,
+                    llm_url=llm_url,
+                    model=llm_model,
+                    api_key=llm_api_key,
+                )
+                if deltas:
+                    apply_drift(get_memory(), deltas)
+                    logger.info(f"[personality] applied {len(deltas)} drift delta(s)")
+            except Exception as e:
+                logger.info(f"[personality] drift analysis errored: {e}")
+
+        if turns_for_analyzer:
+            asyncio.create_task(_run_drift_analysis(), name="orbis-drift-analysis")
 
         if state.active_delivery is delivery:
             state.active_delivery = None

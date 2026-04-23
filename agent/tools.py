@@ -268,6 +268,57 @@ async def recall_preset_handler(params: FunctionCallParams) -> None:
     await params.result_callback(f"Going back to {name}.")
 
 
+@tool(
+    "adjust_personality",
+    (
+        "Apply a small, explicit personality shift in response to the user "
+        "asking you to ('be more playful', 'be less sarcastic', 'be warmer'). "
+        "Use SPARINGLY — only when the user directs a change. Deltas are "
+        "small by design; the persistent personality drifts naturally over "
+        "many sessions and shouldn't lurch. Axis slugs: playful_serious, "
+        "warm_guarded, sarcastic_sincere, verbose_terse, hopeful_cynical, "
+        "grandiose_grounded, probing_incurious, philosophical_pragmatic, "
+        "independent_clingy, curious_bored. Positive delta shifts toward "
+        "the second adjective; negative toward the first."
+    ),
+    parameters={
+        "axis": {
+            "type": "string",
+            "description": "Axis slug (see list above)",
+        },
+        "delta": {
+            "type": "number",
+            "description": "Shift in [-0.2, +0.2]. Typical is 0.1.",
+        },
+    },
+    required=["axis", "delta"],
+    latency=Latency.FAST,
+)
+async def adjust_personality_handler(params: FunctionCallParams) -> None:
+    axis = (params.arguments.get("axis") or "").strip()
+    try:
+        delta = float(params.arguments.get("delta", 0.0))
+    except (TypeError, ValueError):
+        delta = 0.0
+    if not axis or abs(delta) < 0.01:
+        await params.result_callback("I didn't catch a clear personality axis + delta.")
+        return
+    # Clamp to the directable-range; the DAL clamps again at |0.3|.
+    delta = max(-0.2, min(0.2, delta))
+
+    # Import here to avoid module-load cycles.
+    try:
+        from app import get_memory  # type: ignore
+        get_memory().personality.drift(axis, delta, reason="user directive")
+    except Exception as exc:
+        logger.info(f"[orb] adjust_personality memory write failed: {exc}")
+        # Fall through — still confirm verbally so the user hears the intent.
+
+    direction = "more" if delta > 0 else "less"
+    logger.info(f"[personality] adjust_personality axis={axis} delta={delta:+.2f}")
+    await params.result_callback(f"Okay — dialing {axis} {direction}.")
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).
