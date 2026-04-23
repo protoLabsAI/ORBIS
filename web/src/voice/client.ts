@@ -18,8 +18,8 @@ import { apiKeyStore } from '@/auth/apiKey';
  */
 export function buildClient(): PipecatClient {
   const key = apiKeyStore.get();
-  const headers: Record<string, string> = {};
-  if (key) headers['X-API-Key'] = key;
+  const headers = new Headers();
+  if (key) headers.set('X-API-Key', key);
 
   const transport = new SmallWebRTCTransport({
     webrtcRequestParams: {

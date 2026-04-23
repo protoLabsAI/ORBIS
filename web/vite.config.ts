@@ -5,7 +5,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import glsl from 'vite-plugin-glsl';
 import path from 'node:path';
 
-const PROTOVOICE = process.env.PROTOVOICE_URL ?? 'http://localhost:7866';
+const ORBIS_BACKEND = process.env.ORBIS_BACKEND_URL ?? 'http://localhost:7866';
 
 export default defineConfig({
   plugins: [
@@ -18,9 +18,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'protoVoice',
-        short_name: 'protoVoice',
-        description: 'Duplex voice agent with fractal orb visualizer',
+        name: 'ORBIS',
+        short_name: 'ORBIS',
+        description: 'Voice-first AI companion — an orb that talks back, remembers you, and routes to your agents.',
         theme_color: '#0a0a0a',
         background_color: '#0a0a0a',
         display: 'standalone',
@@ -53,11 +53,11 @@ export default defineConfig({
     // Allow the dev server to be reached via Tailscale serve on :8443.
     allowedHosts: ['protolabs.taild25506.ts.net', 'localhost', '.ts.net'],
     proxy: {
-      '/api': { target: PROTOVOICE, changeOrigin: true },
+      '/api': { target: ORBIS_BACKEND, changeOrigin: true },
       // Legacy static assets (orb images, etc.) — one-release deprecation window.
-      '/static': { target: PROTOVOICE, changeOrigin: true },
+      '/static': { target: ORBIS_BACKEND, changeOrigin: true },
       // Well-known A2A agent card.
-      '/.well-known': { target: PROTOVOICE, changeOrigin: true },
+      '/.well-known': { target: ORBIS_BACKEND, changeOrigin: true },
     },
   },
 });
