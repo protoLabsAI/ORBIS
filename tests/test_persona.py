@@ -163,3 +163,60 @@ def test_persona_is_immutable():
     p = Persona(slug="x", name="X", system_prompt="hello")
     with pytest.raises(Exception):
         p.slug = "y"  # frozen dataclass
+
+
+# --- state/mood overrides (DECISIONS 2026-04-23) ---------------------------
+
+
+def test_persona_loads_orb_state_and_mood_overrides(tmp_path: Path):
+    p = tmp_path / "orbis.yaml"
+    p.write_text(
+        """
+persona:
+  name: ORBIS
+orb:
+  variant: fractal
+  palette: Aurora
+  params: {density: 2.4}
+  state_overrides:
+    idle:     {speed: -0.1}
+    speaking: {density: 0.4, speed: 0.3}
+  mood_overrides:
+    valence: {atmosphereGlow: 0.2}
+    arousal: {speed: 0.3}
+""".lstrip(),
+    )
+    persona = load_persona(p)
+    assert persona.orb_state_overrides["idle"]["speed"] == -0.1
+    assert persona.orb_state_overrides["speaking"]["density"] == 0.4
+    assert persona.orb_mood_overrides["valence"]["atmosphereGlow"] == 0.2
+    assert persona.orb_mood_overrides["arousal"]["speed"] == 0.3
+
+
+def test_persona_defaults_overrides_to_empty(tmp_path: Path):
+    """No state_overrides / mood_overrides in yaml → empty dicts,
+    not None. Keeps the frontend composition layer simple."""
+    p = tmp_path / "orbis.yaml"
+    p.write_text("persona: {name: ORBIS}\norb: {variant: fractal}\n")
+    persona = load_persona(p)
+    assert persona.orb_state_overrides == {}
+    assert persona.orb_mood_overrides == {}
+
+
+def test_persona_overrides_round_trip_through_write(tmp_path: Path):
+    """Write a config via config_store, then load via persona loader —
+    state/mood overrides survive the round-trip intact."""
+    from agent.config_store import write_config
+
+    p = tmp_path / "orbis.yaml"
+    write_config({
+        "persona": {"name": "ORBIS"},
+        "orb": {
+            "variant": "fractal",
+            "state_overrides": {"idle": {"speed": -0.1}},
+            "mood_overrides": {"valence": {"atmosphereGlow": 0.2}},
+        },
+    }, p)
+    persona = load_persona(p)
+    assert persona.orb_state_overrides == {"idle": {"speed": -0.1}}
+    assert persona.orb_mood_overrides == {"valence": {"atmosphereGlow": 0.2}}

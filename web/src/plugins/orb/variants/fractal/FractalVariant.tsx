@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { FractalMaterial } from './materials';
 import type { FractalPreset } from './presets';
-import { useOrbState } from '../../useOrbState';
+import { useOrbState, useOrbOverrides } from '../../useOrbState';
 import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
 import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
@@ -18,6 +18,9 @@ import {
   TIME_WRAP,
 } from '../../shared/constants';
 import type { VariantProps } from '../registry';
+import { composeBase } from '../../compose';
+import { moodStore } from '@/plugins/mood/moodStore';
+import { useSyncExternalStore } from 'react';
 
 /**
  * Fractal variant — ray-marched volumetric fractal + shared atmosphere.
@@ -30,7 +33,24 @@ export function FractalVariant({ voiceState, botStream, localStream }: VariantPr
   const matRef = useRef<InstanceType<typeof FractalMaterial>>(null);
 
   const { params } = useOrbState();
-  const base = params as unknown as FractalPreset;
+  const { stateOverrides, moodOverrides } = useOrbOverrides();
+  const mood = useSyncExternalStore(moodStore.subscribe, moodStore.get, moodStore.get);
+
+  // `base` is the composed preset — palette + params + state delta +
+  // mood-scaled delta. The state crossfade picks between two composed
+  // snapshots; when state_overrides or mood shifts, React re-runs this
+  // memo and useStateCrossfade re-arms via its base-changed effect.
+  const base = useMemo(
+    () => composeBase(
+      params as Record<string, number | string>,
+      stateOverrides,
+      moodOverrides,
+      voiceState,
+      { valence: mood.valence, arousal: mood.arousal, guardedness: mood.guardedness },
+    ) as unknown as FractalPreset,
+    [params, stateOverrides, moodOverrides, voiceState,
+     mood.valence, mood.arousal, mood.guardedness],
+  );
   const baseRef = useRef(base);
   baseRef.current = base;
 

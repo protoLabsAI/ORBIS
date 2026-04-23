@@ -37,10 +37,18 @@ _ALLOWED_PERSONA_KEYS = {
     "temperature", "max_tokens", "filler_verbosity",
 }
 _ALLOWED_VOICE_KEYS = {"tts_backend", "voice"}
-_ALLOWED_ORB_KEYS = {"variant", "palette", "params"}
+_ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
 _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
 _ALLOWED_VERBOSITIES = {"silent", "brief", "narrated", "chatty"}
 _ALLOWED_TTS_BACKENDS = {"kokoro", "openai", "elevenlabs", "fish"}
+
+# Orb state/mood authoring (DECISIONS.md 2026-04-23 amendment). Presets
+# grow optional delta maps per voice-state and per mood-dimension on top
+# of `orb.params`. Values are additive (for numbers) or replacement (for
+# colors), composed in the frontend at uniform-set time. Frontend is
+# the only place that interprets them; backend just round-trips.
+_ALLOWED_VOICE_STATES = {"idle", "listening", "thinking", "speaking"}
+_ALLOWED_MOOD_DIMS = {"valence", "arousal", "guardedness"}
 
 
 def read_config(path: str | Path | None = None) -> dict:
@@ -109,6 +117,26 @@ def _validate_voice(block: Any) -> dict:
     return out
 
 
+def _validate_param_delta(block: Any, path_hint: str) -> dict[str, Any]:
+    """Filter a delta map — same shape as orb.params but treated
+    semantically as additive deltas (numbers) or replacements (strings
+    like color hex). Non-mapping input and non-scalar values dropped
+    with warnings; never raises."""
+    if not isinstance(block, dict):
+        logger.warning(f"[config_store] {path_hint} must be a mapping; dropping")
+        return {}
+    out: dict[str, Any] = {}
+    for pk, pv in block.items():
+        if isinstance(pv, (int, float, str, bool)):
+            out[str(pk)] = pv
+        else:
+            logger.warning(
+                f"[config_store] dropping {path_hint}.{pk} "
+                f"(unsupported type {type(pv).__name__})"
+            )
+    return out
+
+
 def _validate_orb(block: Any) -> dict:
     if not isinstance(block, dict):
         return {}
@@ -123,19 +151,49 @@ def _validate_orb(block: Any) -> dict:
             if v is None:
                 out[k] = {}
             elif isinstance(v, dict):
-                # Params are shader uniforms — numbers or strings (color hex).
-                cleaned: dict[str, Any] = {}
-                for pk, pv in v.items():
-                    if isinstance(pv, (int, float, str, bool)):
-                        cleaned[str(pk)] = pv
-                    else:
-                        logger.warning(
-                            f"[config_store] dropping orb.params.{pk} "
-                            f"(unsupported type {type(pv).__name__})"
-                        )
-                out[k] = cleaned
+                out[k] = _validate_param_delta(v, "orb.params")
             else:
                 raise ValueError("orb.params must be a mapping")
+        elif k == "state_overrides":
+            # Expect: {idle|listening|thinking|speaking: {param: delta, ...}}
+            if v is None:
+                out[k] = {}
+            elif isinstance(v, dict):
+                cleaned: dict[str, Any] = {}
+                for state, delta in v.items():
+                    key = str(state).strip().lower()
+                    if key not in _ALLOWED_VOICE_STATES:
+                        logger.warning(
+                            f"[config_store] dropping orb.state_overrides.{state!r} "
+                            f"(must be one of {sorted(_ALLOWED_VOICE_STATES)})"
+                        )
+                        continue
+                    cleaned[key] = _validate_param_delta(
+                        delta, f"orb.state_overrides.{key}",
+                    )
+                out[k] = cleaned
+            else:
+                raise ValueError("orb.state_overrides must be a mapping")
+        elif k == "mood_overrides":
+            # Expect: {valence|arousal|guardedness: {param: delta, ...}}
+            if v is None:
+                out[k] = {}
+            elif isinstance(v, dict):
+                cleaned = {}
+                for dim, delta in v.items():
+                    key = str(dim).strip().lower()
+                    if key not in _ALLOWED_MOOD_DIMS:
+                        logger.warning(
+                            f"[config_store] dropping orb.mood_overrides.{dim!r} "
+                            f"(must be one of {sorted(_ALLOWED_MOOD_DIMS)})"
+                        )
+                        continue
+                    cleaned[key] = _validate_param_delta(
+                        delta, f"orb.mood_overrides.{key}",
+                    )
+                out[k] = cleaned
+            else:
+                raise ValueError("orb.mood_overrides must be a mapping")
     return out
 
 

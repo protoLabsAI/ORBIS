@@ -91,6 +91,11 @@ class Persona:
     orb_variant: str | None = None
     orb_palette: str | None = None
     orb_params: dict = field(default_factory=dict)
+    # Authoring deltas per voice state + mood dimension (DECISIONS.md
+    # 2026-04-23). Composed on top of orb_params in the frontend at
+    # uniform-set time; backend just carries them through.
+    orb_state_overrides: dict = field(default_factory=dict)
+    orb_mood_overrides: dict = field(default_factory=dict)
 
     # Retained for compatibility with the skills-era call signature
     # used by _effective_prompt / delegate routing. Always empty for
@@ -214,6 +219,22 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     orb_params_raw = orb_block.get("params") or {}
     orb_params = dict(orb_params_raw) if isinstance(orb_params_raw, dict) else {}
 
+    # State + mood authoring deltas (optional). Backend carries them
+    # through unchanged; the frontend composition layer applies them
+    # on top of orb_params at uniform-set time. Keys not in the
+    # allowed enums are silently dropped by config_store on write, so
+    # by the time we read them here they're already normalized.
+    state_overrides_raw = orb_block.get("state_overrides") or {}
+    mood_overrides_raw = orb_block.get("mood_overrides") or {}
+    orb_state_overrides = (
+        {k: dict(v) for k, v in state_overrides_raw.items() if isinstance(v, dict)}
+        if isinstance(state_overrides_raw, dict) else {}
+    )
+    orb_mood_overrides = (
+        {k: dict(v) for k, v in mood_overrides_raw.items() if isinstance(v, dict)}
+        if isinstance(mood_overrides_raw, dict) else {}
+    )
+
     # LLM routing — when the block is present, it wins over env.
     # run_bot reads persona.llm.{url, model, api_key, api_key_env}
     # and falls back to env defaults for each field individually.
@@ -238,6 +259,8 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,
+        orb_state_overrides=orb_state_overrides,
+        orb_mood_overrides=orb_mood_overrides,
         llm=llm,
     )
     logger.info(f"[persona] loaded {persona.slug!r} from {path}")
