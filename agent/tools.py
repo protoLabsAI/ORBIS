@@ -135,6 +135,27 @@ def _schema_for(spec: ToolSpec) -> FunctionSchema:
 # ---------------------------------------------------------------------------
 
 
+def _customization_gate_open() -> bool:
+    """True when the user has the paid customization unlock active (or
+    when Stripe isn't configured on this install — dev mode is open)."""
+    try:
+        from app import get_memory  # type: ignore
+        from agent.entitlement import has_customization
+        return has_customization(get_memory())
+    except Exception:
+        # Fail open — never lock the user out due to an entitlement
+        # lookup error. The real gate is server-enforced on the web
+        # side (shop UI) and client-side (locked variants in the
+        # picker); this check is a belt-and-suspenders safety.
+        return True
+
+
+_LOCKED_MESSAGE = (
+    "That change is part of the customization unlock. "
+    "I'll stay in the current look."
+)
+
+
 @tool(
     "set_variant",
     (
@@ -156,6 +177,10 @@ async def set_variant_handler(params: FunctionCallParams) -> None:
     name = (params.arguments.get("name") or "").strip().lower()
     if not name:
         await params.result_callback("I need a variant name to try.")
+        return
+    if not _customization_gate_open():
+        logger.info(f"[orb] set_variant blocked (no entitlement): {name!r}")
+        await params.result_callback(_LOCKED_MESSAGE)
         return
     logger.info(f"[orb] set_variant → {name!r}")
     await params.result_callback(f"Trying the {name} variant.")
@@ -182,6 +207,10 @@ async def apply_palette_handler(params: FunctionCallParams) -> None:
     name = (params.arguments.get("name") or "").strip()
     if not name:
         await params.result_callback("I need a palette name.")
+        return
+    if not _customization_gate_open():
+        logger.info(f"[orb] apply_palette blocked (no entitlement): {name!r}")
+        await params.result_callback(_LOCKED_MESSAGE)
         return
     logger.info(f"[orb] apply_palette → {name!r}")
     await params.result_callback(f"Switching to the {name} palette.")
@@ -214,6 +243,10 @@ async def adjust_param_handler(params: FunctionCallParams) -> None:
     if not key or value is None:
         await params.result_callback("I need both a parameter name and a value.")
         return
+    if not _customization_gate_open():
+        logger.info(f"[orb] adjust_param blocked (no entitlement): {key}={value!r}")
+        await params.result_callback(_LOCKED_MESSAGE)
+        return
     logger.info(f"[orb] adjust_param → {key}={value!r}")
     await params.result_callback(f"Adjusting {key}.")
 
@@ -238,6 +271,10 @@ async def save_preset_handler(params: FunctionCallParams) -> None:
     name = (params.arguments.get("name") or "").strip()
     if not name:
         await params.result_callback("I need a name to save under.")
+        return
+    if not _customization_gate_open():
+        logger.info(f"[orb] save_preset blocked (no entitlement): {name!r}")
+        await params.result_callback(_LOCKED_MESSAGE)
         return
     logger.info(f"[orb] save_preset → {name!r}")
     await params.result_callback(f"Saved this as {name}.")

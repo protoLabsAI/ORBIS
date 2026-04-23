@@ -1053,14 +1053,33 @@ async def lifespan(app: FastAPI):
 
     curator_task = asyncio.create_task(_curator_loop(), name="orbis-curator")
 
+    # Entitlement refresh — re-query Stripe for the owner's latest
+    # payment and extend the local cache. Runs once at boot, then
+    # every REFRESH_INTERVAL_HOURS (default 24). Runs even when Stripe
+    # is unconfigured — the function no-ops in that case.
+    async def _entitlement_refresh_loop() -> None:
+        from agent.entitlement import REFRESH_INTERVAL_HOURS, configured, refresh_from_stripe
+        while True:
+            if configured():
+                try:
+                    refresh_from_stripe(get_memory())
+                except Exception as e:
+                    logger.info(f"[entitlement] refresh failed: {e}")
+            await asyncio.sleep(REFRESH_INTERVAL_HOURS * 3600)
+
+    entitlement_task = asyncio.create_task(
+        _entitlement_refresh_loop(), name="orbis-entitlement"
+    )
+
     try:
         yield
     finally:
-        curator_task.cancel()
-        try:
-            await curator_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        for t in (curator_task, entitlement_task):
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
         await _handler.close()
         lifecycle.stop()
 
@@ -1201,6 +1220,57 @@ async def get_config(user: User = Depends(require_user)):
     consumes this to populate the settings form."""
     from agent.config_store import read_config
     return {"config": read_config()}
+
+
+@app.get("/api/entitlement")
+async def get_entitlement(user: User = Depends(require_user)):
+    """Return the owner's current entitlement state — used by the UI
+    to gate paid-tier features (customization editor, variant picker)."""
+    from agent.entitlement import entitlement_state
+    return entitlement_state(get_memory())
+
+
+@app.post("/api/entitlement/checkout")
+async def create_checkout(user: User = Depends(require_user)):
+    """Create a Stripe Checkout Session for the customization unlock.
+    Returns ``{"url": "<stripe-hosted checkout page>"}``. Client
+    redirects the user there; success/cancel URLs come back via
+    STRIPE_SUCCESS_URL / STRIPE_CANCEL_URL."""
+    from agent.entitlement import EntitlementError, configured, create_checkout_session
+    if not configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe is not configured on this install.",
+        )
+    try:
+        url = create_checkout_session()
+    except EntitlementError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.exception("[entitlement] checkout session creation failed")
+        raise HTTPException(status_code=500, detail=f"checkout failed: {exc}")
+    return {"url": url}
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Stripe webhook endpoint. Verified via signature header. NOT auth-
+    gated — Stripe's webhook call doesn't carry our API key; the
+    signature check is the authentication. Configure this URL in the
+    Stripe dashboard + set STRIPE_WEBHOOK_SECRET in .env."""
+    from agent.entitlement import EntitlementError, configured, handle_webhook_event
+    if not configured():
+        raise HTTPException(
+            status_code=503, detail="Stripe is not configured."
+        )
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        result = handle_webhook_event(payload, signature, get_memory())
+    except EntitlementError as exc:
+        # Signature failure → 400 (Stripe retries on non-2xx).
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
 
 
 @app.post("/api/config")
