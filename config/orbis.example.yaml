@@ -40,10 +40,15 @@ persona:
 
 voice:
   # Pipecat TTS backend. `kokoro` is the default and runs on CPU.
-  # Alternatives: `openai` (configure via TTS_OPENAI_* env vars in .env)
-  # or `fish` (opt-in; requires the fish-speech sidecar).
+  # Alternatives:
+  #   openai      — any OpenAI-compatible /v1/audio/speech endpoint
+  #                 (configure via TTS_OPENAI_* env vars)
+  #   elevenlabs  — ElevenLabs native WebSocket service
+  #                 (configure via ELEVENLABS_* env vars; pay API)
+  #   fish        — Fish S2-Pro sidecar (opt-in; requires the
+  #                 fish-speech docker-compose profile)
   tts_backend: kokoro
-  voice: af_heart              # a Kokoro voice id
+  voice: af_heart              # kokoro voice id, ElevenLabs voice_id, etc.
 
 orb:
   # Starter orb viz — picked at first-run via the setup wizard. Once
