@@ -157,10 +157,11 @@ def _active_skill(user_id: str = "default"):
     return get_active_persona()
 
 
-def _recall_block(user_id: str, skill_slug: str = "orbis") -> str:
-    """Session-open memory callback. Temporary shim pending the memory
-    layer rewrite — reads the legacy per-skill text summary if present."""
-    summary = load_last_summary(user_id, skill_slug)
+def _recall_block(user_id: str) -> str:
+    """Session-open memory callback. Reads the rolling conversation
+    summary for this user and formats it as a nudge block injected
+    into the system prompt at session start."""
+    summary = load_last_summary(user_id)
     if not summary:
         return ""
     return (
@@ -285,7 +286,7 @@ def _effective_prompt(
     """
     base = skill.system_prompt
     plan = plan_block(verbosity)
-    recall = _recall_block(user_id, getattr(skill, "slug", "orbis"))
+    recall = _recall_block(user_id)
     return (
         base
         + "\n\n"
@@ -668,7 +669,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
                 continue
             content = msg.get("content") or ""
             if isinstance(content, str) and content and content != skill.system_prompt:
-                save_summary(user_id, skill.slug, content)
+                save_summary(user_id, content)
                 return
 
     # RTVI — routes structured client↔server events over the WebRTC data
@@ -853,7 +854,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         # (a2a pushes, slow_research completions, scheduled messages).
         # The controller's bid-then-drain will ask before flushing if
         # there are ≥2 queued items.
-        stashed = drain_stashed_deliveries(user_id, skill.slug)
+        stashed = drain_stashed_deliveries(user_id)
         if stashed:
             logger.info(f"[replay] replaying {len(stashed)} stashed delivery(ies)")
             await delivery.replay_stashed(stashed)
@@ -864,7 +865,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         # Persist anything still pending so the next session can replay.
         snapshot = delivery.snapshot_pending()
         for item in snapshot:
-            stash_delivery(user_id, skill.slug, item)
+            stash_delivery(user_id, item)
         state = user_state_for(user_id)
         if state.active_delivery is delivery:
             state.active_delivery = None

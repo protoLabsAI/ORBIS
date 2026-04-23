@@ -363,9 +363,8 @@ def register_a2a_routes(
         delivery = delivery_provider() if delivery_provider else None
         if delivery is None:
             from agent.session_store import stash_delivery
-            slug = skill_slug_provider() if skill_slug_provider else "default"
             user_id = user_id_provider() if user_id_provider else "default"
-            stash_delivery(user_id, slug, {
+            stash_delivery(user_id, {
                 "phrase": f"{caller} says — {text}",
                 "policy": "next_silence" if priority is not Priority.CRITICAL else "now",
                 "priority": priority.value,
@@ -401,17 +400,15 @@ def register_a2a_routes(
             # No live session — stash for the next connect instead of
             # dropping. Replay via drain_stashed_deliveries on_client_connected.
             from agent.session_store import stash_delivery
-            slug = skill_slug_provider() if skill_slug_provider else "default"
             user_id = user_id_provider() if user_id_provider else "default"
-            stash_delivery(user_id, slug, {
+            stash_delivery(user_id, {
                 "phrase": f"{caller} says — {text}",
                 "policy": "next_silence",
                 "priority": "time_sensitive",
                 "keywords": [],
             })
             logger.info(
-                f"[a2a/callback] no active session — stashed under "
-                f"({user_id!r}, {slug!r})"
+                f"[a2a/callback] no active session — stashed under {user_id!r}"
             )
             return {"ok": True, "delivered": False, "stashed": True}
 

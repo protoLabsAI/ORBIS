@@ -1,17 +1,14 @@
 """Per-user process state.
 
-Replaces the module-level singletons (_ACTIVE_SKILL_SLUG, _ACTIVE_DELIVERY,
-_ACTIVE_TRACER, _FILLER) with a dict keyed on ``user_id``. Each known
-user gets their own:
-
-  - active skill selection (the dropdown choice, per-user)
-  - filler verbosity + generator (ambient chat level is per-user)
-  - live voice session state (delivery controller, Langfuse tracer)
+Replaces the module-level singletons (filler, delivery controller,
+Langfuse tracer) with a dict keyed on ``user_id``. ORBIS is
+single-user in practice (one owner per install) but the registry
+shape is retained because it's cheap and makes the multi-device
+flow — same user across phone + laptop — naturally work.
 
 Usage:
 
     state = user_state_for(user_id)
-    state.skill_slug = "chef"
     state.active_delivery = delivery_controller
 """
 
@@ -34,7 +31,6 @@ DEFAULT_USER_ID = "default"
 class UserState:
     """Everything that used to be a module-level singleton, per user."""
     user_id: str
-    skill_slug: str = ""                   # "" = use the global default
     filler_settings: FillerSettings = field(default_factory=FillerSettings)
     filler_generator: FillerGenerator | None = None  # lazy via filler_gen()
 
