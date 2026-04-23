@@ -16,6 +16,14 @@ See `docs/reference/tracing-contract.md`.
 Fail-open: if LANGFUSE_* env vars are unset, every helper here is a
 no-op. Local dev without Langfuse keeps working; production gets full
 tracing when the keys are present.
+
+SDK notes (v4): the v2 client.trace() / trace.span() / trace.update()
+surface was replaced in v3+ by an OpenTelemetry-style model. A "trace"
+is now just the first span in a tree; child spans open via
+span.start_observation(...). session_id / user_id are OTEL attributes
+set at span-open time via the propagate_attributes() context manager.
+Public helper signatures in this module stayed stable across the
+migration — callers don't need to change.
 """
 
 from __future__ import annotations
@@ -71,19 +79,35 @@ def enabled() -> bool:
 
 class _NullSpan:
     """Stand-in object returned when tracing is off, so callers can use
-    `with trace.span(...)` / `span.update(...)` / `span.end(...)` without
-    `if enabled` guards everywhere."""
+    `with trace.start_as_current_observation(...)` / `span.update(...)` /
+    `span.end(...)` without `if enabled` guards everywhere.
+
+    Also carries the legacy v2 method names (`.span()` / `.generation()`)
+    as aliases onto `.start_observation()`, so any caller that wasn't
+    updated during the v4 migration still silently no-ops instead of
+    raising AttributeError.
+    """
+
     def __enter__(self): return self
     def __exit__(self, *_): return False
     def update(self, **_kwargs): return self
     def end(self, **_kwargs): return None
     def score(self, *_args, **_kwargs): return None
-    def span(self, *_args, **_kwargs): return _NullSpan()
-    def generation(self, *_args, **_kwargs): return _NullSpan()
+    def start_observation(self, *_args, **_kwargs): return _NullSpan()
+    # Context-manager variant used by `tracing.span(...)`.
+    @contextmanager
+    def start_as_current_observation(self, *_args, **_kwargs):
+        yield _NullSpan()
+    # v2-compat aliases (kept so stragglers don't crash).
+    def span(self, *args, **kwargs): return self.start_observation(*args, **kwargs)
+    def generation(self, *args, **kwargs): return self.start_observation(*args, **kwargs)
+
     @property
     def id(self) -> str: return ""
     @property
     def trace_id(self) -> str: return ""
+    @property
+    def session_id(self) -> str: return ""
 
 
 _NULL = _NullSpan()
@@ -91,7 +115,8 @@ _NULL = _NullSpan()
 
 def start_session(session_id: str, *, user_id: str | None = None) -> None:
     """Mark a WebRTC session — no Langfuse object is created (sessions
-    are implicit via session_id on traces), but we log for correlation."""
+    are implicit via the session.id OTEL attribute on traces), but we log
+    for correlation."""
     if not enabled():
         return
     logger.info(f"[tracing] session start id={session_id!r} user={user_id!r}")
@@ -105,22 +130,38 @@ def start_turn_trace(
     user_id: str | None = None,
     metadata: dict | None = None,
 ) -> Any:
-    """Open a new trace for a single user turn. Returns a trace handle
-    (or a NullSpan when disabled). Caller is responsible for calling
-    `.update(output=…)` and `.end()` when the turn completes."""
+    """Open a new trace for a single user turn. Returns a span handle
+    (or a _NullSpan when disabled). Caller is responsible for calling
+    `.update(output=…)` and `.end()` when the turn completes.
+
+    In v4 the "trace" is just the root observation. session_id + user_id
+    are set as OTEL trace-level attributes via propagate_attributes so
+    they stick on this span and any children opened within the brief
+    context.
+    """
     client = _lazy_client()
     if client is None:
         return _NULL
     try:
-        return client.trace(
-            name=name,
-            session_id=session_id,
-            user_id=user_id,
-            input=input,
-            metadata=metadata or {},
-        )
+        from langfuse import propagate_attributes  # type: ignore[import-not-found]
+        with propagate_attributes(session_id=session_id, user_id=user_id):
+            span = client.start_observation(
+                name=name,
+                as_type="span",
+                input=input,
+                metadata=metadata or {},
+            )
+        # Stash session_id/user_id on the handle so downstream helpers
+        # (propagation_headers, delegate calls) can read them without
+        # re-entering the OTEL context.
+        try:
+            setattr(span, "_orbis_session_id", session_id)
+            setattr(span, "_orbis_user_id", user_id or "")
+        except Exception:
+            pass
+        return span
     except Exception as e:
-        logger.warning(f"[tracing] trace() failed: {e}")
+        logger.warning(f"[tracing] start_turn_trace failed: {e}")
         return _NULL
 
 
@@ -128,17 +169,40 @@ def continue_trace(
     *,
     trace_id: str,
     session_id: str,
+    parent_span_id: str | None = None,
 ) -> Any:
     """Re-attach to a trace started elsewhere — used when we receive a
     cross-fleet call with Langfuse-Trace-Id / Langfuse-Session-Id headers
-    and want our spans to nest inside the caller's trace."""
+    and want our spans to nest inside the caller's trace.
+
+    v4 uses a TraceContext to graft a new root-level span onto an
+    existing trace tree. parent_span_id is optional but recommended when
+    Langfuse-Parent-Observation-Id is present — it makes the inbound
+    span a sibling of whatever the caller was doing, not a new root.
+    """
     client = _lazy_client()
     if client is None:
         return _NULL
     try:
-        return client.trace(id=trace_id, session_id=session_id)
+        from langfuse import propagate_attributes  # type: ignore[import-not-found]
+        from langfuse.types import TraceContext  # type: ignore[import-not-found]
+        tc_kwargs: dict[str, Any] = {"trace_id": trace_id}
+        if parent_span_id:
+            tc_kwargs["parent_span_id"] = parent_span_id
+        tc = TraceContext(**tc_kwargs)
+        with propagate_attributes(session_id=session_id):
+            span = client.start_observation(
+                name="a2a_inbound",
+                as_type="span",
+                trace_context=tc,
+            )
+        try:
+            setattr(span, "_orbis_session_id", session_id)
+        except Exception:
+            pass
+        return span
     except Exception as e:
-        logger.warning(f"[tracing] continue_trace() failed: {e}")
+        logger.warning(f"[tracing] continue_trace failed: {e}")
         return _NULL
 
 
@@ -229,8 +293,9 @@ class TurnTracer:
         elif isinstance(frame, F["LLMFullResponseStartFrame"]):
             if self._current_trace is not None and self._llm_span is None:
                 try:
-                    self._llm_span = self._current_trace.span(
+                    self._llm_span = self._current_trace.start_observation(
                         name="llm.response",
+                        as_type="generation",
                         input=self._last_transcript,
                     )
                 except Exception as e:
@@ -251,8 +316,9 @@ class TurnTracer:
             name = getattr(frame, "function_name", None) or getattr(frame, "name", "tool")
             if call_id and self._current_trace is not None:
                 try:
-                    self._tool_spans[call_id] = self._current_trace.span(
+                    self._tool_spans[call_id] = self._current_trace.start_observation(
                         name=f"tool.{name}",
+                        as_type="tool",
                         input={"name": name, "args_preview": _preview(getattr(frame, "arguments", None))},
                     )
                 except Exception as e:
@@ -263,7 +329,8 @@ class TurnTracer:
             span = self._tool_spans.pop(call_id, None)
             if span is not None:
                 try:
-                    span.end(output=_preview(getattr(frame, "result", None)))
+                    span.update(output=_preview(getattr(frame, "result", None)))
+                    span.end()
                 except Exception as e:
                     logger.warning(f"[tracing] tool span end failed: {e}")
 
@@ -349,19 +416,28 @@ def propagation_headers(
     """Return the Langfuse-* HTTP headers that carry the current trace
     across fleet boundaries. Empty dict if tracing is off or there's no
     live trace. See docs/reference/tracing-contract.md for the spec.
+
+    Reads session_id off the ORBIS-stamped attribute we set at span
+    creation — v4 spans don't expose session_id as a direct property.
     """
     if not enabled() or trace is None:
         return {}
-    trace_id = getattr(trace, "id", "") or getattr(trace, "trace_id", "")
-    session_id = getattr(trace, "session_id", "") or ""
+    trace_id = getattr(trace, "trace_id", "") or getattr(trace, "id", "")
+    session_id = (
+        getattr(trace, "_orbis_session_id", "")
+        or getattr(trace, "session_id", "")
+        or ""
+    )
     if not (trace_id and session_id):
         return {}
     headers = {
         "Langfuse-Trace-Id": str(trace_id),
         "Langfuse-Session-Id": str(session_id),
     }
-    if parent_observation_id:
-        headers["Langfuse-Parent-Observation-Id"] = str(parent_observation_id)
+    # Parent observation points at this span so the callee nests under us.
+    obs_id = parent_observation_id or getattr(trace, "id", "")
+    if obs_id:
+        headers["Langfuse-Parent-Observation-Id"] = str(obs_id)
     return headers
 
 
@@ -429,6 +505,10 @@ def span(name: str, **span_kwargs: Any):
     Yields a _NullSpan when tracing is off or no trace is live; all
     `.update()` / `.end()` calls no-op. Callers never need an
     `if enabled()` guard.
+
+    v4 note: the `as_type` kwarg selects the observation type
+    ('span' by default, 'generation' / 'tool' / etc. for specialized
+    visualizations). Passes through to start_observation.
     """
     from auth.context import current_session_id
     metadata = dict(span_kwargs.pop("metadata", {}) or {})
@@ -436,7 +516,15 @@ def span(name: str, **span_kwargs: Any):
     sid = current_session_id.get()
     if sid:
         metadata.setdefault("session_id", sid)
-    sp = active_trace().span(name=name, metadata=metadata, **span_kwargs)
+    as_type = span_kwargs.pop("as_type", "span")
+    trace = active_trace()
+    try:
+        sp = trace.start_observation(
+            name=name, as_type=as_type, metadata=metadata, **span_kwargs
+        )
+    except Exception as e:
+        logger.warning(f"[tracing] span.start('{name}') failed: {e}")
+        sp = _NULL
     try:
         yield sp
     finally:
