@@ -1,45 +1,33 @@
-"""Tool registry for the voice agent.
+"""Tool registry for the ORBIS voice agent.
 
-New tools register themselves via the ``@tool()`` decorator — no edits
-to ``register_tools`` or hardcoded latency dicts required. The registry
-is the single source of truth for:
+ORBIS's tool surface is deliberately narrow:
 
-  - name / description / JSON-schema parameters
-  - latency tier (drives progress-narration cadence in DeliveryController)
-  - sync vs async (``async_tool=True`` → ``cancel_on_interruption=False``
-    and the LLM context gets a deferred result injection on completion)
+  - ``delegate_to(target, query)`` — hand off to a user-configured agent
+    (A2A or OpenAI-compat). The user's configured agents are where heavy
+    reasoning lives; ORBIS is the voice frontend for them.
+  - ``set_variant`` / ``apply_palette`` / ``adjust_param`` /
+    ``save_preset`` / ``recall_preset`` — orb self-modification. Lets the
+    agent change its own appearance in response to user requests
+    ("be warmer", "try a darker palette"). The tool handler returns a
+    short spoken confirmation; the client-side orb plugin listens for
+    the function-call RTVI event and applies the visual change.
 
-Example:
+Nothing else ships: no calculator, no search, no datetime, no
+fetch_url — those all become user-configured delegates if actually
+needed. Tools that would create support burden without being the
+product's differentiator are excluded by design.
 
-    @tool(
-        "calculator",
-        "Evaluate an arithmetic expression",
-        parameters={"expression": {"type": "string", "description": "..."}},
-        required=["expression"],
-        latency=Latency.FAST,
-    )
-    async def calculator_handler(params): ...
-
-Tools that need runtime context (``slow_research`` closes over the
-DeliveryController; ``delegate_to`` closes over the DelegateRegistry +
-push-notification config) are still hand-wired in ``register_tools``.
-That keeps the decorator simple for 95% of tools while leaving an
-escape hatch for the context-heavy 5%.
+Registration: tools self-register via ``@tool(...)`` at import time.
+``delegate_to`` is hand-wired because its JSON schema enumerates the
+live delegate registry and therefore changes per-session.
 """
 
 from __future__ import annotations
 
-import ast
-import asyncio
 import logging
-import operator
-import os
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Any, Callable
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import httpx
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams, LLMService
@@ -49,10 +37,6 @@ from .delivery import DeliveryController
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
-
-# Tunables — let us stress-test filler + progress + delivery independently.
-SLOW_RESEARCH_SECS = float(os.environ.get("SLOW_RESEARCH_SECS", "20"))
-DEFAULT_TZ = os.environ.get("TZ", "America/New_York")
 
 
 # ---------------------------------------------------------------------------
@@ -108,14 +92,13 @@ def tool(
 def latency_for(tool_name: str) -> Latency:
     """Expected latency for a tool — reads the registry. Unknown tools
     default to MEDIUM. ``delegate_to`` isn't in the registry (hand-wired)
-    so it also falls back to MEDIUM, which matches the historical value."""
+    so it also falls back to MEDIUM."""
     spec = _TOOL_REGISTRY.get(tool_name)
     return spec.latency if spec else Latency.MEDIUM
 
 
-# Derived from the registry. Lets app.py keep a `name in ASYNC_TOOL_NAMES`
-# style check without maintaining a parallel frozenset.
 class _AsyncToolNames:
+    """Derived view on the registry for `name in ASYNC_TOOL_NAMES` checks."""
     def __contains__(self, name: str) -> bool:
         spec = _TOOL_REGISTRY.get(name)
         return bool(spec and spec.async_tool)
@@ -139,145 +122,155 @@ def _schema_for(spec: ToolSpec) -> FunctionSchema:
 
 
 # ---------------------------------------------------------------------------
-# Built-in tools — decorated in-place so they self-register.
+# Orb self-modification tools.
+#
+# These tools don't touch server-side orb state directly. They return a
+# short spoken confirmation (so the LLM can say it aloud), and the
+# client-side orb plugin listens for the matching RTVI function-call
+# event over the WebRTC data channel and applies the visual change.
+#
+# Entitlement gating (free vs paid tier) for non-starter variants /
+# palettes is handled at the route / client layer, not here — tool
+# handlers just describe the intent.
 # ---------------------------------------------------------------------------
-
-_ALLOWED_OPS = {
-    ast.Add: operator.add,
-    ast.Sub: operator.sub,
-    ast.Mult: operator.mul,
-    ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
-    ast.Mod: operator.mod,
-    ast.FloorDiv: operator.floordiv,
-    ast.USub: operator.neg,
-}
-
-
-def _safe_eval(node: ast.AST) -> float:
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return node.value
-    if isinstance(node, ast.BinOp):
-        op = _ALLOWED_OPS.get(type(node.op))
-        if op is None:
-            raise ValueError(f"Unsupported operator: {type(node.op).__name__}")
-        return op(_safe_eval(node.left), _safe_eval(node.right))
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return -_safe_eval(node.operand)
-    raise ValueError(f"Unsupported expression: {ast.dump(node)}")
 
 
 @tool(
-    "calculator",
+    "set_variant",
     (
-        "Evaluate a basic arithmetic expression. Use ONLY for "
-        "calculations the user has explicitly asked you to do."
+        "Switch the orb to a different base visual variant. Use when the "
+        "user asks for a fundamentally different look (e.g. 'try a nebula' "
+        "or 'show me the crystal'). Available variants depend on the user's "
+        "entitlement; pick from the orb's registered set."
     ),
     parameters={
-        "expression": {
+        "name": {
             "type": "string",
-            "description": "Arithmetic expression, e.g. '15 * 1.2 + 3'",
+            "description": "Variant name (e.g. 'fractal', 'nebula', 'crystal', 'particles')",
         },
     },
-    required=["expression"],
+    required=["name"],
     latency=Latency.FAST,
 )
-async def calculator_handler(params: FunctionCallParams) -> None:
-    expr = params.arguments.get("expression", "")
-    try:
-        tree = ast.parse(expr.strip(), mode="eval")
-        val = _safe_eval(tree.body)
-        if isinstance(val, float) and val.is_integer():
-            val = int(val)
-        result = f"{expr} equals {val}."
-    except Exception as e:
-        result = f"I couldn't calculate that: {e}."
-    await params.result_callback(result)
+async def set_variant_handler(params: FunctionCallParams) -> None:
+    name = (params.arguments.get("name") or "").strip().lower()
+    if not name:
+        await params.result_callback("I need a variant name to try.")
+        return
+    logger.info(f"[orb] set_variant → {name!r}")
+    await params.result_callback(f"Trying the {name} variant.")
 
 
 @tool(
-    "get_datetime",
-    "Return the current date and time.",
-    latency=Latency.FAST,
-)
-async def datetime_handler(params: FunctionCallParams) -> None:
-    try:
-        tz = ZoneInfo(DEFAULT_TZ)
-    except (ZoneInfoNotFoundError, Exception):
-        tz = ZoneInfo("UTC")
-    result = datetime.now(tz=tz).strftime(
-        "It's %A, %B %d, %Y at %I:%M %p %Z."
-    )
-    await params.result_callback(result)
-
-
-@tool(
-    "web_search",
+    "apply_palette",
     (
-        "Search the web for current information. Use when the user asks "
-        "about news, recent events, or facts you're not confident about. "
-        "Returns short snippets from the top results."
+        "Apply a named color palette to the orb's current variant. Use when "
+        "the user wants a mood shift without changing the base form ('warmer', "
+        "'darker', 'something moody'). Unknown palette names fall through "
+        "gracefully on the client."
     ),
     parameters={
-        "query": {"type": "string", "description": "Search query"},
+        "name": {
+            "type": "string",
+            "description": "Palette name (e.g. 'Aurora', 'Ember', 'Noir', 'Mono')",
+        },
     },
-    required=["query"],
-    latency=Latency.MEDIUM,
+    required=["name"],
+    latency=Latency.FAST,
 )
-async def web_search_handler(params: FunctionCallParams) -> None:
-    query = params.arguments.get("query", "").strip()
-    if not query:
-        await params.result_callback("No search query provided.")
+async def apply_palette_handler(params: FunctionCallParams) -> None:
+    name = (params.arguments.get("name") or "").strip()
+    if not name:
+        await params.result_callback("I need a palette name.")
         return
+    logger.info(f"[orb] apply_palette → {name!r}")
+    await params.result_callback(f"Switching to the {name} palette.")
 
-    def _search() -> str:
-        from ddgs import DDGS
-        with DDGS() as d:
-            results = list(d.text(query, max_results=5))
-        if not results:
-            return "No results found."
-        lines = []
-        for r in results:
-            title = r.get("title") or ""
-            body = r.get("body") or ""
-            lines.append(f"{title}: {body}")
-        return " ".join(lines)
-
-    try:
-        text = await asyncio.to_thread(_search)
-    except Exception as e:
-        logger.warning(f"[web_search] failed: {e}")
-        text = "The search failed — I couldn't reach DuckDuckGo."
-    await params.result_callback(text[:2000])  # keep context manageable
-
-
-# ---------------------------------------------------------------------------
-# Async tool — in the registry so latency_for() + ASYNC_TOOL_NAMES pick it
-# up correctly. The decorated handler is a placeholder; register_tools
-# swaps in the real one that closes over the DeliveryController.
-# ---------------------------------------------------------------------------
 
 @tool(
-    "slow_research",
+    "adjust_param",
     (
-        "Kick off a long-running investigation (30s+). Use when the user "
-        "doesn't need an immediate answer — they can keep chatting while "
-        "the agent will speak the result when it's ready."
+        "Tweak a single shader parameter on the current orb. Use for "
+        "incremental adjustments the user suggests ('a bit more turbulent', "
+        "'slower pulse'). Values outside the parameter's valid range are "
+        "clamped by the client."
     ),
-    parameters={"query": {"type": "string", "description": "The question to investigate"}},
-    required=["query"],
-    latency=Latency.SLOW,
-    async_tool=True,
+    parameters={
+        "key": {
+            "type": "string",
+            "description": "Parameter name (e.g. 'density', 'speed', 'glowIntensity')",
+        },
+        "value": {
+            "type": "number",
+            "description": "New value for the parameter",
+        },
+    },
+    required=["key", "value"],
+    latency=Latency.FAST,
 )
-async def _slow_research_placeholder(params: FunctionCallParams) -> None:
-    # Never actually invoked — register_tools substitutes the real handler
-    # built from the session's DeliveryController.
-    raise RuntimeError("slow_research placeholder called without substitution")
+async def adjust_param_handler(params: FunctionCallParams) -> None:
+    key = (params.arguments.get("key") or "").strip()
+    value = params.arguments.get("value")
+    if not key or value is None:
+        await params.result_callback("I need both a parameter name and a value.")
+        return
+    logger.info(f"[orb] adjust_param → {key}={value!r}")
+    await params.result_callback(f"Adjusting {key}.")
+
+
+@tool(
+    "save_preset",
+    (
+        "Save the orb's current configuration (variant + palette + params) "
+        "as a named preset. Use when the user says something like 'save this "
+        "as calm mode' or 'remember this look'. Names are case-insensitive."
+    ),
+    parameters={
+        "name": {
+            "type": "string",
+            "description": "Preset name (e.g. 'calm', 'focused', 'sleepy')",
+        },
+    },
+    required=["name"],
+    latency=Latency.FAST,
+)
+async def save_preset_handler(params: FunctionCallParams) -> None:
+    name = (params.arguments.get("name") or "").strip()
+    if not name:
+        await params.result_callback("I need a name to save under.")
+        return
+    logger.info(f"[orb] save_preset → {name!r}")
+    await params.result_callback(f"Saved this as {name}.")
+
+
+@tool(
+    "recall_preset",
+    (
+        "Restore a previously saved preset by name. Use when the user asks "
+        "to go back to a saved look ('go back to calm mode'). If the preset "
+        "doesn't exist the client quietly no-ops and surfaces a notification."
+    ),
+    parameters={
+        "name": {
+            "type": "string",
+            "description": "Preset name to recall",
+        },
+    },
+    required=["name"],
+    latency=Latency.FAST,
+)
+async def recall_preset_handler(params: FunctionCallParams) -> None:
+    name = (params.arguments.get("name") or "").strip()
+    if not name:
+        await params.result_callback("I need a preset name to recall.")
+        return
+    logger.info(f"[orb] recall_preset → {name!r}")
+    await params.result_callback(f"Going back to {name}.")
 
 
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
-# (derived from the live, per-skill-filtered DelegateRegistry).
+# (derived from the live DelegateRegistry).
 # ---------------------------------------------------------------------------
 
 def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
@@ -289,10 +282,10 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
     return FunctionSchema(
         name="delegate_to",
         description=(
-            "Hand off a question to a specialized backend — another agent "
-            "in the fleet, or a heavier reasoning model. Use when the "
-            "user's question genuinely requires depth, current info, or "
-            "another specialist's expertise.\n\n"
+            "Hand off a question to one of the user's configured agents. "
+            "Use for genuine depth, current information, coding tasks, "
+            "research, or anything that isn't quick small talk. The "
+            "delegate's reply streams back and you relay/summarise it.\n\n"
             f"Available targets:\n{target_lines}\n\n"
             "Pass `target` (one of the names above) and `query` (the "
             "question, phrased as you'd ask a person)."
@@ -362,33 +355,6 @@ def _delegate_to_handler(
     return _handler
 
 
-def _slow_research_handler(_controller: DeliveryController):
-    """Async tool — the LLM acknowledges via its inline preamble (M10
-    TOOL USE prompt block). DO NOT call result_callback in the foreground;
-    pipecat would treat that as the finished result and the LLM would
-    fabricate follow-ups about the topic."""
-    async def _handler(params: FunctionCallParams) -> None:
-        query = params.arguments.get("query", "")
-        logger.info(f"[slow_research] starting: {query!r} (sleep {SLOW_RESEARCH_SECS}s)")
-
-        async def _background() -> None:
-            await asyncio.sleep(SLOW_RESEARCH_SECS)
-            result = (
-                f"Investigation into '{query}' complete. "
-                "This is a synthetic placeholder — real long-form research "
-                "lands when this tool gets a real backend."
-            )
-            try:
-                await params.result_callback(result)
-                logger.info(f"[slow_research] result_callback fired ({len(result)} chars)")
-            except Exception as e:
-                logger.exception(f"[slow_research] result_callback failed: {e}")
-
-        asyncio.create_task(_background())
-
-    return _handler
-
-
 # ---------------------------------------------------------------------------
 # Text-mode tool runner (A2A inbound ReAct) — unchanged interface.
 # ---------------------------------------------------------------------------
@@ -404,13 +370,11 @@ async def run_text_tool(
     """Invoke a tool handler in text mode (no pipecat FunctionCallParams).
 
     Returns the string result the handler would have passed to
-    result_callback. Used by the inbound A2A ReAct loop (F6) so external
+    result_callback. Used by the inbound A2A ReAct loop so external
     agents can drive the same tool registry the voice path uses.
 
-    Sync tools that are in the ``@tool``-decorated registry resolve
-    automatically. ``delegate_to`` is hand-handled. Async tools
-    (slow_research) are NOT exposed here — they require a live
-    DeliveryController + voice session to narrate back on completion.
+    Async tools are NOT exposed here — they require a live voice
+    session to narrate back on completion.
     """
     class _P:  # duck-typed FunctionCallParams stand-in
         def __init__(self, args: dict) -> None:
@@ -441,7 +405,7 @@ async def run_text_tool(
 def build_text_tool_schemas(delegates: DelegateRegistry | None = None) -> list[dict]:
     """Build the OpenAI tools-parameter list for the text-mode ReAct
     loop. Mirrors the schemas register_tools registers with pipecat,
-    minus slow_research (async — see run_text_tool)."""
+    minus any async-only tools."""
     schemas: list[FunctionSchema] = [
         _schema_for(spec)
         for spec in _TOOL_REGISTRY.values()
@@ -454,7 +418,7 @@ def build_text_tool_schemas(delegates: DelegateRegistry | None = None) -> list[d
 
 # ---------------------------------------------------------------------------
 # Registration — iterates the registry for decorated tools, hand-wires
-# the context-heavy ones.
+# delegate_to (dynamic schema).
 # ---------------------------------------------------------------------------
 
 def register_tools(
@@ -468,9 +432,9 @@ def register_tools(
 ) -> ToolsSchema:
     """Attach handlers + return the schema for the LLMContext.
 
-    Decorated tools (``@tool``) are registered automatically. ``delegate_to``
-    and ``slow_research`` are hand-wired because they close over a runtime
-    controller / registry.
+    Decorated tools (``@tool``) are registered automatically.
+    ``delegate_to`` is hand-wired because it closes over the live
+    DelegateRegistry and builds its schema per-session.
     """
 
     def _wrap_sync(handler):
@@ -488,15 +452,8 @@ def register_tools(
 
     standard: list[FunctionSchema] = []
 
-    # Registry-driven tools. slow_research needs runtime delivery context;
-    # skip it when no delivery controller is attached, otherwise substitute
-    # the real handler for its placeholder.
     for spec in _TOOL_REGISTRY.values():
-        if spec.name == "slow_research":
-            if delivery is None:
-                continue
-            handler = _slow_research_handler(delivery)
-        elif spec.async_tool:
+        if spec.async_tool:
             handler = spec.handler
         else:
             handler = _wrap_sync(spec.handler)
