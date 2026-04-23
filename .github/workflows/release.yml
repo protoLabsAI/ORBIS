@@ -124,3 +124,51 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --notes "${{ steps.notes.outputs.notes }}"
+
+      # ── Claude-rewritten notes + Discord announcement ─────────────────────────
+
+      - name: Polish release notes + post to Discord
+        # Best-effort: if ANTHROPIC_API_KEY or a webhook isn't set, or the
+        # Claude call fails, the release itself still shipped above — we
+        # just skip the polished announcement.
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "ANTHROPIC_API_KEY not set — skipping Claude rewrite."
+            exit 0
+          fi
+          VERSION="${{ steps.version.outputs.tag }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
+          if [ -z "${PREV_TAG}" ]; then
+            echo "No previous tag found — this is the first release; skipping polished notes."
+            exit 0
+          fi
+          # Post to the release channel (user-facing) and the dev channel
+          # (engineering visibility). Either webhook can be unset; the
+          # script logs + skips individually.
+          node scripts/rewrite-release-notes.mjs \
+            "${VERSION}" "${PREV_TAG}" \
+            --post-discord-release \
+            --post-discord-dev
+
+      # ── Failure alert ─────────────────────────────────────────────────────────
+
+      - name: Alert on release failure
+        if: failure()
+        env:
+          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+        run: |
+          if [ -z "${DISCORD_DEV_WEBHOOK}" ]; then
+            echo "DISCORD_DEV_WEBHOOK not set — can't alert."
+            exit 0
+          fi
+          TAG="${{ steps.version.outputs.tag }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="ORBIS release FAILED for ${TAG}. Run: ${RUN_URL}"
+          curl -sf -H 'Content-Type: application/json' \
+            -d "{\"content\": \"${MSG}\"}" \
+            "${DISCORD_DEV_WEBHOOK}" || true
