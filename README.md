@@ -1,7 +1,7 @@
 # ORBIS
 
 <p align="center">
-  <img src="https://i.postimg.cc/Y2v3Sj4R/Screenshot-2026-04-22-at-9-12-44-PM.png" alt="ORBIS — voice-first AI companion" width="720"/>
+  <img src="https://i.postimg.cc/rTJYQrMB/Screenshot-2026-04-22-at-9-12-44-PM.png" alt="ORBIS — voice-first AI companion" width="720"/>
 </p>
 
 > Voice-first AI companion. An orb that talks to you, remembers you,
