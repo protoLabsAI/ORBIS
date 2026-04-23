@@ -1195,6 +1195,38 @@ async def get_starter_orbs():
     return {"starters": [s.to_dict() for s in starters]}
 
 
+@app.get("/api/config")
+async def get_config(user: User = Depends(require_user)):
+    """Return the current config/orbis.yaml as a dict. Drawer UI
+    consumes this to populate the settings form."""
+    from agent.config_store import read_config
+    return {"config": read_config()}
+
+
+@app.post("/api/config")
+async def put_config(patch: dict, user: User = Depends(require_user)):
+    """Apply a shallow-merge patch to config/orbis.yaml. Returns the
+    normalized post-write config. Reloads the in-memory persona so
+    the next voice session uses the new values.
+
+    Body shape is a partial config::
+
+        {"persona": {"name": "Atlas"}}              # rename
+        {"voice": {"tts_backend": "elevenlabs"}}    # swap provider
+        {"orb": {"variant": "nebula", "palette": "Helios"}}   # full re-pick
+
+    Drops unknown keys with a warning. Raises 400 on typed failures
+    (invalid tts_backend, non-numeric temperature, etc.).
+    """
+    from agent.config_store import merge_patch
+    try:
+        normalized = merge_patch(patch)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    persona = reload_persona()
+    return {"ok": True, "config": normalized, "persona": persona.slug}
+
+
 def _serve_react() -> bool:
     if FRONTEND == "vanilla":
         return False
