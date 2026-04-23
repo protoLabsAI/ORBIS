@@ -150,6 +150,20 @@ _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 # Module-level cache refreshes via reload_persona().
 from agent.persona import get_active_persona, reload_persona  # noqa: E402
 
+# Memory backend — SQLite-embedded sessions + facts + personality + mood.
+from memory import Memory  # noqa: E402
+
+_memory: Memory | None = None
+
+
+def get_memory() -> Memory:
+    """Lazy memory handle — opens data/orbis.sqlite on first access."""
+    global _memory
+    if _memory is None:
+        _memory = Memory()
+        _memory.personality.seed_defaults()
+    return _memory
+
 
 def _active_skill(user_id: str = "default"):
     """Return the single ORBIS persona. Name kept (Skill-shaped signature)
@@ -158,17 +172,50 @@ def _active_skill(user_id: str = "default"):
 
 
 def _recall_block(user_id: str) -> str:
-    """Session-open memory callback. Reads the rolling conversation
-    summary for this user and formats it as a nudge block injected
-    into the system prompt at session start."""
+    """Session-open memory callback. Composes a nudge block from:
+      - the last 3 SQLite session summaries (structured), and
+      - the rolling text summary produced by pipecat's summarizer
+        (fallback when SQLite is empty — first-boot / fresh install).
+    """
+    parts: list[str] = []
+
+    # Prior-N block from SQLite. Newest first, ~3 sessions keeps the
+    # prompt affordable while still giving cross-session continuity.
+    try:
+        mem = get_memory()
+        prior = mem.sessions.prior_n(3)
+    except Exception as e:
+        logger.warning(f"[memory] prior_n read failed: {e}")
+        prior = []
+
+    if prior:
+        sessions_xml: list[str] = ["<prior_sessions>"]
+        for row in prior:
+            sid = row.get("session_id", "?")
+            ended = row.get("ended_at", "?")
+            final = (row.get("final_output") or "")[:400]
+            sessions_xml.append(f'  <session id="{sid}" ended="{ended}">')
+            if final:
+                sessions_xml.append(f"    <final_output>{final}</final_output>")
+            sessions_xml.append("  </session>")
+        sessions_xml.append("</prior_sessions>")
+        parts.append("\n".join(sessions_xml))
+
+    # Fallback / complement: the text summary file.
     summary = load_last_summary(user_id)
-    if not summary:
+    if summary:
+        parts.append(
+            "## MEMORY — rolling summary\n\n"
+            f"{summary}"
+        )
+
+    if not parts:
         return ""
+
     return (
-        "## MEMORY — from the last session\n\n"
-        f"Last time you spoke with this user, it went roughly: {summary}\n\n"
-        "IF it fits naturally, acknowledge this in your first turn. "
-        "Otherwise IGNORE this block — do not force a callback."
+        "\n\n".join(parts)
+        + "\n\nIF any of this fits naturally, acknowledge it in your first "
+        "turn. Otherwise IGNORE this block — do not force a callback."
     )
 
 
@@ -867,6 +914,36 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         for item in snapshot:
             stash_delivery(user_id, item)
         state = user_state_for(user_id)
+
+        # Persist the session to SQLite so prior_n() sees it next boot.
+        try:
+            mem = get_memory()
+            sid = state.active_session_id or ""
+            if sid:
+                # Extract user+assistant turns + derive final_output from
+                # the live context. Tool calls aren't timing-instrumented
+                # here; leave tool_calls empty for now.
+                turns: list[dict] = []
+                final_output: str | None = None
+                for msg in context.messages:
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if role in ("user", "assistant") and isinstance(content, str) and content:
+                        turns.append({"role": role, "content": content})
+                        if role == "assistant":
+                            final_output = content
+                mem.sessions.add(
+                    session_id=sid,
+                    started_at=None,  # DAL fills _now() when None
+                    ended_at=None,
+                    messages=turns,
+                    tool_calls=[],
+                    final_output=final_output,
+                    trace_id=getattr(turn_tracer, "trace_id", None),
+                )
+        except Exception as e:
+            logger.warning(f"[memory] session persist failed: {e}")
+
         if state.active_delivery is delivery:
             state.active_delivery = None
         if state.active_tracer is turn_tracer:
