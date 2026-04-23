@@ -1181,6 +1181,20 @@ async def reload_persona_endpoint(user: User = Depends(require_user)):
     return {"ok": True, "slug": persona.slug, "name": persona.name}
 
 
+@app.get("/api/starter_orbs")
+async def get_starter_orbs():
+    """Return the curated starter-orb pool. The setup wizard calls this
+    at first boot so the user can pick one; no auth required so the
+    wizard can run before the user has their API key.
+
+    Response shape::
+        {"starters": [{slug, name, description, variant, palette, params}, ...]}
+    """
+    from agent.starter_orbs import load_starters
+    starters = load_starters()
+    return {"starters": [s.to_dict() for s in starters]}
+
+
 def _serve_react() -> bool:
     if FRONTEND == "vanilla":
         return False

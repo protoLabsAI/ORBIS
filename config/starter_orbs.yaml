@@ -1,0 +1,68 @@
+# ORBIS starter orb pool.
+#
+# The set of orbs users pick from during the setup wizard. Fresh
+# installs pick one of these; no customization is offered until the
+# user unlocks the paid tier (see DECISIONS.md § Monetization).
+#
+# Each entry:
+#   slug          — stable id referenced from UI + config/orbis.yaml
+#   name          — human name displayed in the picker
+#   description   — one-line evocative blurb
+#   variant       — orb shader variant (fractal | nebula | crystal | particles)
+#   palette       — palette id within that variant's registered set
+#   params        — optional parameter overrides (typically empty; the
+#                   palette's defaults are usually enough)
+#
+# Add / remove / reorder entries to curate the pool. Shipping 8 gives
+# "pick-one-of-N" enough variety without analysis paralysis; they're
+# also diverse enough that any single one is a complete visual
+# identity on its own.
+
+starters:
+  - slug: aurora
+    name: Aurora
+    description: Shifting green-blue light, patient and wide.
+    variant: fractal
+    palette: Aurora
+
+  - slug: ember
+    name: Ember
+    description: Warm crackling light with hot core.
+    variant: fractal
+    palette: Ember
+
+  - slug: forest
+    name: Forest
+    description: Green-gold canopy light, deep and settled.
+    variant: fractal
+    palette: Forest
+
+  - slug: andromeda
+    name: Andromeda
+    description: Deep cosmic clouds with drifting dust.
+    variant: nebula
+    palette: Andromeda
+
+  - slug: helios
+    name: Helios
+    description: Solar and radiant, humming with energy.
+    variant: nebula
+    palette: Helios
+
+  - slug: prism
+    name: Prism
+    description: Faceted refracted light, crystalline and bright.
+    variant: crystal
+    palette: Prism
+
+  - slug: obsidian
+    name: Obsidian
+    description: Sharp and dark with hidden edges.
+    variant: crystal
+    palette: Obsidian
+
+  - slug: constellation
+    name: Constellation
+    description: Scattered stars in slow orbit.
+    variant: particles
+    palette: Constellation
