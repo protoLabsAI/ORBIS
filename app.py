@@ -332,11 +332,18 @@ def _effective_prompt(
     Persona loader, so skill.system_prompt already reflects it.
     """
     from agent.personality import render_personality_block
+    from agent.neglect import apply_soft_neglect
     base = skill.system_prompt
     plan = plan_block(verbosity)
     recall = _recall_block(user_id)
+    neglect_nudge = ""
     try:
-        personality = render_personality_block(get_memory())
+        mem = get_memory()
+        # Run the neglect computation BEFORE rendering the personality
+        # block — it adjusts mood, and render_personality_block reads
+        # mood. So the session's opening vibe reflects the gap.
+        _days, neglect_nudge = apply_soft_neglect(mem)
+        personality = render_personality_block(mem)
     except Exception as e:
         logger.warning(f"[personality] render failed: {e}")
         personality = ""
@@ -350,6 +357,7 @@ def _effective_prompt(
         + "\n\n"
         + repair_block()
         + (("\n\n" + personality) if personality else "")
+        + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
         + (("\n\n" + recall) if recall else "")
     )
 
