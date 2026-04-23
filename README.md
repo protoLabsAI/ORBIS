@@ -1,84 +1,153 @@
-# protoVoice
+# ORBIS
 
-Full-duplex voice agent. Speak, get spoken replies fast; the agent speaks *before* it's done thinking, can push async results back mid-conversation, and can delegate to other agents or bigger LLMs when it needs to.
+> Voice-first AI companion. An orb that talks to you, remembers you,
+> and routes the heavy lifting to your existing agents.
 
-```
-browser mic → WebRTC → STT → router LLM → TTS → speaker
-                              │
-                              └─ calls a tool → speaks a preamble inline →
-                                 (sync: web_search, calculator, datetime)
-                                 (delegate: ava, opus, any OpenAI-compat)
-                                 (async: slow_research — you keep talking;
-                                  agent drops the answer in at next silence)
-```
+ORBIS is a single-owner desktop / tailnet-hosted app. You talk to the
+orb; it talks back in real time; it remembers you across sessions;
+it hands off complex tasks to whatever agents you've configured (A2A
+fleet agents, OpenAI-compatible endpoints). The differentiator is the
+*companion* layer — persistent memory, slow personality drift, moods,
+and a visible expressive form — around a thin voice-routing agent.
 
-Built on [Pipecat](https://docs.pipecat.ai) 1.0.
+Status: **active development.** Architecture is locked; feature work
+is underway. See [DECISIONS.md](./DECISIONS.md) for the frozen
+architectural snapshot.
 
-## Quick start
+## What ORBIS is
+
+- **Voice-first.** Real-time bidirectional audio via WebRTC + Pipecat.
+  Text fallback is possible but the pitch is "talk to it, don't chat."
+- **Router-first.** The orb's primary capability is delegating to
+  your configured agents — it's the voice frontend for the AI stack
+  you already have, not another agent framework.
+- **Companion-layer.** Persistent memory (SQLite-backed), slow-drift
+  personality axes, short-term mood state, soft-neglect behavior over
+  days-of-silence, visible personality panel for the user to peek at.
+- **Single-owner.** One instance, one owner. Multi-device access via
+  tailnet hosting (phone + laptop hit the same instance). Not
+  multi-tenant.
+
+## What ORBIS isn't
+
+- Not another coding agent (OpenCode / Claude Code / Goose / Aider
+  are all fine; delegate to them instead).
+- Not a game (no progression mechanics, no collectibles as gameplay,
+  no social visits).
+- Not a replacement for ChatGPT — your reasoning still lives in
+  whichever model you've wired up.
+- Not gacha, loot boxes, energy timers, or FOMO-driven monetization.
+
+## Running it (development)
+
+Requirements: Python 3.11+, Bun or npm, a running LLM endpoint
+(local vLLM, LiteLLM gateway, OpenAI, or any OpenAI-compatible
+URL). Kokoro TTS runs CPU-only and is the default; no GPU required
+for TTS.
 
 ```bash
-git clone https://github.com/protoLabsAI/protoVoice.git
-cd protoVoice
-cp .env.example .env      # edit for any secrets (AVA_API_KEY, LITELLM_MASTER_KEY, etc.)
-docker compose up -d
+# One-time
+cp .env.example .env       # edit LLM_URL + any delegate keys
+cp config/orbis.example.yaml config/orbis.yaml       # optional — persona tuning
+cp config/users.example.yaml config/users.yaml       # optional — owner API key
+
+# Run (two processes)
+cd web && bun install && bun run dev   # frontend on :5173
+# in a second shell:
+python app.py                          # backend on :7866
 ```
 
-UI at `http://localhost:7866`. Browsers require HTTPS for mic access on non-localhost — use `tailscale serve 7866` (tailnet-only HTTPS) or a reverse proxy with TLS. Headphones recommended — see [audio handling](https://protolabsai.github.io/protoVoice/guides/audio-handling/) for speaker-echo mitigations.
+Or one-shot with Docker Compose (kokoro default, no Fish sidecar):
 
-## What you get
+```bash
+docker compose up
+```
 
-- **Pipecat pipeline** — WebRTC, VAD, streaming STT → LLM → TTS.
-- **Adaptive barge-in** — VAD-fired interrupts go through a 350 ms grace window that rejects coughs / backchannels / brief noise; real interruptions still fire, just confirmed. Based on LiveKit production data: ~51 % of raw VAD-triggered barges are false positives.
-- **Natural fillers layered** — inline LLM-emitted preamble ("hmm, let me check") before every tool call, two-tier "still working" cadence (~2 s / ~8 s) for slow tools, generative mid-user backchannels ("mm-hmm"), micro-ack injector ("mm") if the pipeline hasn't produced audio within 500 ms. Details in [natural-fillers](https://protolabsai.github.io/protoVoice/explanation/natural-fillers/).
-- **Fish prosody pipeline** — Fish S2-Pro consumes `[softly]` / `[pause:300]` / `[hmm]` tags natively as prosody control; Kokoro / OpenAI strip via pipecat's `text_filters=`. Context stays clean via a tail-end `ProsodyTagStripper`. Research-backed: fillers alone read fake, fillers + ~300 ms pauses cross the uncanny valley (Sesame CSM).
-- **Delegates** — unified `delegate_to(target, query)` tool. A2A delegates get SSE streaming via `message/stream` with progress narration back through the voice pipeline; OpenAI-compat endpoints use non-streaming chat completions. Configured in `config/delegates.yaml`; the LLM picks targets by their descriptions.
-- **Delivery policies** — async-tool results route via `Priority` (critical / time_sensitive / active / passive) → `NOW` / `NEXT_SILENCE` / `WHEN_ASKED`. Bid-then-drain when ≥ 2 queued ("I've got updates from ava and slow_research — want them?"). Utility-gated drop past 3 items. Source attribution ("ava says — …").
-- **A2A push-back** — spec-compliant `/a2a/push` webhook accepts callbacks from delegated agents; outbound `pushNotificationConfig` (env: `A2A_PUSH_URL` + `A2A_PUSH_TOKEN`) attached on each dispatch so remote agents can push progress / terminal state back even if the SSE stream drops. Priority-mapped by event type (`input-required` → interrupt, terminal → next-silence, mid-task status → wait-for-ask).
-- **Reconnect replay** — if `slow_research` finishes after disconnect, or an A2A push arrives while you're offline, payloads stash under the skill slug and replay on the next connect via the bid-then-drain UX.
-- **Context summarization** — pipecat's built-in `LLMContextSummarizer` auto-compresses once token (default 8 k) or message (20) thresholds hit.
-- **Session-open memory callback** — rolling summary persists across WebRTC disconnects; next session may open with "hey, last time we were working through X…" if it fits naturally. Sesame CSM pattern.
-- **Prompt-driven agentic behaviour** — ≥ 3-step requests get a spoken plan preamble (CHI 2025); user pushback triggers acknowledge → reframe → offer repair (ACL 2025); tool results target 18-25 words + follow-up offer, not prose dumps (CHI 2025).
-- **Voice cloning in-browser** — upload a 10-30 s clip, auto-transcribed by Whisper, saved on Fish Audio, registered as a new skill. Instant new voice, no restart.
-- **Personas & skills** — `config/SOUL.md` + `config/skills/*.yaml` for swappable personas with per-skill TTS voice, LLM tuning, and tool restrictions.
-- **A2A inbound** — `/a2a` JSON-RPC supports both `message/send` (sync) and `message/stream` (SSE) per spec. Inbound requests run a bounded ReAct loop so external agents can use our tool registry (`calculator`, `get_datetime`, `web_search`, `delegate_to`). `/a2a/push` accepts spec-conformant callback receipts.
-- **Langfuse tracing** — every user turn is a trace spanning STT → router LLM → tools → TTS → delivery, with filler / backchannel / progress generations auto-captured via `langfuse.openai`. Cross-fleet propagation via `Langfuse-Trace-Id` / `Langfuse-Session-Id` headers so traces stitch across protoLabs agents. Fail-open when Langfuse env is unset. See [tracing](https://protolabsai.github.io/protoVoice/reference/tracing/) and the [cross-fleet contract](https://protolabsai.github.io/protoVoice/reference/tracing-contract/).
-- **RTVI** — server-side pipecat RTVI processor + observer emit structured state events (`bot-llm-started/stopped`, `bot-tts-started/stopped`, `user-transcription`, `function-call-*`) over the WebRTC data channel. Client consumption lands with the React frontend migration.
-- **Pluggable backends** — STT and TTS both swappable via env (`STT_BACKEND=local|openai`, `TTS_BACKEND=fish|kokoro|openai`). Run fully API-backed via LocalAI, LiteLLM, OpenAI — no GPU on the protovoice container needed. See the [use-localai guide](https://protolabsai.github.io/protoVoice/guides/use-localai/).
+Tailnet hosting: `sudo tailscale serve --bg --https=8443 http://127.0.0.1:7866`
+and point your phone / other devices at the tailnet URL.
 
-## Stack defaults
+## Architecture at a glance
 
-| Layer | Default |
-|:---|:---|
-| STT | HF Whisper large-v3-turbo (GPU, in-process) |
-| Router LLM | local vLLM (Qwen3.5-4B — any OpenAI-compat works) |
-| TTS | Fish Audio S2-Pro sidecar (`--half --compile`; ~400-800 ms TTFA); Kokoro 82M (~50 ms) and OpenAI-compat endpoints also selectable |
-| Transport | Pipecat `SmallWebRTCTransport` |
-| Delegates | ava (at `https://ava.proto-labs.ai/v1`) — add more in `config/delegates.yaml` |
+```
+┌──────────────────────────────┐
+│  Browser / PWA               │
+│  (orb viz + drawer)          │
+└────────┬─────────────────────┘
+         │ WebRTC
+         ▼
+┌──────────────────────────────┐        ┌────────────────────┐
+│  Pipecat voice pipeline      │◀──────▶│  Your agents       │
+│  (STT → ORBIS LLM → TTS)     │  A2A   │  (A2A / OpenAI)    │
+│                              │ OpenAI │                    │
+│  ORBIS LLM = small/fast      │        │  protoAgent,       │
+│  router + personality layer  │        │  Claude Code,      │
+│                              │        │  MCP servers,      │
+│                              │        │  whatever          │
+└─────┬────────────────────────┘        └────────────────────┘
+      │
+      ▼
+┌──────────────────────────────┐
+│  SQLite memory backend       │
+│  sessions / facts /          │
+│  personality / mood /        │
+│  entitlement cache           │
+└──────────────────────────────┘
+```
 
-## Configuration
+## Tool surface
 
-Everything's env-driven. `cp .env.example .env` and edit — all 44+ env vars are documented there and in [Environment Variables](https://protolabsai.github.io/protoVoice/reference/environment-variables/). Defaults work for a single-GPU homelab install.
+ORBIS's voice agent has a deliberately small set of tools:
 
-For production boxes, inject secrets via Infisical / Vault / k8s Secret + envFrom — the app reads `os.environ` and doesn't care where values came from.
+- **`delegate_to(target, query)`** — hand off to one of your
+  configured agents. A2A-compatible or OpenAI-compatible. Results
+  stream back through the delivery controller and narrate naturally.
+- **`set_variant(name)`, `apply_palette(name)`, `adjust_param(key,
+  value)`, `save_preset(name)`, `recall_preset(name)`** — the orb
+  self-modifies its appearance when you ask ("be warmer", "try a
+  darker look"). Paid unlock gates non-starter variants.
 
-## Docs
+Nothing else ships. Calculator, search, datetime — all subsumed by
+whatever agent you delegate to.
 
-Full site: **https://protolabsai.github.io/protoVoice/** — Diátaxis-organized (tutorials / guides / reference / explanation).
+## Memory
 
-Common starting points:
+SQLite single-file embedded store at `data/orbis.sqlite` (override
+with `ORBIS_DB_PATH`). Tables:
 
-- [First Voice Session](https://protolabsai.github.io/protoVoice/tutorials/first-voice-session/) — clone, configure, talk
-- [Build a Tool](https://protolabsai.github.io/protoVoice/guides/build-tools/) — sync vs async, the `result_callback` gotcha
-- [Delegates](https://protolabsai.github.io/protoVoice/reference/delegates/) — add an A2A agent or OpenAI endpoint
-- [Audio Handling](https://protolabsai.github.io/protoVoice/guides/audio-handling/) — echo guard, half-duplex, noise filter, smart-turn
-- [Two-Model Split](https://protolabsai.github.io/protoVoice/explanation/two-model-split/) — router LLM vs. delegated thinker pattern
+- `sessions` — one row per voice session (with FTS5 search)
+- `facts` — structured `(subject, relation, object)` with bi-temporal
+  validity + confidence. 90-day half-life decay curator runs weekly.
+- `personality_axes` — 10 slow-drift axes (playful↔serious,
+  warm↔guarded, sarcastic↔sincere, verbose↔terse, hopeful↔cynical,
+  grandiose↔grounded, probing↔incurious, philosophical↔pragmatic,
+  independent↔clingy, curious↔bored)
+- `personality_events` — append-only drift log
+- `mood` — short-term (valence / arousal / guardedness)
+- `entitlement_cache` — local mirror of Stripe verification
 
-## Release pipeline
+No graph DB. No Neo4j. No vector DB. The "poor-man's Graphiti on
+SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
 
-- Push to `main` → GHCR `:latest` + `sha-<short>` images via `.github/workflows/docker-publish.yml`
-- `vX.Y.Z` tag → stable semver images + GitHub release via `.github/workflows/release.yml`
-- Manual `workflow_dispatch` on `prepare-release.yml` → bumps version, opens + auto-merges the release PR, tags
+## Testing
+
+```bash
+.venv/bin/python -m pytest        # unit tests for memory + auth
+cd web && bun run build           # type-check + build frontend
+```
+
+## Contributing
+
+- [DECISIONS.md](./DECISIONS.md) — architecture snapshot, frozen.
+  Amendments are additive (don't silently change direction).
+- [docs/orb-visualizer.md](./docs/orb-visualizer.md) — engineering
+  reference for the orb plugin system inherited from protoVoice.
+
+Seed provenance: this repo started as a squashed fork of
+[protoLabsAI/protoVoice](https://github.com/protoLabsAI/protoVoice)
+@ v0.12.1, then was carved to ORBIS scope. See the commit history
+from the `initial commit` through the `carve:` series for what came
+out of the seed.
 
 ## License
 
-MIT
+TBD.
