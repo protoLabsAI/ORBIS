@@ -47,7 +47,7 @@ except ImportError:
 os.environ.setdefault("HF_HOME", os.environ.get("MODEL_DIR", "/models"))
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -1358,12 +1358,36 @@ async def put_config(patch: dict, user: User = Depends(require_user)):
 
         {"persona": {"name": "Atlas"}}              # rename
         {"voice": {"tts_backend": "elevenlabs"}}    # swap provider
-        {"orb": {"variant": "nebula", "palette": "Helios"}}   # full re-pick
+        {"orb": {"variant": "nebula", "palette": "Helios"}}   # paid
+
+    ``persona`` + ``voice`` blocks are always editable. The ``orb``
+    block requires the paid customization unlock — requests with an
+    ``orb`` block while the caller lacks the entitlement return 403.
+    Starter-orb selection happens via /api/orb/select_starter and is
+    always allowed (restricted to the curated pool).
 
     Drops unknown keys with a warning. Raises 400 on typed failures
     (invalid tts_backend, non-numeric temperature, etc.).
     """
     from agent.config_store import merge_patch
+    from agent.entitlement import has_customization
+
+    # Paid-tier gate — orb block changes require the customization
+    # unlock. This is the authoritative gate; the tool-call path
+    # (set_variant / apply_palette / adjust_param / save_preset)
+    # also gates, but a direct /api/config POST would otherwise
+    # bypass the tools entirely.
+    if isinstance(patch, dict) and patch.get("orb"):
+        if not has_customization(get_memory()):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Orb customization is part of the paid unlock. "
+                    "Use /api/orb/select_starter to pick from the free "
+                    "starter pool, or purchase the unlock."
+                ),
+            )
+
     try:
         normalized = merge_patch(patch)
     except ValueError as exc:

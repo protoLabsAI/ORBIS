@@ -161,7 +161,7 @@ Without Stripe env vars set, customization is open by default
   the entitlement on `checkout.session.completed` / revokes on
   `charge.refunded`.
 - Local SQLite cache tolerates offline periods up to
-  `ENTITLEMENT_CACHE_DAYS` (default 14); a daily lifespan task
+  `ENTITLEMENT_CACHE_DAYS` (default 7); a daily lifespan task
   re-queries Stripe to extend.
 
 Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and

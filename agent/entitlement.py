@@ -50,9 +50,12 @@ STRIPE_CANCEL_URL = os.environ.get(
 )
 
 # How long an entitlement stays "active" in the local cache after the
-# most recent successful Stripe verification. Default 14 days, enough
-# to comfortably survive most offline stretches.
-CACHE_DAYS = int(os.environ.get("ENTITLEMENT_CACHE_DAYS", "14"))
+# most recent successful Stripe verification. Default 7 days — enough
+# to cover a typical offline weekend / travel week while keeping the
+# refund-abuse window manageable. A user who cancels and immediately
+# blocks egress to Stripe still gets at most 7 days of continued
+# access before the refresh can't extend the cache and the gate shuts.
+CACHE_DAYS = int(os.environ.get("ENTITLEMENT_CACHE_DAYS", "7"))
 # How often we re-query Stripe to extend the cache. Default 24 hours.
 REFRESH_INTERVAL_HOURS = int(
     os.environ.get("ENTITLEMENT_REFRESH_INTERVAL_HOURS", "24")
