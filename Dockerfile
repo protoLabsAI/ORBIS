@@ -1,11 +1,11 @@
-# protoVoice — voice agent container (pipecat pipeline).
+# ORBIS — voice agent container (pipecat pipeline).
 #
-# Whisper STT + routing vLLM (Qwen 4B) + Kokoro TTS fallback.
-# Fish Audio S2-Pro is the DEFAULT TTS backend and runs as a separate
-# sidecar container — see docker-compose.yml + Dockerfile.fish.
+# Whisper STT + routing vLLM (Qwen 4B) + Kokoro TTS (default, CPU-only).
+# Fish Audio S2-Pro is opt-in and runs as a separate sidecar container —
+# see docker-compose.yml (`fish` profile) + Dockerfile.fish.
 #
-# Build:  docker build -t protovoice .
-# Run:    docker compose up -d  (preferred — brings up fish-speech too)
+# Build:  docker build -t orbis .
+# Run:    docker compose up -d  (kokoro default; add --profile fish for Fish)
 
 # ---------------------------------------------------------------------------
 # Stage 1: build the React SPA (web/).
@@ -49,7 +49,7 @@ COPY a2a/ ./a2a/
 COPY agent/ ./agent/
 COPY auth/ ./auth/
 COPY config/ ./config/
-COPY skills/ ./skills/
+COPY memory/ ./memory/
 COPY static/ ./static/
 COPY voice/ ./voice/
 # Built SPA from stage 1 — served at / when FRONTEND=react (default once verified).
@@ -60,7 +60,7 @@ ENV HF_HOME=/models
 ENV MODEL_DIR=/models
 ENV PORT=7866
 ENV VLLM_PORT=8100
-ENV TTS_BACKEND=fish
+ENV TTS_BACKEND=kokoro
 
 EXPOSE 7866
 
