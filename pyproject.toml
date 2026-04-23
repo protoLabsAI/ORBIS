@@ -1,17 +1,18 @@
 [project]
-name = "protovoice"
-version = "0.12.1"
-description = "Duplex voice agent on Pipecat — Whisper STT + Qwen LLM + Fish/Kokoro TTS"
+name = "orbis"
+version = "0.1.0"
+description = "ORBIS — voice-first AI companion. Pipecat voice pipeline + orb visualization + delegate-to-your-agents routing."
 requires-python = ">=3.11"
 dependencies = [
     # Pipecat + transports
     "pipecat-ai[webrtc,silero,openai]>=1.0",
-    # Local model runtimes
+    # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
+    # but baseline; users who only want cloud STT/TTS can skip by
+    # installing a slim variant (future work).
     "torch>=2.5",
     "transformers>=4.46",
     "accelerate",
     "kokoro>=0.9",
-    "vllm>=0.18",
     # Web + I/O
     "fastapi",
     "uvicorn[standard]",
@@ -22,7 +23,6 @@ dependencies = [
     "soxr",
     "numpy",
     "pyyaml",
-    "ddgs",
     # Observability
     "langfuse>=3.0",
 ]
@@ -35,7 +35,7 @@ smart-turn = ["pipecat-ai[local-smart-turn]"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 
 [project.scripts]
-protovoice = "app:main"
+orbis = "app:main"
 
 [build-system]
 requires = ["hatchling"]
