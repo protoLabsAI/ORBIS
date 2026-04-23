@@ -75,8 +75,9 @@ class FishAudioTTS(TTSService):
 
         # Defer tracing import — this file is deep in the hot path.
         from agent import tracing
-        tts_span = tracing.active_trace().span(
+        tts_span = tracing.active_trace().start_observation(
             name="tts.fish",
+            as_type="span",
             input={"text_len": len(text), "preview": text[:120]},
             metadata={"backend": "fish", "voice": self._reference_id},
         )
