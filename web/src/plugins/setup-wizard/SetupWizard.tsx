@@ -675,9 +675,9 @@ function StarterCard({
     >
       {/* Gradient swatch derived from the palette's primary/secondary
           energy colors. Cheap visual hint — the actual shader is one
-          click away via the preview button. */}
+          click away via the preview button. Decorative but contains
+          the focusable Preview button, so no aria-hidden. */}
       <div
-        aria-hidden
         className="relative w-full aspect-square rounded-md mb-3 overflow-hidden border border-zinc-800/60"
         style={{
           background: `radial-gradient(circle at 35% 35%, ${primary} 0%, ${secondary} 55%, #0a0a0a 100%)`,
