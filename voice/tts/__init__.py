@@ -16,7 +16,7 @@ from pipecat.services.tts_service import TTSService
 
 logger = logging.getLogger(__name__)
 
-TTS_BACKEND = os.environ.get("TTS_BACKEND", "fish").lower()
+TTS_BACKEND = os.environ.get("TTS_BACKEND", "kokoro").lower()
 
 
 def make_tts(**overrides) -> TTSService:

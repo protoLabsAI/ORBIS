@@ -1,20 +1,28 @@
-# protoVoice — one-command deploy
+# ORBIS — one-command deploy
 #
 #   docker compose up -d
 #
-# Services:
-#   - protovoice   (GPU 0)   WebRTC UI + Whisper + Kokoro + routing vLLM
-#   - fish-speech  (GPU 1)   Fish Audio S2-Pro TTS sidecar — default backend
+# Default services:
+#   - orbis        WebRTC UI + Whisper + Kokoro + routing vLLM
 #
-# Use `TTS_BACKEND=kokoro docker compose up protovoice` to run without Fish.
+# Fish S2-Pro TTS is opt-in via the `fish` profile:
+#
+#   TTS_BACKEND=fish docker compose --profile fish up
+#
+# Requires ~/dev/fish-speech checked out at ../fish-speech as the
+# build context; use this only if you want cloneable voices and have
+# the GPU capacity. Default (kokoro) needs no sidecar.
 
 services:
+  # Opt-in Fish TTS sidecar — activate with `--profile fish`.
+  # Build context points at a sibling fish-speech checkout that already
+  # has .venv + checkpoints/s2-pro/ present.
   fish-speech:
-    # Built from ~/dev/fish-speech checkout — has the .venv + checkpoints.
+    profiles: [fish]
     build:
       context: ../fish-speech
       dockerfile: ${PWD}/Dockerfile.fish
-    container_name: protovoice-fish
+    container_name: orbis-fish
     restart: unless-stopped
     runtime: nvidia
     ports:
@@ -37,43 +45,29 @@ services:
       start_period: 180s
       retries: 3
 
-  protovoice:
+  orbis:
     build: .
-    container_name: protovoice
+    container_name: orbis
     restart: unless-stopped
-    runtime: nvidia
-    depends_on:
-      # Only required when TTS_BACKEND=fish (the default).
-      fish-speech:
-        condition: service_started
     ports:
       - "${PORT:-7866}:7866"
     volumes:
       - ${HF_HOME:-/mnt/models/huggingface}:/models
-    # env_file picks up secrets like WORKSTACEAN_API_KEY / AVA_API_KEY that
-    # aren't enumerated below — don't require a compose edit for every new
-    # delegate key.
     env_file:
       - path: .env
         required: false
     environment:
-      - NVIDIA_VISIBLE_DEVICES=${PROTOVOICE_GPU:-0}
       - HF_HOME=/models
       - PORT=7866
       - VLLM_PORT=8100
       - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3.5-4B}
       - WHISPER_MODEL=${WHISPER_MODEL:-openai/whisper-large-v3-turbo}
-      - TTS_BACKEND=${TTS_BACKEND:-fish}
+      - TTS_BACKEND=${TTS_BACKEND:-kokoro}
+      - KOKORO_VOICE=${KOKORO_VOICE:-af_heart}
+      # Fish is opt-in — only used when TTS_BACKEND=fish. The fish
+      # service above runs under the `fish` compose profile.
       - FISH_URL=${FISH_URL:-http://fish-speech:8092}
       - FISH_REFERENCE_ID=${FISH_REFERENCE_ID:-}
-      - KOKORO_VOICE=${KOKORO_VOICE:-af_heart}
       - SYSTEM_PROMPT=${SYSTEM_PROMPT:-}
       - START_VLLM=${START_VLLM:-1}
       - LLM_URL=${LLM_URL:-}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${PROTOVOICE_GPU:-0}"]
-              capabilities: [gpu]
