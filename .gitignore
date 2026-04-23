@@ -20,3 +20,6 @@ data/
 # User-edited config (the example is committed, not the real file).
 config/orbis.yaml
 config/users.yaml
+
+# Per-project Automaker UI state — local config, should not be versioned.
+.automaker/
