@@ -115,19 +115,29 @@ export const LLM_PRESETS: LLMPreset[] = [
 ];
 
 /** Best-effort match of a url+model back to a known preset id. Lets the
- * Settings panel highlight the active preset tile on open. */
+ * Settings panel highlight the active preset tile on open.
+ *
+ * Three explicit stages so the precedence stays readable:
+ *   1. exact URL equality — most trustworthy
+ *   2. substring URL match — catches paths like `.../v1/chat/completions`
+ *      appended to a preset base URL
+ *   3. model-name equality — last-ditch signal when URL tells us nothing
+ */
 export function matchPreset(url: string, model: string): string {
   const normalized = (s: string) => s.trim().replace(/\/$/, '').toLowerCase();
   const nu = normalized(url);
   const nm = normalized(model);
-  // Exact URL match first — more reliable than model name.
+
+  // 1 — exact URL match.
   for (const p of LLM_PRESETS) {
-    if (!p.url) continue;
-    if (normalized(p.url) === nu) return p.id;
+    if (p.url && normalized(p.url) === nu) return p.id;
   }
-  // Then a substring match (catches litellm-proxied urls like ava:4000).
+  // 2 — substring URL match.
   for (const p of LLM_PRESETS) {
     if (p.url && nu.includes(normalized(p.url))) return p.id;
+  }
+  // 3 — model name match.
+  for (const p of LLM_PRESETS) {
     if (p.model && nm === normalized(p.model)) return p.id;
   }
   return 'custom';

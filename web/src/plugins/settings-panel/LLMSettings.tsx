@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
-import { api } from '@/lib/api';
+import { api, type OrbisConfig } from '@/lib/api';
 import {
   LLM_PRESETS,
   matchPreset,
   type LLMPreset,
 } from '@/shared/llm/presets';
+
+type LLMPayload = NonNullable<OrbisConfig['llm']>;
 
 type TestState =
   | { kind: 'idle' }
@@ -37,6 +39,15 @@ export function LLMSettings() {
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Tracks the "saved" → "idle" timer so we can cancel it on unmount and
+  // avoid setState-after-unmount if the drawer closes mid-toast.
+  const saveResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
+    };
+  }, []);
 
   // Load current /api/config and pre-fill.
   useEffect(() => {
@@ -138,21 +149,22 @@ export function LLMSettings() {
     }
     setSave({ kind: 'saving' });
     try {
-      const llm: Record<string, string> = {
-        url: url.trim(),
-        model: model.trim(),
-      };
       // Only include the key when the user typed something — empty string
       // would clear it, which they probably don't want when a key was
       // already set.
+      const llm: LLMPayload = { url: url.trim(), model: model.trim() };
       if (apiKey.trim()) llm.api_key = apiKey.trim();
-      await api.putConfig({ llm: llm as never });
+      await api.putConfig({ llm });
       setSave({ kind: 'saved' });
       if (apiKey.trim()) {
         setKeyIsSet(true);
         setApiKey('');
       }
-      window.setTimeout(() => setSave({ kind: 'idle' }), 2000);
+      if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
+      saveResetTimerRef.current = setTimeout(
+        () => setSave({ kind: 'idle' }),
+        2000,
+      );
     } catch (e) {
       setSave({ kind: 'error', message: String((e as Error).message ?? e) });
     }

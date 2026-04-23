@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import {
@@ -8,9 +8,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { api } from '@/lib/api';
+import { api, type OrbisConfig } from '@/lib/api';
 
 type TTSBackend = 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
+type VoicePayload = NonNullable<OrbisConfig['voice']>;
+
+const VALID_BACKENDS: readonly TTSBackend[] = [
+  'kokoro', 'openai', 'elevenlabs', 'fish',
+] as const;
+
+const isValidBackend = (v: unknown): v is TTSBackend =>
+  typeof v === 'string' && (VALID_BACKENDS as readonly string[]).includes(v);
 
 type SaveState =
   | { kind: 'idle' }
@@ -39,9 +47,19 @@ const VOICE_PLACEHOLDER: Record<TTSBackend, string> = {
  */
 export function TTSSettings() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [backend, setBackend] = useState<TTSBackend>('kokoro');
   const [voice, setVoice] = useState('');
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
+
+  // Tracks the "saved" → "idle" reset timer so it can be cancelled on
+  // unmount (and before a new save re-arms it).
+  const saveResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,10 +67,16 @@ export function TTSSettings() {
       .then((r) => {
         if (cancelled) return;
         const v = r.config?.voice ?? {};
-        if (v.tts_backend) setBackend(v.tts_backend as TTSBackend);
+        // Only accept known backends — if the server ships a newer one
+        // we haven't listed yet, fall back to kokoro rather than lying
+        // to the user via a coerced cast.
+        if (isValidBackend(v.tts_backend)) setBackend(v.tts_backend);
         if (v.voice) setVoice(v.voice);
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (!cancelled) setLoadError(String((e as Error).message ?? e));
+        console.error('[settings/tts] failed to load config', e);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -60,11 +84,15 @@ export function TTSSettings() {
   const onSave = async () => {
     setSave({ kind: 'saving' });
     try {
-      const v: Record<string, string> = { tts_backend: backend };
+      const v: VoicePayload = { tts_backend: backend };
       if (voice.trim()) v.voice = voice.trim();
-      await api.putConfig({ voice: v as never });
+      await api.putConfig({ voice: v });
       setSave({ kind: 'saved' });
-      window.setTimeout(() => setSave({ kind: 'idle' }), 2000);
+      if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
+      saveResetTimerRef.current = setTimeout(
+        () => setSave({ kind: 'idle' }),
+        2000,
+      );
     } catch (e) {
       setSave({ kind: 'error', message: String((e as Error).message ?? e) });
     }
@@ -132,6 +160,12 @@ export function TTSSettings() {
             </span>
           )}
         </div>
+
+        {loadError && (
+          <div className="text-[11px] text-red-400">
+            Failed to load current config: {loadError}
+          </div>
+        )}
       </div>
     </Panel>
   );

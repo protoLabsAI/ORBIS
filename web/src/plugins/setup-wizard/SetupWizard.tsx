@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
+import { LLM_PRESETS } from '@/shared/llm/presets';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
+
+// A stable default for the LLM step — hitting LLM_PRESETS[0] silently
+// breaks if the preset ordering changes. Fall back to the first entry
+// only if someone renames the well-known id.
+const DEFAULT_LLM_PRESET =
+  LLM_PRESETS.find((p) => p.id === 'openai') ?? LLM_PRESETS[0];
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
@@ -197,8 +204,8 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   );
 }
 
-// Shared with the Settings panel — see web/src/shared/llm/presets.ts
-import { LLM_PRESETS } from '@/shared/llm/presets';
+// LLM_PRESETS is imported at the top of the file — shared with the
+// Settings panel via web/src/shared/llm/presets.ts.
 
 interface LocalDetected {
   ollama?: { url: string; models: string[] };
@@ -212,9 +219,9 @@ type TestState =
   | { kind: 'error'; message: string };
 
 function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [provider, setProvider] = useState<string>('openai');
-  const [url, setUrl] = useState(LLM_PRESETS[0].url);
-  const [model, setModel] = useState(LLM_PRESETS[0].model);
+  const [provider, setProvider] = useState<string>(DEFAULT_LLM_PRESET.id);
+  const [url, setUrl] = useState(DEFAULT_LLM_PRESET.url);
+  const [model, setModel] = useState(DEFAULT_LLM_PRESET.model);
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -222,7 +229,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [local, setLocal] = useState<LocalDetected>({});
 
-  const current = LLM_PRESETS.find((p) => p.id === provider) ?? LLM_PRESETS[0];
+  const current = LLM_PRESETS.find((p) => p.id === provider) ?? DEFAULT_LLM_PRESET;
 
   // Probe localhost for Ollama / LM Studio once on mount. Silent failure —
   // if they're not running, we just don't show the callout.
@@ -234,7 +241,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
   const pickProvider = (next: string) => {
     setProvider(next);
-    const preset = LLM_PRESETS.find((p) => p.id === next) ?? LLM_PRESETS[0];
+    const preset = LLM_PRESETS.find((p) => p.id === next) ?? DEFAULT_LLM_PRESET;
     setUrl(preset.url);
     setModel(preset.model);
     setTest({ kind: 'idle' });
