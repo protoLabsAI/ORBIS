@@ -13,6 +13,7 @@ import './plugins/orb';
 import './plugins/status-pill';
 import './plugins/orb-settings';
 import './plugins/voice-panel';
+import './plugins/settings-panel';
 import './plugins/setup-wizard';
 import './plugins/mood';
 

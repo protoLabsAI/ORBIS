@@ -9,7 +9,8 @@ export type UISlotName =
   | 'overlay-top' // floating top, e.g. status chip, trace chip
   | 'overlay-bottom' // floating bottom, e.g. status pill, transcript strip
   | 'drawer-voice' // drawer tab: voice controls (skill, verbosity)
-  | 'drawer-orb'; // drawer tab: orb controls (palette, sliders)
+  | 'drawer-orb' // drawer tab: orb controls (palette, sliders)
+  | 'drawer-settings'; // drawer tab: runtime settings (LLM/TTS/STT)
 
 export interface Plugin {
   id: string;
