@@ -1222,6 +1222,81 @@ async def get_config(user: User = Depends(require_user)):
     return {"config": read_config()}
 
 
+@app.get("/api/personality")
+async def get_personality(user: User = Depends(require_user)):
+    """Return current personality state: axes + mood + recent drift
+    events + session stats. Drives the drawer's Profile panel so the
+    user can see why the orb feels a certain way."""
+    mem = get_memory()
+    try:
+        axes = [
+            {"axis": a.axis, "value": a.value, "updated_at": a.updated_at}
+            for a in mem.personality.all_axes()
+        ]
+    except Exception:
+        axes = []
+    try:
+        mood = mem.personality.get_mood()
+        mood_dict = {
+            "valence": mood.valence,
+            "arousal": mood.arousal,
+            "guardedness": mood.guardedness,
+            "updated_at": mood.updated_at,
+        }
+    except Exception:
+        mood_dict = None
+    try:
+        events = mem.personality.recent_events(limit=20)
+    except Exception:
+        events = []
+    try:
+        session_count = mem.sessions.count()
+        last_session_ended_at = mem.sessions.last_ended_at()
+    except Exception:
+        session_count = 0
+        last_session_ended_at = None
+    return {
+        "axes": axes,
+        "mood": mood_dict,
+        "recent_events": events,
+        "sessions": {
+            "count": session_count,
+            "last_ended_at": last_session_ended_at,
+        },
+    }
+
+
+@app.post("/api/orb/select_starter")
+async def select_starter(body: dict, user: User = Depends(require_user)):
+    """Commit a starter-orb pick to config/orbis.yaml. Called by the
+    setup wizard after the user picks. Validates the slug against
+    the pool, writes the orb block, reloads persona.
+
+    Body: ``{"slug": "<starter_slug>"}``."""
+    slug = (body.get("slug") or "").strip()
+    if not slug:
+        raise HTTPException(status_code=400, detail="slug is required")
+    from agent.starter_orbs import find_starter
+    from agent.config_store import merge_patch
+    hit = find_starter(slug)
+    if not hit:
+        raise HTTPException(
+            status_code=404, detail=f"unknown starter: {slug!r}",
+        )
+    merge_patch({
+        "orb": {
+            "variant": hit.variant,
+            "palette": hit.palette,
+            "params": dict(hit.params),
+        },
+    })
+    reload_persona()
+    return {
+        "ok": True,
+        "starter": hit.to_dict(),
+    }
+
+
 @app.get("/api/entitlement")
 async def get_entitlement(user: User = Depends(require_user)):
     """Return the owner's current entitlement state — used by the UI

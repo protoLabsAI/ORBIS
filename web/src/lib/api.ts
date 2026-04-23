@@ -52,6 +52,36 @@ export type EntitlementState = {
   customization: { active: boolean; configured: boolean };
 };
 
+export type PersonalityAxis = {
+  axis: string;
+  value: number;
+  updated_at: string;
+};
+
+export type Mood = {
+  valence: number;
+  arousal: number;
+  guardedness: number;
+  updated_at: string;
+} | null;
+
+export type PersonalityEvent = {
+  axis: string;
+  delta: number;
+  reason: string;
+  at: string;
+};
+
+export type PersonalityState = {
+  axes: PersonalityAxis[];
+  mood: Mood;
+  recent_events: PersonalityEvent[];
+  sessions: {
+    count: number;
+    last_ended_at: string | null;
+  };
+};
+
 /** Thrown when a response carries HTTP 401 — signals the key is wrong/missing. */
 export class UnauthorizedError extends Error {
   constructor(path: string) { super(`${path} → 401 unauthorized`); }
@@ -86,4 +116,7 @@ export const api = {
     postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string }>('/api/config', patch),
   entitlement: () => get<EntitlementState>('/api/entitlement'),
   createCheckout: () => postJSON<{ url: string }>('/api/entitlement/checkout', {}),
+  personality: () => get<PersonalityState>('/api/personality'),
+  selectStarter: (slug: string) =>
+    postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
 };
