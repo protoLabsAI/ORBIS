@@ -68,9 +68,6 @@ def render_personality_block(mem) -> str:
         logger.warning(f"[personality] render failed: {e}")
         return ""
 
-    if not axes and mood.valence == 0.0 and mood.arousal == 0.0 and mood.guardedness == 0.0:
-        return ""
-
     axis_lines: list[str] = []
     for slug, neg, pos in _AXIS_DESCRIPTIONS:
         a = axes.get(slug)
@@ -89,6 +86,10 @@ def render_personality_block(mem) -> str:
         )
     if mood.guardedness > 0.15:
         mood_desc.append("guarded")
+
+    # Nothing above the noise floor — emit nothing, not even the header.
+    if not axis_lines and not mood_desc:
+        return ""
 
     lines: list[str] = ["## PERSONALITY"]
     if axis_lines:
