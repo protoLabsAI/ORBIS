@@ -128,10 +128,46 @@ with `ORBIS_DB_PATH`). Tables:
 No graph DB. No Neo4j. No vector DB. The "poor-man's Graphiti on
 SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
 
+## Configuration
+
+- `config/orbis.yaml` — persona (slug, name, system prompt, LLM
+  knobs, filler verbosity), voice (TTS provider + voice id), orb
+  (starter variant / palette / params). Copy from
+  `config/orbis.example.yaml`. Override `system_prompt` at the env
+  level with `SYSTEM_PROMPT`. Re-read via `POST /api/persona/reload`
+  or `POST /api/config` (which the drawer UI calls).
+- `config/starter_orbs.yaml` — the curated pool the setup wizard
+  presents at first boot. Ship 8 by default; edit to taste.
+- `config/users.yaml` — owner credential (single entry). Omitted =
+  single-user fallback (no auth enforced). Required for tailnet
+  hosting.
+- `config/delegates.yaml` — A2A / OpenAI-compat endpoints the
+  `delegate_to` tool can reach.
+
+## Paid unlock (optional)
+
+The orb's full customization editor (change variant, palette,
+shader params, save presets) is behind a one-time Stripe payment.
+Without Stripe env vars set, customization is open by default
+(dev mode). With Stripe configured:
+
+- `POST /api/entitlement/checkout` — creates a Stripe Checkout
+  Session, returns the URL.
+- `POST /api/stripe/webhook` — verifies the signature and grants
+  the entitlement on `checkout.session.completed` / revokes on
+  `charge.refunded`.
+- Local SQLite cache tolerates offline periods up to
+  `ENTITLEMENT_CACHE_DAYS` (default 14); a daily lifespan task
+  re-queries Stripe to extend.
+
+Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and
+`STRIPE_PRICE_CUSTOMIZATION` in `.env` to enable. Point the Stripe
+dashboard webhook at `POST https://<your-host>/api/stripe/webhook`.
+
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest        # unit tests for memory + auth
+.venv/bin/python -m pytest        # full backend suite (100+ tests)
 cd web && bun run build           # type-check + build frontend
 ```
 
