@@ -996,16 +996,40 @@ def prewarm_all() -> None:
 async def lifespan(app: FastAPI):
     lifecycle.start()
     # Prewarm off the event loop so the startup handshake isn't blocked by
-    # Fish's ~2min cold compile; we just begin work in the background.
+    # TTS / STT / LLM cold starts; we just begin work in the background.
     asyncio.get_running_loop().run_in_executor(None, prewarm_all)
+
+    # Curator task — 90-day half-life decay on facts + prune below 0.2
+    # confidence. Runs once at boot, then weekly. Uses Memory.facts.decay_and_prune().
+    async def _curator_loop() -> None:
+        while True:
+            try:
+                mem = get_memory()
+                result = mem.facts.decay_and_prune()
+                if result.get("decayed") or result.get("pruned"):
+                    logger.info(
+                        f"[curator] decayed={result['decayed']} pruned={result['pruned']}"
+                    )
+            except Exception as e:
+                logger.warning(f"[curator] run failed: {e}")
+            # Sleep 7 days. Cancelled cleanly on lifespan shutdown.
+            await asyncio.sleep(7 * 24 * 3600)
+
+    curator_task = asyncio.create_task(_curator_loop(), name="orbis-curator")
+
     try:
         yield
     finally:
+        curator_task.cancel()
+        try:
+            await curator_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await _handler.close()
         lifecycle.stop()
 
 
-app = FastAPI(title="protoVoice", lifespan=lifespan)
+app = FastAPI(title="ORBIS", lifespan=lifespan)
 
 
 @app.post("/api/offer")
