@@ -187,6 +187,11 @@ class TurnTracer:
     """
 
     def __init__(self, session_id: str, user_id: str | None = None) -> None:
+        # Forward into BaseObserver's __init__ when composed as
+        # _ActiveTracer(TurnTracer, BaseObserver). Without this the mixin
+        # base never initializes (notably `_name`), and pipecat crashes
+        # when it stringifies this observer in its proxy setup.
+        super().__init__()
         self.session_id = session_id
         self.user_id = user_id
         self._current_trace: Any = None
