@@ -33,6 +33,8 @@ dependencies = [
 rnnoise = ["pipecat-ai[rnnoise]"]
 smart-turn = ["pipecat-ai[local-smart-turn]"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
+# Test-only: respx mocks httpx for the LLM-probe tests.
+test = ["pytest", "respx"]
 
 [project.scripts]
 orbis = "app:main"

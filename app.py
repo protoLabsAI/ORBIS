@@ -1218,6 +1218,49 @@ async def reload_persona_endpoint(user: User = Depends(require_user)):
     return {"ok": True, "slug": persona.slug, "name": persona.name}
 
 
+@app.post("/api/llm/test")
+async def llm_test(body: dict):
+    """Real round-trip ping against a configured LLM endpoint.
+
+    Body: ``{url, model, api_key?}``. Returns ``{ok, latency_ms?,
+    error?, status?}``. Unauth on purpose — the setup wizard may run
+    before the owner API key is set, and the user's LLM credentials
+    are what's really being validated here, not their ORBIS auth.
+    """
+    from agent.llm_probe import ping_endpoint
+    return await ping_endpoint(
+        url=str(body.get("url") or ""),
+        model=str(body.get("model") or ""),
+        api_key=str(body.get("api_key") or ""),
+    )
+
+
+@app.post("/api/llm/models")
+async def llm_models(body: dict):
+    """GET /models against a configured URL + API key. Returns
+    ``{ok, models[], error?}``. Populates the wizard's model combobox.
+
+    Unauth, same rationale as /api/llm/test.
+    """
+    from agent.llm_probe import list_models
+    return await list_models(
+        url=str(body.get("url") or ""),
+        api_key=str(body.get("api_key") or ""),
+    )
+
+
+@app.get("/api/llm/detect_local")
+async def llm_detect_local():
+    """Parallel probe Ollama (:11434) + LM Studio (:1234) on localhost.
+    Returns only the providers that responded — voice-first homelab
+    users get a "we noticed your local Ollama" callout in the wizard.
+
+    Unauth — localhost detection before auth is set is the whole point.
+    """
+    from agent.llm_probe import detect_local
+    return await detect_local()
+
+
 @app.get("/api/starter_orbs")
 async def get_starter_orbs():
     """Return the curated starter-orb pool. The setup wizard calls this

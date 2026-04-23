@@ -127,4 +127,20 @@ export const api = {
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
+
+  // LLM-provider probing for the setup wizard. These routes are
+  // unauth — the wizard runs before the owner key is set and what's
+  // really being validated is the user's LLM credentials.
+  llmTest: (body: { url: string; model: string; api_key?: string }) =>
+    postJSON<{ ok: boolean; latency_ms?: number; error?: string; status?: number }>(
+      '/api/llm/test', body,
+    ),
+  llmModels: (body: { url: string; api_key?: string }) =>
+    postJSON<{ ok: boolean; models: string[]; error?: string }>(
+      '/api/llm/models', body,
+    ),
+  llmDetectLocal: () =>
+    get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
+      '/api/llm/detect_local',
+    ),
 };

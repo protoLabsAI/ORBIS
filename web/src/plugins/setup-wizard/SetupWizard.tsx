@@ -197,10 +197,8 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   );
 }
 
-type LLMProvider = 'openai' | 'anthropic' | 'groq' | 'gateway' | 'local' | 'custom';
-
 interface LLMPreset {
-  id: LLMProvider;
+  id: string;
   label: string;
   url: string;
   model: string;
@@ -209,77 +207,197 @@ interface LLMPreset {
   blurb: string;
 }
 
+// Hosted + local + gateway presets. All OpenAI-protocol unless
+// labeled otherwise. The actual URL/model/key fields remain editable
+// after picking a preset; the preset just pre-fills them.
 const LLM_PRESETS: LLMPreset[] = [
+  // --- Hosted cloud ---
   {
-    id: 'openai',
-    label: 'OpenAI',
-    url: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
-    needsKey: true,
-    keyPlaceholder: 'sk-...',
+    id: 'openai', label: 'OpenAI',
+    url: 'https://api.openai.com/v1', model: 'gpt-4o-mini',
+    needsKey: true, keyPlaceholder: 'sk-...',
     blurb: 'Fast + cheap. A few cents per hour of chatter.',
   },
   {
-    id: 'anthropic',
-    label: 'Anthropic',
-    url: 'https://api.anthropic.com/v1',
-    model: 'claude-haiku-4-5',
-    needsKey: true,
-    keyPlaceholder: 'sk-ant-...',
+    id: 'anthropic', label: 'Anthropic',
+    url: 'https://api.anthropic.com/v1', model: 'claude-haiku-4-5',
+    needsKey: true, keyPlaceholder: 'sk-ant-...',
     blurb: 'Claude Haiku. Great personality, slightly pricier.',
   },
   {
-    id: 'groq',
-    label: 'Groq',
-    url: 'https://api.groq.com/openai/v1',
-    model: 'llama-3.1-8b-instant',
-    needsKey: true,
-    keyPlaceholder: 'gsk_...',
-    blurb: 'Blazing fast, near-free. Smaller model.',
+    id: 'groq', label: 'Groq',
+    url: 'https://api.groq.com/openai/v1', model: 'llama-3.1-8b-instant',
+    needsKey: true, keyPlaceholder: 'gsk_...',
+    blurb: 'Blazing fast, near-free.',
   },
   {
-    id: 'gateway',
-    label: 'LiteLLM / gateway',
-    url: 'http://localhost:4000/v1',
-    model: 'gpt-4o-mini',
-    needsKey: true,
-    keyPlaceholder: 'gateway master key',
-    blurb: 'Any OpenAI-compatible gateway you run.',
+    id: 'deepseek', label: 'DeepSeek',
+    url: 'https://api.deepseek.com/v1', model: 'deepseek-chat',
+    needsKey: true, keyPlaceholder: 'sk-...',
+    blurb: 'Cheap + surprisingly capable.',
   },
   {
-    id: 'local',
-    label: 'Local (vLLM)',
-    url: 'http://127.0.0.1:8100/v1',
-    model: 'Qwen/Qwen3.5-4B',
+    id: 'openrouter', label: 'OpenRouter',
+    url: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini',
+    needsKey: true, keyPlaceholder: 'sk-or-...',
+    blurb: 'One key, every model.',
+  },
+  {
+    id: 'together', label: 'Together AI',
+    url: 'https://api.together.xyz/v1', model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+    needsKey: true, keyPlaceholder: 'api key',
+    blurb: 'Open-weight models, fast inference.',
+  },
+  {
+    id: 'mistral', label: 'Mistral',
+    url: 'https://api.mistral.ai/v1', model: 'mistral-small-latest',
+    needsKey: true, keyPlaceholder: 'api key',
+    blurb: 'European, hosted, capable.',
+  },
+  {
+    id: 'fireworks', label: 'Fireworks AI',
+    url: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+    needsKey: true, keyPlaceholder: 'api key',
+    blurb: 'Low-latency inference cloud.',
+  },
+  {
+    id: 'moonshot', label: 'Moonshot / Kimi',
+    url: 'https://api.moonshot.ai/v1', model: 'moonshot-v1-8k',
+    needsKey: true, keyPlaceholder: 'api key',
+    blurb: 'Long-context specialist.',
+  },
+  {
+    id: 'xai', label: 'xAI',
+    url: 'https://api.x.ai/v1', model: 'grok-2',
+    needsKey: true, keyPlaceholder: 'xai-...',
+    blurb: 'Grok, via OpenAI-compat API.',
+  },
+  // --- Local / self-hosted ---
+  {
+    id: 'ollama', label: 'Ollama',
+    url: 'http://127.0.0.1:11434/v1', model: 'llama3.2',
     needsKey: false,
-    blurb: 'Offline. Run your own vLLM / LM Studio / ollama.',
+    blurb: 'Local. Auto-detected if running.',
   },
   {
-    id: 'custom',
-    label: 'Custom',
-    url: '',
-    model: '',
-    needsKey: true,
-    keyPlaceholder: 'api key (optional)',
-    blurb: 'Paste your own URL + model.',
+    id: 'lm_studio', label: 'LM Studio',
+    url: 'http://127.0.0.1:1234/v1', model: '',
+    needsKey: false,
+    blurb: 'Local. Start the server in LM Studio first.',
+  },
+  {
+    id: 'vllm', label: 'vLLM (local)',
+    url: 'http://127.0.0.1:8100/v1', model: 'Qwen/Qwen3.5-4B',
+    needsKey: false,
+    blurb: 'Your own vLLM server.',
+  },
+  // --- Gateway / proxy ---
+  {
+    id: 'litellm', label: 'LiteLLM gateway',
+    url: 'http://localhost:4000/v1', model: 'gpt-4o-mini',
+    needsKey: true, keyPlaceholder: 'master key',
+    blurb: 'Route to any provider through one URL.',
+  },
+  // --- Custom ---
+  {
+    id: 'custom', label: 'Custom',
+    url: '', model: '',
+    needsKey: true, keyPlaceholder: 'api key (optional)',
+    blurb: 'Paste your own OpenAI-compatible URL.',
   },
 ];
 
+interface LocalDetected {
+  ollama?: { url: string; models: string[] };
+  lm_studio?: { url: string; models: string[] };
+}
+
+type TestState =
+  | { kind: 'idle' }
+  | { kind: 'checking' }
+  | { kind: 'ok'; latency: number }
+  | { kind: 'error'; message: string };
+
 function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [provider, setProvider] = useState<LLMProvider>('openai');
+  const [provider, setProvider] = useState<string>('openai');
   const [url, setUrl] = useState(LLM_PRESETS[0].url);
   const [model, setModel] = useState(LLM_PRESETS[0].model);
   const [apiKey, setApiKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<TestState>({ kind: 'idle' });
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [local, setLocal] = useState<LocalDetected>({});
 
   const current = LLM_PRESETS.find((p) => p.id === provider) ?? LLM_PRESETS[0];
 
-  const pickProvider = (next: LLMProvider) => {
+  // Probe localhost for Ollama / LM Studio once on mount. Silent failure —
+  // if they're not running, we just don't show the callout.
+  useEffect(() => {
+    api.llmDetectLocal()
+      .then((found) => setLocal(found as LocalDetected))
+      .catch(() => {});
+  }, []);
+
+  const pickProvider = (next: string) => {
     setProvider(next);
     const preset = LLM_PRESETS.find((p) => p.id === next) ?? LLM_PRESETS[0];
     setUrl(preset.url);
     setModel(preset.model);
+    setTest({ kind: 'idle' });
+    setAvailableModels([]);
+  };
+
+  const applyDetected = (name: 'ollama' | 'lm_studio') => {
+    const entry = local[name];
+    if (!entry) return;
+    setProvider(name);
+    setUrl(entry.url);
+    setAvailableModels(entry.models);
+    setModel(entry.models[0] ?? '');
+    setTest({ kind: 'idle' });
+  };
+
+  const onFetchModels = async () => {
+    if (!url.trim()) {
+      setError('Need a URL to fetch models.');
+      return;
+    }
+    setError(null);
+    try {
+      const r = await api.llmModels({ url: url.trim(), api_key: apiKey.trim() || undefined });
+      if (r.ok) {
+        setAvailableModels(r.models);
+        if (!model && r.models[0]) setModel(r.models[0]);
+      } else {
+        setError(`Couldn't list models: ${r.error ?? 'unknown'}`);
+      }
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  };
+
+  const onTest = async () => {
+    if (!url.trim() || !model.trim()) {
+      setError('URL and model required to test.');
+      return;
+    }
+    setError(null);
+    setTest({ kind: 'checking' });
+    try {
+      const r = await api.llmTest({
+        url: url.trim(),
+        model: model.trim(),
+        api_key: apiKey.trim() || undefined,
+      });
+      if (r.ok) {
+        setTest({ kind: 'ok', latency: r.latency_ms ?? 0 });
+      } else {
+        setTest({ kind: 'error', message: r.error ?? 'unknown error' });
+      }
+    } catch (e) {
+      setTest({ kind: 'error', message: String((e as Error).message ?? e) });
+    }
   };
 
   const onContinue = async () => {
@@ -304,18 +422,41 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
   };
 
+  const localCallouts: Array<{ key: 'ollama' | 'lm_studio'; label: string; count: number }> = [];
+  if (local.ollama) localCallouts.push({ key: 'ollama', label: 'Ollama', count: local.ollama.models.length });
+  if (local.lm_studio) localCallouts.push({ key: 'lm_studio', label: 'LM Studio', count: local.lm_studio.models.length });
+
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Router brain</h2>
         <p className="text-sm text-zinc-500 max-w-md mx-auto">
-          Small + fast is the right pick — this LLM handles
-          conversation + routing decisions. Heavy reasoning comes from
-          whatever agent you delegate to.
+          Small + fast is the right pick — this LLM handles conversation
+          + routing decisions. Heavy reasoning delegates out.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {localCallouts.length > 0 && (
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-zinc-300">
+          <div className="text-xs uppercase tracking-wider text-emerald-400 mb-2">
+            Detected on your machine
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {localCallouts.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => applyDetected(c.key)}
+                className="px-3 py-1.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-200 text-xs transition-colors"
+              >
+                Use {c.label} ({c.count} model{c.count === 1 ? '' : 's'})
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
         {LLM_PRESETS.map((p) => (
           <button
             key={p.id}
@@ -347,16 +488,38 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             spellCheck={false}
           />
         </div>
+
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">Model</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Model</label>
+            <button
+              type="button"
+              onClick={onFetchModels}
+              className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Fetch list
+            </button>
+          </div>
           <input
+            list={`llm-models-${provider}`}
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="gpt-4o-mini"
             className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
             spellCheck={false}
           />
+          {availableModels.length > 0 && (
+            <datalist id={`llm-models-${provider}`}>
+              {availableModels.map((m) => <option key={m} value={m} />)}
+            </datalist>
+          )}
+          {availableModels.length > 0 && (
+            <div className="text-[11px] text-zinc-600 mt-1">
+              {availableModels.length} models available — type to filter.
+            </div>
+          )}
         </div>
+
         {current.needsKey && (
           <div>
             <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">API key</label>
@@ -375,6 +538,23 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             </div>
           </div>
         )}
+
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="sm" onClick={onTest} disabled={test.kind === 'checking'}>
+            {test.kind === 'checking' ? 'Testing…' : 'Test connection'}
+          </Button>
+          {test.kind === 'ok' && (
+            <span className="text-xs text-emerald-400">
+              ✓ Connected ({test.latency} ms)
+            </span>
+          )}
+          {test.kind === 'error' && (
+            <span className="text-xs text-red-400 truncate max-w-[60%]">
+              ✗ {test.message}
+            </span>
+          )}
+        </div>
+
         {error && <div className="text-xs text-red-400">{error}</div>}
       </div>
 
