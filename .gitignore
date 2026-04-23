@@ -8,8 +8,15 @@ __pycache__/
 .env.*
 !.env.example
 
-# Node / VitePress
-# NB: package-lock.json IS committed — required by `npm ci` in docs workflow.
+# Node
 node_modules/
-docs/.vitepress/cache/
-docs/.vitepress/dist/
+
+# ORBIS runtime state — per-install user DB + session artifacts.
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# User-edited config (the example is committed, not the real file).
+config/orbis.yaml
+config/users.yaml
