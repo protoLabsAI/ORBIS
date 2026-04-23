@@ -39,6 +39,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # GitHub-hosted ubuntu runners ship with ~14 GB free. The torch
+      # `+cu128` wheel pulls in cuda-toolkit, cublas, cudnn, nccl,
+      # nvshmem, triton — easily 10+ GB on top of our CUDA 12.8 base
+      # image. Without this step the build dies with `[Errno 28] No
+      # space left on device` during the pip install layer. Reclaims
+      # ~14 GB of pre-installed Android SDK / .NET / etc. we don't use.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main (2023-10-18)
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

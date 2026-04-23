@@ -36,6 +36,22 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
 
+      # Reclaim ~14 GB from the runner (pre-installed Android SDK /
+      # .NET / Haskell / tool-cache we don't use). Without this the
+      # torch +cu128 pip layer blows past the runner's ~14 GB default
+      # free space with `[Errno 28] No space left on device`. See the
+      # identical step in docker-publish.yml for the full rationale.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main (2023-10-18)
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
       # ── Version ───────────────────────────────────────────────────────────────
 
       - name: Read version
