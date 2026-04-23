@@ -1,7 +1,7 @@
 name: Publish Docker image to GHCR
 
 # Rolling image build on every push to main: pushes
-# `ghcr.io/protolabsai/protovoice:latest` (what Watchtower polls) plus a
+# `ghcr.io/protolabsai/orbis:latest` (what Watchtower polls) plus a
 # pinned `sha-<short>` for rollbacks.
 #
 # Stable semver Docker tags (vX.Y.Z, X.Y) are cut by release.yml when
@@ -27,12 +27,12 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: protolabsai/protovoice
+  IMAGE_NAME: protolabsai/orbis
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.repository == 'protoLabsAI/protoVoice'
+    if: github.repository == 'protoLabsAI/ORBIS'
     timeout-minutes: 30
 
     steps:
@@ -58,8 +58,8 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=sha-,format=short
           labels: |
-            org.opencontainers.image.title=protovoice
-            org.opencontainers.image.description=protoVoice — full-duplex voice agent on Pipecat
+            org.opencontainers.image.title=orbis
+            org.opencontainers.image.description=ORBIS — voice-first AI companion
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 

@@ -17,13 +17,13 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: protolabsai/protovoice
+  IMAGE_NAME: protolabsai/orbis
 
 jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: github.repository == 'protoLabsAI/protoVoice'
+    if: github.repository == 'protoLabsAI/ORBIS'
     permissions:
       contents: write
       packages: write
@@ -68,8 +68,8 @@ jobs:
             type=semver,pattern={{version}},value=${{ steps.version.outputs.tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.tag }}
           labels: |
-            org.opencontainers.image.title=protovoice
-            org.opencontainers.image.description=protoVoice — full-duplex voice agent on Pipecat
+            org.opencontainers.image.title=orbis
+            org.opencontainers.image.description=ORBIS — voice-first AI companion
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}

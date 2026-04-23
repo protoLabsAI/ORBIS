@@ -39,7 +39,7 @@ jobs:
     #   "chore: release" — this is the self-loop cutoff. The release PR
     #   merging its own bump must NOT kick off another bump.
     if: >-
-      github.repository == 'protoLabsAI/protoVoice' &&
+      github.repository == 'protoLabsAI/ORBIS' &&
       (
         github.event_name == 'workflow_dispatch' ||
         (
