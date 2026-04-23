@@ -44,16 +44,15 @@ architectural snapshot.
 
 ## Running it (development)
 
-Requirements: Python 3.11+, Bun or npm, a running LLM endpoint
-(local vLLM, LiteLLM gateway, OpenAI, or any OpenAI-compatible
-URL). Kokoro TTS runs CPU-only and is the default; no GPU required
-for TTS.
+Requirements: Python 3.11+, Bun or npm, and an LLM endpoint (any of
+OpenAI / Anthropic / Groq / DeepSeek / Ollama / LM Studio / LiteLLM
+gateway / etc. — see the setup wizard for the full preset list).
+Kokoro TTS runs CPU-only and is the default; no GPU required.
 
 ```bash
 # One-time
-cp .env.example .env       # edit LLM_URL + any delegate keys
-cp config/orbis.example.yaml config/orbis.yaml       # optional — persona tuning
-cp config/users.example.yaml config/users.yaml       # optional — owner API key
+cp .env.example .env       # optional — env vars for pro setups
+# config/orbis.yaml is auto-written by the first-run setup wizard
 
 # Run (two processes)
 cd web && bun install && bun run dev   # frontend on :5173
@@ -61,14 +60,24 @@ cd web && bun install && bun run dev   # frontend on :5173
 python app.py                          # backend on :7866
 ```
 
-Or one-shot with Docker Compose (kokoro default, no Fish sidecar):
+Open `http://localhost:5173` and the **setup wizard** walks you
+through: name yourself + name the orb, pick an LLM provider (15
+presets, with live "test connection" + model-list fetch + Ollama /
+LM Studio auto-detect if they're running), pick a starter orb, hatch.
+Ends in the main app ready to double-click-to-talk.
+
+One-shot with Docker Compose (kokoro default, no Fish sidecar):
 
 ```bash
 docker compose up
 ```
 
 Tailnet hosting: `sudo tailscale serve --bg --https=8443 http://127.0.0.1:7866`
-and point your phone / other devices at the tailnet URL.
+and point your phone / other devices at the tailnet URL. The Drawer
+→ Voice tab → Access panel accepts the owner API key for tailnet
+auth (generate with
+`python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"`
+and write it into `config/users.yaml`).
 
 ## Architecture at a glance
 

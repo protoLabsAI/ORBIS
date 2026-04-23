@@ -1,6 +1,6 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-23. Branch: `main`.*
+*Last updated 2026-04-23 (evening pass). Branch: `main`.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -12,143 +12,140 @@ time, remembers you across sessions, and delegates heavy reasoning to
 your configured agents. Single-owner, tailnet-hostable, SQLite-backed
 memory + personality, pipecat voice pipeline with kokoro default TTS.
 
-Repo is in a **runnable, reviewable** state — 35 commits in, 23/23
-planned tasks complete. Backend spine + full frontend (setup wizard,
-drawer panels, hatch animation, orb plugins) all shipped. Live boot
-+ real WebRTC verification still to do by a human.
+Repo is **runnable + tested live** — setup wizard ships end-to-end,
+voice session connects + responds, 131 passing unit tests. 47+ commits
+shipped.
 
 ## Where we are
 
 ### Codebase
 
 - **Repo:** [github.com/protoLabsAI/ORBIS](https://github.com/protoLabsAI/ORBIS)
-- **Branch:** `main`
-- **Tests:** 104 passing (`pytest`), zero failures
-- **Build:** frontend typechecks locally; not yet verified on clean
-  bun install in CI (frontend hasn't been wired into the release
-  pipeline yet — see [HANDOFF.md](./HANDOFF.md))
-- **Dockerfile:** builds stage-1 web via bun, stage-2 Python runtime;
-  needs a live verify after the deps trim
+- **Branch:** `main` (no release tag cut yet)
+- **Tests:** 131 passing (`pytest`), zero failures
+- **Build:** frontend bundles cleanly; Dockerfile restored + runnable
+- **Live verified:** setup wizard + hatch animation + voice session
+  round-trip confirmed working on first-user test box
 - **Release pipeline:** `.github/workflows/` retargeted to
-  `protoLabsAI/ORBIS` + `ghcr.io/protolabsai/orbis`; not yet fired
-  (no tag cut)
+  `protoLabsAI/ORBIS` + `ghcr.io/protolabsai/orbis`; tag not yet cut
 
 ### What's shipped
 
 **Backend spine**
-- Single-persona loader (`config/orbis.yaml`) replacing the
-  protoVoice skills catalog
+- Single-persona loader (`config/orbis.yaml`) with `persona`, `voice`,
+  `llm`, and `orb` blocks. Env overrides per-field; persona wins when
+  explicitly set
 - Single-owner API-key auth; tailnet-hosted multi-device by design
-- Pipecat voice pipeline untouched from seed; kokoro default TTS
-- SQLite memory backend — sessions (FTS5), facts (bi-temporal +
-  90-day half-life decay), personality axes, mood, entitlement cache
+- Pipecat voice pipeline; kokoro default TTS
+- SQLite memory — sessions (FTS5), facts (bi-temporal + 90-day
+  half-life decay), personality axes, mood, entitlement cache
 - Personality rendering into prompt + post-session drift analyzer
-  (small-LLM call, silent on failure)
 - Soft-neglect mood shifts over days of silence
-- Tool surface scoped to `delegate_to` + 5 orb self-modification
-  tools + `adjust_personality` for directable drift
+- Tool surface: `delegate_to` + 5 orb-control tools + `adjust_personality`
 - TTS pluggable: kokoro / openai-compat / elevenlabs / fish
+- LLM-endpoint probing (test, model list, local auto-detect) — see below
 
 **API surface** (`/api/*`, auth-gated except where noted)
-- `whoami`, `verbosity`, `persona/reload`, `users/reload`
-- `starter_orbs` (unauth — wizard uses before auth is set)
-- `config` (GET/POST with typed validation)
-- `personality` (mood + axes + drift events + session stats)
-- `orb/select_starter` (wizard commits pick)
-- `entitlement`, `entitlement/checkout`
-- `stripe/webhook` (unauth, signature-verified)
-- `offer` (WebRTC signalling)
-- `delegates/reload`
+| Route | Method | Auth | Purpose |
+|:---|:---:|:---:|:---|
+| `whoami` | GET | ✓ | Resolve owner identity |
+| `verbosity` | GET/POST | ✓ | Filler verbosity for session |
+| `starter_orbs` | GET | — | Curated pool (wizard) |
+| `config` | GET/POST | ✓ | Read + patch `config/orbis.yaml`. POST rejects `orb` block when caller lacks the customization entitlement |
+| `personality` | GET | ✓ | Mood + axes + drift events + session stats |
+| `orb/select_starter` | POST | ✓ | Wizard's starter pick |
+| `persona/reload` | POST | ✓ | Re-read `config/orbis.yaml` |
+| `delegates/reload` | POST | ✓ | Re-read `config/delegates.yaml` |
+| `users/reload` | POST | ✓ | Re-read owner credential |
+| `llm/test` | POST | — | Real chat.completions round-trip + latency |
+| `llm/models` | POST | — | `GET /models` with Ollama fallback |
+| `llm/detect_local` | GET | — | Parallel probe Ollama + LM Studio |
+| `entitlement` | GET | ✓ | Paid-tier state |
+| `entitlement/checkout` | POST | ✓ | Stripe Checkout session |
+| `stripe/webhook` | POST | sig | Grant/revoke entitlement |
+| `offer` | POST/PATCH | ✓ | WebRTC signalling |
+| `metrics` | GET | ✓ | Counters |
+| `healthz` | GET | — | Process shape |
 
-**Frontend**
-- Setup wizard (welcome → access → pick → done → hatch) as a
-  full-screen first-run overlay
-- Hatch animation (3.6s scripted CSS reveal)
-- Drawer with Voice + Orb tabs; Voice tab has Agent, Profile, Access
-  panels
-- API-key field with password input + `whoami` verification
-- Personality panel surfacing mood, top axes, session stats, recent
-  drift
-- Mood polling plugin (subscribable via `useMood()`)
-- Orb plugin system (Fractal, Nebula, Crystal, Particles variants)
-  unchanged from seed
+**Frontend (React + Vite + shadcn)**
+- First-run setup wizard (welcome → names → llm → pick → done → hatch)
+  - Names: `persona.user_name` + `persona.name` collection
+  - LLM: 15 provider presets (OpenAI / Anthropic / Groq / DeepSeek /
+    OpenRouter / Together / Mistral / Fireworks / Moonshot / xAI /
+    Ollama / LM Studio / vLLM / LiteLLM / Custom) + live model-list
+    fetch + "Test connection" real round-trip + local-detect banner
+    (emerald callout when Ollama or LM Studio is running on localhost)
+  - Pick: 8 starter orbs, each with a palette-derived gradient swatch
+    and a fullscreen preview modal (live shader, drag-to-rotate)
+  - Hatch: 3.6s CSS reveal (seed → flare → fade)
+- Drawer with Voice + Orb tabs
+  - Voice tab: Agent (verbosity) / Profile (mood + axes + sessions
+    + recent drift) / Access (owner API key)
+  - Orb tab: variant / palette / param editing (gated by entitlement)
+- Mood polling plugin — subscribable via `useMood()`
+- Orb plugin system (Fractal / Nebula / Crystal / Particles)
 
 ### Config files shipped
 
-- `config/orbis.example.yaml` — persona + voice + orb starter
-- `config/starter_orbs.yaml` — the curated 8-orb pool
+- `config/orbis.example.yaml` — persona + voice + llm + orb
+  (new llm block documents OpenAI / LiteLLM-gateway / local vLLM examples)
+- `config/starter_orbs.yaml` — curated 8-orb pool
 - `config/users.example.yaml` — owner credential shape
 - `config/delegates.yaml` — A2A + OpenAI-compat targets
 - `.env.example` — env vars (LLM, TTS, Stripe, tracing, etc.)
 
-## Not yet done
+## Pending follow-ups (not blocking)
 
-Nothing is formally on the task list — but these are the obvious
-follow-ups flagged across commits:
+- **Per-variant mood visual mapping** — `moodStore` polls, but no
+  variant subscribes yet. Each orb shader needs its own mood → uniform
+  translation. Biggest remaining gap between designed and implemented.
+- **State + mood authoring editor** — drag-a-slider-see-the-orb-react
+  surface for users to author their own state/mood mappings. Paid-tier
+  feature per DECISIONS.md amendment.
+- **`_active_skill()` naming rename** — compat shim returning Persona;
+  cosmetic but worth a rename pass.
+- **Docker hostname resolution UX** (task #68) — wizard accepts bare
+  hostnames like `ava` that don't resolve inside containers. Inline
+  warning + docs note.
+- **ACP / MCP / CLI subprocess delegates** — scoped out; users who
+  want CLI-tool delegation wrap their CLI in A2A themselves
+  (protoAgent is the reference). ORBIS stays voice-companion, not
+  agent-framework.
+- **Frontend CI** — no `bun run build` in the release pipeline yet.
+- **Docs site rebuild** — VitePress was purged in the demolition;
+  only `docs/orb-visualizer.md` survives. README + DECISIONS + STATUS
+  + HANDOFF carry most of the load.
 
-- **State + mood authoring editor** — `moodStore` polls, but no
-  variant subscribes yet. Per-variant uniform mappings are still
-  to build. Authoring UI (drag a slider, see the orb react, save
-  the delta) is the full realization of DECISIONS.md's amendment.
-- **`_active_skill()` → `get_active_persona()` rename** — the
-  compatibility shim works but the naming is stale in app.py and
-  a2a/server.py.
-- **Live-boot verification** — the Python imports clean and
-  frontend builds locally, but a real WebRTC session against a
-  running LLM hasn't been smoke-tested end-to-end yet.
-- **Docs rebuild** — `docs/` got purged in the demolition; only
-  `docs/orb-visualizer.md` survives. Worth authoring a small guide
-  set (setup, persona config, delegate config, state/mood editor)
-  once the product stabilizes.
-- **CI hookup for the new deps trim** — `pyproject.toml` lost vllm
-  + ddgs; worth confirming the Dockerfile build + a pytest run
-  cleanly in a fresh container.
-
-See [HANDOFF.md](./HANDOFF.md) for the full QA checklist and
-open-design questions.
+See [HANDOFF.md](./HANDOFF.md) for the full QA checklist + open design
+questions + ordered next steps.
 
 ## Module map
 
 ```
-agent/                         voice-pipeline quality + agent glue
+agent/                         voice-pipeline + agent glue
   persona.py                   single-persona loader from orbis.yaml
   personality.py               prompt rendering + drift analyzer
   neglect.py                   soft-neglect mood shifts
   starter_orbs.py              curated pool loader
   config_store.py              read/write + schema validation
   entitlement.py               Stripe checkout / webhook / refresh
+  llm_probe.py                 ping + list_models + detect_local
   tools.py                     delegate_to + 5 orb tools + adjust_personality
   delegates.py                 A2A + OpenAI-compat unified dispatch
   filler.py / delivery.py      voice-pipeline natural-filler machinery
-  backchannel.py / micro_ack.py / bargein.py
+  backchannel.py / micro_ack.py / bargein.py / echo_guard.py / prosody.py
   session_store.py             orphan deliveries + legacy text summaries
   tracing.py                   Langfuse integration
   user_state.py                per-user runtime state
 
 auth/                          single-owner API-key auth
   users.py                     User + UserRegistry + require_user
-  context.py                   current_user_id / current_session_id ContextVars
+  context.py                   ContextVars for user/session tracking
   infisical.py                 optional Infisical secret fetch
-  __init__.py
 
 a2a/                           A2A inbound + outbound
-  server.py                    /a2a routes + webhook handlers
-  client.py                    outbound dispatcher
-
-voice/                         STT + TTS pipecat adapters
-  stt.py                       Whisper (local or OpenAI-compat)
-  tts/__init__.py              provider dispatch
-  tts/kokoro.py                default (CPU)
-  tts/openai.py                OpenAI-compat
-  tts/elevenlabs.py            native WebSocket
-  tts/fish.py                  opt-in sidecar
-
-memory/                        SQLite memory backend (new in ORBIS)
-  db.py                        Memory facade + schema + migrations
-  sessions.py                  SessionsDAL (FTS5)
-  facts.py                     FactsDAL (bi-temporal, half-life decay)
-  personality.py               PersonalityDAL (axes + events + mood)
-  entitlement.py               EntitlementDAL (cache)
+memory/                        SQLite memory backend (sessions/facts/personality/mood/entitlement)
+voice/                         STT + TTS pipecat adapters (kokoro/openai/elevenlabs/fish)
 
 web/src/
   App.tsx                      side-effect imports; top-level PipecatClient
@@ -156,17 +153,30 @@ web/src/
   components/Drawer.tsx        Sheet + Voice/Orb tabs
   plugins/
     orb/                       R3F orb + variants + store + broadcast bus
-    orb-settings/              params editor (in drawer Orb tab)
+    orb-settings/              params editor (drawer Orb tab)
     voice-panel/               Agent + Profile + Access panels
     status-pill/               connection status indicator
     setup-wizard/              first-run flow + hatch animation
+                                 - SetupWizard.tsx   (5-step flow)
+                                 - OrbPreviewModal.tsx
+                                 - paletteColors.ts
     mood/                      polling store + useMood() hook
   auth/                        apiKey store + useApiKey hook
   lib/api.ts                   typed /api/* fetch wrappers
 
 config/                        user-editable YAML
-tests/                         pytest: 104 cases, all green
-docs/                          orb-visualizer.md only (rest were purged)
+tests/                         pytest: 131 cases
+  test_users.py                auth primitive
+  test_memory.py               SQLite DALs
+  test_persona.py              persona loader
+  test_personality_render.py   prompt rendering math
+  test_neglect.py              soft-neglect day-buckets
+  test_starter_orbs.py         pool loader
+  test_config_store.py         schema + read/write/merge
+  test_config_endpoint_gate.py /api/config paid-tier gate
+  test_entitlement.py          Stripe glue
+  test_llm_probe.py            ping/models/detect_local (respx-mocked)
+docs/                          orb-visualizer.md only
 ```
 
 ## Quick-start
@@ -175,22 +185,25 @@ docs/                          orb-visualizer.md only (rest were purged)
 cd ~/path/to/ORBIS
 
 # One-time
-cp .env.example .env                             # edit LLM_URL, keys
-cp config/orbis.example.yaml config/orbis.yaml   # optional
-cp config/users.example.yaml config/users.yaml   # tailnet hosting only
+cp .env.example .env                             # edit LLM_URL if running locally
+cp config/orbis.example.yaml config/orbis.yaml   # optional; wizard writes it
+cp config/users.example.yaml config/users.yaml   # tailnet only
 
 # Run dev
 cd web && bun install && bun run dev             # :5173
 python app.py                                    # :7866
 
+# First-run: the wizard appears. To re-run it:
+# in browser console: localStorage.removeItem('orbis.setupComplete'); location.reload()
+
 # Tests
-.venv/bin/python -m pytest                       # 104 passing
+python -m pytest                                  # 131 passing
+python -m pip install -e '.[test]'                # respx for LLM-probe tests
 ```
 
 ## Known tripwires (don't change lightly)
 
-Carried forward from the protoVoice seed — these are hard-won
-discoveries, still relevant:
+Carried forward from the protoVoice seed — hard-won discoveries:
 
 - **Browser mic constraints stay at defaults** (AGC/NS/EC on).
   Disabling them broke server VAD.
@@ -207,6 +220,8 @@ discoveries, still relevant:
 - **`_active_skill()` is a compat shim** returning the Persona. The
   name is stale; don't mistake it for a surviving piece of the
   skills system.
+- **Preset gradient swatch is NOT aria-hidden** — it wraps the Preview
+  button, which needs to stay in the a11y tree.
 
 ## One-line rollback
 
