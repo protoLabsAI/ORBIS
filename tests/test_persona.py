@@ -163,3 +163,88 @@ def test_persona_is_immutable():
     p = Persona(slug="x", name="X", system_prompt="hello")
     with pytest.raises(Exception):
         p.slug = "y"  # frozen dataclass
+
+
+# --- state/mood overrides (DECISIONS 2026-04-23) ---------------------------
+
+
+def test_persona_loads_orb_state_and_mood_overrides(tmp_path: Path):
+    p = tmp_path / "orbis.yaml"
+    p.write_text(
+        """
+persona:
+  name: ORBIS
+orb:
+  variant: fractal
+  palette: Aurora
+  params: {density: 2.4}
+  state_overrides:
+    idle:     {speed: -0.1}
+    speaking: {density: 0.4, speed: 0.3}
+  mood_overrides:
+    valence: {atmosphereGlow: 0.2}
+    arousal: {speed: 0.3}
+""".lstrip(),
+    )
+    persona = load_persona(p)
+    assert persona.orb_state_overrides["idle"]["speed"] == -0.1
+    assert persona.orb_state_overrides["speaking"]["density"] == 0.4
+    assert persona.orb_mood_overrides["valence"]["atmosphereGlow"] == 0.2
+    assert persona.orb_mood_overrides["arousal"]["speed"] == 0.3
+
+
+def test_persona_defaults_overrides_to_empty(tmp_path: Path):
+    """No state_overrides / mood_overrides in yaml → empty dicts,
+    not None. Keeps the frontend composition layer simple."""
+    p = tmp_path / "orbis.yaml"
+    p.write_text("persona: {name: ORBIS}\norb: {variant: fractal}\n")
+    persona = load_persona(p)
+    assert persona.orb_state_overrides == {}
+    assert persona.orb_mood_overrides == {}
+
+
+def test_persona_overrides_round_trip_through_write(tmp_path: Path):
+    """Write a config via config_store, then load via persona loader —
+    state/mood overrides survive the round-trip intact."""
+    from agent.config_store import write_config
+
+    p = tmp_path / "orbis.yaml"
+    write_config({
+        "persona": {"name": "ORBIS"},
+        "orb": {
+            "variant": "fractal",
+            "state_overrides": {"idle": {"speed": -0.1}},
+            "mood_overrides": {"valence": {"atmosphereGlow": 0.2}},
+        },
+    }, p)
+    persona = load_persona(p)
+    assert persona.orb_state_overrides == {"idle": {"speed": -0.1}}
+    assert persona.orb_mood_overrides == {"valence": {"atmosphereGlow": 0.2}}
+
+
+def test_persona_normalizes_hand_authored_override_keys(tmp_path: Path):
+    """Hand-edited YAML skips config_store's validator — persona.load
+    mirrors the same filtering so case + enum membership + numeric-
+    only for mood deltas are enforced on the read path."""
+    p = tmp_path / "orbis.yaml"
+    p.write_text(
+        """
+orb:
+  state_overrides:
+    Speaking: {density: 0.4, primaryColor: "#ff00ff"}
+    hyper:    {density: 9.9}
+  mood_overrides:
+    Valence:   {atmosphereGlow: 0.2, colorTag: "#ff0000"}
+    curiosity: {speed: 0.5}
+""".lstrip(),
+    )
+    persona = load_persona(p)
+    # Case normalized, unknown keys dropped.
+    assert "speaking" in persona.orb_state_overrides
+    assert persona.orb_state_overrides["speaking"]["density"] == 0.4
+    assert persona.orb_state_overrides["speaking"]["primaryColor"] == "#ff00ff"
+    assert "hyper" not in persona.orb_state_overrides
+    # Mood normalized + numeric-only (colorTag string gets dropped).
+    assert "valence" in persona.orb_mood_overrides
+    assert persona.orb_mood_overrides["valence"] == {"atmosphereGlow": 0.2}
+    assert "curiosity" not in persona.orb_mood_overrides

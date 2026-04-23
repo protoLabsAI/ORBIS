@@ -20,6 +20,7 @@ import {
   savePalette,
   saveParams,
 } from './storage';
+import type { MoodOverrides, StateOverrides } from './compose';
 
 const STORAGE_VARIANT = 'orbis.orb.variant';
 
@@ -27,6 +28,10 @@ export interface OrbStateSnapshot {
   variantId: string;
   palette: string;
   params: Record<string, unknown>;
+  // Authoring deltas applied on top of `params` by the composition
+  // layer at uniform-set time. Empty maps compose to no-op.
+  stateOverrides: StateOverrides;
+  moodOverrides: MoodOverrides;
   epoch: number;
 }
 
@@ -63,8 +68,22 @@ class OrbStore {
       variantId: variant?.id ?? variantId,
       palette,
       params: { ...paletteParams, ...savedParams },
+      stateOverrides: {},
+      moodOverrides: {},
       epoch: 0,
     };
+  }
+
+  /** Replace the authoring override maps — called by the drawer or by
+   * the hydrate-from-server step on first mount. Fires listeners. */
+  setOverrides(stateOverrides: StateOverrides, moodOverrides: MoodOverrides): void {
+    this.snap = {
+      ...this.snap,
+      stateOverrides,
+      moodOverrides,
+      epoch: this.snap.epoch + 1,
+    };
+    this.listeners.forEach((l) => l());
   }
 
   getSnapshot = (): OrbStateSnapshot => this.snap;
@@ -99,13 +118,19 @@ class OrbStore {
     saveParams(this.snap.params);
   }
 
-  /** Switch variant. Loads the variant's default palette + any saved params. */
+  /** Switch variant. Loads the variant's default palette + any saved
+   * params. Authoring overrides are KEPT across the swap — `composeBase`
+   * silently drops keys that don't exist on the new variant, so
+   * same-named uniforms compose and everything else no-ops. Crucially,
+   * swapping away and back restores the authored deltas without having
+   * to re-fetch from the server. */
   setVariant(id: string): void {
     const variant = variantRegistry.get(id);
     if (!variant) return;
     const palette = variant.defaultPalette;
     const paletteParams = (variant.palettes[palette] ?? {}) as Record<string, unknown>;
     this.snap = {
+      ...this.snap,
       variantId: id,
       palette,
       params: { ...paletteParams },

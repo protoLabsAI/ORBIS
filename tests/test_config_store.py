@@ -156,6 +156,133 @@ def test_validate_drops_complex_param_types(
     assert "matrix" not in out["orb"]["params"]
 
 
+# --- state/mood override round-trip (DECISIONS 2026-04-23) ------------------
+
+
+def test_validate_accepts_state_and_mood_overrides():
+    out = validate_and_normalize({
+        "orb": {
+            "variant": "fractal", "palette": "Aurora",
+            "params": {"density": 2.0},
+            "state_overrides": {
+                "idle":     {"speed": -0.1},
+                "speaking": {"density": 0.4, "speed": 0.3},
+            },
+            "mood_overrides": {
+                "valence":     {"atmosphereGlow": 0.2},
+                "arousal":     {"speed": 0.3},
+                "guardedness": {"density": -0.2},
+            },
+        },
+    })
+    assert out["orb"]["state_overrides"]["idle"]["speed"] == -0.1
+    assert out["orb"]["state_overrides"]["speaking"]["density"] == 0.4
+    assert out["orb"]["mood_overrides"]["valence"]["atmosphereGlow"] == 0.2
+    assert out["orb"]["mood_overrides"]["arousal"]["speed"] == 0.3
+
+
+def test_state_overrides_drop_unknown_state_key(
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "orb": {
+                "state_overrides": {
+                    "idle":   {"speed": -0.1},
+                    "hyper":  {"density": 9.9},   # not a real voice state
+                },
+            },
+        })
+    assert "idle" in out["orb"]["state_overrides"]
+    assert "hyper" not in out["orb"]["state_overrides"]
+
+
+def test_mood_overrides_drop_unknown_dim(
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "orb": {
+                "mood_overrides": {
+                    "valence":   {"atmosphereGlow": 0.2},
+                    "curiosity": {"speed": 0.5},   # not a real mood dim
+                },
+            },
+        })
+    assert "valence" in out["orb"]["mood_overrides"]
+    assert "curiosity" not in out["orb"]["mood_overrides"]
+
+
+def test_state_overrides_reject_non_mapping():
+    with pytest.raises(ValueError, match="state_overrides must be a mapping"):
+        validate_and_normalize({"orb": {"state_overrides": "not-a-dict"}})
+
+
+def test_mood_overrides_reject_non_mapping():
+    with pytest.raises(ValueError, match="mood_overrides must be a mapping"):
+        validate_and_normalize({"orb": {"mood_overrides": "not-a-dict"}})
+
+
+def test_override_param_deltas_drop_complex_types(
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "orb": {
+                "state_overrides": {
+                    "idle": {"speed": -0.1, "matrix": [[1, 2]]},
+                },
+            },
+        })
+    assert out["orb"]["state_overrides"]["idle"]["speed"] == -0.1
+    assert "matrix" not in out["orb"]["state_overrides"]["idle"]
+
+
+def test_state_override_normalizes_case():
+    out = validate_and_normalize({
+        "orb": {"state_overrides": {"IDLE": {"speed": -0.1}}},
+    })
+    assert "idle" in out["orb"]["state_overrides"]
+
+
+def test_mood_overrides_reject_non_numeric_deltas(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Mood deltas are multiplied by the live mood scalar — a string
+    or bool can't be scaled, so the validator drops them. State
+    deltas still accept strings (replacement semantics, e.g. color
+    hex)."""
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "orb": {
+                "mood_overrides": {
+                    "valence": {
+                        "atmosphereGlow": 0.2,  # kept
+                        "primaryColor": "#ff00ff",  # dropped — can't scale a string
+                        "enabled": True,  # dropped — bool is nonsensical here
+                    },
+                },
+            },
+        })
+    mood = out["orb"]["mood_overrides"]["valence"]
+    assert mood == {"atmosphereGlow": 0.2}
+
+
+def test_state_overrides_still_accept_string_replacements():
+    """State deltas keep string/bool support (replacement, not scaling)
+    so authors can swap color hex per voice state."""
+    out = validate_and_normalize({
+        "orb": {
+            "state_overrides": {
+                "speaking": {"primaryColor": "#ff00ff", "density": 0.4},
+            },
+        },
+    })
+    state = out["orb"]["state_overrides"]["speaking"]
+    assert state["primaryColor"] == "#ff00ff"
+    assert state["density"] == 0.4
+
+
 # --- write_config -----------------------------------------------------------
 
 

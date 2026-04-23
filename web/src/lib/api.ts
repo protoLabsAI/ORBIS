@@ -53,6 +53,19 @@ export type OrbisConfig = {
     variant?: string;
     palette?: string;
     params?: Record<string, unknown>;
+    // Authoring deltas per voice state and mood dimension — see
+    // DECISIONS.md (2026-04-23 amendment) and
+    // web/src/plugins/orb/compose.ts for the composition math.
+    // Values are additive (numbers) or replacement (strings like hex
+    // colors). Absent entries compose to no-op.
+    state_overrides?: Partial<
+      Record<'idle' | 'listening' | 'thinking' | 'speaking',
+        Record<string, number | string>>
+    >;
+    mood_overrides?: Partial<
+      Record<'valence' | 'arousal' | 'guardedness',
+        Record<string, number | string>>
+    >;
   };
 };
 
