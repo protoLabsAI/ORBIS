@@ -13,6 +13,7 @@ import './plugins/orb';
 import './plugins/status-pill';
 import './plugins/orb-settings';
 import './plugins/voice-panel';
+import './plugins/setup-wizard';
 
 function App() {
   const clientRef = useRef<PipecatClient | null>(null);
