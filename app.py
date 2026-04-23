@@ -116,8 +116,6 @@ from agent.tools import (
     register_tools,
     run_text_tool,
 )
-from skills.loader import load_skills, write_voice_clone_skill
-from skills.models import DEFAULT_SOUL_SLUG, Skill
 from auth import load_users, require_admin, require_user, user_registry
 from auth.users import DEFAULT_USER, User
 from auth.context import current_session_id, current_user_id
@@ -125,7 +123,6 @@ from agent.user_state import active_user_states, user_state_for, UserState
 from voice import lifecycle
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt, transcribe_bytes
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
-from voice.tts.fish import add_reference as fish_add_reference, list_references as fish_list_references
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("protovoice")
@@ -144,15 +141,61 @@ CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "config"))
 # Gates every /api/* route via require_user.
 load_users(CONFIG_DIR / "users.yaml")
 
-# Skills registry + the currently selected skill. A `SYSTEM_PROMPT` env
-# override wins over the skill's prompt (kept for backwards compat).
-_SKILLS: dict[str, Skill] = load_skills(CONFIG_DIR)
-_SYSTEM_PROMPT_ENV_OVERRIDE = os.environ.get("SYSTEM_PROMPT") or None
-
 # Delegate registry — A2A agents + OpenAI-compat endpoints the agent can
 # hand off to via `delegate_to`. Loaded once at boot. Shared across users.
 _DELEGATES_YAML = Path(os.environ.get("DELEGATES_YAML", "config/delegates.yaml"))
 _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
+
+# Stub persona while the new single-persona module is designed — keeps
+# run_bot / text_agent / A2A handler working after the skills system
+# was removed. Subsequent commits replace this with a proper persona
+# loader (single SOUL-like file, no catalog).
+from types import SimpleNamespace as _PersonaNS
+
+_SYSTEM_PROMPT_ENV_OVERRIDE = os.environ.get("SYSTEM_PROMPT") or None
+_DEFAULT_PERSONA_TEXT = (
+    "You are ORBIS — an AI companion. You're primarily a router to the "
+    "user's configured agents via the delegate_to tool; you chat, remember, "
+    "and have personality, but heavy reasoning you hand off. Keep replies "
+    "brief, warm, and spoken aloud."
+)
+
+_ACTIVE_PERSONA = _PersonaNS(
+    slug="orbis",
+    name="ORBIS",
+    description="",
+    system_prompt=_DEFAULT_PERSONA_TEXT,
+    temperature=float(os.environ.get("LLM_TEMPERATURE", "0.7")),
+    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "150")),
+    tts_backend=None,
+    voice=None,
+    delegates=None,
+    behavior={},
+    llm=None,
+    filler_verbosity=None,
+    tools=[],
+    viz={},
+)
+
+
+def _active_skill(user_id: str = "default"):
+    """Return the single ORBIS persona. Shim kept so callers that
+    expect a Skill-shaped object keep working until they're rewritten."""
+    return _ACTIVE_PERSONA
+
+
+def _recall_block(user_id: str, skill_slug: str = "orbis") -> str:
+    """Session-open memory callback. Temporary shim pending the memory
+    layer rewrite — reads the legacy per-skill text summary if present."""
+    summary = load_last_summary(user_id, skill_slug)
+    if not summary:
+        return ""
+    return (
+        "## MEMORY — from the last session\n\n"
+        f"Last time you spoke with this user, it went roughly: {summary}\n\n"
+        "IF it fits naturally, acknowledge this in your first turn. "
+        "Otherwise IGNORE this block — do not force a callback."
+    )
 
 
 def _filler_gen_for(user_id: str) -> FillerGenerator:
@@ -237,29 +280,6 @@ _METRICS: dict = {
 }
 
 
-def _resolved_skill_slug(user: User | None, user_id: str | None = None) -> str:
-    """Resolve which skill slug this user's next session will use.
-
-    Admins + unconstrained users fall back to the mutable
-    user_state.skill_slug. A non-admin with ``allowed_skills`` set gets
-    their mutable slug only if it's in the allowed list — otherwise we
-    snap to the first allowed entry (avoids a stale mutable value locking
-    them out of their own allowed set).
-    """
-    uid = user.id if user else (user_id or "default")
-    mutable = user_state_for(uid).skill_slug or DEFAULT_SOUL_SLUG
-    if user and not user.is_admin and user.allowed_skills is not None:
-        if mutable in user.allowed_skills:
-            return mutable
-        return user.allowed_skills[0]
-    return mutable
-
-
-def _active_skill(user_id: str) -> Skill:
-    slug = _resolved_skill_slug(user_registry.by_id(user_id), user_id=user_id)
-    return _SKILLS.get(slug) or _SKILLS[DEFAULT_SOUL_SLUG]
-
-
 def _resolve_behavior_block(raw) -> dict:
     """Normalize a skill.behavior sub-block into {enabled: bool, ...overrides}.
 
@@ -281,22 +301,18 @@ def _resolve_behavior_block(raw) -> dict:
 
 
 def _effective_prompt(
-    skill: Skill, tts_backend: str, *, verbosity, user_id: str,
+    skill, tts_backend: str, *, verbosity, user_id: str,
 ) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
-    The TOOL USE block is verbosity-and-backend-aware — it instructs the
-    LLM to emit a brief preamble before each tool call (the new "filler"
-    primitive), with prosody guidance per backend. Verbosity is per-user
-    and passed in by the caller.
+    ``skill`` is kept as a positional arg for call-site compatibility
+    with the skills-system era. It accepts the _ACTIVE_PERSONA stub
+    (duck-typed) for now. The env override (``SYSTEM_PROMPT``) still
+    wins over the persona text if set.
     """
     base = _SYSTEM_PROMPT_ENV_OVERRIDE or skill.system_prompt
     plan = plan_block(verbosity)
-    # Sesame CSM finding: session-open memory callbacks boost "presence";
-    # mid-turn recall reads as creepy. If we have a saved summary from the
-    # previous session with this skill, inject one nudge and let the LLM
-    # decide whether to reference it naturally.
-    recall = _recall_block(user_id, skill.slug)
+    recall = _recall_block(user_id, getattr(skill, "slug", "orbis"))
     return (
         base
         + "\n\n"
@@ -308,22 +324,6 @@ def _effective_prompt(
         + repair_block()
         + (("\n\n" + recall) if recall else "")
     )
-
-
-def _recall_block(user_id: str, skill_slug: str) -> str:
-    summary = load_last_summary(user_id, skill_slug)
-    if not summary:
-        return ""
-    return f"""\
-## MEMORY — from the last session
-
-Last time the user and this persona spoke, it went roughly: {summary}
-
-IF it fits naturally, acknowledge this in your first turn of the new
-session — e.g. "hey, last time we were working through X, any update?"
-Only if the user's first message lines up with the topic. Otherwise
-IGNORE this block completely; do not force a callback.
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -993,7 +993,7 @@ async def health():
         "delegates": [
             {"name": d.name, "type": d.type} for d in _DELEGATES.all()
         ],
-        "skills": list(_SKILLS.keys()),
+        "persona": _ACTIVE_PERSONA.slug,
         "audio": {
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
@@ -1047,96 +1047,6 @@ async def set_verbosity(body: dict, user: User = Depends(require_user)):
     return {"verbosity": state.filler_settings.verbosity.value}
 
 
-@app.get("/api/skills")
-async def get_skills(user: User = Depends(require_user)):
-    # For non-admins with allowed_skills set, filter the catalog so they
-    # only see what they can activate. Admins + unconstrained users see
-    # the full list. ``locked`` is true when there's exactly one choice —
-    # clients use it to render a read-only chip instead of a dropdown.
-    active = _resolved_skill_slug(user)
-    visible = [
-        s for s in _SKILLS.values()
-        if user.is_admin or user.allowed_skills is None
-        or s.slug in user.allowed_skills
-    ]
-    locked = (
-        not user.is_admin
-        and user.allowed_skills is not None
-        and len(user.allowed_skills) == 1
-    )
-    return {
-        "active": active,
-        "locked": locked,
-        "skills": [
-            {
-                "slug": s.slug,
-                "name": s.name,
-                "description": s.description,
-                # Optional dedicated orb viz. Clients apply it on skill switch.
-                "viz": dict(s.viz) if s.viz else {},
-            }
-            for s in visible
-        ],
-    }
-
-
-@app.post("/api/skills")
-async def set_skill(body: dict, user: User = Depends(require_user)):
-    slug = (body.get("slug") or "").strip()
-    if slug not in _SKILLS:
-        return {"error": f"unknown skill: {slug}", "available": list(_SKILLS.keys())}
-    # Non-admins must stay within their allowed_skills list. Admins are
-    # never constrained.
-    if not user.allows_skill(slug):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"skill '{slug}' not in allowed_skills for user '{user.id}'"
-            ),
-        )
-    user_state_for(user.id).skill_slug = slug
-    return {"active": slug}
-
-
-@app.post("/api/admin/skills")
-async def admin_set_skill(body: dict, admin: User = Depends(require_admin)):
-    """Admin-only — set any user's active skill, bypassing pin.
-
-    Body: { user_id: <str>, slug: <str> }. Uses the target user's
-    mutable skill_slug field; does not modify allowed_skills (to do that,
-    edit the user roster). Applies on the user's next connection —
-    active sessions keep the skill they snapshotted at connect.
-    """
-    target_id = (body.get("user_id") or "").strip()
-    slug = (body.get("slug") or "").strip()
-    if not target_id:
-        return {"error": "user_id is required"}
-    if slug not in _SKILLS:
-        return {"error": f"unknown skill: {slug}", "available": list(_SKILLS.keys())}
-    if not user_registry.single_user_mode() and user_registry.by_id(target_id) is None:
-        return {"error": f"unknown user: {target_id}"}
-    user_state_for(target_id).skill_slug = slug
-    return {"ok": True, "user_id": target_id, "active": slug}
-
-
-@app.post("/api/skills/reload")
-async def reload_skills_endpoint(user: User = Depends(require_user)):
-    """Re-read every config/skills/*.yaml + SOUL.md from disk.
-
-    Safe to call at any time. Active sessions already snapshotted their
-    skill at connect; they keep their current snapshot until the next
-    (re)connect. `/healthz` + GET `/api/skills` reflect the new set
-    immediately.
-    """
-    global _SKILLS
-    _SKILLS = load_skills(CONFIG_DIR)
-    return {
-        "ok": True,
-        "skills": list(_SKILLS.keys()),
-        "active": user_state_for(user.id).skill_slug or DEFAULT_SOUL_SLUG,
-    }
-
-
 @app.post("/api/users/reload")
 async def reload_users_endpoint(user: User = Depends(require_user)):
     """Re-fetch the user roster from Infisical (if configured) or the
@@ -1159,93 +1069,6 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
     """
     names = _DELEGATES.reload()
     return {"ok": True, "delegates": names}
-
-
-# ---------------------------------------------------------------------------
-# Voice cloning — upload a reference clip, optionally auto-transcribe, save
-# on the Fish server, and stamp a new skill so it shows in the dropdown.
-# ---------------------------------------------------------------------------
-
-import re as _re
-from fastapi import File, Form, UploadFile
-
-_SLUG_RE = _re.compile(r"^[a-z0-9][a-z0-9\-_]{1,63}$")
-
-
-@app.get("/api/voice/references")
-async def voice_references(user: User = Depends(require_user)):
-    """List the Fish server's saved voice references."""
-    if TTS_BACKEND != "fish":
-        return {"backend": TTS_BACKEND, "references": []}
-    return {"backend": "fish", "references": fish_list_references()}
-
-
-@app.post("/api/voice/clone")
-async def voice_clone(
-    audio: UploadFile = File(...),
-    slug: str = Form(...),
-    name: str | None = Form(None),
-    transcript: str | None = Form(None),
-    description: str = Form(""),
-    user: User = Depends(require_user),
-):
-    """Upload a reference clip, optionally auto-transcribe, save on Fish,
-    and create a new skill that uses it."""
-    global _SKILLS
-    if TTS_BACKEND != "fish":
-        return {
-            "error": (
-                f"voice cloning requires TTS_BACKEND=fish (currently {TTS_BACKEND!r}). "
-                "OpenAI/Kokoro backends use preset voices only."
-            )
-        }
-    slug = slug.strip().lower()
-    if not _SLUG_RE.match(slug):
-        return {"error": "slug must be lowercase letters/numbers/hyphens (2-64 chars)"}
-    if slug in _SKILLS:
-        return {"error": f"slug '{slug}' already exists"}
-
-    audio_bytes = await audio.read()
-    if not audio_bytes:
-        return {"error": "empty audio upload"}
-
-    # Auto-transcribe if the user didn't provide one.
-    final_transcript = (transcript or "").strip()
-    auto_transcribed = False
-    if not final_transcript:
-        try:
-            final_transcript = await asyncio.to_thread(transcribe_bytes, audio_bytes)
-            auto_transcribed = True
-        except Exception as e:
-            logger.exception("[voice/clone] whisper transcription failed")
-            return {"error": f"auto-transcribe failed: {e}"}
-        if not final_transcript:
-            return {"error": "auto-transcribe produced empty text — provide a transcript manually"}
-
-    # Save on Fish using the slug as the reference id. Fish's regex requires
-    # `^[a-zA-Z0-9\-_ ]+$` which our stricter slug_re already satisfies.
-    ok = await asyncio.to_thread(fish_add_reference, slug, audio_bytes, final_transcript)
-    if not ok:
-        return {"error": "Fish server rejected the reference — check the sidecar logs"}
-
-    # Stamp a skill YAML and hot-reload the skills dict.
-    display_name = (name or slug.replace("-", " ").title()).strip()
-    write_voice_clone_skill(
-        slug=slug,
-        name=display_name,
-        reference_id=slug,
-        description=description.strip(),
-        config_dir=CONFIG_DIR,
-    )
-    _SKILLS = load_skills(CONFIG_DIR)
-    _METRICS["clone_requests_total"] += 1
-    return {
-        "ok": True,
-        "slug": slug,
-        "name": display_name,
-        "transcript": final_transcript,
-        "auto_transcribed": auto_transcribed,
-    }
 
 
 def _serve_react() -> bool:
@@ -1299,9 +1122,7 @@ register_a2a_routes(
     app,
     text_agent=text_agent,
     delivery_provider=lambda: user_state_for(_A2A_USER_ID).active_delivery,
-    skill_slug_provider=lambda: (
-        user_state_for(_A2A_USER_ID).skill_slug or DEFAULT_SOUL_SLUG
-    ),
+    skill_slug_provider=lambda: _ACTIVE_PERSONA.slug,
     user_id_provider=lambda: _A2A_USER_ID,
 )
 
