@@ -35,9 +35,19 @@ WORKDIR /app
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install deps (layer cached separately from source)
+# Install deps (layer cached separately from source).
+#
+# torch is pinned to the CUDA 12.8 wheel to match the container base
+# (nvidia/cuda:12.8.0-runtime). The default PyPI torch wheel ships
+# against CUDA 13.x which requires a newer driver than the 570 series
+# ships. Install torch first from the cu128 index so the subsequent
+# pyproject-driven install sees the requirement satisfied and doesn't
+# pull the wrong wheel.
 COPY pyproject.toml ./
 RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cu128 \
+        torch && \
     pip install --no-cache-dir $(python3 -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(' '.join(d['project']['dependencies']))")
 
 # Spacy model is required by Kokoro (fallback TTS).
