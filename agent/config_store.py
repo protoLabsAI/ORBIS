@@ -137,6 +137,29 @@ def _validate_param_delta(block: Any, path_hint: str) -> dict[str, Any]:
     return out
 
 
+def _validate_numeric_delta(block: Any, path_hint: str) -> dict[str, Any]:
+    """Like `_validate_param_delta` but numbers only. Mood overrides
+    are multiplied by the live mood scalar at render time — a string
+    (or bool) can't be scaled, so letting one through would produce a
+    silent no-op or a type-error at the shader uniform boundary. Keep
+    them out at the config layer."""
+    if not isinstance(block, dict):
+        logger.warning(f"[config_store] {path_hint} must be a mapping; dropping")
+        return {}
+    out: dict[str, Any] = {}
+    for pk, pv in block.items():
+        # `bool` is a subclass of `int`; reject it explicitly — a bool
+        # delta scaled by 0.6 is nonsensical.
+        if isinstance(pv, bool) or not isinstance(pv, (int, float)):
+            logger.warning(
+                f"[config_store] dropping {path_hint}.{pk} "
+                f"(mood deltas must be numeric; got {type(pv).__name__})"
+            )
+            continue
+        out[str(pk)] = pv
+    return out
+
+
 def _validate_orb(block: Any) -> dict:
     if not isinstance(block, dict):
         return {}
@@ -176,6 +199,7 @@ def _validate_orb(block: Any) -> dict:
                 raise ValueError("orb.state_overrides must be a mapping")
         elif k == "mood_overrides":
             # Expect: {valence|arousal|guardedness: {param: delta, ...}}
+            # Numeric-only — see _validate_numeric_delta for why.
             if v is None:
                 out[k] = {}
             elif isinstance(v, dict):
@@ -188,7 +212,7 @@ def _validate_orb(block: Any) -> dict:
                             f"(must be one of {sorted(_ALLOWED_MOOD_DIMS)})"
                         )
                         continue
-                    cleaned[key] = _validate_param_delta(
+                    cleaned[key] = _validate_numeric_delta(
                         delta, f"orb.mood_overrides.{key}",
                     )
                 out[k] = cleaned

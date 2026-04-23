@@ -67,10 +67,15 @@ export function composeBase(
 
 /** Mutate `target` in place, adding numeric deltas (scaled by `weight`)
  * and replacing string/boolean values. Keys absent from `target` are
- * ignored — we never introduce new uniform names via a delta map. */
+ * ignored — we never introduce new uniform names via a delta map.
+ *
+ * Uses `Object.hasOwn` (not `in`) so inherited prototype properties
+ * can't sneak through the unknown-key filter. Matters here because
+ * variant swaps mean the same override map may be composed against
+ * different shaders' param sets over a session's lifetime. */
 function applyDelta(target: ParamMap, delta: ParamMap, weight: number): void {
   for (const [k, v] of Object.entries(delta)) {
-    if (!(k in target)) continue; // unknown uniform — drop
+    if (!Object.hasOwn(target, k)) continue; // unknown uniform — drop
     if (typeof v === 'number' && typeof target[k] === 'number') {
       target[k] = (target[k] as number) + v * weight;
     } else if (typeof v === 'string') {

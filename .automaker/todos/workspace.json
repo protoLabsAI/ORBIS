@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "lists": {
+    "8c705a41-550a-49a3-bbcc-be59aa3e583d": {
+      "id": "8c705a41-550a-49a3-bbcc-be59aa3e583d",
+      "name": "Todo",
+      "ownerType": "shared",
+      "items": [],
+      "createdAt": "2026-04-23T04:47:56.751Z",
+      "updatedAt": "2026-04-23T04:47:56.751Z"
+    }
+  },
+  "listOrder": [
+    "8c705a41-550a-49a3-bbcc-be59aa3e583d"
+  ]
+}

@@ -69,6 +69,47 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _normalize_override_map(
+    raw: Any,
+    *,
+    allowed: set[str],
+    numeric_only: bool,
+) -> dict:
+    """Lowercase + filter the outer key (voice-state or mood-dim) and
+    the inner param-delta dict. Keys outside `allowed` are dropped;
+    the value dict drops non-scalar entries. If `numeric_only` is set,
+    strings and bools in the inner dict are also dropped — mood deltas
+    get multiplied by a scalar at render time and can't be non-numeric.
+    Mirrors `agent.config_store._validate_orb` semantics for the
+    read path so hand-authored YAML can't bypass it."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for k, v in raw.items():
+        key = str(k).strip().lower()
+        if key not in allowed:
+            logger.warning(
+                f"[persona] dropping orb override key {k!r} "
+                f"(not in {sorted(allowed)})"
+            )
+            continue
+        if not isinstance(v, dict):
+            logger.warning(
+                f"[persona] orb override {key!r} must be a mapping; dropping"
+            )
+            continue
+        inner: dict[str, Any] = {}
+        for pk, pv in v.items():
+            if numeric_only:
+                if isinstance(pv, bool) or not isinstance(pv, (int, float)):
+                    continue
+            elif not isinstance(pv, (int, float, str, bool)):
+                continue
+            inner[str(pk)] = pv
+        out[key] = inner
+    return out
+
+
 @dataclass(frozen=True)
 class Persona:
     """The single ORBIS persona loaded from config/orbis.yaml."""
@@ -219,20 +260,20 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     orb_params_raw = orb_block.get("params") or {}
     orb_params = dict(orb_params_raw) if isinstance(orb_params_raw, dict) else {}
 
-    # State + mood authoring deltas (optional). Backend carries them
-    # through unchanged; the frontend composition layer applies them
-    # on top of orb_params at uniform-set time. Keys not in the
-    # allowed enums are silently dropped by config_store on write, so
-    # by the time we read them here they're already normalized.
-    state_overrides_raw = orb_block.get("state_overrides") or {}
-    mood_overrides_raw = orb_block.get("mood_overrides") or {}
-    orb_state_overrides = (
-        {k: dict(v) for k, v in state_overrides_raw.items() if isinstance(v, dict)}
-        if isinstance(state_overrides_raw, dict) else {}
+    # State + mood authoring deltas (optional). Writes via config_store
+    # normalize keys (case, enum membership) but hand-authored YAML
+    # bypasses that path — mirror the filter here so a config.yaml with
+    # `Speaking:` or `Valence:` doesn't silently fall out of the
+    # composer's lookup.
+    orb_state_overrides = _normalize_override_map(
+        orb_block.get("state_overrides"),
+        allowed={"idle", "listening", "thinking", "speaking"},
+        numeric_only=False,
     )
-    orb_mood_overrides = (
-        {k: dict(v) for k, v in mood_overrides_raw.items() if isinstance(v, dict)}
-        if isinstance(mood_overrides_raw, dict) else {}
+    orb_mood_overrides = _normalize_override_map(
+        orb_block.get("mood_overrides"),
+        allowed={"valence", "arousal", "guardedness"},
+        numeric_only=True,
     )
 
     # LLM routing — when the block is present, it wins over env.

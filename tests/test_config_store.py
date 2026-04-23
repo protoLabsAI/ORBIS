@@ -245,6 +245,44 @@ def test_state_override_normalizes_case():
     assert "idle" in out["orb"]["state_overrides"]
 
 
+def test_mood_overrides_reject_non_numeric_deltas(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Mood deltas are multiplied by the live mood scalar — a string
+    or bool can't be scaled, so the validator drops them. State
+    deltas still accept strings (replacement semantics, e.g. color
+    hex)."""
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "orb": {
+                "mood_overrides": {
+                    "valence": {
+                        "atmosphereGlow": 0.2,  # kept
+                        "primaryColor": "#ff00ff",  # dropped — can't scale a string
+                        "enabled": True,  # dropped — bool is nonsensical here
+                    },
+                },
+            },
+        })
+    mood = out["orb"]["mood_overrides"]["valence"]
+    assert mood == {"atmosphereGlow": 0.2}
+
+
+def test_state_overrides_still_accept_string_replacements():
+    """State deltas keep string/bool support (replacement, not scaling)
+    so authors can swap color hex per voice state."""
+    out = validate_and_normalize({
+        "orb": {
+            "state_overrides": {
+                "speaking": {"primaryColor": "#ff00ff", "density": 0.4},
+            },
+        },
+    })
+    state = out["orb"]["state_overrides"]["speaking"]
+    assert state["primaryColor"] == "#ff00ff"
+    assert state["density"] == 0.4
+
+
 # --- write_config -----------------------------------------------------------
 
 

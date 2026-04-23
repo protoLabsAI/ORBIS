@@ -119,22 +119,21 @@ class OrbStore {
   }
 
   /** Switch variant. Loads the variant's default palette + any saved
-   * params. Overrides reset to empty: they're authored against a
-   * specific variant's uniform namespace, so carrying them across a
-   * variant swap would apply deltas to keys that don't exist on the
-   * new variant (and `composeBase` silently drops unknown keys, so
-   * you'd just see nothing). Cleaner to reset. */
+   * params. Authoring overrides are KEPT across the swap — `composeBase`
+   * silently drops keys that don't exist on the new variant, so
+   * same-named uniforms compose and everything else no-ops. Crucially,
+   * swapping away and back restores the authored deltas without having
+   * to re-fetch from the server. */
   setVariant(id: string): void {
     const variant = variantRegistry.get(id);
     if (!variant) return;
     const palette = variant.defaultPalette;
     const paletteParams = (variant.palettes[palette] ?? {}) as Record<string, unknown>;
     this.snap = {
+      ...this.snap,
       variantId: id,
       palette,
       params: { ...paletteParams },
-      stateOverrides: {},
-      moodOverrides: {},
       epoch: this.snap.epoch + 1,
     };
     this.listeners.forEach((l) => l());

@@ -220,3 +220,31 @@ def test_persona_overrides_round_trip_through_write(tmp_path: Path):
     persona = load_persona(p)
     assert persona.orb_state_overrides == {"idle": {"speed": -0.1}}
     assert persona.orb_mood_overrides == {"valence": {"atmosphereGlow": 0.2}}
+
+
+def test_persona_normalizes_hand_authored_override_keys(tmp_path: Path):
+    """Hand-edited YAML skips config_store's validator — persona.load
+    mirrors the same filtering so case + enum membership + numeric-
+    only for mood deltas are enforced on the read path."""
+    p = tmp_path / "orbis.yaml"
+    p.write_text(
+        """
+orb:
+  state_overrides:
+    Speaking: {density: 0.4, primaryColor: "#ff00ff"}
+    hyper:    {density: 9.9}
+  mood_overrides:
+    Valence:   {atmosphereGlow: 0.2, colorTag: "#ff0000"}
+    curiosity: {speed: 0.5}
+""".lstrip(),
+    )
+    persona = load_persona(p)
+    # Case normalized, unknown keys dropped.
+    assert "speaking" in persona.orb_state_overrides
+    assert persona.orb_state_overrides["speaking"]["density"] == 0.4
+    assert persona.orb_state_overrides["speaking"]["primaryColor"] == "#ff00ff"
+    assert "hyper" not in persona.orb_state_overrides
+    # Mood normalized + numeric-only (colorTag string gets dropped).
+    assert "valence" in persona.orb_mood_overrides
+    assert persona.orb_mood_overrides["valence"] == {"atmosphereGlow": 0.2}
+    assert "curiosity" not in persona.orb_mood_overrides
