@@ -616,8 +616,12 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     if skill.voice:
         if tts_backend == "kokoro":
             tts_kwargs["voice"] = skill.voice
-            if skill.lang:
-                tts_kwargs["lang"] = skill.lang
+            # Persona has no lang field today — KOKORO_LANG env handles
+            # language overrides. getattr keeps this branch forward-
+            # compatible if a lang field is added later.
+            lang = getattr(skill, "lang", None)
+            if lang:
+                tts_kwargs["lang"] = lang
         elif tts_backend == "fish":
             tts_kwargs["reference_id"] = skill.voice
     tts = make_tts(**tts_kwargs)
