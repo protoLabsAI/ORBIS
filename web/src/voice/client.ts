@@ -1,22 +1,30 @@
 import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
+import { apiKeyStore } from '@/auth/apiKey';
 
 /**
  * Build a PipecatClient wired to ORBIS's SmallWebRTCRequestHandler.
  *
  * We POST an SDP offer to `/api/offer` and PATCH ICE updates to the same
- * path — the transport library handles the full handshake.
+ * path — the transport library handles the full handshake. The owner
+ * API key is attached as ``X-API-Key`` so tailnet-hosted instances
+ * authenticate the handshake; ``apiKeyStore`` returns null in
+ * single-user fallback mode and the server accepts anonymously.
  *
  * The video transceiver stays enabled in the offer even though we only
  * send audio — omitting it causes DTLS/SCTP to silently fail on aiortc
  * (ORBIS's WebRTC backend). `enableCam: false` keeps the camera off
- * while still negotiating the transceiver. See
- * `project_pipecat_gotchas.md` line 16 for the forensic.
+ * while still negotiating the transceiver.
  */
 export function buildClient(): PipecatClient {
+  const key = apiKeyStore.get();
+  const headers: Record<string, string> = {};
+  if (key) headers['X-API-Key'] = key;
+
   const transport = new SmallWebRTCTransport({
     webrtcRequestParams: {
       endpoint: '/api/offer',
+      headers,
     },
     waitForICEGathering: true,
   });
