@@ -91,11 +91,17 @@ def test_validate_rejects_bad_verbosity():
 def test_validate_accepts_full_config():
     data = {
         "persona": {
-            "slug": "x", "name": "X", "system_prompt": "hi",
+            "slug": "x", "name": "X", "user_name": "Alice",
+            "system_prompt": "hi",
             "temperature": 0.5, "max_tokens": 180,
             "filler_verbosity": "narrated",
         },
         "voice": {"tts_backend": "elevenlabs", "voice": "abc"},
+        "llm": {
+            "url": "https://api.openai.com/v1",
+            "model": "gpt-4o-mini",
+            "api_key": "sk-test",
+        },
         "orb": {
             "variant": "nebula",
             "palette": "Helios",
@@ -103,9 +109,36 @@ def test_validate_accepts_full_config():
         },
     }
     out = validate_and_normalize(data)
+    assert out["persona"]["user_name"] == "Alice"
     assert out["persona"]["temperature"] == 0.5
     assert out["voice"]["tts_backend"] == "elevenlabs"
+    assert out["llm"]["url"] == "https://api.openai.com/v1"
+    assert out["llm"]["api_key"] == "sk-test"
     assert out["orb"]["params"]["density"] == 1.7
+
+
+def test_validate_llm_strips_unknown_keys(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "llm": {"url": "http://x", "mystery": "field"},
+        })
+    assert "mystery" not in out["llm"]
+
+
+def test_validate_llm_rejects_non_dict_extra_body():
+    with pytest.raises(ValueError, match="extra_body"):
+        validate_and_normalize({
+            "llm": {"url": "http://x", "extra_body": "not-a-dict"},
+        })
+
+
+def test_validate_llm_accepts_env_ref_or_direct_key():
+    # Either api_key or api_key_env is valid — the run_bot path prefers
+    # api_key when both are present (direct wins; docstring'd).
+    o1 = validate_and_normalize({"llm": {"url": "http://x", "api_key_env": "FOO"}})
+    assert o1["llm"]["api_key_env"] == "FOO"
+    o2 = validate_and_normalize({"llm": {"url": "http://x", "api_key": "sk-..."}})
+    assert o2["llm"]["api_key"] == "sk-..."
 
 
 def test_validate_drops_complex_param_types(

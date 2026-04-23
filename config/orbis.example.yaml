@@ -13,6 +13,11 @@ persona:
   slug: orbis
   name: ORBIS
 
+  # How the orb addresses you in conversation. Empty = no name
+  # injected into the prompt (the orb won't know what to call you).
+  # Set via the setup wizard; editable later from the drawer.
+  user_name: ""
+
   # Inline the persona's system prompt below, or point at a file:
   # system_prompt_file: persona.md   # relative to the config dir
   system_prompt: |
@@ -49,6 +54,30 @@ voice:
   #                 fish-speech docker-compose profile)
   tts_backend: kokoro
   voice: af_heart              # kokoro voice id, ElevenLabs voice_id, etc.
+
+# LLM routing — the small/fast model that powers the voice agent's
+# routing + personality layer. When this block is set, it overrides
+# the LLM_URL / LLM_SERVED_NAME / LLM_API_KEY env vars. Leave the
+# block out (or unset individual fields) to fall back to env.
+#
+# Examples:
+#   # OpenAI-hosted
+#   llm:
+#     url: https://api.openai.com/v1
+#     model: gpt-4o-mini
+#     api_key: sk-...                  # direct (wizard-written)
+#     # or: api_key_env: OPENAI_API_KEY  (env-var indirection)
+#
+#   # Anthropic via LiteLLM gateway
+#   llm:
+#     url: http://gateway:4000/v1
+#     model: claude-haiku-4-5
+#     api_key_env: LITELLM_MASTER_KEY
+#
+#   # Local vLLM (default; leave block unset to use env)
+#   # llm:
+#   #   url: http://127.0.0.1:8100/v1
+#   #   model: Qwen/Qwen3.5-4B
 
 orb:
   # Starter orb viz — picked at first-run via the setup wizard. Once

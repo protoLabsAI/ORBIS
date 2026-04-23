@@ -12,6 +12,7 @@ Shape of ``config/orbis.yaml``::
     persona:
       slug: orbis
       name: ORBIS
+      user_name: Alice          # how the orb addresses the user
       system_prompt: |
         You are ORBIS — an AI companion that speaks to the user...
       # Optional: point at an external file instead of inlining the prompt.
@@ -27,6 +28,17 @@ Shape of ``config/orbis.yaml``::
       tts_backend: kokoro
       voice: af_heart
 
+    llm:
+      # The small/fast LLM that drives the voice agent's routing +
+      # personality layer. Unset → falls back to the env defaults
+      # (LLM_URL / LLM_SERVED_NAME / LLM_API_KEY). Use api_key_env for
+      # env-var indirection; api_key for direct storage.
+      url: https://api.openai.com/v1
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+      # api_key: sk-...   (direct; less secure, but wizard writes here
+      #                    when the user pastes a key)
+
     orb:
       # Starter orb viz — applied on first boot. Once entitled, the user
       # can change these via voice / drawer.
@@ -39,6 +51,10 @@ Shape of ``config/orbis.yaml``::
 Env overrides win when set:
   - ``SYSTEM_PROMPT`` overrides ``persona.system_prompt``
   - ``TTS_BACKEND`` / ``KOKORO_VOICE`` override ``voice.*``
+  - ``LLM_URL`` / ``LLM_SERVED_NAME`` / ``LLM_API_KEY`` are the fallback
+    when the ``llm`` block is absent; explicit ``llm`` block values
+    always win (lets a packaged install ship with the config user-
+    editable and not rely on env-var plumbing).
 """
 
 from __future__ import annotations
@@ -59,6 +75,8 @@ class Persona:
 
     slug: str = "orbis"
     name: str = "ORBIS"
+    # How the orb addresses the user. Empty = no name injected.
+    user_name: str = ""
     # Persona identity — composed into the voice agent's system prompt.
     system_prompt: str = ""
     # Decoder-side LLM knobs.
@@ -79,6 +97,9 @@ class Persona:
     # ORBIS (delegation targets are global, not persona-scoped).
     delegates: list | None = None
     behavior: dict = field(default_factory=dict)
+    # llm: dict with shape {url, model, api_key, api_key_env}. Unset →
+    # run_bot falls back to env defaults. Set from the setup wizard's
+    # LLM-provider step, writable via /api/config.
     llm: dict | None = None
     tools: list = field(default_factory=list)
 
@@ -155,9 +176,11 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     persona_block = data.get("persona") or {}
     voice_block = data.get("voice") or {}
     orb_block = data.get("orb") or {}
+    llm_block = data.get("llm") or {}
 
     slug = (persona_block.get("slug") or "orbis").strip()
     name = (persona_block.get("name") or "ORBIS").strip()
+    user_name = (persona_block.get("user_name") or "").strip()
     system_prompt = _resolve_prompt(persona_block, config_dir)
 
     # Env-win over config for TTS selection so the same YAML file works
@@ -191,9 +214,21 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     orb_params_raw = orb_block.get("params") or {}
     orb_params = dict(orb_params_raw) if isinstance(orb_params_raw, dict) else {}
 
+    # LLM routing — when the block is present, it wins over env.
+    # run_bot reads persona.llm.{url, model, api_key, api_key_env}
+    # and falls back to env defaults for each field individually.
+    llm: dict | None = None
+    if isinstance(llm_block, dict) and llm_block:
+        llm = {}
+        for k in ("url", "model", "api_key", "api_key_env", "extra_body"):
+            v = llm_block.get(k)
+            if v is not None:
+                llm[k] = v
+
     persona = Persona(
         slug=slug,
         name=name,
+        user_name=user_name,
         system_prompt=system_prompt,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -203,6 +238,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,
+        llm=llm,
     )
     logger.info(f"[persona] loaded {persona.slug!r} from {path}")
     return persona

@@ -347,6 +347,19 @@ def _effective_prompt(
     except Exception as e:
         logger.warning(f"[personality] render failed: {e}")
         personality = ""
+
+    # User-addressing block — tells the orb who the user is by name
+    # so greetings / recall feel personal. Empty user_name = no block.
+    user_block = ""
+    user_name = (getattr(skill, "user_name", "") or "").strip()
+    if user_name:
+        user_block = (
+            f"## USER\n\n"
+            f"The user's name is {user_name}. Use it occasionally — "
+            f"not in every turn, but when a greeting, callback, or "
+            f"gentle correction calls for it."
+        )
+
     return (
         base
         + "\n\n"
@@ -356,6 +369,7 @@ def _effective_prompt(
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
+        + (("\n\n" + user_block) if user_block else "")
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
         + (("\n\n" + recall) if recall else "")
@@ -548,20 +562,24 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
 
     stt = make_stt()
 
-    # Per-skill LLM routing. When skill.llm.{url,model,api_key_env} is set,
-    # this session's chat completions go to that endpoint instead of the
-    # env default (typically the local vLLM). Lets a single skill route to
-    # a LiteLLM gateway, OpenAI, Anthropic, etc. — without affecting other
-    # skills running in the same process.
+    # LLM routing. When persona.llm.{url, model, api_key, api_key_env}
+    # is set via config/orbis.yaml or the setup wizard, this session's
+    # chat completions route there instead of the env default. Falls
+    # back per-field to LLM_URL / LLM_SERVED_NAME / LLM_API_KEY env vars
+    # so a mix (e.g. custom url but rely-on-env key) works naturally.
     skill_llm = skill.llm or {}
     using_custom_llm = bool(skill_llm.get("url"))
     llm_url = str(skill_llm.get("url") or LLM_URL)
     llm_model = str(skill_llm.get("model") or LLM_SERVED_NAME)
-    llm_api_key = (
-        os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
-        if skill_llm.get("api_key_env")
-        else LLM_API_KEY
-    )
+    if skill_llm.get("api_key"):
+        # Direct key stored in config/orbis.yaml — wizard-written path.
+        llm_api_key = str(skill_llm["api_key"])
+    elif skill_llm.get("api_key_env"):
+        llm_api_key = os.environ.get(
+            str(skill_llm["api_key_env"]), LLM_API_KEY
+        )
+    else:
+        llm_api_key = LLM_API_KEY
     # vLLM-specific extras. Only inject when hitting the default (local)
     # endpoint; non-vLLM gateways (LiteLLM, OpenAI, Anthropic) either
     # ignore or reject `chat_template_kwargs`. Skills can override via

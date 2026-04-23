@@ -33,11 +33,12 @@ DEFAULT_PATH = os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
 # from the write (with a log message) so the UI can't inject garbage
 # that later boots would have to tolerate.
 _ALLOWED_PERSONA_KEYS = {
-    "slug", "name", "system_prompt", "system_prompt_file",
+    "slug", "name", "user_name", "system_prompt", "system_prompt_file",
     "temperature", "max_tokens", "filler_verbosity",
 }
 _ALLOWED_VOICE_KEYS = {"tts_backend", "voice"}
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params"}
+_ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
 _ALLOWED_VERBOSITIES = {"silent", "brief", "narrated", "chatty"}
 _ALLOWED_TTS_BACKENDS = {"kokoro", "openai", "elevenlabs", "fish"}
 
@@ -65,7 +66,7 @@ def _validate_persona(block: Any) -> dict:
         if k not in _ALLOWED_PERSONA_KEYS:
             logger.warning(f"[config_store] dropping unknown persona key {k!r}")
             continue
-        if k in ("slug", "name", "system_prompt", "system_prompt_file"):
+        if k in ("slug", "name", "user_name", "system_prompt", "system_prompt_file"):
             if v is not None:
                 out[k] = str(v)
         elif k == "temperature":
@@ -138,6 +139,27 @@ def _validate_orb(block: Any) -> dict:
     return out
 
 
+def _validate_llm(block: Any) -> dict:
+    """Filter an llm block — URL + model + either direct api_key or
+    api_key_env reference + optional extra_body."""
+    if not isinstance(block, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for k, v in block.items():
+        if k not in _ALLOWED_LLM_KEYS:
+            logger.warning(f"[config_store] dropping unknown llm key {k!r}")
+            continue
+        if k in ("url", "model", "api_key", "api_key_env"):
+            if v is not None:
+                out[k] = str(v)
+        elif k == "extra_body":
+            if v is None or isinstance(v, dict):
+                out[k] = v if v else None
+            else:
+                raise ValueError("llm.extra_body must be a mapping or null")
+    return out
+
+
 def validate_and_normalize(data: dict) -> dict:
     """Apply schema filtering across the top-level blocks. Raises
     ValueError on typed validation failures; silently drops unknown
@@ -151,13 +173,17 @@ def validate_and_normalize(data: dict) -> dict:
         block = _validate_voice(data["voice"])
         if block:
             out["voice"] = block
+    if "llm" in data:
+        block = _validate_llm(data["llm"])
+        if block:
+            out["llm"] = block
     if "orb" in data:
         block = _validate_orb(data["orb"])
         if block:
             out["orb"] = block
     # Unknown top-level keys — drop with warning.
     for k in data:
-        if k not in ("persona", "voice", "orb"):
+        if k not in ("persona", "voice", "llm", "orb"):
             logger.warning(f"[config_store] dropping unknown top-level key {k!r}")
     return out
 
@@ -197,7 +223,7 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
     """
     current = read_config(path)
     merged: dict[str, Any] = dict(current)
-    for block_key in ("persona", "voice", "orb"):
+    for block_key in ("persona", "voice", "llm", "orb"):
         if block_key not in patch:
             continue
         block_patch = patch[block_key]
