@@ -92,9 +92,25 @@ jobs:
       - name: Read version
         id: version
         shell: bash
+        # When triggered by tag push or by workflow_dispatch with an
+        # explicit `tag` input, the ref looks like `vX.Y.Z` and we
+        # want VERSION = X.Y.Z. When triggered by workflow_dispatch
+        # against a branch (no tag arg, ref_name is the branch), fall
+        # back to the in-tree pyproject.toml version so PEP 440
+        # validation downstream doesn't choke on the slash-bearing
+        # branch name. Branch dispatches are dev/test artifacts —
+        # they don't get attached to a release.
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
+          case "${TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*)
+              VERSION="${TAG#v}"
+              ;;
+            *)
+              VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+              echo "Branch dispatch (${TAG}); using in-tree version ${VERSION}"
+              ;;
+          esac
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
