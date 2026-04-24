@@ -89,10 +89,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # PyApp embeds the project at build time. It expects an sdist or
-      # a source tree it can pip-install; pointing PYAPP_PROJECT_PATH
-      # at the checkout is simplest. The hatchling wheel config added
-      # in #ef04c90 covers the "pip install ." case.
       - name: Read version
         id: version
         shell: bash
@@ -102,15 +98,45 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # PyApp wants a pre-built sdist or wheel at PYAPP_PROJECT_PATH,
+      # not a source directory. Build one now — hatchling reads
+      # pyproject.toml and emits orbis-<version>.tar.gz under
+      # dist-sdist/. We override the version in pyproject to match
+      # the release tag so the sdist filename is predictable.
+      - name: Build ORBIS sdist for PyApp
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          # Stamp the release version into pyproject so the produced
+          # sdist is named orbis-<version>.tar.gz predictably.
+          python - <<PY
+          import re, pathlib
+          VERSION = "${{ steps.version.outputs.version }}"
+          p = pathlib.Path("pyproject.toml")
+          content = p.read_text()
+          content = re.sub(r'version\s*=\s*"[^"]*"', f'version = "{VERSION}"', content, count=1)
+          p.write_text(content)
+          PY
+          python -m build --sdist --outdir dist-sdist
+          # Fail here (not later in PyApp) if the sdist name doesn't
+          # match the tag — surfaces version-stamping drift locally.
+          SDIST="dist-sdist/orbis-${{ steps.version.outputs.version }}.tar.gz"
+          if [ ! -f "${SDIST}" ]; then
+            echo "::error::Expected sdist at ${SDIST} but it doesn't exist."
+            ls -la dist-sdist/
+            exit 2
+          fi
+          ls -la dist-sdist/
+
       - name: Build ORBIS sidecar binary (PyApp)
         shell: bash
         env:
           # Core PyApp config. See https://ofek.dev/pyapp/ for the
-          # full matrix — the vars below are the minimum for a
-          # project-path build that runs `app:main` on launch.
+          # full matrix — the vars below are the minimum for an
+          # sdist-based build that runs `app:main` on launch.
           PYAPP_PROJECT_NAME: orbis
           PYAPP_PROJECT_VERSION: ${{ steps.version.outputs.version }}
-          PYAPP_PROJECT_PATH: ${{ github.workspace }}
+          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist-sdist/orbis-${{ steps.version.outputs.version }}.tar.gz
           PYAPP_PYTHON_VERSION: '3.11'
           PYAPP_EXEC_SPEC: 'app:main'
           # Full isolation — don't touch the user's Python or site-packages.
@@ -231,10 +257,77 @@ jobs:
 
       - name: Build Tauri installer
         shell: bash
-        # Unsigned bundle for test releases per the PR plan — signing
-        # wires in PR 4 via Developer ID (macOS) + Authenticode
-        # (Windows) + Tauri's updater key (Linux/all).
-        run: cd src-tauri && cargo tauri build
+        # Signing is conditional on secret presence — the workflow
+        # stays green for test releases (no secrets → unsigned) and
+        # flips to signed automatically once the org provisions the
+        # certs + Apple Developer ID. See docs/desktop-signing.md for
+        # the cert procurement steps + secret names.
+        #
+        # tauri-cli picks up the Apple / Windows signing env vars
+        # automatically — we don't need per-OS flags, just export
+        # the right vars when the matching secret exists.
+        env:
+          # macOS Developer ID signing + notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode signing (base64-encoded PFX).
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Tauri updater signing key (v1 format). When set, the
+          # builder also emits a `.sig` file per installer that the
+          # future updater plugin can verify against the public key
+          # baked into tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cd src-tauri
+          SIGNED="no"
+          # tauri-cli / tauri-bundler attempt signing as soon as *any*
+          # of the platform secrets are set, then fail the build if the
+          # complement is missing. Require the full set — if one piece
+          # is absent, unset the rest so the builder falls back to an
+          # unsigned bundle cleanly instead of crashing mid-build.
+          case "${{ runner.os }}" in
+            macOS)
+              if [ -n "${APPLE_CERTIFICATE}" ] \
+                  && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
+                  && [ -n "${APPLE_SIGNING_IDENTITY}" ] \
+                  && [ -n "${APPLE_ID}" ] \
+                  && [ -n "${APPLE_PASSWORD}" ] \
+                  && [ -n "${APPLE_TEAM_ID}" ]; then
+                SIGNED="Developer ID"
+              else
+                unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+                      APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD \
+                      APPLE_TEAM_ID
+              fi
+              ;;
+            Windows)
+              if [ -n "${WINDOWS_CERTIFICATE}" ] \
+                  && [ -n "${WINDOWS_CERTIFICATE_PASSWORD}" ]; then
+                SIGNED="Authenticode"
+              else
+                unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
+              fi
+              ;;
+            Linux)
+              # Linux doesn't have a native signing format; the
+              # Tauri updater .sig is the only signature here.
+              [ -n "${TAURI_SIGNING_PRIVATE_KEY}" ] && SIGNED="updater-only"
+              ;;
+          esac
+          # Updater key requires its password to be valid if the key is
+          # encrypted; mirror the completeness rule so a half-configured
+          # updater secret doesn't fail the whole build.
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          echo "Signing mode: ${SIGNED}"
+          cargo tauri build
 
       - name: Locate installer artifact
         shell: bash
@@ -268,6 +361,14 @@ jobs:
           EXT="${INSTALLER##*.}"
           OUT="ORBIS-${{ steps.version.outputs.version }}-${{ matrix.target }}.${EXT}"
           cp "$INSTALLER" "$OUT"
+          # The updater `.sig` (only produced when TAURI_SIGNING_PRIVATE_KEY
+          # was set) lives beside the original bundle — copy it next to
+          # the renamed installer so the release-upload step below can
+          # find it via env.installer_sig.
+          if [ -f "${INSTALLER}.sig" ]; then
+            cp "${INSTALLER}.sig" "${OUT}.sig"
+            echo "installer_sig=${OUT}.sig" >> "$GITHUB_ENV"
+          fi
           echo "installer=$OUT" >> "$GITHUB_ENV"
           echo "installer_name=$OUT" >> "$GITHUB_ENV"
           ls -la "$OUT"
@@ -286,17 +387,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
+        # Also uploads the updater signature alongside each installer
+        # when it exists (created by `cargo tauri build` only when
+        # TAURI_SIGNING_PRIVATE_KEY is set). Tauri's updater plugin
+        # fetches these later to verify the update bundle.
         run: |
           TAG="${{ steps.version.outputs.tag }}"
+          # Collect the set of artifacts — installer is required, its
+          # .sig is optional (only produced when signing is configured).
+          # installer_sig is set by the "Locate installer artifact" step
+          # only when the updater key produced a sibling signature.
+          ARTIFACTS=("${{ env.artifact }}" "${{ env.installer }}")
+          if [ -n "${{ env.installer_sig }}" ] && [ -f "${{ env.installer_sig }}" ]; then
+            ARTIFACTS+=("${{ env.installer_sig }}")
+          fi
           # release.yml creates the release on tag push; this job
           # runs in parallel, so the release may not exist yet. Poll
           # briefly before uploading.
           for _ in $(seq 1 30); do
             if gh release view "${TAG}" >/dev/null 2>&1; then
-              gh release upload "${TAG}" \
-                "${{ env.artifact }}" \
-                "${{ env.installer }}" \
-                --clobber
+              gh release upload "${TAG}" "${ARTIFACTS[@]}" --clobber
               exit 0
             fi
             sleep 10

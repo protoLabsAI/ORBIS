@@ -14,10 +14,33 @@ export interface LLMPreset {
   blurb: string;
 }
 
-// Hosted + local + gateway presets. All OpenAI-protocol unless labeled
-// otherwise. The actual URL/model/key fields remain editable after
-// picking a preset — the preset just pre-fills them.
+// Local-first + hosted + gateway presets. All OpenAI-protocol unless
+// labeled otherwise. The actual URL/model/key fields remain editable
+// after picking a preset — the preset just pre-fills them.
+//
+// Ordering: Ollama first because the bundled desktop app targets
+// users running a local LLM. Cloud providers follow for users who
+// prefer hosted inference; `custom` stays last for full freedom.
 export const LLM_PRESETS: LLMPreset[] = [
+  // --- Local / self-hosted (the desktop-app happy path) ---
+  {
+    id: 'ollama', label: 'Ollama',
+    url: 'http://127.0.0.1:11434/v1', model: 'llama3.2',
+    needsKey: false,
+    blurb: 'Local. Auto-detected if running. Recommended for the desktop app.',
+  },
+  {
+    id: 'lm_studio', label: 'LM Studio',
+    url: 'http://127.0.0.1:1234/v1', model: '',
+    needsKey: false,
+    blurb: 'Local. Start the server in LM Studio first.',
+  },
+  {
+    id: 'vllm', label: 'vLLM (local)',
+    url: 'http://127.0.0.1:8100/v1', model: 'Qwen/Qwen3.5-4B',
+    needsKey: false,
+    blurb: 'Your own vLLM server.',
+  },
   // --- Hosted cloud ---
   {
     id: 'openai', label: 'OpenAI',
@@ -78,25 +101,6 @@ export const LLM_PRESETS: LLMPreset[] = [
     url: 'https://api.x.ai/v1', model: 'grok-2',
     needsKey: true, keyPlaceholder: 'xai-...',
     blurb: 'Grok, via OpenAI-compat API.',
-  },
-  // --- Local / self-hosted ---
-  {
-    id: 'ollama', label: 'Ollama',
-    url: 'http://127.0.0.1:11434/v1', model: 'llama3.2',
-    needsKey: false,
-    blurb: 'Local. Auto-detected if running.',
-  },
-  {
-    id: 'lm_studio', label: 'LM Studio',
-    url: 'http://127.0.0.1:1234/v1', model: '',
-    needsKey: false,
-    blurb: 'Local. Start the server in LM Studio first.',
-  },
-  {
-    id: 'vllm', label: 'vLLM (local)',
-    url: 'http://127.0.0.1:8100/v1', model: 'Qwen/Qwen3.5-4B',
-    needsKey: false,
-    blurb: 'Your own vLLM server.',
   },
   // --- Gateway / proxy ---
   {

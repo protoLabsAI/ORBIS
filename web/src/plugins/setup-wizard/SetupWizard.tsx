@@ -5,11 +5,12 @@ import { LLM_PRESETS } from '@/shared/llm/presets';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
-// A stable default for the LLM step — hitting LLM_PRESETS[0] silently
-// breaks if the preset ordering changes. Fall back to the first entry
-// only if someone renames the well-known id.
+// A stable default for the LLM step — explicit id lookup so the
+// default doesn't drift if the preset ordering changes. Ollama is
+// the recommended path for the desktop app; if that id ever goes
+// away, fall back to the first entry.
 const DEFAULT_LLM_PRESET =
-  LLM_PRESETS.find((p) => p.id === 'openai') ?? LLM_PRESETS[0];
+  LLM_PRESETS.find((p) => p.id === 'ollama') ?? LLM_PRESETS[0];
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
@@ -355,6 +356,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           </div>
         </div>
       )}
+      {localCallouts.length === 0 && <OllamaInstallHelper />}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
         {LLM_PRESETS.map((p) => (
@@ -466,6 +468,92 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       </div>
     </div>
   );
+}
+
+/**
+ * Shown on the LLM step when no local-LLM server is detected. Points
+ * users at Ollama — the recommended path for the desktop app — with
+ * copy-to-clipboard install one-liners per-OS. Non-blocking: users
+ * can still pick a cloud provider from the grid below.
+ */
+function OllamaInstallHelper() {
+  const [copied, setCopied] = useState<string | null>(null);
+  const platform = detectOS();
+
+  const commands: Record<OSKind, { label: string; cmd: string }> = {
+    macos:   { label: 'macOS',   cmd: 'curl -fsSL https://ollama.com/install.sh | sh' },
+    linux:   { label: 'Linux',   cmd: 'curl -fsSL https://ollama.com/install.sh | sh' },
+    windows: { label: 'Windows', cmd: 'winget install Ollama.Ollama' },
+  };
+
+  const onCopy = async (key: string, cmd: string) => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopied(key);
+      window.setTimeout(() => setCopied(null), 1500);
+    } catch {
+      // Browser might block clipboard in some contexts — UX falls back
+      // to the visible text the user can select manually.
+    }
+  };
+
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
+      <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
+        Recommended — Install Ollama
+      </div>
+      <p className="text-[13px] text-zinc-400 mb-3">
+        ORBIS works best with a local LLM. Ollama is the fastest way to
+        get one running; it's free, open-source, and auto-detected once
+        installed.
+      </p>
+      <div className="space-y-2">
+        {(['macos', 'linux', 'windows'] as const).map((k) => {
+          const { label, cmd } = commands[k];
+          const highlight = k === platform;
+          const key = `cmd-${k}`;
+          return (
+            <div
+              key={k}
+              className={
+                'flex items-center gap-2 rounded px-2.5 py-1.5 ' +
+                (highlight
+                  ? 'bg-amber-500/10 border border-amber-500/40'
+                  : 'bg-zinc-900/40 border border-zinc-800')
+              }
+            >
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500 w-14 shrink-0">
+                {label}
+              </span>
+              <code className="flex-1 font-mono text-[11px] text-zinc-200 truncate">
+                {cmd}
+              </code>
+              <button
+                type="button"
+                onClick={() => onCopy(key, cmd)}
+                className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-zinc-200 transition-colors shrink-0"
+              >
+                {copied === key ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-[11px] text-zinc-500 mt-2">
+        After install, run <code>ollama pull llama3.2</code> then reopen
+        this step — we'll detect it automatically.
+      </div>
+    </div>
+  );
+}
+
+type OSKind = 'macos' | 'linux' | 'windows';
+
+function detectOS(): OSKind {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  if (/Mac|iPhone|iPad|iPod/i.test(ua)) return 'macos';
+  if (/Windows/i.test(ua)) return 'windows';
+  return 'linux';
 }
 
 function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {

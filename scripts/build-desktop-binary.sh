@@ -65,9 +65,21 @@ esac
 
 PROJECT_PATH="$(pwd)"   # split so a failing `pwd` surfaces via set -e
 
+# PyApp takes an sdist/wheel file, not a directory. Build an sdist
+# now so the downstream PYAPP_PROJECT_PATH points at a real file.
+echo "[build-desktop] Building sdist..."
+python3 -m pip install --quiet --upgrade build
+python3 -m build --sdist --outdir "${PROJECT_PATH}/dist-sdist"
+SDIST="${PROJECT_PATH}/dist-sdist/orbis-${VERSION_NO_V}.tar.gz"
+if [ ! -f "${SDIST}" ]; then
+  echo "Expected sdist at ${SDIST} but it doesn't exist." >&2
+  echo "Check pyproject.toml's [project].version matches ${VERSION_NO_V}." >&2
+  exit 2
+fi
+
 export PYAPP_PROJECT_NAME="orbis"
 export PYAPP_PROJECT_VERSION="${VERSION_NO_V}"
-export PYAPP_PROJECT_PATH="${PROJECT_PATH}"
+export PYAPP_PROJECT_PATH="${SDIST}"
 export PYAPP_PYTHON_VERSION="3.11"
 export PYAPP_EXEC_SPEC="app:main"
 export PYAPP_FULL_ISOLATION="1"
