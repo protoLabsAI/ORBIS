@@ -278,15 +278,32 @@ jobs:
         run: |
           cd src-tauri
           SIGNED="no"
+          # tauri-cli / tauri-bundler attempt signing as soon as *any*
+          # of the platform secrets are set, then fail the build if the
+          # complement is missing. Require the full set — if one piece
+          # is absent, unset the rest so the builder falls back to an
+          # unsigned bundle cleanly instead of crashing mid-build.
           case "${{ runner.os }}" in
             macOS)
-              if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_SIGNING_IDENTITY}" ]; then
+              if [ -n "${APPLE_CERTIFICATE}" ] \
+                  && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
+                  && [ -n "${APPLE_SIGNING_IDENTITY}" ] \
+                  && [ -n "${APPLE_ID}" ] \
+                  && [ -n "${APPLE_PASSWORD}" ] \
+                  && [ -n "${APPLE_TEAM_ID}" ]; then
                 SIGNED="Developer ID"
+              else
+                unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+                      APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD \
+                      APPLE_TEAM_ID
               fi
               ;;
             Windows)
-              if [ -n "${WINDOWS_CERTIFICATE}" ]; then
+              if [ -n "${WINDOWS_CERTIFICATE}" ] \
+                  && [ -n "${WINDOWS_CERTIFICATE_PASSWORD}" ]; then
                 SIGNED="Authenticode"
+              else
+                unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
               fi
               ;;
             Linux)
@@ -295,6 +312,12 @@ jobs:
               [ -n "${TAURI_SIGNING_PRIVATE_KEY}" ] && SIGNED="updater-only"
               ;;
           esac
+          # Updater key requires its password to be valid if the key is
+          # encrypted; mirror the completeness rule so a half-configured
+          # updater secret doesn't fail the whole build.
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
           echo "Signing mode: ${SIGNED}"
           cargo tauri build
 
@@ -330,6 +353,14 @@ jobs:
           EXT="${INSTALLER##*.}"
           OUT="ORBIS-${{ steps.version.outputs.version }}-${{ matrix.target }}.${EXT}"
           cp "$INSTALLER" "$OUT"
+          # The updater `.sig` (only produced when TAURI_SIGNING_PRIVATE_KEY
+          # was set) lives beside the original bundle — copy it next to
+          # the renamed installer so the release-upload step below can
+          # find it via env.installer_sig.
+          if [ -f "${INSTALLER}.sig" ]; then
+            cp "${INSTALLER}.sig" "${OUT}.sig"
+            echo "installer_sig=${OUT}.sig" >> "$GITHUB_ENV"
+          fi
           echo "installer=$OUT" >> "$GITHUB_ENV"
           echo "installer_name=$OUT" >> "$GITHUB_ENV"
           ls -la "$OUT"
@@ -356,9 +387,11 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           # Collect the set of artifacts — installer is required, its
           # .sig is optional (only produced when signing is configured).
+          # installer_sig is set by the "Locate installer artifact" step
+          # only when the updater key produced a sibling signature.
           ARTIFACTS=("${{ env.artifact }}" "${{ env.installer }}")
-          if [ -f "${{ env.installer }}.sig" ]; then
-            ARTIFACTS+=("${{ env.installer }}.sig")
+          if [ -n "${{ env.installer_sig }}" ] && [ -f "${{ env.installer_sig }}" ]; then
+            ARTIFACTS+=("${{ env.installer_sig }}")
           fi
           # release.yml creates the release on tag push; this job
           # runs in parallel, so the release may not exist yet. Poll

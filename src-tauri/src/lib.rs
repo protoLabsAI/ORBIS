@@ -251,7 +251,7 @@ fn handle_termination(
             "ORBIS needs a supported GPU",
             "ORBIS's voice pipeline runs in real time, so it needs \
              hardware acceleration:\n\n\
-             • macOS — Apple Silicon (M1, M2, M3, or M4)\n\
+             • macOS — Apple Silicon (M1 or newer)\n\
              • Windows / Linux — NVIDIA GPU with driver 570 or newer\n\n\
              Neither was detected on this machine. If you want to run \
              ORBIS on a CPU-only box anyway, the Docker self-host path \

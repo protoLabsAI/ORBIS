@@ -147,7 +147,7 @@ spctl --assess --type exec --verbose "ORBIS.app"
 ### Windows
 ```sh
 # PowerShell
-Get-AuthenticodeSignature .\ORBIS-0.1.9-x86_64-pc-windows-msvc.msi
+Get-ChildItem .\ORBIS-*-x86_64-pc-windows-msvc.msi | Get-AuthenticodeSignature
 ```
 
 ### Tauri updater signatures

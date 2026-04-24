@@ -68,7 +68,7 @@ PROJECT_PATH="$(pwd)"   # split so a failing `pwd` surfaces via set -e
 # PyApp takes an sdist/wheel file, not a directory. Build an sdist
 # now so the downstream PYAPP_PROJECT_PATH points at a real file.
 echo "[build-desktop] Building sdist..."
-python3 -m pip install --quiet --upgrade build 2>/dev/null || true
+python3 -m pip install --quiet --upgrade build
 python3 -m build --sdist --outdir "${PROJECT_PATH}/dist-sdist"
 SDIST="${PROJECT_PATH}/dist-sdist/orbis-${VERSION_NO_V}.tar.gz"
 if [ ! -f "${SDIST}" ]; then
