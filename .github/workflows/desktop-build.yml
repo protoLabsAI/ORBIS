@@ -89,12 +89,50 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build web SPA
+        shell: bash
+        # `pyproject.toml`'s force-include rule pulls `web/dist/` into
+        # the sdist + wheel; without this step the sdist build below
+        # fails with `Forced include not found: ...web/dist`. Bun is
+        # the dev-tree tool of choice; falls back to npm if needed.
+        # Mirrors `scripts/build-desktop-binary.sh`'s local flow.
+        run: |
+          cd web
+          if command -v bun >/dev/null 2>&1; then
+            bun install --frozen-lockfile
+            bun run build
+          else
+            npm install
+            npm run build
+          fi
+
       - name: Read version
         id: version
         shell: bash
+        # When triggered by tag push or by workflow_dispatch with an
+        # explicit `tag` input, the ref looks like `vX.Y.Z` and we
+        # want VERSION = X.Y.Z. When triggered by workflow_dispatch
+        # against a branch (no tag arg, ref_name is the branch), fall
+        # back to the in-tree pyproject.toml version so PEP 440
+        # validation downstream doesn't choke on the slash-bearing
+        # branch name. Branch dispatches are dev/test artifacts —
+        # they don't get attached to a release.
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
-          VERSION="${TAG#v}"
+          case "${TAG}" in
+            v[0-9]*.[0-9]*.[0-9]*)
+              VERSION="${TAG#v}"
+              ;;
+            *)
+              VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+              echo "Branch dispatch (${TAG}); using in-tree version ${VERSION}"
+              ;;
+          esac
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -267,12 +305,17 @@ jobs:
         # automatically — we don't need per-OS flags, just export
         # the right vars when the matching secret exists.
         env:
-          # macOS Developer ID signing + notarization.
+          # macOS Developer ID signing + notarization. We use App
+          # Store Connect API keys for notarization rather than an
+          # app-specific password — the .p8 key is rotation-safe
+          # against Apple ID password changes and doesn't prompt
+          # 2FA on every CI run.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # Windows Authenticode signing (base64-encoded PFX).
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -296,14 +339,22 @@ jobs:
               if [ -n "${APPLE_CERTIFICATE}" ] \
                   && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
                   && [ -n "${APPLE_SIGNING_IDENTITY}" ] \
-                  && [ -n "${APPLE_ID}" ] \
-                  && [ -n "${APPLE_PASSWORD}" ] \
+                  && [ -n "${APPLE_API_ISSUER}" ] \
+                  && [ -n "${APPLE_API_KEY}" ] \
+                  && [ -n "${APPLE_API_KEY_PATH}" ] \
                   && [ -n "${APPLE_TEAM_ID}" ]; then
+                # Tauri-cli expects APPLE_API_KEY_PATH to be a file
+                # path, not the key contents. The secret is the
+                # base64-encoded .p8 — decode to a tmp file and
+                # repoint the env var at it.
+                KEYFILE="$(mktemp -t orbis-apple-api-XXXXXX).p8"
+                echo "${APPLE_API_KEY_PATH}" | base64 --decode > "${KEYFILE}"
+                export APPLE_API_KEY_PATH="${KEYFILE}"
                 SIGNED="Developer ID"
               else
                 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
-                      APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD \
-                      APPLE_TEAM_ID
+                      APPLE_SIGNING_IDENTITY APPLE_API_ISSUER \
+                      APPLE_API_KEY APPLE_API_KEY_PATH APPLE_TEAM_ID
               fi
               ;;
             Windows)

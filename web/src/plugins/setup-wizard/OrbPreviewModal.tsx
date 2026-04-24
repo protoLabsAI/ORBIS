@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { OrbPreview } from '@/plugins/orb/OrbPreview';
 import { orbStore } from '@/plugins/orb/store';
@@ -23,6 +23,14 @@ export function OrbPreviewModal({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  // Track whether the user clicked "Use this orb" (vs. dismissed). On
+  // confirm we want the previewed look to STAY committed; the cleanup
+  // below otherwise restores the pre-preview snapshot, which silently
+  // reverts the user's pick to whatever was active before the preview
+  // opened (typically the default fractal+Aurora) — that's the bug
+  // where every wizard pick rendered as Aurora regardless of choice.
+  const confirmedRef = useRef(false);
+
   useEffect(() => {
     const s = orbStore.get();
     const snapshot = {
@@ -42,15 +50,26 @@ export function OrbPreviewModal({
     };
     window.addEventListener('keydown', onKey);
     return () => {
-      // Restore prior state on unmount.
+      window.removeEventListener('keydown', onKey);
+      if (confirmedRef.current) {
+        // User picked this orb — leave the store on the previewed
+        // look; the wizard's commitPick already pushed it server-side.
+        return;
+      }
+      // Dismissal path — restore prior state so the wizard's
+      // background orb doesn't keep the preview's look.
       s.setVariant(snapshot.variantId);
       s.setPreset(snapshot.palette);
       for (const [k, v] of Object.entries(snapshot.params)) {
         s.setParam(k, v);
       }
-      window.removeEventListener('keydown', onKey);
     };
   }, [starter, onClose]);
+
+  const handleConfirm = () => {
+    confirmedRef.current = true;
+    onConfirm();
+  };
 
   return (
     <div className="fixed inset-0 z-40 bg-[#0a0a0a]">
@@ -83,7 +102,7 @@ export function OrbPreviewModal({
       <div className="absolute inset-x-0 bottom-0 p-6 flex items-center justify-center gap-3 pointer-events-none">
         <div className="pointer-events-auto flex items-center gap-3">
           <Button variant="ghost" onClick={onClose}>Keep looking</Button>
-          <Button onClick={onConfirm}>Use this orb</Button>
+          <Button onClick={handleConfirm}>Use this orb</Button>
         </div>
       </div>
 

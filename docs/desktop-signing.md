@@ -14,7 +14,7 @@ and how each platform's signing actually fires.
 
 | Platform | Format | Secrets required |
 |---|---|---|
-| macOS | Developer ID signing + Apple notarization | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` |
+| macOS | Developer ID signing + Apple notarization | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`, `APPLE_TEAM_ID` |
 | Windows | Authenticode | `WINDOWS_CERTIFICATE` (base64 PFX), `WINDOWS_CERTIFICATE_PASSWORD` |
 | Linux (AppImage) | No native format; optional Tauri updater signature | `TAURI_SIGNING_PRIVATE_KEY` (+ optional password) |
 | Tauri auto-updater (all OS) | Ed25519 signature on each installer | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
@@ -47,12 +47,28 @@ on the repo.
    base64 -i DeveloperID.p12 | pbcopy
    ```
 
-4. **Create an app-specific password** at
-   [appleid.apple.com → Sign-In and Security → App-Specific Passwords](https://appleid.apple.com/account/manage).
-   Label it "ORBIS notarization". Copy the password.
+4. **Create an App Store Connect API key** at
+   [App Store Connect → Integrations → Keys](https://appstoreconnect.apple.com/access/integrations/api).
+   - Click **+** to generate a new key, label it "ORBIS notarization",
+     grant **Developer** access.
+   - Download the `.p8` file — **only available once**, store it safely.
+   - Note the **Key ID** (10-char alphanumeric) and **Issuer ID**
+     (UUID shown at the top of the page).
 
-5. **Find your Team ID** at
+   We use API keys rather than an app-specific password so the secret
+   doesn't have to be rotated every time an Apple ID password
+   changes, and CI runs aren't subject to the 2FA prompts that
+   password auth occasionally surfaces.
+
+5. **Base64-encode the `.p8`** for secret storage:
+   ```sh
+   base64 -i AuthKey_<KEY_ID>.p8 | pbcopy
+   ```
+
+6. **Find your Team ID** at
    [Apple Developer → Membership](https://developer.apple.com/account#MembershipDetailsCard).
+   It's also embedded in the `APPLE_SIGNING_IDENTITY` string
+   ("Developer ID Application: Your Name (TEAMID)").
 
 ### Secrets to set
 
@@ -61,9 +77,10 @@ on the repo.
 | `APPLE_CERTIFICATE` | base64-encoded `.p12` from step 3 |
 | `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password from step 2 |
 | `APPLE_SIGNING_IDENTITY` | the full identity string, e.g. `Developer ID Application: Your Name (ABC123DEF4)` |
-| `APPLE_ID` | your Apple ID email |
-| `APPLE_PASSWORD` | the app-specific password from step 4 |
-| `APPLE_TEAM_ID` | 10-char team ID from step 5 |
+| `APPLE_API_ISSUER` | Issuer ID (UUID) from step 4 |
+| `APPLE_API_KEY` | Key ID (10-char) from step 4 |
+| `APPLE_API_KEY_PATH` | base64-encoded `.p8` from step 5 (CI decodes it to a tmp file) |
+| `APPLE_TEAM_ID` | 10-char Team ID from step 6 |
 
 Next tagged release will sign + notarize the `.dmg` and `.app`
 inside. Users no longer get the Gatekeeper warning on first open.
@@ -133,6 +150,18 @@ In `src-tauri/tauri.conf.json` (when the updater lands):
     }
   }
 }
+```
+
+### Current ORBIS updater public key
+
+This is the public half of the keypair whose private half lives as
+`TAURI_SIGNING_PRIVATE_KEY` in Infisical's `prod` env (synced to
+GitHub Actions secrets). Paste verbatim into the `pubkey` field
+above when the updater plugin gets wired. If the private key is
+ever rotated, regenerate, update Infisical, and replace this block.
+
+```
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDQ0E3RjE2QzhFQTc0NEEKUldSS2RPcklGbi9LakpLM1g4YmE2eXd1ZE01RVNUaHh5bkk2VzZuWlE4ajdLTE9ENGRuNkZoWTYK
 ```
 
 ## Verifying a release is signed

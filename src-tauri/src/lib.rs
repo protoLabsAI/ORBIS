@@ -51,6 +51,20 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    /// Trigger TCC prompts for mic + camera via `AVCaptureDevice` on
+    /// macOS. Defined in `src/mic_permission.m`; without this the
+    /// webview's `getUserMedia` call silently auto-grants through
+    /// wry's default WKUIDelegate, so Core Audio hands back dead
+    /// streams and the app never appears under System Settings →
+    /// Privacy & Security → Microphone. We fire this once at boot —
+    /// the first call shows the consent dialog; subsequent calls
+    /// (across launches) hit the cached TCC decision. See the shim's
+    /// header comment for the full rationale.
+    fn orbis_request_macos_av_access();
+}
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -96,6 +110,16 @@ pub fn run() {
         .filter_level(log::LevelFilter::Info)
         .parse_default_env()
         .try_init();
+
+    // Kick the macOS TCC consent dialog for mic + camera now, before
+    // the webview opens. Completion blocks fire async but that's fine
+    // — by the time the user interacts with the app the grant has
+    // landed and the webview's `getUserMedia` will pick it up. See
+    // `src/mic_permission.m` for the full why.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        orbis_request_macos_av_access();
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
