@@ -33,9 +33,12 @@ def _default_db_path() -> str:
       3. ``agent.paths.get_db_path()`` — per-OS user data dir used by
          desktop bundles and fresh installs
 
-    Resolved lazily (at Memory() construction, not import time) so the
-    platform path machinery doesn't mkdir user dirs during pytest runs
-    that never touch the DB.
+    Pure resolution: each call re-reads the env and filesystem, so
+    anything that invokes this at DB-open time (``open_db``,
+    ``Memory()``) picks up fixture-scoped ``ORBIS_DB_PATH`` overrides.
+    The module-level ``DEFAULT_DB_PATH`` snapshot below is the one
+    place we capture a value eagerly, and it's kept purely for
+    backward compatibility with code that imports the constant.
     """
     override = os.environ.get("ORBIS_DB_PATH")
     if override:
@@ -46,10 +49,16 @@ def _default_db_path() -> str:
     return str(get_db_path())
 
 
-# Historical attribute name — kept as a read-only module attribute for
-# consumers that import it. Use the callable form below when lazy
-# resolution matters.
-DEFAULT_DB_PATH = _default_db_path()
+def __getattr__(name: str) -> str:
+    """Module-level ``__getattr__`` (PEP 562) — resolves
+    ``DEFAULT_DB_PATH`` on each attribute access instead of a single
+    import-time snapshot. Matches the precedence rules of
+    ``_default_db_path()`` above so ``from memory.db import
+    DEFAULT_DB_PATH`` at any point during a session reflects the
+    current env, not the env at module-load time."""
+    if name == "DEFAULT_DB_PATH":
+        return _default_db_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 SCHEMA_VERSION = 1
 
 

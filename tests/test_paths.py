@@ -52,12 +52,15 @@ def test_platform_detects_linux(monkeypatch: pytest.MonkeyPatch):
 def test_db_path_env_override_wins(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ):
+    """``get_db_path`` is pure resolution — it does NOT create the
+    parent dir. That's ``open_db``'s job; doing it here would mkdir
+    at import time via DEFAULT_DB_PATH."""
     explicit = tmp_path / "custom" / "my.sqlite"
     monkeypatch.setenv("ORBIS_DB_PATH", str(explicit))
     p = _reload()
     got = p.get_db_path()
     assert got == explicit
-    assert got.parent.is_dir()  # mkdir on demand
+    assert not got.parent.exists(), "resolver must not create filesystem state"
 
 
 def test_db_path_darwin_default(
@@ -107,12 +110,27 @@ def test_db_path_linux_fallback(
 def test_cache_dir_env_override_wins(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ):
+    """Pure resolution — ``configure_hf_home`` is the one function that
+    creates the dir, because it has to before transformers runs."""
     explicit = tmp_path / "orbis-cache"
     monkeypatch.setenv("ORBIS_CACHE_DIR", str(explicit))
     p = _reload()
     got = p.get_cache_dir()
     assert got == explicit
-    assert got.is_dir()
+    assert not got.exists(), "resolver must not create filesystem state"
+
+
+def test_configure_hf_home_creates_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    """The one path function that does I/O — pre-creates the cache dir
+    so downstream transformers / huggingface_hub calls can write."""
+    target = tmp_path / "cache-to-create"
+    monkeypatch.setenv("ORBIS_CACHE_DIR", str(target))
+    p = _reload()
+    assert not target.exists()
+    p.configure_hf_home()
+    assert target.is_dir()
 
 
 def test_cache_dir_hf_home_fallback(

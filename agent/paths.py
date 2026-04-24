@@ -66,20 +66,22 @@ def _default_cache_dir() -> Path:
 
 
 def get_db_path() -> Path:
-    """Absolute path to the SQLite DB. Ensures parent dir exists.
+    """Absolute path to the SQLite DB. Pure resolution — does not
+    touch the filesystem. Callers that open the DB are expected to
+    create the parent dir themselves (see ``open_db``).
 
     Resolution:
       1. ``ORBIS_DB_PATH`` if set (absolute path to the `.sqlite` file)
       2. ``<data_dir>/orbis.sqlite``
     """
     override = os.environ.get("ORBIS_DB_PATH")
-    path = Path(override) if override else _default_data_dir() / "orbis.sqlite"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    return Path(override) if override else _default_data_dir() / "orbis.sqlite"
 
 
 def get_cache_dir() -> Path:
-    """Absolute path to the model-cache directory. Ensures it exists.
+    """Absolute path to the model-cache directory. Pure resolution —
+    does not touch the filesystem. ``configure_hf_home`` creates the
+    dir when it's actually needed.
 
     Resolution:
       1. ``ORBIS_CACHE_DIR`` if set
@@ -93,9 +95,7 @@ def get_cache_dir() -> Path:
         or os.environ.get("HF_HOME")
         or os.environ.get("MODEL_DIR")
     )
-    path = Path(override) if override else _default_cache_dir()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return Path(override) if override else _default_cache_dir()
 
 
 def configure_hf_home() -> Path:
@@ -103,9 +103,13 @@ def configure_hf_home() -> Path:
     downstream transformers / huggingface_hub import finds the ORBIS
     cache dir. Must run before the first transformers import.
 
+    Creates the cache dir — this is the one path function that does
+    I/O, because downstream consumers assume the dir exists.
+
     Returns the resolved cache dir for logging.
     """
     cache = get_cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HOME", str(cache))
     os.environ.setdefault("TRANSFORMERS_CACHE", str(cache))
     return cache
