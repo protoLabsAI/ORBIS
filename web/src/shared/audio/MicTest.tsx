@@ -3,19 +3,28 @@ import { Button } from '@/components/ui/button';
 
 type Status = 'idle' | 'requesting' | 'listening' | 'denied' | 'silent' | 'error';
 
+interface TrackDiagnostic {
+  readyState: string;
+  muted: boolean;
+  enabled: boolean;
+  label: string;
+  settings: Record<string, unknown>;
+}
+
 // The level-meter RMS cutoff that counts as "yes, actual voice reached the
 // mic." Tuned against silent-room noise floor (~0.01) vs. normal speaking
 // volume (0.1+). Once the meter crosses this once we flag the mic verified
 // so the parent can enable its Continue button.
 const VERIFIED_RMS = 0.04;
 
-// If the level never budges above ~1% RMS for this long, macOS TCC is
-// almost certainly silently denying even though getUserMedia resolved —
-// Tauri/wry's WKUIDelegate auto-grants without TCC consultation, so
-// Core Audio hands us a dead stream. Surface a helpful hint instead of
-// letting the user stare at a flat meter.
-const SILENT_DENY_TIMEOUT_MS = 4000;
-const SILENT_FLOOR_RMS = 0.01;
+// If the level never budges above this floor for this long, the stream
+// is almost certainly disconnected from real audio (TCC silent-deny or
+// a system mute). Floor is below ambient-room noise so a quiet user
+// doesn't false-positive — only true zeros trip it. Timeout is long
+// enough that someone clicking "Test" then taking a breath before
+// speaking still has time to make a sound.
+const SILENT_DENY_TIMEOUT_MS = 8000;
+const SILENT_FLOOR_RMS = 0.003;
 
 export interface MicTestProps {
   /** Fired the first time a voice-level sample clears VERIFIED_RMS. */
@@ -38,6 +47,7 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
   const [verified, setVerified] = useState(false);
+  const [trackInfo, setTrackInfo] = useState<TrackDiagnostic | null>(null);
 
   // Refs for teardown — we never re-render on these; they're side-effect
   // handles whose identity matters for cleanup, not for UI.
@@ -78,6 +88,33 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
         audio: deviceId ? { deviceId: { exact: deviceId } } : true,
       });
       streamRef.current = stream;
+
+      // Snapshot track diagnostics so we can show them when the level
+      // meter doesn't move — the difference between a TCC-denied track
+      // (muted=true / readyState=ended), an OS-suspended track, or a
+      // genuinely-quiet-room real track is invisible from the meter
+      // alone but obvious from these fields.
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        setTrackInfo({
+          readyState: track.readyState,
+          muted: track.muted,
+          enabled: track.enabled,
+          label: track.label || '(unlabeled)',
+          settings: track.getSettings() as Record<string, unknown>,
+        });
+        track.onmute = () => {
+          setTrackInfo((prev) => (prev ? { ...prev, muted: true } : prev));
+        };
+        track.onunmute = () => {
+          setTrackInfo((prev) => (prev ? { ...prev, muted: false } : prev));
+        };
+        track.onended = () => {
+          setTrackInfo((prev) =>
+            prev ? { ...prev, readyState: 'ended' } : prev,
+          );
+        };
+      }
 
       const ctx = new AudioContext();
       ctxRef.current = ctx;
@@ -175,14 +212,22 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
           <div className="text-sm text-amber-400">
             Mic opened but no audio is coming through.
           </div>
+          {trackInfo && (
+            <div className="text-[11px] text-zinc-500 font-mono bg-zinc-950/60 rounded p-2 space-y-0.5">
+              <div>label: {trackInfo.label}</div>
+              <div>readyState: {trackInfo.readyState}</div>
+              <div>muted: {String(trackInfo.muted)}</div>
+              <div>enabled: {String(trackInfo.enabled)}</div>
+              <div>sampleRate: {String(trackInfo.settings.sampleRate ?? '-')}</div>
+              <div>deviceId: {String(trackInfo.settings.deviceId ?? '-').slice(0, 16)}…</div>
+            </div>
+          )}
           <div className="text-xs text-zinc-500 leading-relaxed">
-            macOS likely silently denied this build — the webview opens a
-            stream but the system refuses to connect it to the real mic.
-            Open <span className="text-zinc-300">System Settings → Privacy
-            &amp; Security → Microphone</span>, toggle ORBIS on (add it via
-            the <span className="text-zinc-300">+</span> button if it isn't
-            listed), quit the app, and relaunch. Signed releases won't have
-            this step; dev builds do.
+            {trackInfo?.muted
+              ? 'The track is system-muted — macOS TCC denied microphone access despite the host app having it. Known limitation: WKWebView\'s WebContent subprocess does not always inherit the host\'s mic grant. Open Safari at the same URL to test voice while we sort this.'
+              : trackInfo?.readyState === 'ended'
+                ? 'The audio track ended immediately — the source was disconnected. Try a different input device, or relaunch.'
+                : 'Track looks live but no audio data is reaching the analyzer. If you can speak louder right now and the meter still does not budge, it is the silent-deny case.'}
           </div>
           <Button onClick={start}>Retry</Button>
         </div>

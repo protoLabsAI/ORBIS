@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
+import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import { MicTest } from '@/shared/audio/MicTest';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
@@ -580,7 +581,16 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
     setCommitting(true);
     setError(null);
     try {
-      await api.selectStarter(slug);
+      const res = await api.selectStarter(slug);
+      // Server-side write to config/orbis.yaml is necessary but not
+      // sufficient — the orb store reads variant + palette from
+      // localStorage on first mount and never re-syncs afterward, so
+      // without this push the rendered orb stays on whatever's in
+      // localStorage (defaults to fractal + Aurora) regardless of the
+      // user's pick. Push immediately so the hatch animation and the
+      // rest of the app reflect the selection.
+      setVariant(res.starter.variant);
+      applyPreset(res.starter.palette);
       onNext();
     } catch (e) {
       setCommitting(false);
@@ -700,6 +710,25 @@ function StarterCard({
 
 function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const [verified, setVerified] = useState(false);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string>('');
+
+  const refreshDevices = async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      // Browsers only expose labeled audioinput devices once permission
+      // has been granted, so the picker stays empty until after the
+      // first successful test — that's why MicTest's onVerified hook
+      // also calls back into this refresh.
+      setDevices(all.filter((d) => d.kind === 'audioinput'));
+    } catch {
+      // Permission not yet granted — picker stays hidden.
+    }
+  };
+
+  useEffect(() => {
+    void refreshDevices();
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -711,7 +740,34 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         </p>
       </div>
 
-      <MicTest onVerified={() => setVerified(true)} />
+      {devices.length > 0 && (
+        <label className="block">
+          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
+            Input device
+          </div>
+          <select
+            value={deviceId}
+            onChange={(e) => setDeviceId(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
+          >
+            <option value="">System default</option>
+            {devices.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Device ${d.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <MicTest
+        key={deviceId /* rebuild stream when device changes */}
+        deviceId={deviceId || undefined}
+        onVerified={() => {
+          setVerified(true);
+          void refreshDevices();
+        }}
+      />
 
       <div className="flex justify-between pt-2">
         <Button variant="ghost" onClick={onBack}>Back</Button>
