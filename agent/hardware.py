@@ -64,6 +64,18 @@ def detect_device() -> Device:
     # set HF_HOME / etc.
     import torch  # noqa: PLC0415
 
+    # Explicit CPU opt-in trumps accelerator probing. CI macOS runners
+    # report MPS as available but with a tiny memory budget that OOMs
+    # the smoke-test matmul; without this short-circuit the smoke test
+    # would falsely fail on a perfectly-bootable CPU build. Same value
+    # for the Docker CPU profile and for users who insist on CPU.
+    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
+        logger.warning(
+            "[hardware] ORBIS_ALLOW_CPU=1 → using CPU "
+            "(expect multi-second voice turns)"
+        )
+        return "cpu"
+
     if torch.cuda.is_available():
         _smoke_test(torch, "cuda")
         return "cuda"
@@ -74,13 +86,6 @@ def detect_device() -> Device:
     if torch.backends.mps.is_available():
         _smoke_test(torch, "mps")
         return "mps"
-
-    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
-        logger.warning(
-            "[hardware] no accelerator detected; ORBIS_ALLOW_CPU=1 → using CPU "
-            "(expect multi-second voice turns)"
-        )
-        return "cpu"
 
     raise HardwareError(_UNSUPPORTED_MSG)
 
