@@ -89,10 +89,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # PyApp embeds the project at build time. It expects an sdist or
-      # a source tree it can pip-install; pointing PYAPP_PROJECT_PATH
-      # at the checkout is simplest. The hatchling wheel config added
-      # in #ef04c90 covers the "pip install ." case.
       - name: Read version
         id: version
         shell: bash
@@ -102,15 +98,37 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
+      # PyApp wants a pre-built sdist or wheel at PYAPP_PROJECT_PATH,
+      # not a source directory. Build one now — hatchling reads
+      # pyproject.toml and emits orbis-<version>.tar.gz under
+      # dist-sdist/. We override the version in pyproject to match
+      # the release tag so the sdist filename is predictable.
+      - name: Build ORBIS sdist for PyApp
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          # Stamp the release version into pyproject so the produced
+          # sdist is named orbis-<version>.tar.gz predictably.
+          python - <<PY
+          import re, pathlib
+          VERSION = "${{ steps.version.outputs.version }}"
+          p = pathlib.Path("pyproject.toml")
+          content = p.read_text()
+          content = re.sub(r'version\s*=\s*"[^"]*"', f'version = "{VERSION}"', content, count=1)
+          p.write_text(content)
+          PY
+          python -m build --sdist --outdir dist-sdist
+          ls -la dist-sdist/
+
       - name: Build ORBIS sidecar binary (PyApp)
         shell: bash
         env:
           # Core PyApp config. See https://ofek.dev/pyapp/ for the
-          # full matrix — the vars below are the minimum for a
-          # project-path build that runs `app:main` on launch.
+          # full matrix — the vars below are the minimum for an
+          # sdist-based build that runs `app:main` on launch.
           PYAPP_PROJECT_NAME: orbis
           PYAPP_PROJECT_VERSION: ${{ steps.version.outputs.version }}
-          PYAPP_PROJECT_PATH: ${{ github.workspace }}
+          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist-sdist/orbis-${{ steps.version.outputs.version }}.tar.gz
           PYAPP_PYTHON_VERSION: '3.11'
           PYAPP_EXEC_SPEC: 'app:main'
           # Full isolation — don't touch the user's Python or site-packages.
