@@ -47,8 +47,17 @@ interface Props {
 export function AuthoringContextPicker({
   ctx, onChange, simulate, onToggleSimulate,
 }: Props) {
-  const isActive = (candidate: AuthoringContext): boolean =>
-    JSON.stringify(candidate) === JSON.stringify(ctx);
+  const isActive = (candidate: AuthoringContext): boolean => {
+    if (candidate.kind !== ctx.kind) return false;
+    if (candidate.kind === 'base') return true;
+    if (candidate.kind === 'state' && ctx.kind === 'state') {
+      return candidate.state === ctx.state;
+    }
+    if (candidate.kind === 'mood' && ctx.kind === 'mood') {
+      return candidate.dim === ctx.dim;
+    }
+    return false;
+  };
 
   const pick = (next: AuthoringContext) => {
     onChange(next);
@@ -64,7 +73,7 @@ export function AuthoringContextPicker({
           <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
             Base + live values
           </label>
-          <ChipRow>
+          <ChipRow ariaLabel="Authoring: base context">
             <Chip active={isActive({ kind: 'base' })} onClick={() => pick({ kind: 'base' })}>
               Base
             </Chip>
@@ -75,7 +84,7 @@ export function AuthoringContextPicker({
           <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
             State overrides
           </label>
-          <ChipRow>
+          <ChipRow ariaLabel="Authoring: state context">
             {STATES.map((s) => (
               <Chip
                 key={s}
@@ -92,7 +101,7 @@ export function AuthoringContextPicker({
           <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
             Mood overrides
           </label>
-          <ChipRow>
+          <ChipRow ariaLabel="Authoring: mood dimension">
             {DIMS.map((d) => (
               <Chip
                 key={d}
@@ -151,8 +160,14 @@ export function applySimulation(ctx: AuthoringContext, on: boolean): void {
   simulationStore.setPinnedState(null);
 }
 
-function ChipRow({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-wrap gap-1.5">{children}</div>;
+function ChipRow({
+  children, ariaLabel,
+}: { children: React.ReactNode; ariaLabel: string }) {
+  return (
+    <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
+      {children}
+    </div>
+  );
 }
 
 function Chip({
@@ -161,6 +176,8 @@ function Chip({
   return (
     <button
       type="button"
+      role="radio"
+      aria-checked={active}
       onClick={onClick}
       className={
         'px-2.5 py-1 rounded-md text-xs transition-colors border ' +

@@ -7,7 +7,7 @@
  * would replace-not-merge the nested dict and lose sibling fields.
  */
 
-import { api } from '@/lib/api';
+import { api, type OrbisConfig } from '@/lib/api';
 import { orbStore } from '../orb/store';
 import type {
   MoodOverrides,
@@ -19,6 +19,10 @@ import type { MoodDim } from './AuthoringContext';
 const SAVE_DEBOUNCE_MS = 400;
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+// `_dirty` is set by the setters, cleared after a successful flush.
+// Prevents flushSave() (called on panel unmount) from firing a POST
+// when nothing has actually been authored in this session.
+let _dirty = false;
 
 /** Set one field in one state-override bucket. Zero-valued numbers
  * remove the entry so the override map stays minimal on disk. */
@@ -39,6 +43,7 @@ export function setStateDelta(
     next[state] = bucket;
   }
   orbStore.get().setOverrides(next, snap.moodOverrides);
+  _dirty = true;
   scheduleSave();
 }
 
@@ -61,6 +66,7 @@ export function setMoodDelta(
     next[dim] = bucket;
   }
   orbStore.get().setOverrides(snap.stateOverrides, next);
+  _dirty = true;
   scheduleSave();
 }
 
@@ -79,6 +85,7 @@ export function resetBucket(ctx:
     delete next[ctx.dim];
     orbStore.get().setOverrides(snap.stateOverrides, next);
   }
+  _dirty = true;
   scheduleSave();
 }
 
@@ -87,23 +94,52 @@ function scheduleSave(): void {
   _saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
 }
 
-/** Force an immediate save — useful when the panel unmounts mid-debounce. */
+/** Force an immediate save — useful when the panel unmounts mid-
+ * debounce. No-ops when nothing has been authored since the last
+ * flush; skips the network round-trip entirely. */
 export async function flushSave(): Promise<void> {
   if (_saveTimer) {
     clearTimeout(_saveTimer);
     _saveTimer = null;
   }
+  if (!_dirty) return;
   const snap = orbStore.getSnapshot();
+  const patch: { orb: NonNullable<OrbisConfig['orb']> } = {
+    orb: {
+      state_overrides: toWire(snap.stateOverrides),
+      mood_overrides: toWire(snap.moodOverrides),
+    },
+  };
   try {
-    await api.putConfig({
-      orb: {
-        state_overrides: snap.stateOverrides as never,
-        mood_overrides: snap.moodOverrides as never,
-      },
-    });
+    await api.putConfig(patch);
+    _dirty = false;
   } catch (e) {
     console.error('[orb-settings] save overrides failed', e);
+    // Leave _dirty set so the next flush retries.
   }
+}
+
+/** Narrow the in-memory `ParamMap` (which allows bool|undefined) to
+ * the JSON shape `OrbisConfig` declares — `number | string`. Drops
+ * undefined values; keeps booleans as-is (server-side validator
+ * accepts them for state deltas, drops them for mood deltas — see
+ * agent/config_store.py). */
+function toWire<K extends string>(
+  overrides: Partial<Record<K, Record<string, number | string | boolean | undefined>>>,
+): Partial<Record<K, Record<string, number | string>>> {
+  const out: Partial<Record<K, Record<string, number | string>>> = {};
+  for (const key of Object.keys(overrides) as K[]) {
+    const bucket = overrides[key];
+    if (!bucket) continue;
+    const cleaned: Record<string, number | string> = {};
+    for (const [k, v] of Object.entries(bucket)) {
+      if (v === undefined) continue;
+      if (typeof v === 'boolean') cleaned[k] = v ? 1 : 0;
+      else cleaned[k] = v;
+    }
+    out[key] = cleaned;
+  }
+  return out;
 }
 
 function deepClone<T>(v: T): T {

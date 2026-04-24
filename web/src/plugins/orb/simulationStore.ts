@@ -54,8 +54,11 @@ class SimulationStore {
     this.listeners.forEach((l) => l());
   }
 
-  /** Replace the pinned mood. Pass null to release to live mood. */
+  /** Replace the pinned mood. Pass null to release to live mood.
+   * Skips notify when the incoming mood matches the current pin to
+   * avoid waking every subscriber on a no-op pin. */
   setPinnedMood(mood: Mood | null): void {
+    if (moodEquals(this.snap.pinnedMood, mood)) return;
     this.snap = { ...this.snap, pinnedMood: mood, epoch: this.snap.epoch + 1 };
     this.listeners.forEach((l) => l());
   }
@@ -69,3 +72,11 @@ class SimulationStore {
 }
 
 export const simulationStore = new SimulationStore();
+
+function moodEquals(a: Mood | null, b: Mood | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.valence === b.valence
+      && a.arousal === b.arousal
+      && a.guardedness === b.guardedness;
+}

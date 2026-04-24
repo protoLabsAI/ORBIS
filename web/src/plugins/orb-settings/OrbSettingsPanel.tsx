@@ -236,6 +236,8 @@ export function OrbSettingsPanel() {
   );
 }
 
+function noop(): void {}
+
 /**
  * Renders a section of fields in either "base" or "delta" mode.
  *
@@ -300,7 +302,13 @@ function SettingsSection({
         const baseValue = Number(params[f.key] ?? f.min);
         const rawDelta = bucket[f.key];
         const delta = typeof rawDelta === 'number' ? rawDelta : 0;
-        const onChange = ctx.kind === 'state' ? onStateDelta : onMoodDelta;
+        // Narrow explicitly so the ctx === 'base' branch can't
+        // silently fall through to onMoodDelta if a future refactor
+        // reshuffles the `baseMode` guard upstream.
+        const onChange =
+          ctx.kind === 'state' ? onStateDelta :
+          ctx.kind === 'mood'  ? onMoodDelta  :
+          /* istanbul ignore next */ noop;
         return (
           <FieldDeltaSlider
             key={f.key}

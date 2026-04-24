@@ -30,6 +30,12 @@ export function FieldDeltaSlider({
   const range = (field.max - field.min) * 0.5;
   const composed = baseValue + delta;
   const hasDelta = delta !== 0;
+  // The runtime doesn't clamp composed uniforms today, but a delta
+  // large enough to blow past the field's authored range usually
+  // looks wrong (rotation overflows, negative density, etc.). Flag
+  // it visually so the author knows their preset is pushing outside
+  // what the variant was tuned for.
+  const outOfRange = composed < field.min || composed > field.max;
 
   return (
     <Field
@@ -39,7 +45,12 @@ export function FieldDeltaSlider({
         <div className="flex items-center gap-2 font-mono text-xs">
           <span className="text-zinc-500">{formatValue(baseValue, field.step)}</span>
           <span className="text-zinc-600">→</span>
-          <span className={hasDelta ? 'text-amber-300' : 'text-zinc-500'}>
+          <span
+            className={
+              outOfRange ? 'text-red-400' : hasDelta ? 'text-amber-300' : 'text-zinc-500'
+            }
+            title={outOfRange ? `outside authored range [${field.min}, ${field.max}]` : undefined}
+          >
             {formatValue(composed, field.step)}
           </span>
           <button
