@@ -89,6 +89,28 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build web SPA
+        shell: bash
+        # `pyproject.toml`'s force-include rule pulls `web/dist/` into
+        # the sdist + wheel; without this step the sdist build below
+        # fails with `Forced include not found: ...web/dist`. Bun is
+        # the dev-tree tool of choice; falls back to npm if needed.
+        # Mirrors `scripts/build-desktop-binary.sh`'s local flow.
+        run: |
+          cd web
+          if command -v bun >/dev/null 2>&1; then
+            bun install --frozen-lockfile
+            bun run build
+          else
+            npm install
+            npm run build
+          fi
+
       - name: Read version
         id: version
         shell: bash
