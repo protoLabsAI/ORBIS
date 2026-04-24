@@ -152,6 +152,18 @@ In `src-tauri/tauri.conf.json` (when the updater lands):
 }
 ```
 
+### Current ORBIS updater public key
+
+This is the public half of the keypair whose private half lives as
+`TAURI_SIGNING_PRIVATE_KEY` in Infisical's `prod` env (synced to
+GitHub Actions secrets). Paste verbatim into the `pubkey` field
+above when the updater plugin gets wired. If the private key is
+ever rotated, regenerate, update Infisical, and replace this block.
+
+```
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDQ0E3RjE2QzhFQTc0NEEKUldSS2RPcklGbi9LakpLM1g4YmE2eXd1ZE01RVNUaHh5bkk2VzZuWlE4ajdLTE9ENGRuNkZoWTYK
+```
+
 ## Verifying a release is signed
 
 ### macOS
