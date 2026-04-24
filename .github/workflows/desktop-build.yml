@@ -231,10 +231,54 @@ jobs:
 
       - name: Build Tauri installer
         shell: bash
-        # Unsigned bundle for test releases per the PR plan — signing
-        # wires in PR 4 via Developer ID (macOS) + Authenticode
-        # (Windows) + Tauri's updater key (Linux/all).
-        run: cd src-tauri && cargo tauri build
+        # Signing is conditional on secret presence — the workflow
+        # stays green for test releases (no secrets → unsigned) and
+        # flips to signed automatically once the org provisions the
+        # certs + Apple Developer ID. See docs/desktop-signing.md for
+        # the cert procurement steps + secret names.
+        #
+        # tauri-cli picks up the Apple / Windows signing env vars
+        # automatically — we don't need per-OS flags, just export
+        # the right vars when the matching secret exists.
+        env:
+          # macOS Developer ID signing + notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Authenticode signing (base64-encoded PFX).
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Tauri updater signing key (v1 format). When set, the
+          # builder also emits a `.sig` file per installer that the
+          # future updater plugin can verify against the public key
+          # baked into tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cd src-tauri
+          SIGNED="no"
+          case "${{ runner.os }}" in
+            macOS)
+              if [ -n "${APPLE_CERTIFICATE}" ] && [ -n "${APPLE_SIGNING_IDENTITY}" ]; then
+                SIGNED="Developer ID"
+              fi
+              ;;
+            Windows)
+              if [ -n "${WINDOWS_CERTIFICATE}" ]; then
+                SIGNED="Authenticode"
+              fi
+              ;;
+            Linux)
+              # Linux doesn't have a native signing format; the
+              # Tauri updater .sig is the only signature here.
+              [ -n "${TAURI_SIGNING_PRIVATE_KEY}" ] && SIGNED="updater-only"
+              ;;
+          esac
+          echo "Signing mode: ${SIGNED}"
+          cargo tauri build
 
       - name: Locate installer artifact
         shell: bash
@@ -286,17 +330,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
+        # Also uploads the updater signature alongside each installer
+        # when it exists (created by `cargo tauri build` only when
+        # TAURI_SIGNING_PRIVATE_KEY is set). Tauri's updater plugin
+        # fetches these later to verify the update bundle.
         run: |
           TAG="${{ steps.version.outputs.tag }}"
+          # Collect the set of artifacts — installer is required, its
+          # .sig is optional (only produced when signing is configured).
+          ARTIFACTS=("${{ env.artifact }}" "${{ env.installer }}")
+          if [ -f "${{ env.installer }}.sig" ]; then
+            ARTIFACTS+=("${{ env.installer }}.sig")
+          fi
           # release.yml creates the release on tag push; this job
           # runs in parallel, so the release may not exist yet. Poll
           # briefly before uploading.
           for _ in $(seq 1 30); do
             if gh release view "${TAG}" >/dev/null 2>&1; then
-              gh release upload "${TAG}" \
-                "${{ env.artifact }}" \
-                "${{ env.installer }}" \
-                --clobber
+              gh release upload "${TAG}" "${ARTIFACTS[@]}" --clobber
               exit 0
             fi
             sleep 10

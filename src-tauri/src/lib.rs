@@ -248,12 +248,15 @@ fn handle_termination(
     if exit_code == HARDWARE_EXIT_CODE {
         fatal_dialog(
             app,
-            "Unsupported hardware",
-            "ORBIS requires an NVIDIA GPU (driver 570+) on Windows/Linux \
-             or an Apple Silicon Mac (M1 or newer).\n\n\
+            "ORBIS needs a supported GPU",
+            "ORBIS's voice pipeline runs in real time, so it needs \
+             hardware acceleration:\n\n\
+             • macOS — Apple Silicon (M1, M2, M3, or M4)\n\
+             • Windows / Linux — NVIDIA GPU with driver 570 or newer\n\n\
              Neither was detected on this machine. If you want to run \
-             ORBIS on CPU-only hardware anyway, use the Docker self-host \
-             path — see https://github.com/protoLabsAI/ORBIS.",
+             ORBIS on a CPU-only box anyway, the Docker self-host path \
+             is the supported route:\n\n\
+             https://github.com/protoLabsAI/ORBIS#docker--with--without-gpu",
         );
         return;
     }
