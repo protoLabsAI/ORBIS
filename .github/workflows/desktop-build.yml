@@ -185,14 +185,103 @@ jobs:
           print("READY line found")
           PY
 
-      - name: Upload as workflow artifact
+      - name: Upload sidecar binary as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.artifact_name }}
           path: ${{ env.artifact }}
           retention-days: 14
 
-      - name: Attach to GitHub release
+      # ── Tauri shell: bundle the sidecar into a native installer ────────────
+
+      - name: Install tauri-cli
+        shell: bash
+        run: cargo install tauri-cli --version '^2' --locked
+
+      - name: Generate platform icons from source PNG
+        shell: bash
+        # Creates icon.icns (macOS) + icon.ico (Windows) + sized PNG
+        # variants in src-tauri/icons/ from the committed source.
+        # Idempotent; safe to re-run. Replace icon.png with a branded
+        # one before a public launch and regeneration picks it up.
+        run: |
+          cd src-tauri
+          cargo tauri icon icons/icon.png
+
+      - name: Stage sidecar under src-tauri/binaries
+        shell: bash
+        # Tauri's externalBin resolver expects the binary at
+        # `src-tauri/binaries/orbis-<target>[.exe]`.
+        run: |
+          mkdir -p src-tauri/binaries
+          cp "${{ env.artifact }}" "src-tauri/binaries/${{ env.artifact_name }}"
+          ls -la src-tauri/binaries
+
+      - name: Stamp release version into tauri.conf.json
+        shell: bash
+        # jq is the idiomatic CI JSON mutator; available on all three
+        # runners by default. Preserves the file's formatting better
+        # than a Python heredoc would.
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          jq --arg v "$VERSION" '.version = $v' \
+            src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
+          grep '"version"' src-tauri/tauri.conf.json | head -1
+
+      - name: Build Tauri installer
+        shell: bash
+        # Unsigned bundle for test releases per the PR plan — signing
+        # wires in PR 4 via Developer ID (macOS) + Authenticode
+        # (Windows) + Tauri's updater key (Linux/all).
+        run: cd src-tauri && cargo tauri build
+
+      - name: Locate installer artifact
+        shell: bash
+        # shopt -s nullglob makes the glob expand to nothing (rather
+        # than the literal pattern) when no files match, so the
+        # length check below surfaces a clear error instead of a
+        # confusing `cp ./not-a-real-path` failure.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          case "${{ runner.os }}" in
+            macOS)
+              CANDIDATES=(src-tauri/target/release/bundle/dmg/*.dmg)
+              ;;
+            Linux)
+              CANDIDATES=(src-tauri/target/release/bundle/appimage/*.AppImage)
+              ;;
+            Windows)
+              CANDIDATES=(src-tauri/target/release/bundle/msi/*.msi)
+              ;;
+          esac
+          if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+            echo "::error::No installer produced by cargo tauri build." \
+                 "Expected bundle artifact under src-tauri/target/release/bundle/"
+            echo "--- bundle dir contents ---"
+            find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null || \
+              echo "(bundle dir missing entirely)"
+            exit 1
+          fi
+          INSTALLER="${CANDIDATES[0]}"
+          EXT="${INSTALLER##*.}"
+          OUT="ORBIS-${{ steps.version.outputs.version }}-${{ matrix.target }}.${EXT}"
+          cp "$INSTALLER" "$OUT"
+          echo "installer=$OUT" >> "$GITHUB_ENV"
+          echo "installer_name=$OUT" >> "$GITHUB_ENV"
+          ls -la "$OUT"
+
+      - name: Upload installer as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.installer_name }}
+          path: ${{ env.installer }}
+          retention-days: 14
+
+      # ── Release asset attachment (both binary + installer) ─────────────────
+
+      - name: Attach artifacts to GitHub release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -204,11 +293,14 @@ jobs:
           # briefly before uploading.
           for _ in $(seq 1 30); do
             if gh release view "${TAG}" >/dev/null 2>&1; then
-              gh release upload "${TAG}" "${{ env.artifact }}" --clobber
+              gh release upload "${TAG}" \
+                "${{ env.artifact }}" \
+                "${{ env.installer }}" \
+                --clobber
               exit 0
             fi
             sleep 10
           done
-          echo "Release ${TAG} did not appear within 5 min; leaving the" \
-               "artifact as a workflow artifact only."
-          exit 0  # don't fail the job — the upload is best-effort
+          echo "Release ${TAG} did not appear within 5 min; leaving" \
+               "artifacts as workflow artifacts only."
+          exit 0  # best-effort

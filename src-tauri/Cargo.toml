@@ -1,0 +1,32 @@
+[package]
+name = "orbis-tauri"
+version = "0.0.0"  # overridden by CI per-tag; stay 0.0.0 in-tree for dev
+edition = "2021"
+description = "ORBIS — voice-first AI companion. Tauri 2 desktop shell."
+authors = ["protoLabs Studio"]
+# No license set yet — the main README says "License TBD" and that
+# decision predates desktop-prep. Using the SPDX "NOASSERTION" marker
+# so cargo doesn't warn; revisit before any public crates.io publish
+# or repo-open, whichever comes first.
+license = "NOASSERTION"
+repository = "https://github.com/protoLabsAI/ORBIS"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Sidecar spawn + stdout-line parsing lives in the shell plugin.
+# Without this plugin `ShellExt::shell().sidecar(...)` isn't available.
+tauri-plugin-shell = "2"
+# Native dialogs for the "hardware unsupported" path (sidecar exit 2)
+# and generic error surfacing.
+tauri-plugin-dialog = "2"
+url = "2"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
