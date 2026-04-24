@@ -43,8 +43,12 @@ except ImportError:
     # from the shell env in that case.
     pass
 
-# Route HF downloads to the mounted model cache before transformers imports anything.
-os.environ.setdefault("HF_HOME", os.environ.get("MODEL_DIR", "/models"))
+# Route HF downloads to the ORBIS cache directory before transformers
+# imports anything. Honors ORBIS_CACHE_DIR / HF_HOME / MODEL_DIR in that
+# order; falls back to a per-OS user cache dir when run as a bundled
+# desktop binary. See agent/paths.py for the full resolution.
+from agent.paths import configure_hf_home  # noqa: E402
+_cache_dir = configure_hf_home()
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
@@ -1548,8 +1552,26 @@ if _serve_react():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--port", type=int, default=PORT,
+                        help="TCP port; 0 = ephemeral (Tauri sidecar default)")
+    parser.add_argument("--host", default=os.environ.get("ORBIS_HOST", "0.0.0.0"),
+                        help="Bind host. Docker: 0.0.0.0 (default). Desktop "
+                             "bundles: 127.0.0.1 (loopback only).")
     args = parser.parse_args()
+
+    logger.info(f"[boot] cache dir: {_cache_dir}")
+
+    # Hard-fail on unsupported hardware — see agent/hardware.py. Docker
+    # CPU profile sets ORBIS_ALLOW_CPU=1 to opt back in; desktop bundles
+    # leave it unset so the shell can surface a friendly "you need a GPU"
+    # dialog when the sidecar exits non-zero.
+    from agent.hardware import detect_device, HardwareError
+    try:
+        device = detect_device()
+        logger.info(f"[boot] accelerator: {device}")
+    except HardwareError as e:
+        print(f"\n[orbis] {e}\n", file=sys.stderr, flush=True)
+        sys.exit(2)
 
     def _shutdown(_sig, _frame):
         logger.info("Shutting down")
@@ -1559,8 +1581,27 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    # Port 0 → OS assigns. Pre-bind a socket so we can print the real
+    # port BEFORE uvicorn starts (the Tauri shell reads stdout for the
+    # readiness line). uvicorn's Config accepts a pre-bound fd, which
+    # closes the race window between knowing the port and listening on it.
+    import socket
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((args.host, args.port))
+    sock.listen(128)
+    bound_host, bound_port = sock.getsockname()[:2]
+
+    # Canonical readiness line — Tauri + other supervisors grep for this
+    # prefix to learn where to connect. Keep it first on stdout; any
+    # logger output is on stderr.
+    print(f"ORBIS_READY http://{bound_host}:{bound_port}", flush=True)
+
+    config = uvicorn.Config(app, fd=sock.fileno())
+    server = uvicorn.Server(config)
+    server.run()
 
 
 if __name__ == "__main__":

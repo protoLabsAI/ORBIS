@@ -22,7 +22,34 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = os.environ.get("ORBIS_DB_PATH", "data/orbis.sqlite")
+
+def _default_db_path() -> str:
+    """Resolve the DB path per this precedence:
+
+      1. ``ORBIS_DB_PATH`` env var — explicit override
+      2. legacy ``data/orbis.sqlite`` if the repo-local ``data/``
+         directory already exists — keeps existing repo-checkout
+         installs working unchanged
+      3. ``agent.paths.get_db_path()`` — per-OS user data dir used by
+         desktop bundles and fresh installs
+
+    Resolved lazily (at Memory() construction, not import time) so the
+    platform path machinery doesn't mkdir user dirs during pytest runs
+    that never touch the DB.
+    """
+    override = os.environ.get("ORBIS_DB_PATH")
+    if override:
+        return override
+    if Path("data").exists():
+        return "data/orbis.sqlite"
+    from agent.paths import get_db_path
+    return str(get_db_path())
+
+
+# Historical attribute name — kept as a read-only module attribute for
+# consumers that import it. Use the callable form below when lazy
+# resolution matters.
+DEFAULT_DB_PATH = _default_db_path()
 SCHEMA_VERSION = 1
 
 
@@ -144,8 +171,12 @@ def open_db(path: str | Path | None = None) -> sqlite3.Connection:
 
     Applies pragmas friendly to single-writer embedded use:
     WAL journal mode, foreign keys enforced, row_factory=Row.
+
+    When ``path`` is None, the path is re-resolved on each call (so
+    tests that monkeypatch ``ORBIS_DB_PATH`` at runtime pick up the
+    override) via ``_default_db_path``.
     """
-    db_path = Path(path) if path else Path(DEFAULT_DB_PATH)
+    db_path = Path(path) if path else Path(_default_db_path())
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
