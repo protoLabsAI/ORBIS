@@ -1,0 +1,310 @@
+//! ORBIS Tauri 2 desktop shell.
+//!
+//! Thin wrapper around the ORBIS Python backend (the "sidecar"). On
+//! boot:
+//!
+//!   1. Spawn the `orbis` external binary (`binaries/orbis-<target>`
+//!      produced by the PyApp workflow at .github/workflows/
+//!      desktop-build.yml).
+//!   2. Stream its stdout. The Python entry in `app.py:main()` prints
+//!      `ORBIS_READY http://127.0.0.1:<port>` once uvicorn is serving.
+//!   3. Navigate the main webview at that URL. The Python backend
+//!      serves its React SPA from /web/dist/ and the /api/* JSON
+//!      endpoints on the same port, so a single webview origin covers
+//!      the whole app.
+//!
+//! Failure modes worth thinking about explicitly:
+//!
+//! - **Hardware unsupported** — the sidecar's `detect_device()` (in
+//!   agent/hardware.py) hard-exits with code 2 when neither CUDA nor
+//!   MPS is available. We catch `CommandEvent::Terminated` with that
+//!   exit code and surface a native dialog pointing the user at the
+//!   Docker self-host path. No silent CPU fallback.
+//!
+//! - **Sidecar crashes at boot** — any other non-zero exit before the
+//!   ready line appears also gets a dialog, with the last ~80 stderr
+//!   lines truncated for display.
+//!
+//! - **App shutdown** — on `RunEvent::ExitRequested` we kill the
+//!   sidecar (SIGKILL on Unix, TerminateProcess on Windows) so the
+//!   uvicorn + Pipecat + Whisper + Kokoro process tree doesn't
+//!   linger. Tauri's shell plugin handles the cleanup if we drop the
+//!   CommandChild — we just make sure the guard drops.
+
+use std::collections::VecDeque;
+use std::sync::Mutex;
+
+use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
+
+/// Max stderr lines retained for error-dialog context if the sidecar
+/// exits non-zero before the ready line.
+const STDERR_RING_CAPACITY: usize = 80;
+
+/// Exit code the Python hardware probe uses. See agent/hardware.py.
+const HARDWARE_EXIT_CODE: i32 = 2;
+
+/// Tauri-managed state: the currently-spawned sidecar child, guarded
+/// so the exit handler can kill it from outside the async task.
+struct Sidecar {
+    child: Mutex<Option<CommandChild>>,
+}
+
+impl Sidecar {
+    fn new() -> Self {
+        Self {
+            child: Mutex::new(None),
+        }
+    }
+
+    fn store(&self, child: CommandChild) {
+        if let Ok(mut guard) = self.child.lock() {
+            *guard = Some(child);
+        }
+    }
+
+    fn kill(&self) {
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(child) = guard.take() {
+                let _ = child.kill();
+            }
+        }
+    }
+}
+
+pub fn run() {
+    // env_logger so `RUST_LOG=debug` surfaces the sidecar stream + our
+    // own parsing logs during development.
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .parse_default_env()
+        .try_init();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .manage(Sidecar::new())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            // Spawn the sidecar on an async task so setup() returns
+            // immediately + the splash window renders while the
+            // Python process is booting.
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = supervise_sidecar(handle.clone()).await {
+                    log::error!("sidecar supervisor exited: {e}");
+                    fatal_dialog(
+                        &handle,
+                        "ORBIS couldn't start",
+                        &format!(
+                            "The ORBIS backend failed to launch.\n\n{e}\n\n\
+                             If this keeps happening, try the Docker self-host path \
+                             — see https://github.com/protoLabsAI/ORBIS."
+                        ),
+                    );
+                }
+            });
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app_handle.try_state::<Sidecar>() {
+                    log::info!("app exit requested — killing sidecar");
+                    state.kill();
+                }
+            }
+        });
+}
+
+/// Spawn the Python sidecar, watch its stdout/stderr, and either
+/// navigate the main webview on `ORBIS_READY` or surface an error
+/// dialog on a bad exit. Single-shot: one sidecar per app run.
+async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
+    let shell = app.shell();
+
+    // `sidecar("orbis")` resolves to `binaries/orbis-<target>` on the
+    // bundle or `./binaries/orbis-<target>` during `tauri dev`.
+    // Target-suffix resolution is Tauri's job — we just give the base
+    // name that matches the externalBin entry in tauri.conf.json.
+    let command = shell
+        .sidecar("orbis")
+        .map_err(|e| format!("couldn't find sidecar binary: {e}"))?
+        .args(["--host", "127.0.0.1", "--port", "0"]);
+
+    let (mut rx, child) = command
+        .spawn()
+        .map_err(|e| format!("sidecar spawn failed: {e}"))?;
+
+    if let Some(state) = app.try_state::<Sidecar>() {
+        state.store(child);
+    }
+
+    // Retain recent stderr so a crash-before-ready surfaces something
+    // actionable in the error dialog instead of "unknown error."
+    let mut stderr_ring: VecDeque<String> = VecDeque::with_capacity(STDERR_RING_CAPACITY);
+    let mut ready = false;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                log::info!("[sidecar/stdout] {line}");
+
+                // Parse `ORBIS_READY http://<host>:<port>` — the
+                // contract added in #20 (agent/paths.py + app.py main).
+                if !ready {
+                    if let Some(url) = parse_ready(&line) {
+                        navigate_webview(&app, &url)?;
+                        ready = true;
+                    }
+                }
+            }
+            CommandEvent::Stderr(bytes) => {
+                let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                log::info!("[sidecar/stderr] {line}");
+                if stderr_ring.len() == STDERR_RING_CAPACITY {
+                    stderr_ring.pop_front();
+                }
+                stderr_ring.push_back(line);
+            }
+            CommandEvent::Terminated(payload) => {
+                let code = payload.code.unwrap_or(-1);
+                log::warn!("sidecar terminated with code {code}");
+                handle_termination(&app, code, &stderr_ring, ready);
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Extract the URL from a `ORBIS_READY http://host:port` line. Ignores
+/// any stdout line that doesn't start with the exact prefix so
+/// incidental logs (if they ever land on stdout) don't fool us.
+fn parse_ready(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("ORBIS_READY ")?;
+    let url = rest.split_whitespace().next()?;
+    // Cheap validation — a malformed URL would make Tauri's navigate
+    // call blow up later, so reject here for a cleaner error path.
+    url::Url::parse(url).ok()?;
+    Some(url.to_string())
+}
+
+/// Point the main webview at the sidecar's ready URL. During `tauri
+/// dev` the splash page at `../splash/index.html` was loaded first;
+/// here we swap it for the running backend.
+fn navigate_webview(app: &AppHandle, url: &str) -> Result<(), String> {
+    let parsed = tauri::Url::parse(url).map_err(|e| format!("invalid url {url}: {e}"))?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())?;
+    window
+        .navigate(parsed)
+        .map_err(|e| format!("navigate failed: {e}"))?;
+    log::info!("navigated main webview to {url}");
+    Ok(())
+}
+
+/// Surface a friendly native dialog when the sidecar exits before the
+/// ready line, with a branch for the hardware-unsupported case that
+/// points users at the Docker path instead of dumping stderr.
+fn handle_termination(
+    app: &AppHandle,
+    exit_code: i32,
+    stderr_ring: &VecDeque<String>,
+    ready: bool,
+) {
+    if ready {
+        // The sidecar reached ready state and later exited — the user
+        // probably quit; don't nag with a dialog.
+        return;
+    }
+
+    if exit_code == HARDWARE_EXIT_CODE {
+        fatal_dialog(
+            app,
+            "Unsupported hardware",
+            "ORBIS requires an NVIDIA GPU (driver 570+) on Windows/Linux \
+             or an Apple Silicon Mac (M1 or newer).\n\n\
+             Neither was detected on this machine. If you want to run \
+             ORBIS on CPU-only hardware anyway, use the Docker self-host \
+             path — see https://github.com/protoLabsAI/ORBIS.",
+        );
+        return;
+    }
+
+    // Generic crash — show the tail of stderr so the user has
+    // something to paste into an issue.
+    let tail: Vec<_> = stderr_ring.iter().cloned().collect();
+    let detail = if tail.is_empty() {
+        format!("sidecar exited with code {exit_code} before becoming ready")
+    } else {
+        format!(
+            "sidecar exited with code {exit_code}. Last output:\n\n{}",
+            tail.join("\n")
+        )
+    };
+    fatal_dialog(app, "ORBIS backend crashed", &detail);
+}
+
+/// Blocking modal error dialog + app exit. We don't try to let the
+/// user recover — if the sidecar couldn't start, the app has nothing
+/// to show.
+fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
+    let handle = app.clone();
+    let title_owned = title.to_string();
+    let body_owned = body.to_string();
+    // Dialog API is blocking-on-main-thread; hop back to the Tauri
+    // runtime so we don't deadlock the supervisor task.
+    tauri::async_runtime::spawn(async move {
+        handle
+            .dialog()
+            .message(body_owned)
+            .title(title_owned)
+            .kind(MessageDialogKind::Error)
+            .blocking_show();
+        handle.exit(1);
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ready;
+
+    #[test]
+    fn parse_ready_happy_path() {
+        assert_eq!(
+            parse_ready("ORBIS_READY http://127.0.0.1:54321").as_deref(),
+            Some("http://127.0.0.1:54321"),
+        );
+    }
+
+    #[test]
+    fn parse_ready_ignores_trailing_content() {
+        assert_eq!(
+            parse_ready("ORBIS_READY http://127.0.0.1:54321 extra data").as_deref(),
+            Some("http://127.0.0.1:54321"),
+        );
+    }
+
+    #[test]
+    fn parse_ready_rejects_non_prefix_lines() {
+        assert_eq!(parse_ready("INFO starting up"), None);
+        assert_eq!(parse_ready(""), None);
+    }
+
+    #[test]
+    fn parse_ready_rejects_invalid_url() {
+        assert_eq!(parse_ready("ORBIS_READY not-a-url"), None);
+    }
+}
