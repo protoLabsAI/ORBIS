@@ -3,11 +3,11 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { NebulaMaterial } from './materials';
 import type { NebulaPreset } from './presets';
-import { useOrbState } from '../../useOrbState';
 import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
 import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
 import { usePointerInteraction } from '../../shared/hooks/usePointerInteraction';
+import { useComposedBase } from '../../shared/hooks/useComposedBase';
 import { Atmosphere } from '../../shared/atmosphere/Atmosphere';
 import {
   BREATH_AMP,
@@ -34,11 +34,12 @@ export function NebulaVariant({ voiceState, botStream, localStream }: VariantPro
   const meshRef = useRef<THREE.Mesh>(null);
   const matRef = useRef<InstanceType<typeof NebulaMaterial>>(null);
 
-  const { params } = useOrbState();
-  const base = params as unknown as NebulaPreset;
+  // Composed base = palette + params + state/mood deltas + simulation
+  // pins; see useComposedBase for the full composition chain.
+  const { base, effectiveState } = useComposedBase<NebulaPreset>(voiceState);
 
   const { dBotRef, dUserRef } = useAudioEnvelopes({ botStream, localStream });
-  const { snapRef } = useStateCrossfade(voiceState, base);
+  const { snapRef } = useStateCrossfade(effectiveState, base);
   const { breathNormRef } = useIdleBreath();
   const { clickDirRef, clickStrengthRef, dragVelRef } = usePointerInteraction(meshRef);
 

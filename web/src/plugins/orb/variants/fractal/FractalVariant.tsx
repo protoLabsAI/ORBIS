@@ -3,11 +3,11 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { FractalMaterial } from './materials';
 import type { FractalPreset } from './presets';
-import { useOrbState, useOrbOverrides } from '../../useOrbState';
 import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
 import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
 import { usePointerInteraction } from '../../shared/hooks/usePointerInteraction';
+import { useComposedBase } from '../../shared/hooks/useComposedBase';
 import { Atmosphere } from '../../shared/atmosphere/Atmosphere';
 import { clamp01 } from '../../shared/math';
 import {
@@ -18,10 +18,6 @@ import {
   TIME_WRAP,
 } from '../../shared/constants';
 import type { VariantProps } from '../registry';
-import { composeBase } from '../../compose';
-import { moodStore } from '@/plugins/mood/moodStore';
-import { simulationStore } from '../../simulationStore';
-import { useSyncExternalStore } from 'react';
 
 /**
  * Fractal variant — ray-marched volumetric fractal + shared atmosphere.
@@ -33,38 +29,10 @@ export function FractalVariant({ voiceState, botStream, localStream }: VariantPr
   const meshRef = useRef<THREE.Mesh>(null);
   const matRef = useRef<InstanceType<typeof FractalMaterial>>(null);
 
-  const { params } = useOrbState();
-  const { stateOverrides, moodOverrides } = useOrbOverrides();
-  const liveMood = useSyncExternalStore(moodStore.subscribe, moodStore.get, moodStore.get);
-  const sim = useSyncExternalStore(
-    simulationStore.subscribe, simulationStore.getSnapshot, simulationStore.getSnapshot,
-  );
-
-  // Rendering uses the simulated pins when the authoring panel set
-  // them, otherwise the live sources. Simulation never persists — it
-  // only affects what this session sees.
-  const effectiveState = sim.pinnedState ?? voiceState;
-  const effectiveMood = sim.pinnedMood ?? {
-    valence: liveMood.valence,
-    arousal: liveMood.arousal,
-    guardedness: liveMood.guardedness,
-  };
-
-  // `base` is the composed preset — palette + params + state delta +
-  // mood-scaled delta. The state crossfade picks between two composed
-  // snapshots; when state_overrides or mood shifts, React re-runs this
-  // memo and useStateCrossfade re-arms via its base-changed effect.
-  const base = useMemo(
-    () => composeBase(
-      params as Record<string, number | string>,
-      stateOverrides,
-      moodOverrides,
-      effectiveState,
-      effectiveMood,
-    ) as unknown as FractalPreset,
-    [params, stateOverrides, moodOverrides, effectiveState,
-     effectiveMood.valence, effectiveMood.arousal, effectiveMood.guardedness],
-  );
+  // Composed base = palette + params + state delta + mood-scaled delta,
+  // routed through simulation pins when the authoring panel sets them.
+  // Shared across every variant — see useComposedBase's docstring.
+  const { base, effectiveState } = useComposedBase<FractalPreset>(voiceState);
   const baseRef = useRef(base);
   baseRef.current = base;
 
