@@ -1,0 +1,214 @@
+name: 'Desktop Build'
+
+# Produces per-OS ORBIS binaries for the Tauri shell (PR 3) to spawn
+# as a sidecar. Fires on semver tags (alongside release.yml's Docker
+# build) and on manual dispatch for iteration.
+#
+# Binary naming follows Tauri's `externalBin` convention so the
+# src-tauri config in PR 3 can reference a single `binaries/orbis`
+# entry that resolves per-target:
+#   orbis-aarch64-apple-darwin
+#   orbis-x86_64-pc-windows-msvc.exe
+#   orbis-x86_64-unknown-linux-gnu
+#
+# Built with PyApp — produces a small (~10 MB) Rust launcher that
+# lazily downloads Python + pip-installs ORBIS on first run. Matches
+# our "hardware-blessed users tolerate a first-run download" product
+# call. See docs/build-desktop-binary.md for the local flow.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build against (e.g. v0.1.7)'
+        required: false
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # needed for uploading release assets
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    if: github.repository == 'protoLabsAI/ORBIS'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14           # Apple Silicon (M1-M4 runner fleet)
+            target: aarch64-apple-darwin
+            binary_suffix: ''
+            # MPS ships in the default arm64 torch wheel; no extra index needed.
+            torch_index: ''
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary_suffix: ''
+            # CUDA 12.8 wheels; matches the Dockerfile cu128 pin.
+            torch_index: 'https://download.pytorch.org/whl/cu128'
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            binary_suffix: '.exe'
+            torch_index: 'https://download.pytorch.org/whl/cu128'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # Reclaim ~14 GB on the Ubuntu/Windows runners — torch+cu128
+      # pulls cuda-toolkit + cublas + cudnn + nccl + triton, which
+      # blew past the default runner's disk budget in #10 already.
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # PyApp embeds the project at build time. It expects an sdist or
+      # a source tree it can pip-install; pointing PYAPP_PROJECT_PATH
+      # at the checkout is simplest. The hatchling wheel config added
+      # in #ef04c90 covers the "pip install ." case.
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ORBIS sidecar binary (PyApp)
+        shell: bash
+        env:
+          # Core PyApp config. See https://ofek.dev/pyapp/ for the
+          # full matrix — the vars below are the minimum for a
+          # project-path build that runs `app:main` on launch.
+          PYAPP_PROJECT_NAME: orbis
+          PYAPP_PROJECT_VERSION: ${{ steps.version.outputs.version }}
+          PYAPP_PROJECT_PATH: ${{ github.workspace }}
+          PYAPP_PYTHON_VERSION: '3.11'
+          PYAPP_EXEC_SPEC: 'app:main'
+          # Full isolation — don't touch the user's Python or site-packages.
+          PYAPP_FULL_ISOLATION: '1'
+          # Per-platform pip config:
+          # - macOS arm64: default PyPI (torch ships with MPS).
+          # - Windows/Linux: add the pytorch cu128 index so torch
+          #   resolves to +cu128 wheels matching the driver we target.
+          PYAPP_PIP_EXTRA_ARGS: ${{ matrix.torch_index && format('--extra-index-url {0}', matrix.torch_index) || '' }}
+          # Show the full pip install log in CI so torch/wheel issues
+          # are easy to triage.
+          PYAPP_PIP_VERBOSE: '1'
+        run: |
+          mkdir -p dist
+          cargo install pyapp --root dist --locked
+          # PyApp produces `dist/bin/pyapp` (or `pyapp.exe`). Rename
+          # to match Tauri's externalBin target-suffix convention.
+          OUT="orbis-${{ matrix.target }}${{ matrix.binary_suffix }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/bin/pyapp.exe "dist/${OUT}"
+          else
+            mv dist/bin/pyapp "dist/${OUT}"
+          fi
+          echo "artifact=dist/${OUT}" >> "$GITHUB_ENV"
+          echo "artifact_name=${OUT}" >> "$GITHUB_ENV"
+
+      - name: Smoke-test the binary
+        shell: bash
+        # Sanity check — binary runs and prints ORBIS_READY on a GPU-
+        # less runner via the CPU opt-in. Catches packaging breakage
+        # (missing deps, broken entry point) before we upload. Voice
+        # pipeline isn't exercised; we just verify boot.
+        #
+        # Uses a Python launcher instead of GNU `timeout` so macOS
+        # runners (no coreutils) work unchanged.
+        env:
+          ORBIS_ALLOW_CPU: '1'
+          ORBIS_DB_PATH: ${{ runner.temp }}/orbis-smoke/orbis.sqlite
+          ORBIS_CACHE_DIR: ${{ runner.temp }}/orbis-smoke/cache
+        run: |
+          python3 - <<'PY'
+          import os, re, signal, subprocess, sys, time
+
+          artifact = os.environ["GITHUB_WORKSPACE"] + "/" + os.environ["artifact"] \
+              if "artifact" in os.environ else "${{ env.artifact }}"
+          # Fall through to the workflow-env path if the above didn't resolve.
+          artifact = "${{ env.artifact }}"
+          print(f"smoking {artifact}")
+          p = subprocess.Popen(
+              [artifact, "--port", "0"],
+              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+          )
+          ready = False
+          start = time.time()
+          try:
+              while time.time() - start < 180:
+                  line = p.stdout.readline()
+                  if not line:
+                      if p.poll() is not None:
+                          break
+                      continue
+                  print(line, end="")
+                  if re.search(r"ORBIS_READY http://", line):
+                      ready = True
+                      break
+          finally:
+              try: p.terminate()
+              except Exception: pass
+              try: p.wait(timeout=5)
+              except Exception:
+                  try: p.kill()
+                  except Exception: pass
+          if not ready:
+              sys.exit("SMOKE FAIL: no ORBIS_READY line in 180s")
+          print("READY line found")
+          PY
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.artifact_name }}
+          path: ${{ env.artifact }}
+          retention-days: 14
+
+      - name: Attach to GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          # release.yml creates the release on tag push; this job
+          # runs in parallel, so the release may not exist yet. Poll
+          # briefly before uploading.
+          for _ in $(seq 1 30); do
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              gh release upload "${TAG}" "${{ env.artifact }}" --clobber
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Release ${TAG} did not appear within 5 min; leaving the" \
+               "artifact as a workflow artifact only."
+          exit 0  # don't fail the job — the upload is best-effort
