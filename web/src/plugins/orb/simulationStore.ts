@@ -64,9 +64,16 @@ class SimulationStore {
   }
 
   /** Clear both pins at once — e.g. when the authoring panel unmounts
-   * or the user toggles Simulate off. */
+   * or the user toggles Simulate off. No-op when already cleared, and
+   * epoch keeps ticking forward so update-counter consumers don't
+   * observe a non-monotonic jump back to 0. */
   clear(): void {
-    this.snap = { ...INITIAL };
+    if (this.snap.pinnedState === null && this.snap.pinnedMood === null) return;
+    this.snap = {
+      pinnedState: null,
+      pinnedMood: null,
+      epoch: this.snap.epoch + 1,
+    };
     this.listeners.forEach((l) => l());
   }
 }

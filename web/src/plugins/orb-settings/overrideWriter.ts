@@ -19,10 +19,15 @@ import type { MoodDim } from './AuthoringContext';
 const SAVE_DEBOUNCE_MS = 400;
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
-// `_dirty` is set by the setters, cleared after a successful flush.
+// `_dirty` is set by the setters, cleared when a save drains it.
 // Prevents flushSave() (called on panel unmount) from firing a POST
 // when nothing has actually been authored in this session.
 let _dirty = false;
+// Single-flight guard for the actual POST. A second flushSave() that
+// lands while one is in flight waits on this promise rather than
+// firing a concurrent request (which could race and let an older
+// snapshot overwrite a newer one).
+let _saveInFlight: Promise<void> | null = null;
 
 /** Set one field in one state-override bucket. Zero-valued numbers
  * remove the entry so the override map stays minimal on disk. */
@@ -91,31 +96,60 @@ export function resetBucket(ctx:
 
 function scheduleSave(): void {
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(flushSave, SAVE_DEBOUNCE_MS);
+  _saveTimer = setTimeout(() => { void flushSave(); }, SAVE_DEBOUNCE_MS);
 }
 
 /** Force an immediate save — useful when the panel unmounts mid-
- * debounce. No-ops when nothing has been authored since the last
- * flush; skips the network round-trip entirely. */
+ * debounce. Single-flights: if a save is already in flight, waits on
+ * it rather than firing a second request. Loops until `_dirty` is
+ * drained so edits that land during an await get shipped in the
+ * next round. No-ops when nothing is dirty. */
 export async function flushSave(): Promise<void> {
   if (_saveTimer) {
     clearTimeout(_saveTimer);
     _saveTimer = null;
   }
+  if (_saveInFlight) {
+    await _saveInFlight;
+    // `_saveInFlight` drains on its own loop; if it left us clean
+    // (no new edits during its await), we're done.
+    if (!_dirty) return;
+  }
   if (!_dirty) return;
-  const snap = orbStore.getSnapshot();
-  const patch: { orb: NonNullable<OrbisConfig['orb']> } = {
-    orb: {
-      state_overrides: toWire(snap.stateOverrides),
-      mood_overrides: toWire(snap.moodOverrides),
-    },
-  };
+  _saveInFlight = runSaveLoop();
   try {
-    await api.putConfig(patch);
+    await _saveInFlight;
+  } finally {
+    _saveInFlight = null;
+  }
+}
+
+/** Drain `_dirty` by posting snapshots in sequence. Capturing the
+ * snapshot BEFORE each await means edits that land during the
+ * network round-trip don't get silently merged into this
+ * transaction — they show up as still-dirty, and the loop picks
+ * them up on the next pass. */
+async function runSaveLoop(): Promise<void> {
+  while (_dirty) {
     _dirty = false;
-  } catch (e) {
-    console.error('[orb-settings] save overrides failed', e);
-    // Leave _dirty set so the next flush retries.
+    const snap = orbStore.getSnapshot();
+    const patch: { orb: NonNullable<OrbisConfig['orb']> } = {
+      orb: {
+        state_overrides: toWire(snap.stateOverrides),
+        mood_overrides: toWire(snap.moodOverrides),
+      },
+    };
+    try {
+      await api.putConfig(patch);
+    } catch (e) {
+      // Re-arm so a future scheduleSave / flushSave retries. Break
+      // out rather than spin — we don't want to hammer the server
+      // on repeated failures, and the next user edit will trigger
+      // a fresh attempt.
+      _dirty = true;
+      console.error('[orb-settings] save overrides failed', e);
+      return;
+    }
   }
 }
 

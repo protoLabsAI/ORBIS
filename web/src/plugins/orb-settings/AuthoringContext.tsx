@@ -68,23 +68,38 @@ export function AuthoringContextPicker({
 
   return (
     <Panel title="Authoring">
-      <div className="space-y-3">
+      {/* Single radiogroup — ctx is one mutually-exclusive selection
+          across all three visual sections. Nested radiogroups
+          mis-describe the actual behavior to screen readers. */}
+      <div role="radiogroup" aria-label="Authoring context" className="space-y-3">
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
+          <div
+            id="authoring-section-base"
+            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+          >
             Base + live values
-          </label>
-          <ChipRow ariaLabel="Authoring: base context">
+          </div>
+          <div
+            className="flex flex-wrap gap-1.5"
+            aria-labelledby="authoring-section-base"
+          >
             <Chip active={isActive({ kind: 'base' })} onClick={() => pick({ kind: 'base' })}>
               Base
             </Chip>
-          </ChipRow>
+          </div>
         </div>
 
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
+          <div
+            id="authoring-section-state"
+            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+          >
             State overrides
-          </label>
-          <ChipRow ariaLabel="Authoring: state context">
+          </div>
+          <div
+            className="flex flex-wrap gap-1.5"
+            aria-labelledby="authoring-section-state"
+          >
             {STATES.map((s) => (
               <Chip
                 key={s}
@@ -94,14 +109,20 @@ export function AuthoringContextPicker({
                 {cap(s)}
               </Chip>
             ))}
-          </ChipRow>
+          </div>
         </div>
 
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5 block">
+          <div
+            id="authoring-section-mood"
+            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+          >
             Mood overrides
-          </label>
-          <ChipRow ariaLabel="Authoring: mood dimension">
+          </div>
+          <div
+            className="flex flex-wrap gap-1.5"
+            aria-labelledby="authoring-section-mood"
+          >
             {DIMS.map((d) => (
               <Chip
                 key={d}
@@ -111,7 +132,7 @@ export function AuthoringContextPicker({
                 {cap(d)}
               </Chip>
             ))}
-          </ChipRow>
+          </div>
         </div>
 
         {!isBase(ctx) && (
@@ -158,16 +179,6 @@ export function applySimulation(ctx: AuthoringContext, on: boolean): void {
   pinned[ctx.dim] = 1;
   simulationStore.setPinnedMood(pinned);
   simulationStore.setPinnedState(null);
-}
-
-function ChipRow({
-  children, ariaLabel,
-}: { children: React.ReactNode; ariaLabel: string }) {
-  return (
-    <div role="radiogroup" aria-label={ariaLabel} className="flex flex-wrap gap-1.5">
-      {children}
-    </div>
-  );
 }
 
 function Chip({
