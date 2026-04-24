@@ -29,11 +29,25 @@ HOST_ARCH="$(uname -m)"
 
 case "${HOST_OS}" in
   Darwin)
+    # ORBIS desktop targets Apple Silicon (M1+) only; Intel Macs are
+    # out of scope per the hardware-requirements discussion. Fail
+    # fast with a clear message rather than building an arm64 binary
+    # that won't run on an x86_64 host.
+    if [ "${HOST_ARCH}" != "arm64" ]; then
+      echo "Unsupported macOS host arch: ${HOST_ARCH}. ORBIS desktop" >&2
+      echo "requires an Apple Silicon (arm64) Mac. See DECISIONS.md." >&2
+      exit 2
+    fi
     TARGET="aarch64-apple-darwin"
     SUFFIX=""
     TORCH_INDEX=""
     ;;
   Linux)
+    if [ "${HOST_ARCH}" != "x86_64" ]; then
+      echo "Unsupported Linux host arch: ${HOST_ARCH}. ORBIS desktop" >&2
+      echo "builds target x86_64-unknown-linux-gnu." >&2
+      exit 2
+    fi
     TARGET="x86_64-unknown-linux-gnu"
     SUFFIX=""
     TORCH_INDEX="https://download.pytorch.org/whl/cu128"
@@ -49,9 +63,11 @@ case "${HOST_OS}" in
     ;;
 esac
 
+PROJECT_PATH="$(pwd)"   # split so a failing `pwd` surfaces via set -e
+
 export PYAPP_PROJECT_NAME="orbis"
 export PYAPP_PROJECT_VERSION="${VERSION_NO_V}"
-export PYAPP_PROJECT_PATH="$(pwd)"
+export PYAPP_PROJECT_PATH="${PROJECT_PATH}"
 export PYAPP_PYTHON_VERSION="3.11"
 export PYAPP_EXEC_SPEC="app:main"
 export PYAPP_FULL_ISOLATION="1"

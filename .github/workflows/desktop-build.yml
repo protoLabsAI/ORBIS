@@ -63,9 +63,12 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      # Reclaim ~14 GB on the Ubuntu/Windows runners — torch+cu128
-      # pulls cuda-toolkit + cublas + cudnn + nccl + triton, which
-      # blew past the default runner's disk budget in #10 already.
+      # Reclaim ~14 GB on Ubuntu runners — torch+cu128 pulls
+      # cuda-toolkit + cublas + cudnn + nccl + triton, which blew
+      # past the default Ubuntu runner's 14 GB free-space budget in
+      # #10. Windows runners ship with ~85 GB free by default so
+      # cu128 fits without cleanup; macOS doesn't install cu128
+      # (uses the default MPS-bundled wheel).
       - name: Free disk space (Linux)
         if: runner.os == 'Linux'
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
@@ -149,11 +152,8 @@ jobs:
           ORBIS_CACHE_DIR: ${{ runner.temp }}/orbis-smoke/cache
         run: |
           python3 - <<'PY'
-          import os, re, signal, subprocess, sys, time
+          import os, re, subprocess, sys, time
 
-          artifact = os.environ["GITHUB_WORKSPACE"] + "/" + os.environ["artifact"] \
-              if "artifact" in os.environ else "${{ env.artifact }}"
-          # Fall through to the workflow-env path if the above didn't resolve.
           artifact = "${{ env.artifact }}"
           print(f"smoking {artifact}")
           p = subprocess.Popen(
