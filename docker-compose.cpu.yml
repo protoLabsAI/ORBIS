@@ -14,6 +14,12 @@ services:
     # Use the default OCI runtime instead of nvidia. Compose can't remove
     # a top-level scalar via override, so we replace it.
     runtime: runc
+    # Opt into CPU mode — the hardware probe in agent/hardware.py
+    # hard-fails on non-accelerated hardware unless this env var is set.
+    # The Docker self-host path is the supported CPU route; desktop
+    # bundles leave this unset so they refuse to start without a GPU.
+    environment:
+      - ORBIS_ALLOW_CPU=1
     deploy:
       resources:
         reservations:

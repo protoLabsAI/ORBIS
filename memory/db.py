@@ -22,7 +22,43 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = os.environ.get("ORBIS_DB_PATH", "data/orbis.sqlite")
+
+def _default_db_path() -> str:
+    """Resolve the DB path per this precedence:
+
+      1. ``ORBIS_DB_PATH`` env var — explicit override
+      2. legacy ``data/orbis.sqlite`` if the repo-local ``data/``
+         directory already exists — keeps existing repo-checkout
+         installs working unchanged
+      3. ``agent.paths.get_db_path()`` — per-OS user data dir used by
+         desktop bundles and fresh installs
+
+    Pure resolution: each call re-reads the env and filesystem, so
+    anything that invokes this at DB-open time (``open_db``,
+    ``Memory()``) picks up fixture-scoped ``ORBIS_DB_PATH`` overrides.
+    The module-level ``DEFAULT_DB_PATH`` snapshot below is the one
+    place we capture a value eagerly, and it's kept purely for
+    backward compatibility with code that imports the constant.
+    """
+    override = os.environ.get("ORBIS_DB_PATH")
+    if override:
+        return override
+    if Path("data").exists():
+        return "data/orbis.sqlite"
+    from agent.paths import get_db_path
+    return str(get_db_path())
+
+
+def __getattr__(name: str) -> str:
+    """Module-level ``__getattr__`` (PEP 562) — resolves
+    ``DEFAULT_DB_PATH`` on each attribute access instead of a single
+    import-time snapshot. Matches the precedence rules of
+    ``_default_db_path()`` above so ``from memory.db import
+    DEFAULT_DB_PATH`` at any point during a session reflects the
+    current env, not the env at module-load time."""
+    if name == "DEFAULT_DB_PATH":
+        return _default_db_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 SCHEMA_VERSION = 1
 
 
@@ -144,8 +180,12 @@ def open_db(path: str | Path | None = None) -> sqlite3.Connection:
 
     Applies pragmas friendly to single-writer embedded use:
     WAL journal mode, foreign keys enforced, row_factory=Row.
+
+    When ``path`` is None, the path is re-resolved on each call (so
+    tests that monkeypatch ``ORBIS_DB_PATH`` at runtime pick up the
+    override) via ``_default_db_path``.
     """
-    db_path = Path(path) if path else Path(DEFAULT_DB_PATH)
+    db_path = Path(path) if path else Path(_default_db_path())
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
