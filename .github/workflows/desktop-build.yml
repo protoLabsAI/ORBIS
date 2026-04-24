@@ -267,12 +267,17 @@ jobs:
         # automatically — we don't need per-OS flags, just export
         # the right vars when the matching secret exists.
         env:
-          # macOS Developer ID signing + notarization.
+          # macOS Developer ID signing + notarization. We use App
+          # Store Connect API keys for notarization rather than an
+          # app-specific password — the .p8 key is rotation-safe
+          # against Apple ID password changes and doesn't prompt
+          # 2FA on every CI run.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           # Windows Authenticode signing (base64-encoded PFX).
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -296,14 +301,22 @@ jobs:
               if [ -n "${APPLE_CERTIFICATE}" ] \
                   && [ -n "${APPLE_CERTIFICATE_PASSWORD}" ] \
                   && [ -n "${APPLE_SIGNING_IDENTITY}" ] \
-                  && [ -n "${APPLE_ID}" ] \
-                  && [ -n "${APPLE_PASSWORD}" ] \
+                  && [ -n "${APPLE_API_ISSUER}" ] \
+                  && [ -n "${APPLE_API_KEY}" ] \
+                  && [ -n "${APPLE_API_KEY_PATH}" ] \
                   && [ -n "${APPLE_TEAM_ID}" ]; then
+                # Tauri-cli expects APPLE_API_KEY_PATH to be a file
+                # path, not the key contents. The secret is the
+                # base64-encoded .p8 — decode to a tmp file and
+                # repoint the env var at it.
+                KEYFILE="$(mktemp -t orbis-apple-api-XXXXXX).p8"
+                echo "${APPLE_API_KEY_PATH}" | base64 --decode > "${KEYFILE}"
+                export APPLE_API_KEY_PATH="${KEYFILE}"
                 SIGNED="Developer ID"
               else
                 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
-                      APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD \
-                      APPLE_TEAM_ID
+                      APPLE_SIGNING_IDENTITY APPLE_API_ISSUER \
+                      APPLE_API_KEY APPLE_API_KEY_PATH APPLE_TEAM_ID
               fi
               ;;
             Windows)

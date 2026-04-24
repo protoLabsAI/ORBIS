@@ -1,13 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 
-type Status = 'idle' | 'requesting' | 'listening' | 'denied' | 'error';
+type Status = 'idle' | 'requesting' | 'listening' | 'denied' | 'silent' | 'error';
 
 // The level-meter RMS cutoff that counts as "yes, actual voice reached the
 // mic." Tuned against silent-room noise floor (~0.01) vs. normal speaking
 // volume (0.1+). Once the meter crosses this once we flag the mic verified
 // so the parent can enable its Continue button.
 const VERIFIED_RMS = 0.04;
+
+// If the level never budges above ~1% RMS for this long, macOS TCC is
+// almost certainly silently denying even though getUserMedia resolved —
+// Tauri/wry's WKUIDelegate auto-grants without TCC consultation, so
+// Core Audio hands us a dead stream. Surface a helpful hint instead of
+// letting the user stare at a flat meter.
+const SILENT_DENY_TIMEOUT_MS = 4000;
+const SILENT_FLOOR_RMS = 0.01;
 
 export interface MicTestProps {
   /** Fired the first time a voice-level sample clears VERIFIED_RMS. */
@@ -38,7 +46,7 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
   const rafRef = useRef<number | null>(null);
   const verifiedRef = useRef(false);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(({ resetUI = true } = {}) => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -51,9 +59,15 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
       void ctxRef.current.close();
     }
     ctxRef.current = null;
+    if (resetUI) {
+      setStatus('idle');
+      setLevel(0);
+      verifiedRef.current = false;
+      setVerified(false);
+    }
   }, []);
 
-  useEffect(() => () => stop(), [stop]);
+  useEffect(() => () => stop({ resetUI: false }), [stop]);
 
   const start = useCallback(async () => {
     setStatus('requesting');
@@ -73,6 +87,11 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
       source.connect(analyser);
 
       const samples = new Uint8Array(analyser.fftSize);
+      const startedAt = performance.now();
+      // `seenAudible` catches the case where the mic is briefly active
+      // but returns zeros — e.g. muted input — and distinguishes that
+      // from the TCC silent-deny case where the stream is dead forever.
+      let seenAudible = false;
       const tick = () => {
         analyser.getByteTimeDomainData(samples);
         // RMS over the centered waveform (bytes are 0-255 around 128).
@@ -83,10 +102,24 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
         }
         const rms = Math.sqrt(sum / samples.length);
         setLevel(rms);
+        if (rms > SILENT_FLOOR_RMS) seenAudible = true;
         if (!verifiedRef.current && rms >= VERIFIED_RMS) {
           verifiedRef.current = true;
           setVerified(true);
           onVerified?.();
+        }
+        // macOS-specific silent-deny path: Tauri/wry's default WKUIDelegate
+        // grants media capture without checking TCC, so getUserMedia
+        // resolves with a "stream" that Core Audio can't actually read
+        // from. The meter sits at 0 forever. Switch UI to a helpful
+        // message once we're confident that's what we're seeing.
+        if (
+          !seenAudible &&
+          performance.now() - startedAt > SILENT_DENY_TIMEOUT_MS
+        ) {
+          setStatus('silent');
+          stop({ resetUI: false });
+          return;
         }
         rafRef.current = requestAnimationFrame(tick);
       };
@@ -132,8 +165,26 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
           </div>
           <LevelMeter value={level} verified={verified} />
           <div className="flex justify-end">
-            <Button variant="ghost" onClick={stop}>Stop</Button>
+            <Button variant="ghost" onClick={() => stop()}>Stop</Button>
           </div>
+        </div>
+      )}
+
+      {status === 'silent' && (
+        <div className="space-y-3">
+          <div className="text-sm text-amber-400">
+            Mic opened but no audio is coming through.
+          </div>
+          <div className="text-xs text-zinc-500 leading-relaxed">
+            macOS likely silently denied this build — the webview opens a
+            stream but the system refuses to connect it to the real mic.
+            Open <span className="text-zinc-300">System Settings → Privacy
+            &amp; Security → Microphone</span>, toggle ORBIS on (add it via
+            the <span className="text-zinc-300">+</span> button if it isn't
+            listed), quit the app, and relaunch. Signed releases won't have
+            this step; dev builds do.
+          </div>
+          <Button onClick={start}>Retry</Button>
         </div>
       )}
 

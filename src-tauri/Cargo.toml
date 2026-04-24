@@ -13,6 +13,9 @@ repository = "https://github.com/protoLabsAI/ORBIS"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Compiles src/mic_permission.m on macOS — see build.rs and the
+# file's header comment for why we can't avoid the Obj-C shim.
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
