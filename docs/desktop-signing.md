@@ -151,9 +151,19 @@ Get-ChildItem .\ORBIS-*-x86_64-pc-windows-msvc.msi | Get-AuthenticodeSignature
 ```
 
 ### Tauri updater signatures
-Each signed installer has a sibling `.sig` file attached to the same
-GitHub release. The updater plugin fetches both and verifies the sig
-against the pub key at runtime.
+The updater plugin verifies each downloaded bundle against a sibling
+`.sig` file using the pubkey baked into `tauri.conf.json`. Artifact
+naming is platform-specific:
+
+- **macOS** — `*.app.tar.gz` + `*.app.tar.gz.sig`. The Tauri v2
+  updater does **not** use the DMG for macOS updates; you need
+  `bundle.createUpdaterArtifacts: true` in `tauri.conf.json` for the
+  tarball + sig to land in `target/release/bundle/macos/`.
+- **Windows** — `*.msi` + `*.msi.sig`.
+- **Linux** — `*.AppImage` + `*.AppImage.sig`.
+
+All of the above are uploaded to the GitHub release alongside the
+installer by `desktop-build.yml`.
 
 ## Rollback / key rotation
 

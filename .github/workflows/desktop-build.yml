@@ -118,6 +118,14 @@ jobs:
           p.write_text(content)
           PY
           python -m build --sdist --outdir dist-sdist
+          # Fail here (not later in PyApp) if the sdist name doesn't
+          # match the tag — surfaces version-stamping drift locally.
+          SDIST="dist-sdist/orbis-${{ steps.version.outputs.version }}.tar.gz"
+          if [ ! -f "${SDIST}" ]; then
+            echo "::error::Expected sdist at ${SDIST} but it doesn't exist."
+            ls -la dist-sdist/
+            exit 2
+          fi
           ls -la dist-sdist/
 
       - name: Build ORBIS sidecar binary (PyApp)
