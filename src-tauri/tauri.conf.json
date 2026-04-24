@@ -35,8 +35,7 @@
     "externalBin": ["binaries/orbis"],
     "macOS": {
       "entitlements": "./entitlements.plist",
-      "signingIdentity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": true
     }
   },
   "plugins": {}
