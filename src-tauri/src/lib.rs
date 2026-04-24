@@ -1,7 +1,22 @@
 //! ORBIS Tauri 2 desktop shell.
 //!
-//! Thin wrapper around the ORBIS Python backend (the "sidecar"). On
-//! boot:
+//! Thin wrapper around the ORBIS Python backend (the "sidecar").
+//!
+//! ## Security posture
+//!
+//! The CSP in `tauri.conf.json#app.security.csp` applies to the
+//! splash page only (frontendDist = `../splash`). Once the sidecar
+//! is ready we `window.navigate()` to `http://127.0.0.1:<ephemeral>`,
+//! which is a different origin and governed by whatever headers the
+//! Python backend serves (currently none specific). Both splash and
+//! SPA ship from fully-local content on this machine, so the policy
+//! is permissive within the app's origin but blocks unexpected
+//! network reach. `shell:allow-execute` in the default capability
+//! pins the sidecar args so there's no arbitrary-exec surface.
+//!
+//! ## Runtime flow
+//!
+//! On boot:
 //!
 //!   1. Spawn the `orbis` external binary (`binaries/orbis-<target>`
 //!      produced by the PyApp workflow at .github/workflows/
@@ -260,21 +275,21 @@ fn handle_termination(
 /// Blocking modal error dialog + app exit. We don't try to let the
 /// user recover — if the sidecar couldn't start, the app has nothing
 /// to show.
+///
+/// Runs synchronously so the caller (the sidecar supervisor) can't
+/// return before the dialog has shown + the exit has been requested.
+/// Previously this spawned an async task and returned immediately,
+/// which meant the supervisor's `Ok(())` return could race the
+/// dialog appearance on slow machines. Shows on whichever thread
+/// calls us — `blocking_show` is safe from non-main threads in
+/// Tauri 2.
 fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
-    let handle = app.clone();
-    let title_owned = title.to_string();
-    let body_owned = body.to_string();
-    // Dialog API is blocking-on-main-thread; hop back to the Tauri
-    // runtime so we don't deadlock the supervisor task.
-    tauri::async_runtime::spawn(async move {
-        handle
-            .dialog()
-            .message(body_owned)
-            .title(title_owned)
-            .kind(MessageDialogKind::Error)
-            .blocking_show();
-        handle.exit(1);
-    });
+    app.dialog()
+        .message(body)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .blocking_show();
+    app.exit(1);
 }
 
 #[cfg(test)]
@@ -306,5 +321,14 @@ mod tests {
     #[test]
     fn parse_ready_rejects_invalid_url() {
         assert_eq!(parse_ready("ORBIS_READY not-a-url"), None);
+    }
+
+    #[test]
+    fn parse_ready_rejects_prefix_only() {
+        // Catches a sidecar that prints the marker but fails to
+        // format the URL — we'd otherwise sit on the splash forever.
+        assert_eq!(parse_ready("ORBIS_READY"), None);
+        assert_eq!(parse_ready("ORBIS_READY "), None);
+        assert_eq!(parse_ready("ORBIS_READY   "), None);
     }
 }

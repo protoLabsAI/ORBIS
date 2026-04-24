@@ -43,11 +43,14 @@ during dev. Two options:
    that just prints the ready line and sleeps. Simple, no code change
    needed.
 
-Route #2 one-liner on Linux/macOS:
+Route #2 one-liner on Linux/macOS (uses `rustc` to pick the host's
+full Rust target triple — `uname -m` gives e.g. `arm64` on macOS but
+Rust expects `aarch64-apple-darwin`):
 
 ```sh
 mkdir -p src-tauri/binaries
-cat > src-tauri/binaries/orbis-$(uname -m)-unknown-linux-gnu <<'EOF'
+TARGET=$(rustc -vV | sed -n 's/host: //p')
+cat > src-tauri/binaries/orbis-${TARGET} <<'EOF'
 #!/usr/bin/env bash
 echo "ORBIS_READY http://127.0.0.1:7866"
 sleep infinity

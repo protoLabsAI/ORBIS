@@ -219,15 +219,14 @@ jobs:
 
       - name: Stamp release version into tauri.conf.json
         shell: bash
+        # jq is the idiomatic CI JSON mutator; available on all three
+        # runners by default. Preserves the file's formatting better
+        # than a Python heredoc would.
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          python3 - <<PY
-          import json, pathlib
-          p = pathlib.Path("src-tauri/tauri.conf.json")
-          conf = json.loads(p.read_text())
-          conf["version"] = "${VERSION}"
-          p.write_text(json.dumps(conf, indent=2) + "\n")
-          PY
+          jq --arg v "$VERSION" '.version = $v' \
+            src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+          mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
           grep '"version"' src-tauri/tauri.conf.json | head -1
 
       - name: Build Tauri installer
@@ -239,20 +238,33 @@ jobs:
 
       - name: Locate installer artifact
         shell: bash
+        # shopt -s nullglob makes the glob expand to nothing (rather
+        # than the literal pattern) when no files match, so the
+        # length check below surfaces a clear error instead of a
+        # confusing `cp ./not-a-real-path` failure.
         run: |
+          set -euo pipefail
+          shopt -s nullglob
           case "${{ runner.os }}" in
             macOS)
-              INSTALLER=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -1)
+              CANDIDATES=(src-tauri/target/release/bundle/dmg/*.dmg)
               ;;
             Linux)
-              INSTALLER=$(ls src-tauri/target/release/bundle/appimage/*.AppImage | head -1)
+              CANDIDATES=(src-tauri/target/release/bundle/appimage/*.AppImage)
               ;;
             Windows)
-              INSTALLER=$(ls src-tauri/target/release/bundle/msi/*.msi | head -1)
+              CANDIDATES=(src-tauri/target/release/bundle/msi/*.msi)
               ;;
           esac
-          # Rename with our conventional scheme so release-page links
-          # are predictable across tags.
+          if [ "${#CANDIDATES[@]}" -eq 0 ]; then
+            echo "::error::No installer produced by cargo tauri build." \
+                 "Expected bundle artifact under src-tauri/target/release/bundle/"
+            echo "--- bundle dir contents ---"
+            find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null || \
+              echo "(bundle dir missing entirely)"
+            exit 1
+          fi
+          INSTALLER="${CANDIDATES[0]}"
           EXT="${INSTALLER##*.}"
           OUT="ORBIS-${{ steps.version.outputs.version }}-${{ matrix.target }}.${EXT}"
           cp "$INSTALLER" "$OUT"

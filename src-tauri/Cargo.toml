@@ -4,7 +4,11 @@ version = "0.0.0"  # overridden by CI per-tag; stay 0.0.0 in-tree for dev
 edition = "2021"
 description = "ORBIS — voice-first AI companion. Tauri 2 desktop shell."
 authors = ["protoLabs Studio"]
-license = "TBD"
+# No license set yet — the main README says "License TBD" and that
+# decision predates desktop-prep. Using the SPDX "NOASSERTION" marker
+# so cargo doesn't warn; revisit before any public crates.io publish
+# or repo-open, whichever comes first.
+license = "NOASSERTION"
 repository = "https://github.com/protoLabsAI/ORBIS"
 
 [build-dependencies]
