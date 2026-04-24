@@ -20,6 +20,7 @@ import {
 import type { VariantProps } from '../registry';
 import { composeBase } from '../../compose';
 import { moodStore } from '@/plugins/mood/moodStore';
+import { simulationStore } from '../../simulationStore';
 import { useSyncExternalStore } from 'react';
 
 /**
@@ -34,7 +35,20 @@ export function FractalVariant({ voiceState, botStream, localStream }: VariantPr
 
   const { params } = useOrbState();
   const { stateOverrides, moodOverrides } = useOrbOverrides();
-  const mood = useSyncExternalStore(moodStore.subscribe, moodStore.get, moodStore.get);
+  const liveMood = useSyncExternalStore(moodStore.subscribe, moodStore.get, moodStore.get);
+  const sim = useSyncExternalStore(
+    simulationStore.subscribe, simulationStore.getSnapshot, simulationStore.getSnapshot,
+  );
+
+  // Rendering uses the simulated pins when the authoring panel set
+  // them, otherwise the live sources. Simulation never persists — it
+  // only affects what this session sees.
+  const effectiveState = sim.pinnedState ?? voiceState;
+  const effectiveMood = sim.pinnedMood ?? {
+    valence: liveMood.valence,
+    arousal: liveMood.arousal,
+    guardedness: liveMood.guardedness,
+  };
 
   // `base` is the composed preset — palette + params + state delta +
   // mood-scaled delta. The state crossfade picks between two composed
@@ -45,18 +59,20 @@ export function FractalVariant({ voiceState, botStream, localStream }: VariantPr
       params as Record<string, number | string>,
       stateOverrides,
       moodOverrides,
-      voiceState,
-      { valence: mood.valence, arousal: mood.arousal, guardedness: mood.guardedness },
+      effectiveState,
+      effectiveMood,
     ) as unknown as FractalPreset,
-    [params, stateOverrides, moodOverrides, voiceState,
-     mood.valence, mood.arousal, mood.guardedness],
+    [params, stateOverrides, moodOverrides, effectiveState,
+     effectiveMood.valence, effectiveMood.arousal, effectiveMood.guardedness],
   );
   const baseRef = useRef(base);
   baseRef.current = base;
 
-  // Shared driver.
+  // Shared driver. Pass `effectiveState` so simulation-pinning flows
+  // through the crossfade machine too; otherwise the visuals would
+  // lag until the real voice pipeline hit the pinned state.
   const { dBotRef, dUserRef } = useAudioEnvelopes({ botStream, localStream });
-  const { snapRef } = useStateCrossfade(voiceState, base);
+  const { snapRef } = useStateCrossfade(effectiveState, base);
   const { breathNormRef } = useIdleBreath();
   const { clickDirRef, clickStrengthRef, dragVelRef } = usePointerInteraction(meshRef);
 
