@@ -1,5 +1,6 @@
 import { Panel } from '@/components/ui/panel';
 import { LLMSettings } from './LLMSettings';
+import { MicSettings } from './MicSettings';
 import { TTSSettings } from './TTSSettings';
 
 /**
@@ -12,6 +13,7 @@ export function SettingsPanel() {
     <div className="space-y-5">
       <LLMSettings />
       <TTSSettings />
+      <MicSettings />
       <Panel title="STT">
         <p className="text-xs text-zinc-500">
           Speech-to-text is configured via environment variables today —

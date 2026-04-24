@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
+import { MicTest } from '@/shared/audio/MicTest';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
@@ -14,7 +15,7 @@ const DEFAULT_LLM_PRESET =
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
-type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'done' | 'hatching';
+type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'mic' | 'done' | 'hatching';
 
 /**
  * First-run setup wizard. Detects "no setup done yet" via a
@@ -75,8 +76,14 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
           )}
           {step === 'pick' && (
             <PickStep
-              onNext={() => setStep('done')}
+              onNext={() => setStep('mic')}
               onBack={() => setStep('llm')}
+            />
+          )}
+          {step === 'mic' && (
+            <MicStep
+              onNext={() => setStep('done')}
+              onBack={() => setStep('pick')}
             />
           )}
           {step === 'done' && (
@@ -91,7 +98,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 // ── Indicator ──────────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: Step }) {
-  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'done'];
+  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'mic', 'done'];
   const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
@@ -686,6 +693,32 @@ function StarterCard({
       </div>
       <div className="text-[10px] text-zinc-600 mt-2 uppercase tracking-wider">
         {starter.variant} · {starter.palette}
+      </div>
+    </div>
+  );
+}
+
+function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [verified, setVerified] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center space-y-2">
+        <h2 className="text-lg text-zinc-200">Microphone</h2>
+        <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+          ORBIS is voice-first. Grant mic access and watch the level meter
+          react to your voice before we hatch.
+        </p>
+      </div>
+
+      <MicTest onVerified={() => setVerified(true)} />
+
+      <div className="flex justify-between pt-2">
+        <Button variant="ghost" onClick={onBack}>Back</Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onNext}>Skip for now</Button>
+          <Button onClick={onNext} disabled={!verified}>Continue</Button>
+        </div>
       </div>
     </div>
   );
