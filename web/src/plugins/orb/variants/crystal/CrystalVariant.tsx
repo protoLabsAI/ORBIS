@@ -3,11 +3,11 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Environment, MeshTransmissionMaterial } from '@react-three/drei';
 import type { CrystalPreset } from './presets';
-import { useOrbState } from '../../useOrbState';
 import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
 import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
 import { usePointerInteraction } from '../../shared/hooks/usePointerInteraction';
+import { useComposedBase } from '../../shared/hooks/useComposedBase';
 import { Atmosphere } from '../../shared/atmosphere/Atmosphere';
 import {
   BREATH_AMP,
@@ -36,11 +36,12 @@ export function CrystalVariant({ voiceState, botStream, localStream }: VariantPr
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const matRef = useRef<any>(null);
 
-  const { params } = useOrbState();
-  const base = params as unknown as CrystalPreset;
+  // Composed base = palette + params + state/mood deltas + simulation
+  // pins; see useComposedBase for the full composition chain.
+  const { base, effectiveState } = useComposedBase<CrystalPreset>(voiceState);
 
   const { dBotRef, dUserRef } = useAudioEnvelopes({ botStream, localStream });
-  const { snapRef } = useStateCrossfade(voiceState, base);
+  const { snapRef } = useStateCrossfade(effectiveState, base);
   const { breathNormRef } = useIdleBreath();
   const { clickDirRef, clickStrengthRef, dragVelRef } = usePointerInteraction(meshRef);
 
