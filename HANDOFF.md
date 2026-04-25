@@ -1,7 +1,8 @@
 # HANDOFF — ORBIS
 
-*Updated 2026-04-23 (evening) after the Medium LLM-wizard pass +
-first live user test.*
+*Updated 2026-04-24 (after the desktop-voice arc — PR #28 merged,
+PR #30 in flight). Apple Silicon Mac desktop build now ships voice
+end-to-end.*
 
 This doc is for the next human to sit down with ORBIS — whether
 that's tomorrow-you, a teammate picking it up, or a handoff to a
@@ -33,8 +34,11 @@ developer-facing overview.
   user-picked starter orb. Paid tier (one-time Stripe purchase,
   7-day offline-tolerant cache) unlocks full customization.
 - **Status:** Architecture is locked. Engineering spine is complete.
-  **Setup wizard + voice round-trip verified live on first user
-  test.** Remaining work is polish + follow-ups.
+  **Mac desktop build runs the full voice loop end-to-end** —
+  signed + notarized .dmg installs, mic permission prompts cleanly,
+  audio reaches Pipecat, MLX-LM in-process replies, Kokoro speaks
+  back. ~1.0-1.2s first-audio-out per turn on M1 base. Remaining
+  work is polish + follow-ups.
 
 ## What works — verified live
 
@@ -50,9 +54,16 @@ developer-facing overview.
 - **Starter-orb preview modal** renders the live shader + drag-to-
   rotate works
 - **`/api/llm/test` button** successfully validates provider setup
-  from the wizard
+  from the wizard (HTTP path AND the new `mlx://` HF-id probe)
 - **Local auto-detect** surfaces running Ollama / LM Studio when
   present
+- **Mac desktop build (signed + notarized .dmg)** installs from the
+  CI artifact, opens, prompts for mic permission via TCC, completes
+  the full voice round-trip with MLX in-process LLM
+- **MLX-LM adapter** loads Qwen3.5-4B in 1.8s warm, generates at 42
+  tok/s decode on M1 base, no thinking-preamble dead air
+- **Bench harness** (`python scripts/bench.py --turns 10`) produces
+  repeatable per-component numbers — see STATUS.md TL;DR
 
 ## What's probable but unverified
 
@@ -132,6 +143,22 @@ before declaring a release.
 
 ## Known issues / rough edges
 
+- **Tool-call translation gap in Ollama + MLX adapters.** Both new
+  adapters log a one-time warning and proceed content-only when the
+  pipecat context has tool calls — meaning `delegate_to` and the
+  orb-control tools won't reach gemma3+/qwen3+ on Ollama or any
+  model on MLX yet. OpenAI-compat path still has full tool support;
+  cloud users unaffected. See `voice/llm/ollama.py` + `mlx.py`
+  header comments.
+- **gemma3n on mlx-lm 0.31.x** has an upstream `sanitize()` bug
+  (`KeyError: 'model'`) that breaks loading. Default MLX preset is
+  Qwen3.5-4B as a workaround; flip back when the upstream fix lands.
+- **MicroAckInjector still fires on every turn.** Trigger lifted
+  500ms → 1500ms (PR #30) but with the LLM at ~1s round-trip the
+  filler still wins the race. UX call: lift further, drop volume,
+  or make conditional on conversation length.
+- **Pipecat `STTService._ttfb_timeout_handler` warning** — pipecat
+  asyncio bug, cosmetic.
 - **`_active_skill()` naming shim.** `app.py` + `a2a/server.py`
   still reference `skill_slug_provider` / `_active_skill()` —
   compat shims returning the Persona. Functional but confusing; due
@@ -192,14 +219,16 @@ before declaring a release.
 
 ## Recommended next steps (in priority order)
 
-### Immediate (before public-facing demo)
+### Immediate (this week — pre-ship)
 
-1. **Run the remaining QA checklist items above.** Budget ~2 hours
-   for the "unverified" list.
-2. **Fix whatever it surfaces.** WebGL context-lost is the most
-   likely thing that'll matter at a real demo.
-3. **Cut v0.1.0.** Tag the release, confirm the Docker image
-   publishes, fix any release-pipeline issues.
+1. **Merge PR #30** (voice + MLX + bench). Ready; needs review.
+2. **Tool-call translation in Ollama + MLX adapters.** Currently
+   warned + skipped — needed for `delegate_to` to reach gemma3+/
+   qwen3+ on local backends. ~half-day each.
+3. **Run the remaining QA checklist items below.** Budget ~2 hours.
+4. **Cut v0.1.11 and verify a fresh-install Mac user flow** — DMG
+   installs, mic prompt fires, voice round-trip works on a
+   first-time machine. This is the actual ship test.
 
 ### Short-term (next 1-2 weeks)
 

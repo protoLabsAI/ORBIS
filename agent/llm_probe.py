@@ -43,12 +43,76 @@ def _normalize_base(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# MLX endpoint validation
+# ---------------------------------------------------------------------------
+
+
+async def _ping_mlx(url: str, model: str) -> dict:
+    """Validate an `mlx://<hf-id>` configuration without triggering
+    the model download. HEAD the model's config.json on HuggingFace —
+    200 means the repo exists and is reachable; 404 means the user
+    typed an id that doesn't resolve.
+
+    Returns a `note` field the wizard can surface alongside ok/error
+    so the user sees "First voice session will download ~Xgb" before
+    they hit Continue.
+    """
+    # Model id can come from either the url (mlx://<id>) or the
+    # explicit `model` field — the wizard fills both.
+    hf_id = url[len("mlx://"):] if url.startswith("mlx://") else model
+    hf_id = (hf_id or "").strip()
+    if not hf_id or "/" not in hf_id:
+        return {
+            "ok": False,
+            "error": "MLX models need a HuggingFace id like 'mlx-community/<model>'",
+        }
+    t0 = time.perf_counter()
+    head_url = f"https://huggingface.co/{hf_id}/resolve/main/config.json"
+    try:
+        async with httpx.AsyncClient(timeout=_TEST_TIMEOUT, follow_redirects=True) as client:
+            r = await client.head(head_url)
+    except httpx.TimeoutException:
+        return {"ok": False, "error": "timeout reaching huggingface.co"}
+    except httpx.RequestError as exc:
+        return {"ok": False, "error": f"network: {exc}"}
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    if r.status_code == 200:
+        return {
+            "ok": True,
+            "latency_ms": latency_ms,
+            "note": "First voice session will download the model (~2-5 GB).",
+        }
+    if r.status_code in (401, 404):
+        return {
+            "ok": False,
+            "error": f"model '{hf_id}' not found on HuggingFace",
+            "latency_ms": latency_ms,
+            "status": r.status_code,
+        }
+    return {
+        "ok": False,
+        "error": f"HuggingFace returned HTTP {r.status_code}",
+        "latency_ms": latency_ms,
+        "status": r.status_code,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Test connection — real chat round-trip
 # ---------------------------------------------------------------------------
 
 
 async def ping_endpoint(url: str, model: str, api_key: str = "") -> dict:
     """Ping the chat endpoint with a minimal prompt and time it."""
+    # MLX is in-process — there's no HTTP endpoint to ping. Treat the
+    # URL as an `mlx://<huggingface-model-id>` and validate that the
+    # model id is fetchable from HF (HEAD on a config file). Cheap
+    # network round-trip, no model download. Returns a clear note
+    # about the first-run download so the user isn't surprised by
+    # the multi-GB pull when they start a voice session.
+    if (url or "").startswith("mlx://"):
+        return await _ping_mlx(url, model)
+
     base = _normalize_base(url)
     if not base or not model:
         return {"ok": False, "error": "url and model are required"}

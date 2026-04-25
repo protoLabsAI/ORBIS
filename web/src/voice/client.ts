@@ -1,6 +1,24 @@
 import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { apiKeyStore } from '@/auth/apiKey';
+import {
+  getPreferredAudioDeviceId,
+  subscribePreferredAudioDeviceId,
+} from '@/shared/audio/preferredDevice';
+
+// Transport states (from pipecat client docs) where `updateMic()` is
+// safe to call — the local input pipeline exists and the transport is
+// past the initialize phase. "initializing" and "disconnected" still
+// throw with NotSupportedError because the device manager hasn't been
+// constructed yet.
+const MIC_READY_STATES = new Set([
+  'initialized',
+  'authenticating',
+  'authenticated',
+  'connecting',
+  'connected',
+  'ready',
+]);
 
 /**
  * Build a PipecatClient wired to ORBIS's SmallWebRTCRequestHandler.
@@ -28,10 +46,58 @@ export function buildClient(): PipecatClient {
     },
     waitForICEGathering: true,
   });
-  return new PipecatClient({
+  // Latched mic id — updated by the localStorage subscriber, applied
+  // once the transport reaches an `updateMic`-safe state. We never
+  // drop a desired id; the latest write wins on every state-change
+  // tick until the transport accepts it.
+  let pendingDeviceId: string | null = getPreferredAudioDeviceId() || null;
+  let micApplied = false;
+
+  const applyMicIfReady = (state: string, client: PipecatClient) => {
+    if (!MIC_READY_STATES.has(state)) return;
+    const id = pendingDeviceId;
+    if (id === null) {
+      micApplied = true;
+      return;
+    }
+    try {
+      client.updateMic(id);
+      micApplied = true;
+    } catch {
+      // Transport flapped between the state event and the call —
+      // leave `micApplied=false` so the next state tick retries.
+    }
+  };
+
+  const client = new PipecatClient({
     transport,
     enableMic: true,
     enableCam: false,
-    callbacks: {},
+    callbacks: {
+      // Apply the pending mic id once the transport is initialized
+      // enough to honor it. Pipecat only fires this for transitions,
+      // not the initial state, so the subscribe below also probes
+      // the current state on later writes.
+      onTransportStateChanged: (state: string) => {
+        if (!micApplied) applyMicIfReady(state, client);
+      },
+    },
   });
+
+  // Plumb the user's selected mic into Pipecat. The picker writes to
+  // localStorage via `setPreferredAudioDeviceId`; we update the latched
+  // value and re-attempt applying it. Empty string means "system
+  // default" — Pipecat treats that as no override, but we still want
+  // to clear any prior selection, so we pass it through.
+  subscribePreferredAudioDeviceId((id) => {
+    pendingDeviceId = id || null;
+    micApplied = false;
+    // Try eagerly — if we're already ready, this lands immediately.
+    // The transport exposes its current state via `state` getter on
+    // versions that support it; fall back to the callback path.
+    const current = (client as unknown as { state?: string }).state;
+    if (current) applyMicIfReady(current, client);
+  });
+
+  return client;
 }

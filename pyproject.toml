@@ -25,6 +25,14 @@ dependencies = [
     "pyyaml",
     # Observability
     "langfuse>=4,<5",
+    # MLX-LM for native Apple Silicon LLM inference (Mac arm64 only).
+    # Added so the desktop sidecar can run the LLM in-process via
+    # Apple's MLX framework instead of requiring a separate Ollama
+    # install. Conditional dep — pip will skip on Linux/Windows
+    # (where the Docker self-host path is the supported answer per
+    # README). See voice/llm/mlx.py + voice/llm/__init__.py for the
+    # adapter + factory routing.
+    "mlx-lm>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [project.optional-dependencies]

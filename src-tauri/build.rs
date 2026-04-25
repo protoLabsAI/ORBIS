@@ -11,10 +11,17 @@ fn main() {
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rerun-if-changed=src/mic_permission.m");
+        println!("cargo:rerun-if-changed=src/media_permission_patch.m");
         cc::Build::new()
             .file("src/mic_permission.m")
+            .file("src/media_permission_patch.m")
             .flag("-fobjc-arc")
-            .compile("orbis_mic_permission");
+            .compile("orbis_mac_shims");
         println!("cargo:rustc-link-lib=framework=AVFoundation");
+        // WebKit for the WKWebView delegate swap, AppKit for NSWindow /
+        // NSView traversal. CoreFoundation comes in transitively via
+        // those, no explicit link needed.
+        println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rustc-link-lib=framework=AppKit");
     }
 }

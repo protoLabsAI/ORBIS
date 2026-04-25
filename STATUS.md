@@ -1,6 +1,6 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-23 (evening pass). Branch: `main`.*
+*Last updated 2026-04-24 (PR #28 + #30 voice / desktop arc). Branch: `main` + `feat/desktop-voice-followup` (PR #30 open).*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -12,9 +12,17 @@ time, remembers you across sessions, and delegates heavy reasoning to
 your configured agents. Single-owner, tailnet-hostable, SQLite-backed
 memory + personality, pipecat voice pipeline with kokoro default TTS.
 
-Repo is **runnable + tested live** — setup wizard ships end-to-end,
-voice session connects + responds, 131 passing unit tests. 47+ commits
-shipped.
+**Desktop voice loop functional end-to-end on Apple Silicon.** Mic
+permission lands via TCC (Developer-ID signed builds + a runtime
+WKUIDelegate patch + an AVCaptureDevice TCC shim), audio reaches
+Pipecat, Whisper transcribes (~250ms), MLX-LM in-process generates
+the reply (~350ms TTFB, 42 tok/s decode on M1 Pro 32GB), Kokoro speaks
+back (0.16× realtime). First-audio-out per turn ~1.0-1.2s on M1
+base; scales ~2× per Apple-Silicon generation.
+
+Repo is **runnable + tested live** — setup wizard ships end-to-end
+on Mac desktop build, voice session connects + responds with the
+full STT → LLM → TTS chain producing audio. 131 passing unit tests.
 
 ## Where we are
 
@@ -25,9 +33,12 @@ shipped.
 - **Tests:** 131 passing (`pytest`), zero failures
 - **Build:** frontend bundles cleanly; Dockerfile restored + runnable
 - **Live verified:** setup wizard + hatch animation + voice session
-  round-trip confirmed working on first-user test box
+  round-trip confirmed working on first-user test box, AND in the
+  Mac desktop build (Tauri shell + signed/notarized .dmg)
 - **Release pipeline:** `.github/workflows/` retargeted to
-  `protoLabsAI/ORBIS` + `ghcr.io/protolabsai/orbis`; tag not yet cut
+  `protoLabsAI/ORBIS`; v0.1.10 tagged. Desktop-build workflow now
+  produces signed + notarized .dmg via App Store Connect API key
+  (PR #28 wired secrets through Infisical → GitHub Actions sync)
 
 ### What's shipped
 
@@ -43,7 +54,37 @@ shipped.
 - Soft-neglect mood shifts over days of silence
 - Tool surface: `delegate_to` + 5 orb-control tools + `adjust_personality`
 - TTS pluggable: kokoro / openai-compat / elevenlabs / fish
-- LLM-endpoint probing (test, model list, local auto-detect) — see below
+- **LLM factory** (`voice/llm/`) — pluggable adapters: OpenAI-compat,
+  Ollama-native (uses /api/chat so `think:false` actually works),
+  MLX-LM in-process for Apple Silicon. Provider auto-detected from
+  URL shape; explicit override via persona config. See
+  `DECISIONS.md` § "LLM factory + MLX-LM as Apple-Silicon default".
+- LLM-endpoint probing (test, model list, local auto-detect, MLX
+  HF-id validation) — see below
+
+**Desktop shell (Tauri 2 + Mac signing)**
+- Tauri shell with PyApp-bundled Python sidecar. Apple Silicon arm64
+  is the supported desktop target; Linux/Windows builds remain in CI
+  for completeness but are deprioritized (Docker self-host is the
+  cross-platform answer per README).
+- WKWebView WebContent media-capture works via two Obj-C shims:
+  `mic_permission.m` (TCC registration via `AVCaptureDevice`) and
+  `media_permission_patch.m` (runtime swap of wry's UIDelegate from
+  Grant → Prompt so TCC actually gates the WebContent process).
+- Hardened-runtime entitlements: `device.audio-input`,
+  `device.camera`, network, JIT, `disable-library-validation`.
+- CI builds Developer-ID-signed + notarized .dmg via App Store
+  Connect API key. Secrets pulled from Infisical → GitHub Actions.
+
+**Voice loop benchmarks** — Apple M1 Pro 10-core 32GB (MacBookPro18,1),
+macOS 26.2, current defaults, 10-turn run:
+- STT (Whisper-base.en): 244ms p50 for 3s clip
+- LLM TTFB (MLX Qwen3.5-4B 4-bit): 327ms p50, 422ms p95
+- LLM decode: 45 tok/s steady-state
+- TTS (Kokoro): 294ms TTFA p50, 0.13× RTF (~7.7× faster than realtime)
+- End-to-end first-audio-out: ~1.0s per turn
+- Repeatable: `python scripts/bench.py --turns 10` (script prints
+  the hardware fingerprint at the top of every run for context)
 
 **API surface** (`/api/*`, auth-gated except where noted)
 | Route | Method | Auth | Purpose |

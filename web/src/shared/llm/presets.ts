@@ -12,6 +12,12 @@ export interface LLMPreset {
   needsKey: boolean;
   keyPlaceholder?: string;
   blurb: string;
+  /** Show in the always-visible top row of the wizard's LLM picker.
+   * Non-featured presets live behind a "Show all providers" expander
+   * so the default surface stays scannable — most users want one of
+   * the local options or one of the two big cloud labels, not the
+   * full 15-tile grid. */
+  featured?: boolean;
 }
 
 // Local-first + hosted + gateway presets. All OpenAI-protocol unless
@@ -24,10 +30,16 @@ export interface LLMPreset {
 export const LLM_PRESETS: LLMPreset[] = [
   // --- Local / self-hosted (the desktop-app happy path) ---
   {
+    id: 'mlx', label: 'Built-in (MLX)',
+    url: 'mlx://mlx-community/Qwen3.5-4B-MLX-4bit', model: 'mlx-community/Qwen3.5-4B-MLX-4bit',
+    needsKey: false, featured: true,
+    blurb: 'Apple Silicon native — Qwen 3.5 4B running in-process via Apple’s MLX framework. Best quality on M-series. First-time download ~2.5GB; cached after that.',
+  },
+  {
     id: 'ollama', label: 'Ollama',
-    url: 'http://127.0.0.1:11434/v1', model: 'llama3.2',
-    needsKey: false,
-    blurb: 'Local. Auto-detected if running. Recommended for the desktop app.',
+    url: 'http://127.0.0.1:11434/v1', model: 'gemma3n:e2b',
+    needsKey: false, featured: true,
+    blurb: 'Local separate process. Use if you already run Ollama or want to share a model with other tools.',
   },
   {
     id: 'lm_studio', label: 'LM Studio',
@@ -45,13 +57,13 @@ export const LLM_PRESETS: LLMPreset[] = [
   {
     id: 'openai', label: 'OpenAI',
     url: 'https://api.openai.com/v1', model: 'gpt-4o-mini',
-    needsKey: true, keyPlaceholder: 'sk-...',
+    needsKey: true, keyPlaceholder: 'sk-...', featured: true,
     blurb: 'Fast + cheap. A few cents per hour of chatter.',
   },
   {
     id: 'anthropic', label: 'Anthropic',
     url: 'https://api.anthropic.com/v1', model: 'claude-haiku-4-5',
-    needsKey: true, keyPlaceholder: 'sk-ant-...',
+    needsKey: true, keyPlaceholder: 'sk-ant-...', featured: true,
     blurb: 'Claude Haiku. Great personality, slightly pricier.',
   },
   {
@@ -113,8 +125,8 @@ export const LLM_PRESETS: LLMPreset[] = [
   {
     id: 'custom', label: 'Custom',
     url: '', model: '',
-    needsKey: true, keyPlaceholder: 'api key (optional)',
-    blurb: 'Paste your own OpenAI-compatible URL.',
+    needsKey: true, keyPlaceholder: 'api key (optional)', featured: true,
+    blurb: 'Paste your own OpenAI-compatible URL — works for any gateway, proxy, or custom endpoint.',
   },
 ];
 

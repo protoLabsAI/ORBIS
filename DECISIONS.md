@@ -290,6 +290,76 @@ as a product promise is unreachable without that acceleration.
   viable — no toolkit requirement, no override file. The GPU-first
   posture is strictly a docker concern.
 
+## Amendment — 2026-04-24: LLM factory + MLX-LM as Apple-Silicon default
+
+The LLM has graduated from "single OpenAILLMService talking to whatever
+URL is configured" to a small adapter pattern under `voice/llm/`:
+
+  voice/llm/__init__.py     — make_llm() factory + provider auto-detect
+  voice/llm/openai.py       — re-export of pipecat's OpenAI-compat path
+  voice/llm/ollama.py       — native /api/chat (so `think: false` works)
+  voice/llm/mlx.py          — Apple Silicon native via mlx-lm
+
+Selection precedence (in `make_llm`):
+
+  1. Explicit `provider="..."` kwarg
+  2. `mlx://<huggingface-id>` URL scheme  → MLXLLMService
+  3. URL shape (port 11434, "ollama" hostname) → OllamaLLMService
+  4. Probe `<root>/api/version` 200 → OllamaLLMService
+  5. Fall back to OpenAILLMService
+
+Why each adapter exists:
+
+- **Ollama-native** — Ollama's OpenAI-compat /v1/chat/completions
+  silently ignores the `think: false` request field. Models with
+  reasoning preambles (gemma3/4, qwen3, deepseek-r1) jam pipecat's
+  sentence aggregator until the reasoning phase ends. Native
+  /api/chat honors `think`; first content tokens land in 100-300ms
+  instead of 6-8s.
+- **MLX-LM** — Mac users no longer need a separate Ollama install.
+  Models download into the HF cache the same way Whisper and Kokoro
+  already do; the LLM runs in-process inside the Python sidecar.
+  ~2× faster than llama.cpp on Apple Silicon for the same
+  quantization. Lazy-imported so non-Mac builds keep working without
+  the dependency.
+
+Default desktop wizard preset is now `mlx-community/Qwen3.5-4B-MLX-4bit`.
+The OllamaInstallHelper preset stays available for users who already
+run Ollama or want to share models with other tooling. We deliberately
+don't auto-upgrade Ollama users to MLX — a multi-GB silent download
+under the user violates the "no surprises" principle.
+
+This decision pushes the explicit cross-platform desktop story:
+**Apple Silicon Mac is the supported desktop product. Linux/Windows
+desktop builds remain in CI for completeness but are deprioritized;
+the supported answer for those platforms is the Docker self-host
+path that's already documented.**
+
+## Amendment — 2026-04-24: Tauri shell + WebContent media capture
+
+The Tauri 2 desktop shell now ships with three runtime patches that
+make the WKWebView's WebContent subprocess actually usable for
+real-time voice on a Developer-ID-signed Mac build:
+
+- `src-tauri/src/mic_permission.m` — calls
+  `AVCaptureDevice.requestAccessForMediaType:` at app boot so TCC
+  registers our bundle id. Without this, our app never appears in
+  System Settings → Privacy & Security → Microphone.
+- `src-tauri/src/media_permission_patch.m` — runtime swap of wry's
+  WKUIDelegate. wry hardcodes `WKPermissionDecision::Grant` for
+  media capture, which bypasses TCC and hands WebContent a dead
+  audio stream. We replace the decision with `Prompt`, which routes
+  through TCC properly. Re-applies on a 1-second heartbeat so
+  reload / new-webview events get caught.
+- `src-tauri/entitlements.plist` — adds `audio-input`, `camera`,
+  network, JIT, library-validation exceptions required by hardened
+  runtime + WebContent.
+
+These patches are Mac-specific (no-op on other platforms via cfg).
+They're considered part of the supported architecture, not
+workarounds — wry's media-capture default isn't going to change
+upstream anytime soon, and the Apple-side requirements are stable.
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:

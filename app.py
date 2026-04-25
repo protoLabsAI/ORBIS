@@ -73,6 +73,8 @@ from pipecat.utils.context.llm_context_summarization import (
     LLMContextSummaryConfig,
 )
 from pipecat.services.openai.llm import OpenAILLMService
+
+from voice.llm import make_llm
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -597,8 +599,28 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # needs a different extra-body shape) can override via
     # persona.llm.extra_body.
     if "extra_body" in skill_llm:
+        # User-provided override always wins.
         extra_body = skill_llm["extra_body"] or None
+    elif using_custom_llm:
+        # Custom URL = send a bare OpenAI-compat request. Don't try to
+        # inject reasoning-disable hints — every gateway / proxy /
+        # in-house wrapper has its own opinions about what fields are
+        # allowed, and an unfamiliar field can trip a WAF / 400 / 403
+        # depending on the stack. Specifically: proto-labs.ai's
+        # LiteLLM-backed gateway rejects `chat_template_kwargs`,
+        # `think`, and `enable_thinking` outright with 400 ("unsupported
+        # property"), and we observed even `reasoning_effort: minimal`
+        # triggering 403 ("Your request was blocked.") on certain
+        # model+system-prompt combos. Same pattern hit in the
+        # protoVoice seed before — the original code's `elif
+        # using_custom_llm: extra_body = None` was the right call. If
+        # a custom backend has a thinking-disable convention, the user
+        # opts in via persona.llm.extra_body explicitly.
+        extra_body = None
     else:
+        # Default endpoint (the project-bundled vLLM) — safe to send
+        # the chat-template-kwargs convention vLLM understands. Skills
+        # / personas can override via extra_body for finer control.
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
 
     settings_kwargs: dict = {
@@ -609,16 +631,19 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     if extra_body is not None:
         settings_kwargs["extra"] = {"extra_body": extra_body}
 
-    llm = OpenAILLMService(
-        api_key=llm_api_key,
+    # voice/llm/__init__.py picks the right adapter — Ollama instances
+    # get the native /api/chat path (which honors `think: false`),
+    # everything else routes through pipecat's OpenAI-compat service.
+    # The factory also handles the supports_developer_role swap for
+    # the project's default endpoint.
+    llm = make_llm(
         base_url=llm_url,
+        model=llm_model,
+        api_key=llm_api_key,
         settings=OpenAILLMService.Settings(**settings_kwargs),
+        provider=skill_llm.get("provider"),
+        using_custom_url=using_custom_llm,
     )
-    # vLLM rejects `role: developer` (used for async-tool result injection);
-    # OpenAI-compatible gateways generally accept it. Only strip when we
-    # know we're hitting the default local endpoint.
-    if not using_custom_llm:
-        llm.supports_developer_role = False
 
     # Per-skill delegate filter. Empty list / None = all delegates exposed.
     session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
@@ -793,9 +818,11 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
         # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~500 ms of UserStoppedSpeaking, emit a quiet "mm" / "hm"
-        # so the agent feels responsive on slow turns. Cancels when the
-        # bot actually starts speaking. Vapi Fill Injection pattern.
+        # within ~1500 ms (default; per-persona override via
+        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
+        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
+        # Cancels when the bot actually starts speaking. Vapi Fill
+        # Injection pattern.
         MicroAckInjector(
             tts_backend=tts_backend,
             enabled=ma_cfg["enabled"],
@@ -1260,6 +1287,241 @@ async def llm_models(body: dict):
     return await list_models(
         url=str(body.get("url") or ""),
         api_key=str(body.get("api_key") or ""),
+    )
+
+
+def _ollama_url_is_safe(url: str) -> bool:
+    """Reject non-local Ollama URLs to prevent the unauth ``/api/llm/pull``
+    route from being weaponized as an SSRF gadget.
+
+    The route is unauth (the wizard runs before an API key is set up).
+    Without this guard, a malicious page in the WKWebView (or anyone
+    on 127.0.0.1 with the ephemeral port) could pass any URL and have
+    the sidecar POST to it — most concerningly the cloud-metadata
+    endpoint at 169.254.169.254 if the user later runs ORBIS on a
+    cloud host.
+
+    Allowed:
+      - http(s) scheme
+      - loopback by name (``localhost``, ``ip6-localhost``)
+      - loopback or RFC-1918 private IPs (127.0.0.0/8, 10/8, 172.16/12,
+        192.168/16, fc00::/7, ::1)
+      - mDNS/Tailscale-style hostnames (``*.local``, ``*.lan``,
+        ``*.ts.net``) so users with Ollama on another box on their
+        tailnet still work
+
+    Rejected: everything else, including link-local 169.254.x.x
+    (cloud metadata) and any public hostname/IP.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "ip6-localhost", "ip6-loopback"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # Hostname (not an IP literal). Constrain to local-network suffixes
+        # that aren't routable on the public internet.
+        return host.endswith(".local") or host.endswith(".lan") or host.endswith(".ts.net")
+    # IP literal — accept loopback + private; reject link-local, the
+    # all-zeros unspecified address (which on Linux means "any
+    # interface" and would be a confused-deputy invitation), and
+    # multicast. Python's `is_private` includes 169.254.0.0/16 (and
+    # IPv6 fe80::/10), which is exactly the cloud-metadata range we
+    # need to keep blocked, so check those out explicitly.
+    if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
+@app.post("/api/llm/pull")
+async def llm_pull(body: dict):
+    """Stream an Ollama pull as Server-Sent Events.
+
+    The wizard calls this when a user picks Ollama and the
+    recommended model isn't installed yet — instead of asking them
+    to drop into a terminal and run ``ollama pull <name>``, we
+    proxy Ollama's native ``/api/pull`` and forward each NDJSON
+    progress chunk as an SSE message. The frontend renders a
+    progress bar from the ``completed`` / ``total`` fields.
+
+    Body::
+
+        {"name": "gemma3n:e2b", "url": "http://127.0.0.1:11434"}
+
+    The ``url`` defaults to the local Ollama instance; we trim any
+    trailing ``/v1`` so the same value used as ``llm.url`` for the
+    OpenAI-compat endpoint also works here.
+
+    Unauth — same rationale as ``/api/llm/detect_local``: this runs
+    before the wizard has set up an API key. URL is constrained by
+    ``_ollama_url_is_safe`` so the route can't be turned into an
+    SSRF gadget.
+    """
+    from fastapi.responses import StreamingResponse
+    import httpx as _httpx
+
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "missing model name"}, status_code=400)
+
+    raw_url = str(body.get("url") or "http://127.0.0.1:11434").rstrip("/")
+    if raw_url.endswith("/v1"):
+        raw_url = raw_url[:-3]
+    if not _ollama_url_is_safe(raw_url):
+        # Reject before opening a connection. The error is intentionally
+        # specific — the wizard prompts on the response, and there's
+        # no information leak: the validator only inspects the URL the
+        # caller already supplied.
+        return JSONResponse(
+            {"error": f"refusing to proxy non-local Ollama URL: {raw_url}"},
+            status_code=400,
+        )
+
+    async def _stream():
+        timeout = _httpx.Timeout(connect=5.0, read=None, write=None, pool=None)
+        async with _httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    f"{raw_url}/api/pull",
+                    json={"model": name, "stream": True},
+                ) as resp:
+                    if resp.status_code != 200:
+                        msg = await resp.aread()
+                        yield f"event: error\ndata: {msg.decode(errors='replace')[:200]}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        # Ollama emits NDJSON; pass each line through
+                        # as the data of an SSE message. Frontend just
+                        # JSON.parses each event.data.
+                        yield f"data: {line}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+            except _httpx.HTTPError as e:
+                yield f"event: error\ndata: {str(e)[:200]}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/llm/mlx/pull")
+async def llm_mlx_pull(body: dict):
+    """Stream an MLX model download (via huggingface_hub) as SSE.
+
+    Frontend equivalent of ``/api/llm/pull`` but for the MLX path —
+    when the wizard's user picks the Built-in (MLX) preset, this
+    endpoint downloads the chosen ``mlx-community/...`` repo into
+    the HF cache directly so the first voice session doesn't pay
+    the multi-GB download cost. Emits ``data: {status, completed,
+    total}`` progress events while the download runs, then a final
+    ``event: done``.
+
+    Body: ``{"model": "mlx-community/gemma-3n-E2B-it-4bit"}``
+
+    Unauth — same rationale as ``/api/llm/detect_local``.
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    model_id = str(body.get("model") or "").strip()
+    if not model_id or "/" not in model_id:
+        return JSONResponse(
+            {"error": "model id required (e.g. mlx-community/gemma-3n-E2B-it-4bit)"},
+            status_code=400,
+        )
+
+    async def _stream():
+        try:
+            from huggingface_hub import snapshot_download, HfApi
+        except ImportError as e:
+            yield f"event: error\ndata: huggingface_hub not available: {e}\n\n"
+            return
+
+        loop = _asyncio.get_running_loop()
+        # HF_HOME can be set to override; otherwise the default is the
+        # XDG-ish cache. Read it from the env so we look in the same
+        # place huggingface_hub will write to.
+        hf_home = os.environ.get(
+            "HF_HOME", str(_Path.home() / ".cache/huggingface")
+        )
+        cache_dir = _Path(hf_home) / "hub" / f"models--{model_id.replace('/', '--')}"
+
+        def _dir_size(p: _Path) -> int:
+            if not p.exists():
+                return 0
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+        # Yield an immediate "starting" so the frontend stops sitting
+        # at zero while the size-probe runs.
+        yield 'data: {"status": "fetching repo metadata", "completed": 0, "total": 0}\n\n'
+
+        # Get total size in an executor — HfApi is sync.
+        total_bytes = 0
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: HfApi().repo_info(model_id, files_metadata=True)
+            )
+            for f in info.siblings or []:
+                if f.size:
+                    total_bytes += f.size
+        except Exception as e:
+            yield (
+                f'data: {{"status": "couldn\\u0027t read total size, '
+                f'progress percent will be missing: {str(e)[:100]}", '
+                f'"completed": 0, "total": 0}}\n\n'
+            )
+
+        yield (
+            f'data: {{"status": "downloading", "completed": 0, '
+            f'"total": {total_bytes}}}\n\n'
+        )
+
+        fut = loop.run_in_executor(None, snapshot_download, model_id)
+
+        last = -1
+        while not fut.done():
+            completed = _dir_size(cache_dir)
+            if completed != last:
+                yield (
+                    f'data: {{"status": "downloading", '
+                    f'"completed": {completed}, "total": {total_bytes}}}\n\n'
+                )
+                last = completed
+            await _asyncio.sleep(0.4)
+
+        try:
+            await fut
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)[:200]}\n\n"
+            return
+
+        completed = _dir_size(cache_dir) or total_bytes
+        yield (
+            f'data: {{"status": "done", '
+            f'"completed": {completed}, "total": {total_bytes or completed}}}\n\n'
+        )
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

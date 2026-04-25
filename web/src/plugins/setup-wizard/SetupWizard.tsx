@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
+import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import { MicTest } from '@/shared/audio/MicTest';
+import {
+  getPreferredAudioDeviceId,
+  setPreferredAudioDeviceId,
+} from '@/shared/audio/preferredDevice';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
@@ -237,8 +242,16 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [local, setLocal] = useState<LocalDetected>({});
+  const [showAllProviders, setShowAllProviders] = useState(false);
 
   const current = LLM_PRESETS.find((p) => p.id === provider) ?? DEFAULT_LLM_PRESET;
+  // Show featured presets up front; reveal the long-tail OpenAI-compat
+  // providers (Groq / DeepSeek / OpenRouter / etc.) only if the user
+  // expands the accordion or has selected one of them already.
+  const visiblePresets = (showAllProviders || !current.featured)
+    ? LLM_PRESETS
+    : LLM_PRESETS.filter((p) => p.featured || p.id === provider);
+  const hiddenCount = LLM_PRESETS.length - visiblePresets.length;
 
   // Probe localhost for Ollama / LM Studio once on mount. Silent failure —
   // if they're not running, we just don't show the callout.
@@ -365,9 +378,42 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         </div>
       )}
       {localCallouts.length === 0 && <OllamaInstallHelper />}
+      {provider === 'mlx' && (
+        <ModelPullCallout
+          source="mlx"
+          modelName={model || DEFAULT_LLM_PRESET.model}
+          onPulled={() => {
+            // Mark "test" as ok once the model is local — first
+            // voice session will load from disk in seconds.
+            setTest({ kind: 'ok', latency: 0 });
+          }}
+        />
+      )}
+      {provider === 'ollama' &&
+        local.ollama &&
+        !local.ollama.models.includes(model) && (
+          <ModelPullCallout
+            source="ollama"
+            modelName={model}
+            ollamaUrl={local.ollama.url}
+            onPulled={() => {
+              api
+                .llmDetectLocal()
+                .then((found) => {
+                  setLocal(found as LocalDetected);
+                  const next = (found as LocalDetected).ollama;
+                  if (next?.models.includes(model)) {
+                    setAvailableModels(next.models);
+                    setTest({ kind: 'idle' });
+                  }
+                })
+                .catch(() => {});
+            }}
+          />
+        )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-        {LLM_PRESETS.map((p) => (
+        {visiblePresets.map((p) => (
           <button
             key={p.id}
             type="button"
@@ -386,6 +432,25 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           </button>
         ))}
       </div>
+
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllProviders(true)}
+          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          Show {hiddenCount} more providers ▾
+        </button>
+      )}
+      {showAllProviders && (
+        <button
+          type="button"
+          onClick={() => setShowAllProviders(false)}
+          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          Show fewer ▴
+        </button>
+      )}
 
       <div className="space-y-3">
         <div>
@@ -548,9 +613,123 @@ function OllamaInstallHelper() {
         })}
       </div>
       <div className="text-[11px] text-zinc-500 mt-2">
-        After install, run <code>ollama pull llama3.2</code> then reopen
-        this step — we'll detect it automatically.
+        After install, reopen this step — we'll detect Ollama and offer
+        to pull the recommended <code>gemma3n:e2b</code> model
+        automatically.
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shown when Ollama IS detected but the recommended model isn't
+ * installed. One-click pull through the backend's SSE proxy of
+ * Ollama's `/api/pull`. Renders a progress bar from
+ * `completed`/`total` byte counts; on success calls `onPulled` so
+ * the parent can refresh its model list and advance.
+ */
+function ModelPullCallout({
+  modelName,
+  source,
+  ollamaUrl,
+  onPulled,
+}: {
+  modelName: string;
+  /** 'ollama' uses /api/llm/pull; 'mlx' uses /api/llm/mlx/pull. */
+  source: 'ollama' | 'mlx';
+  /** Required when source='ollama'. */
+  ollamaUrl?: string;
+  onPulled: () => void;
+}) {
+  const [pulling, setPulling] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const start = async () => {
+    setPulling(true);
+    setError(null);
+    setDone(false);
+    setStatus(source === 'mlx' ? 'starting download' : 'contacting Ollama');
+    setCompleted(0);
+    setTotal(0);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      const stream = source === 'mlx'
+        ? pullMlxModel(modelName, { signal: ac.signal })
+        : pullOllamaModel(modelName, ollamaUrl ?? 'http://127.0.0.1:11434', { signal: ac.signal });
+      for await (const evt of stream) {
+        if (evt.error) {
+          setError(evt.error);
+          continue;
+        }
+        if (evt.status) setStatus(evt.status);
+        if (typeof evt.completed === 'number') setCompleted(evt.completed);
+        if (typeof evt.total === 'number') setTotal(evt.total);
+      }
+      if (!ac.signal.aborted) {
+        setDone(true);
+        onPulled();
+      }
+    } catch (e) {
+      if (!ac.signal.aborted) setError(String((e as Error).message ?? e));
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const cancel = () => abortRef.current?.abort();
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const mb = (n: number) => (n / (1024 * 1024)).toFixed(0);
+
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
+      <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
+        {source === 'mlx' ? 'Built-in model — first run' : 'Recommended model not installed'}
+      </div>
+      <p className="text-[13px] text-zinc-400 mb-3">
+        {source === 'mlx'
+          ? <>Download <code className="text-zinc-200">{modelName}</code> from HuggingFace (~2-5 GB). One-time; cached locally for every future session.</>
+          : <>Pull <code className="text-zinc-200">{modelName}</code> for the fastest local voice loop on this machine. ~5.6 GB; takes a few minutes on a normal connection.</>}
+      </p>
+      {!pulling && !done && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[11px] text-zinc-500">
+            {error ? <span className="text-rose-400">{error}</span> : 'One-time download.'}
+          </div>
+          <Button onClick={start}>Pull {modelName}</Button>
+        </div>
+      )}
+      {pulling && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-zinc-400 truncate pr-2">{status}</span>
+            <span className="text-zinc-500 tabular-nums shrink-0">
+              {total > 0 ? `${mb(completed)} / ${mb(total)} MB · ${pct}%` : '…'}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div
+              className="h-full bg-amber-500/80 transition-[width] duration-200"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button variant="ghost" onClick={cancel}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {done && (
+        <div className="text-sm text-emerald-400">
+          ✓ {modelName} installed. You can continue.
+        </div>
+      )}
     </div>
   );
 }
@@ -711,7 +890,19 @@ function StarterCard({
 function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const [verified, setVerified] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string>('');
+  const [deviceId, setDeviceIdState] = useState<string>(() =>
+    getPreferredAudioDeviceId(),
+  );
+
+  const onChangeDevice = (id: string) => {
+    // Reset verification when the user picks a different mic — the
+    // previous device's verified state shouldn't carry over to a fresh
+    // input that hasn't been tested. (CodeRabbit major #14 on PR #30
+    // and the duplicate finding on the second pass both flag this.)
+    setDeviceIdState(id);
+    setPreferredAudioDeviceId(id);
+    setVerified(false);
+  };
 
   const refreshDevices = async () => {
     try {
@@ -747,7 +938,7 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           </div>
           <select
             value={deviceId}
-            onChange={(e) => setDeviceId(e.target.value)}
+            onChange={(e) => onChangeDevice(e.target.value)}
             className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
           >
             <option value="">System default</option>
@@ -763,6 +954,7 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       <MicTest
         key={deviceId /* rebuild stream when device changes */}
         deviceId={deviceId || undefined}
+        onPermissionGranted={() => void refreshDevices()}
         onVerified={() => {
           setVerified(true);
           void refreshDevices();

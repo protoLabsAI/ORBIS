@@ -56,7 +56,6 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[cfg(target_os = "macos")]
 extern "C" {
-    /// Trigger TCC prompts for mic + camera via `AVCaptureDevice` on
     /// macOS. Defined in `src/mic_permission.m`; without this the
     /// webview's `getUserMedia` call silently auto-grants through
     /// wry's default WKUIDelegate, so Core Audio hands back dead
@@ -66,6 +65,18 @@ extern "C" {
     /// (across launches) hit the cached TCC decision. See the shim's
     /// header comment for the full rationale.
     fn orbis_request_macos_av_access();
+
+    /// Replace wry's WKWebView UIDelegate's media-capture decision
+    /// from `Grant` to `Prompt`, so Core Audio's TCC gate is
+    /// actually consulted instead of bypassed. See
+    /// `src/media_permission_patch.m` for the full rationale —
+    /// short version: wry hardcodes Grant, which is a JS-layer
+    /// approval, but the WebContent subprocess then can't actually
+    /// open the audio device because the OS-level permission
+    /// pathway was short-circuited. Calling Prompt routes through
+    /// TCC properly, finds the grant we already established via
+    /// `orbis_request_macos_av_access`, and the stream wires up.
+    fn orbis_install_media_capture_prompt();
 }
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -164,6 +175,14 @@ pub fn run() {
 /// navigate the main webview on `ORBIS_READY` or surface an error
 /// dialog on a bad exit. Single-shot: one sidecar per app run.
 async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
+    // Schedule the WKWebView UIDelegate swap as soon as we're past
+    // setup. The Obj-C side trampolines to the main queue and polls
+    // for the webview to exist, so timing here is forgiving.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        orbis_install_media_capture_prompt();
+    }
+
     let shell = app.shell();
 
     // Resolve the env vars the sidecar needs at boot:
