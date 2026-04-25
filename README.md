@@ -44,15 +44,18 @@ architectural snapshot.
 
 ## Running it (development)
 
-Requirements: Python 3.11+, Bun or npm, and an LLM endpoint (any of
-OpenAI / Anthropic / Groq / DeepSeek / Ollama / LM Studio / LiteLLM
-gateway / etc. — see the setup wizard for the full preset list).
-Everything — including Whisper STT + Kokoro TTS — runs on CPU by
-default, so no GPU is required. A CUDA GPU is strongly recommended
-for real-time voice though: it drops Whisper latency from ~seconds to
-<200 ms per utterance and trims the first-synth Kokoro warmup from
-30-60s down to a second or two. See [Docker — with / without GPU](#docker--with--without-gpu)
-below.
+Requirements: Python 3.11+, Bun or npm, and an LLM endpoint. The
+desktop app's recommended path is the new **Built-in (MLX)** preset
+which runs Qwen3.5-4B (or any `mlx-community/...` model) in-process
+via Apple's MLX framework — zero extra install, ~2.5GB first-run
+download. Other choices in the wizard: Ollama, LM Studio, vLLM, or
+any of the OpenAI/Anthropic/Groq/DeepSeek/OpenRouter/Together/
+Mistral/Fireworks/Moonshot/xAI cloud providers. Everything —
+including Whisper STT + Kokoro TTS — runs on CPU by default, so no
+GPU is required outside of the LLM. A CUDA GPU is strongly
+recommended for the *non-Mac* dev path; Apple Silicon Macs use the
+unified-memory GPU automatically via MLX + Metal-accelerated Whisper.
+See [Docker — with / without GPU](#docker--with--without-gpu) below.
 
 ```bash
 # One-time
