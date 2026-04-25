@@ -186,11 +186,18 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // Pre-existing values in the parent env win — handy for `cargo
     // tauri dev` where the developer may want to point at the repo's
     // checked-in config or run a real vLLM.
-    let config_path = resolve_config_path(&app);
+    let config_path = resolve_config_path(&app)?;
     if let Some(parent) = config_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("couldn't create config dir {}: {e}", parent.display());
-        }
+        // Fail fast if we can't create the config dir — without it the
+        // sidecar will boot to a broken state (no config, no place for
+        // the wizard to write). Propagating the error routes us to the
+        // fatal-dialog path with a clear "ORBIS couldn't start" message.
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "couldn't create config dir {}: {e}",
+                parent.display()
+            )
+        })?;
     }
     seed_default_config(&app, &config_path);
     let start_vllm = std::env::var("START_VLLM").unwrap_or_else(|_| "0".to_string());
@@ -315,22 +322,25 @@ fn seed_default_config(app: &AppHandle, config_path: &PathBuf) {
 ///   2. `<app_data_dir>/orbis.yaml`, where `app_data_dir` is Tauri's
 ///      platform-correct user-writable location (e.g. on macOS
 ///      `~/Library/Application Support/<bundle-id>/`).
-///   3. Last-ditch fallback: `./orbis.yaml` next to the binary —
-///      only reached if Tauri's path resolver itself errors, which
-///      shouldn't happen in practice. Logged loudly so we notice.
-fn resolve_config_path(app: &AppHandle) -> PathBuf {
+///
+/// We deliberately don't fall back to a relative path here — that's
+/// the trap this PR exists to fix. The bundled sidecar runs with
+/// cwd=`/`, so a relative `./orbis.yaml` would resolve to an
+/// unwritable root path and re-introduce the original "wizard has
+/// nowhere to write" failure mode. If `app_data_dir()` itself fails
+/// (extraordinary on a working install) we propagate the error so
+/// `supervise_sidecar` surfaces it via the fatal-dialog rather than
+/// silently shipping the app to a broken state.
+fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(value) = std::env::var("ORBIS_CONFIG") {
         if !value.is_empty() {
-            return PathBuf::from(value);
+            return Ok(PathBuf::from(value));
         }
     }
-    match app.path().app_data_dir() {
-        Ok(dir) => dir.join("orbis.yaml"),
-        Err(e) => {
-            log::error!("app_data_dir resolve failed ({e}); falling back to ./orbis.yaml");
-            PathBuf::from("orbis.yaml")
-        }
-    }
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("orbis.yaml"))
+        .map_err(|e| format!("app_data_dir resolve failed: {e}"))
 }
 
 /// Extract the URL from a `ORBIS_READY http://host:port` line. Ignores
