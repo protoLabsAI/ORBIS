@@ -217,6 +217,44 @@ def _resolve_skill_llm(skill) -> dict:
     }
 
 
+# Sentinels wrapping pipecat's rolling summary in the LLM context. The
+# summarizer's `summary_message_template` is configured to produce
+# `<orbis-summary>...</orbis-summary>` as a user-role message at index 1
+# of context.messages. The `on_summary_applied` handler matches on these
+# tags to extract the summary text and persist it. Decoupled from
+# pipecat's wrapper so a future pipecat upgrade that changes the
+# default template doesn't silently break our persistence.
+SUMMARY_TAG_OPEN = "<orbis-summary>"
+SUMMARY_TAG_CLOSE = "</orbis-summary>"
+
+
+def _extract_summary_text(messages) -> str | None:
+    """Pull the summary out of a context.messages list. Returns None if
+    no tagged summary message is present.
+
+    Walks all messages (not just role=user) so the parsing is resilient
+    to pipecat changing where it injects the summary. The tag pair is
+    distinct enough that a false-positive match on conversation content
+    would be a deliberate user impression — acceptable risk."""
+    for msg in messages:
+        try:
+            content = msg.get("content") if hasattr(msg, "get") else None
+        except Exception:
+            content = None
+        if not isinstance(content, str):
+            continue
+        if SUMMARY_TAG_OPEN not in content or SUMMARY_TAG_CLOSE not in content:
+            continue
+        start = content.index(SUMMARY_TAG_OPEN) + len(SUMMARY_TAG_OPEN)
+        end = content.index(SUMMARY_TAG_CLOSE)
+        if end <= start:
+            continue
+        text = content[start:end].strip()
+        if text:
+            return text
+    return None
+
+
 def _recall_block(user_id: str) -> str:
     """Session-open memory callback. Composes a nudge block from:
       - the last 3 SQLite session summaries (structured), and
@@ -775,10 +813,22 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     _summary_max_tokens = int(os.environ.get("MEMORY_MAX_CONTEXT_TOKENS", "8000"))
     _summary_max_messages = int(os.environ.get("MEMORY_MAX_MESSAGES", "20"))
     _summary_target_tokens = int(os.environ.get("MEMORY_TARGET_CONTEXT_TOKENS", str(_summary_max_tokens // 2)))
+    # Wrap pipecat's summary in sentinel tags so on_summary_applied can
+    # find and extract the summary content reliably. Without these, the
+    # handler has no way to distinguish the rolling summary from any
+    # other user message — pipecat inserts the summary as a user-role
+    # message at index 1 (NOT a system message; see pipecat's
+    # _apply_summary). Default template "Conversation summary: {summary}"
+    # is also unreliable because legitimate user utterances could match.
     _summary_config = LLMAutoContextSummarizationConfig(
         max_context_tokens=_summary_max_tokens,
         max_unsummarized_messages=_summary_max_messages,
-        summary_config=LLMContextSummaryConfig(target_context_tokens=_summary_target_tokens),
+        summary_config=LLMContextSummaryConfig(
+            target_context_tokens=_summary_target_tokens,
+            summary_message_template=(
+                f"{SUMMARY_TAG_OPEN}{{summary}}{SUMMARY_TAG_CLOSE}"
+            ),
+        ),
     )
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
@@ -793,16 +843,14 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # session can open with a natural "last time we…" callback.
     @assistant_agg.event_handler("on_summary_applied")
     async def _on_summary_applied(_agg, _summarizer, _event) -> None:
-        # The latest summary is the first system message in the context
-        # that isn't the persona's SOUL prompt. Pipecat's summarizer
-        # inserts / updates it in-place.
-        for msg in context.messages:
-            if msg.get("role") != "system":
-                continue
-            content = msg.get("content") or ""
-            if isinstance(content, str) and content and content != skill.system_prompt:
-                save_summary(user_id, content)
-                return
+        text = _extract_summary_text(context.messages)
+        if text:
+            save_summary(user_id, text)
+        else:
+            logger.warning(
+                "[memory] on_summary_applied fired but no tagged summary "
+                "found in context; persistence skipped"
+            )
 
     # RTVI — routes structured client↔server events over the WebRTC data
     # channel (bot-llm-started/stopped, bot-tts-started/stopped, user-
