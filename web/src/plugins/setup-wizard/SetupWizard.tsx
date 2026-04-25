@@ -4,6 +4,10 @@ import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import { MicTest } from '@/shared/audio/MicTest';
+import {
+  getPreferredAudioDeviceId,
+  setPreferredAudioDeviceId,
+} from '@/shared/audio/preferredDevice';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
@@ -711,7 +715,14 @@ function StarterCard({
 function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const [verified, setVerified] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string>('');
+  const [deviceId, setDeviceIdState] = useState<string>(() =>
+    getPreferredAudioDeviceId(),
+  );
+
+  const onChangeDevice = (id: string) => {
+    setDeviceIdState(id);
+    setPreferredAudioDeviceId(id);
+  };
 
   const refreshDevices = async () => {
     try {
@@ -747,7 +758,7 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           </div>
           <select
             value={deviceId}
-            onChange={(e) => setDeviceId(e.target.value)}
+            onChange={(e) => onChangeDevice(e.target.value)}
             className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
           >
             <option value="">System default</option>
@@ -763,6 +774,7 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       <MicTest
         key={deviceId /* rebuild stream when device changes */}
         deviceId={deviceId || undefined}
+        onPermissionGranted={() => void refreshDevices()}
         onVerified={() => {
           setVerified(true);
           void refreshDevices();

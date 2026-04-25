@@ -73,6 +73,8 @@ from pipecat.utils.context.llm_context_summarization import (
     LLMContextSummaryConfig,
 )
 from pipecat.services.openai.llm import OpenAILLMService
+
+from voice.llm import make_llm
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -599,7 +601,21 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
     else:
-        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+        # Disable reasoning/thinking on every backend we know about.
+        # Each gateway uses its own key; sending all of them in one
+        # extra_body means whichever endpoint gets hit picks up the
+        # right one and ignores the rest:
+        #   - vLLM / LiteLLM: chat_template_kwargs.enable_thinking
+        #   - Ollama (recent versions): top-level "think" boolean
+        #   - LM Studio: also accepts "reasoning_effort" / "think"
+        # Without disabling, gemma4 / qwen3 / DeepSeek-R1 stream
+        # `reasoning` deltas with empty `content` first, which jams
+        # pipecat's sentence-aggregator and TTS waits for tokens
+        # that never arrive until the reasoning phase finally ends.
+        extra_body = {
+            "chat_template_kwargs": {"enable_thinking": False},
+            "think": False,
+        }
 
     settings_kwargs: dict = {
         "model": llm_model,
@@ -609,16 +625,19 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     if extra_body is not None:
         settings_kwargs["extra"] = {"extra_body": extra_body}
 
-    llm = OpenAILLMService(
-        api_key=llm_api_key,
+    # voice/llm/__init__.py picks the right adapter — Ollama instances
+    # get the native /api/chat path (which honors `think: false`),
+    # everything else routes through pipecat's OpenAI-compat service.
+    # The factory also handles the supports_developer_role swap for
+    # the project's default endpoint.
+    llm = make_llm(
         base_url=llm_url,
+        model=llm_model,
+        api_key=llm_api_key,
         settings=OpenAILLMService.Settings(**settings_kwargs),
+        provider=skill_llm.get("provider"),
+        using_custom_url=using_custom_llm,
     )
-    # vLLM rejects `role: developer` (used for async-tool result injection);
-    # OpenAI-compatible gateways generally accept it. Only strip when we
-    # know we're hitting the default local endpoint.
-    if not using_custom_llm:
-        llm.supports_developer_role = False
 
     # Per-skill delegate filter. Empty list / None = all delegates exposed.
     session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)

@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
 import { MicTest } from '@/shared/audio/MicTest';
+import {
+  getPreferredAudioDeviceId,
+  setPreferredAudioDeviceId,
+  subscribePreferredAudioDeviceId,
+} from '@/shared/audio/preferredDevice';
 
 /**
  * Mic tab for the settings drawer — re-runs the same `getUserMedia`
@@ -11,7 +16,9 @@ import { MicTest } from '@/shared/audio/MicTest';
  */
 export function MicSettings() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string>('');
+  const [deviceId, setDeviceIdState] = useState<string>(() =>
+    getPreferredAudioDeviceId(),
+  );
 
   const refreshDevices = async () => {
     try {
@@ -25,7 +32,15 @@ export function MicSettings() {
 
   useEffect(() => {
     void refreshDevices();
+    // Stay in sync if the wizard's mic step writes a different id while
+    // the settings panel is open.
+    return subscribePreferredAudioDeviceId(setDeviceIdState);
   }, []);
+
+  const onChangeDevice = (id: string) => {
+    setDeviceIdState(id);
+    setPreferredAudioDeviceId(id);
+  };
 
   return (
     <Panel title="Microphone">
@@ -37,7 +52,7 @@ export function MicSettings() {
             </div>
             <select
               value={deviceId}
-              onChange={(e) => setDeviceId(e.target.value)}
+              onChange={(e) => onChangeDevice(e.target.value)}
               className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
             >
               <option value="">System default</option>
@@ -52,11 +67,14 @@ export function MicSettings() {
         <MicTest
           key={deviceId /* rebuild stream when device changes */}
           deviceId={deviceId || undefined}
+          onPermissionGranted={refreshDevices}
           onVerified={refreshDevices}
         />
         <p className="text-[11px] text-zinc-600 leading-relaxed">
-          Device selection is UI-only in this version; ORBIS still routes
-          through the system-default input during a voice session.
+          The selection persists across reloads and is plumbed into
+          Pipecat's voice client, so the next voice session uses this
+          input. "System default" means whatever macOS picks at the
+          time of the session.
         </p>
       </div>
     </Panel>

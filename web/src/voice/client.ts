@@ -1,6 +1,10 @@
 import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { apiKeyStore } from '@/auth/apiKey';
+import {
+  getPreferredAudioDeviceId,
+  subscribePreferredAudioDeviceId,
+} from '@/shared/audio/preferredDevice';
 
 /**
  * Build a PipecatClient wired to ORBIS's SmallWebRTCRequestHandler.
@@ -28,10 +32,37 @@ export function buildClient(): PipecatClient {
     },
     waitForICEGathering: true,
   });
-  return new PipecatClient({
+  const client = new PipecatClient({
     transport,
     enableMic: true,
     enableCam: false,
     callbacks: {},
   });
+
+  // Plumb the user's selected mic into Pipecat. The picker writes to
+  // localStorage via `setPreferredAudioDeviceId`; we apply the current
+  // value at build time and subscribe so any later change in the
+  // settings panel or wizard reaches the live client without a
+  // reconnect. Empty string means "system default" — Pipecat treats
+  // that as no override.
+  const initialId = getPreferredAudioDeviceId();
+  if (initialId) {
+    try {
+      client.updateMic(initialId);
+    } catch {
+      // updateMic can throw before the transport is ready; the
+      // subscriber below picks up the same value once Pipecat is
+      // primed if the user touches the picker again.
+    }
+  }
+  subscribePreferredAudioDeviceId((id) => {
+    try {
+      client.updateMic(id);
+    } catch {
+      // Ignored: same reason as above. Worst case the user re-selects
+      // and the next call lands.
+    }
+  });
+
+  return client;
 }

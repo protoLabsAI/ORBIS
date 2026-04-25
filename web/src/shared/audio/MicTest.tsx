@@ -29,6 +29,12 @@ const SILENT_FLOOR_RMS = 0.003;
 export interface MicTestProps {
   /** Fired the first time a voice-level sample clears VERIFIED_RMS. */
   onVerified?: () => void;
+  /** Fired the moment `getUserMedia` resolves — before we know whether
+   *  the stream actually carries audio. Lets parents re-run
+   *  `enumerateDevices` to populate device labels (which browsers
+   *  withhold until a getUserMedia grant has happened in this session)
+   *  without waiting for the user to actually make a sound. */
+  onPermissionGranted?: () => void;
   /** Optional device id from enumerateDevices — used by the settings panel. */
   deviceId?: string;
 }
@@ -42,7 +48,7 @@ export interface MicTestProps {
  * only prompt for mic access from a direct click handler, so the wizard
  * must render this before any auto-started WebRTC session.
  */
-export function MicTest({ onVerified, deviceId }: MicTestProps) {
+export function MicTest({ onVerified, onPermissionGranted, deviceId }: MicTestProps) {
   const [status, setStatus] = useState<Status>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
@@ -88,6 +94,7 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
         audio: deviceId ? { deviceId: { exact: deviceId } } : true,
       });
       streamRef.current = stream;
+      onPermissionGranted?.();
 
       // Snapshot track diagnostics so we can show them when the level
       // meter doesn't move — the difference between a TCC-denied track
@@ -171,7 +178,7 @@ export function MicTest({ onVerified, deviceId }: MicTestProps) {
         setErrorMessage(err?.message || String(e));
       }
     }
-  }, [deviceId, onVerified]);
+  }, [deviceId, onVerified, onPermissionGranted]);
 
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">

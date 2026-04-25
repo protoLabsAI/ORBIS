@@ -86,9 +86,16 @@ class LocalWhisperSTT(SegmentedSTTService):
         self._user_id = user_id
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        # `audio` arrives as a WAV-formatted byte buffer aggregated by
+        # pipecat's SegmentedSTTService between VAD start/end markers.
+        # Logging the raw size makes it obvious when an empty/tiny
+        # segment slipped through (which Whisper transcribes to "" or
+        # garbage and the pipeline silently no-ops downstream).
+        logger.info(f"[stt.local] run_stt received audio bytes={len(audio)}")
         try:
             data, sr = sf.read(io.BytesIO(audio), dtype="float32")
         except Exception as e:
+            logger.warning(f"[stt.local] decode failed: {e}")
             yield ErrorFrame(error=f"STT decode failed: {e}")
             return
 
@@ -98,22 +105,35 @@ class LocalWhisperSTT(SegmentedSTTService):
             data = soxr.resample(data, sr, 16000)
 
         duration_s = len(data) / 16000.0
+        rms = float(np.sqrt(np.mean(data * data))) if data.size else 0.0
+        logger.info(
+            f"[stt.local] decoded sr_in={sr} samples={data.size} "
+            f"duration={duration_s:.2f}s rms={rms:.4f}"
+        )
         with tracing.span(
             "stt.whisper",
             input={"sample_rate": 16000, "audio_seconds": round(duration_s, 2)},
             metadata={"backend": "local"},
         ) as sp:
             try:
+                t0 = time.time()
                 result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
                 text = (result.get("text") or "").strip()
+                logger.info(
+                    f"[stt.local] whisper {duration_s:.2f}s → "
+                    f"{(time.time() - t0):.2f}s → text={text!r}"
+                )
             except Exception as e:
                 sp.update(level="ERROR", status_message=str(e))
+                logger.error(f"[stt.local] inference failed: {e}")
                 yield ErrorFrame(error=f"STT inference failed: {e}")
                 return
             sp.update(output=text)
 
         if text:
             yield TranscriptionFrame(text, self._user_id, time_now_iso8601())
+        else:
+            logger.info("[stt.local] empty transcription — no frame emitted")
 
 
 # ---------------------------------------------------------------------------
