@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
+import { pullOllamaModel } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import { MicTest } from '@/shared/audio/MicTest';
 import {
@@ -369,6 +370,32 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         </div>
       )}
       {localCallouts.length === 0 && <OllamaInstallHelper />}
+      {local.ollama &&
+        !local.ollama.models.includes(DEFAULT_LLM_PRESET.model) && (
+          <ModelPullCallout
+            modelName={DEFAULT_LLM_PRESET.model}
+            ollamaUrl={local.ollama.url}
+            onPulled={() => {
+              // Re-detect so the picker reflects the new model.
+              api
+                .llmDetectLocal()
+                .then((found) => {
+                  setLocal(found as LocalDetected);
+                  // Auto-apply Ollama with the freshly-pulled model so
+                  // the user can continue without manually clicking.
+                  const next = (found as LocalDetected).ollama;
+                  if (next?.models.includes(DEFAULT_LLM_PRESET.model)) {
+                    setProvider('ollama');
+                    setUrl(next.url);
+                    setAvailableModels(next.models);
+                    setModel(DEFAULT_LLM_PRESET.model);
+                    setTest({ kind: 'idle' });
+                  }
+                })
+                .catch(() => {});
+            }}
+          />
+        )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
         {LLM_PRESETS.map((p) => (
@@ -552,9 +579,116 @@ function OllamaInstallHelper() {
         })}
       </div>
       <div className="text-[11px] text-zinc-500 mt-2">
-        After install, run <code>ollama pull llama3.2</code> then reopen
-        this step — we'll detect it automatically.
+        After install, reopen this step — we'll detect Ollama and offer
+        to pull the recommended <code>gemma3n:e2b</code> model
+        automatically.
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shown when Ollama IS detected but the recommended model isn't
+ * installed. One-click pull through the backend's SSE proxy of
+ * Ollama's `/api/pull`. Renders a progress bar from
+ * `completed`/`total` byte counts; on success calls `onPulled` so
+ * the parent can refresh its model list and advance.
+ */
+function ModelPullCallout({
+  modelName,
+  ollamaUrl,
+  onPulled,
+}: {
+  modelName: string;
+  ollamaUrl: string;
+  onPulled: () => void;
+}) {
+  const [pulling, setPulling] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const start = async () => {
+    setPulling(true);
+    setError(null);
+    setDone(false);
+    setStatus('contacting Ollama');
+    setCompleted(0);
+    setTotal(0);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      for await (const evt of pullOllamaModel(modelName, ollamaUrl, { signal: ac.signal })) {
+        if (evt.error) {
+          setError(evt.error);
+          continue;
+        }
+        if (evt.status) setStatus(evt.status);
+        if (typeof evt.completed === 'number') setCompleted(evt.completed);
+        if (typeof evt.total === 'number') setTotal(evt.total);
+      }
+      if (!ac.signal.aborted) {
+        setDone(true);
+        onPulled();
+      }
+    } catch (e) {
+      if (!ac.signal.aborted) setError(String((e as Error).message ?? e));
+    } finally {
+      setPulling(false);
+    }
+  };
+
+  const cancel = () => abortRef.current?.abort();
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const mb = (n: number) => (n / (1024 * 1024)).toFixed(0);
+
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
+      <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
+        Recommended model not installed
+      </div>
+      <p className="text-[13px] text-zinc-400 mb-3">
+        Pull <code className="text-zinc-200">{modelName}</code> for the
+        fastest local voice loop on this machine. ~5.6 GB; takes a few
+        minutes on a normal connection.
+      </p>
+      {!pulling && !done && (
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[11px] text-zinc-500">
+            {error ? <span className="text-rose-400">{error}</span> : 'One-time download.'}
+          </div>
+          <Button onClick={start}>Pull {modelName}</Button>
+        </div>
+      )}
+      {pulling && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="text-zinc-400 truncate pr-2">{status}</span>
+            <span className="text-zinc-500 tabular-nums shrink-0">
+              {total > 0 ? `${mb(completed)} / ${mb(total)} MB · ${pct}%` : '…'}
+            </span>
+          </div>
+          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+            <div
+              className="h-full bg-amber-500/80 transition-[width] duration-200"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button variant="ghost" onClick={cancel}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {done && (
+        <div className="text-sm text-emerald-400">
+          ✓ {modelName} installed. You can continue.
+        </div>
+      )}
     </div>
   );
 }

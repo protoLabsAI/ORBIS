@@ -1282,6 +1282,70 @@ async def llm_models(body: dict):
     )
 
 
+@app.post("/api/llm/pull")
+async def llm_pull(body: dict[str, Any]):
+    """Stream an Ollama pull as Server-Sent Events.
+
+    The wizard calls this when a user picks Ollama and the
+    recommended model isn't installed yet — instead of asking them
+    to drop into a terminal and run ``ollama pull <name>``, we
+    proxy Ollama's native ``/api/pull`` and forward each NDJSON
+    progress chunk as an SSE message. The frontend renders a
+    progress bar from the ``completed`` / ``total`` fields.
+
+    Body::
+
+        {"name": "gemma3n:e2b", "url": "http://127.0.0.1:11434"}
+
+    The ``url`` defaults to the local Ollama instance; we trim any
+    trailing ``/v1`` so the same value used as ``llm.url`` for the
+    OpenAI-compat endpoint also works here.
+
+    Unauth — same rationale as ``/api/llm/detect_local``: this runs
+    before the wizard has set up an API key.
+    """
+    from fastapi.responses import StreamingResponse
+    import httpx as _httpx
+
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "missing model name"}, status_code=400)
+
+    raw_url = str(body.get("url") or "http://127.0.0.1:11434").rstrip("/")
+    if raw_url.endswith("/v1"):
+        raw_url = raw_url[:-3]
+
+    async def _stream():
+        timeout = _httpx.Timeout(connect=5.0, read=None, write=None, pool=None)
+        async with _httpx.AsyncClient(timeout=timeout) as client:
+            try:
+                async with client.stream(
+                    "POST",
+                    f"{raw_url}/api/pull",
+                    json={"model": name, "stream": True},
+                ) as resp:
+                    if resp.status_code != 200:
+                        msg = await resp.aread()
+                        yield f"event: error\ndata: {msg.decode(errors='replace')[:200]}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        # Ollama emits NDJSON; pass each line through
+                        # as the data of an SSE message. Frontend just
+                        # JSON.parses each event.data.
+                        yield f"data: {line}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+            except _httpx.HTTPError as e:
+                yield f"event: error\ndata: {str(e)[:200]}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/llm/detect_local")
 async def llm_detect_local():
     """Parallel probe Ollama (:11434) + LM Studio (:1234) on localhost.
