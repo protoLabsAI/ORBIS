@@ -190,7 +190,15 @@ class DeliveryController(FrameProcessor):
 
     def snapshot_pending(self) -> list[dict[str, object]]:
         """Return a JSON-serializable list of currently-pending items.
-        Used by app.py on disconnect to stash what didn't land in time."""
+        Used by app.py on disconnect to stash what didn't land in time.
+
+        Each item carries the controller's `bid_issued` flag so a
+        mid-bid reconnect doesn't lose the held state and re-bid the
+        user immediately. Replicated across items rather than stored
+        separately because the session_store is per-item-append; this
+        keeps the persistence schema unchanged. If no items are
+        pending, the flag is moot — empty queue means nothing to bid
+        on."""
         return [
             {
                 "phrase": p.phrase,
@@ -198,6 +206,7 @@ class DeliveryController(FrameProcessor):
                 "priority": p.priority.value,
                 "keywords": list(p.keywords),
                 "enqueued_at": p.enqueued_at,
+                "bid_issued": self._bid_issued,
             }
             for p in self._pending
         ]
@@ -205,7 +214,16 @@ class DeliveryController(FrameProcessor):
     async def replay_stashed(self, items: list[dict[str, object]]) -> None:
         """Enqueue stashed items (from a prior session) via the normal
         deliver() path. Phrases are already attributed; pass source=None
-        so we don't double-wrap."""
+        so we don't double-wrap.
+
+        If any stashed item carries `bid_issued=True`, restore the flag
+        BEFORE delivering so the bid-then-drain gate in `_drain_eligible`
+        sees the held state and doesn't re-bid the user immediately on
+        reconnect."""
+        restore_bid = any(bool(raw.get("bid_issued")) for raw in items)
+        if restore_bid:
+            self._bid_issued = True
+            logger.info("[delivery] replay restored held bid state")
         for raw in items:
             try:
                 priority = Priority(raw.get("priority", Priority.ACTIVE.value))
