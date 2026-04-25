@@ -59,7 +59,15 @@ class MicroAckInjector(FrameProcessor):
         self,
         *,
         tts_backend: str,
-        trigger_ms: int = 500,
+        # 1500ms gives a fast local LLM (e.g. gemma3n:e2b on M1, ~1s
+        # round-trip) the chance to start speaking before a filler
+        # fires. The original 500ms default was tuned for the slow-LLM
+        # era; with the Ollama-native adapter + small models, the
+        # filler always won that race and surfaced as "the bot says
+        # 'mm' before every reply", which felt twitchy. The persona-
+        # config `behavior.micro_ack.first_ms` still overrides this
+        # default per-skill if a particular agent wants snappier acks.
+        trigger_ms: int = 1500,
         min_interval_secs: float = 4.0,
         enabled: bool = True,
     ) -> None:
