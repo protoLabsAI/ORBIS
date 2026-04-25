@@ -25,9 +25,9 @@ export const LLM_PRESETS: LLMPreset[] = [
   // --- Local / self-hosted (the desktop-app happy path) ---
   {
     id: 'ollama', label: 'Ollama',
-    url: 'http://127.0.0.1:11434/v1', model: 'llama3.2',
+    url: 'http://127.0.0.1:11434/v1', model: 'gemma3n:e2b',
     needsKey: false,
-    blurb: 'Local. Auto-detected if running. Recommended for the desktop app.',
+    blurb: 'Local. gemma3n:e2b — Google’s edge-tuned 2B-effective Matformer, fastest on M-series. Auto-detected if running.',
   },
   {
     id: 'lm_studio', label: 'LM Studio',
