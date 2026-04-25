@@ -56,10 +56,11 @@ export function OrbStage() {
         console.error('[orb] connect error:', err);
         // R10: surface in the status pill so the user knows the
         // double-click did something. Common causes: backend
-        // unreachable, API key wrong, SDP timeout. Keep the message
-        // short — full detail is in console for debugging.
+        // unreachable, API key wrong, SDP timeout. 4s matches the
+        // duration used by RTVI Error events for UX consistency
+        // across error sources.
         const detail = err instanceof Error ? err.message : String(err);
-        pushStatusTransient(`couldn't connect: ${detail}`, 5000);
+        pushStatusTransient(`couldn't connect: ${detail}`, 4000);
       });
     } else if (active) {
       client.disconnect().catch((err) => {
