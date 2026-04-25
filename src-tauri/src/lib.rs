@@ -333,8 +333,14 @@ fn seed_default_config(app: &AppHandle, config_path: &PathBuf) {
 /// silently shipping the app to a broken state.
 fn resolve_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(value) = std::env::var("ORBIS_CONFIG") {
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value));
+        // Trim — a whitespace-only value almost always means "this var
+        // got templated out / left blank in a launcher script" rather
+        // than "the user intentionally pointed config at ` `", so fall
+        // through to app_data_dir instead of breaking the boot on the
+        // unwritable path the trimmed string would resolve to.
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
         }
     }
     app.path()
