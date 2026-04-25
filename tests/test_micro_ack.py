@@ -113,6 +113,21 @@ async def test_suppressed_when_bot_speaking(injector_factory) -> None:
 
 
 @pytest.mark.asyncio
+async def test_verbosity_getter_exception_does_not_crash_timer(injector_factory) -> None:
+    """A getter that raises must not crash the background task. We
+    treat the exception as non-SILENT (best-effort emit) and continue,
+    so a torn-down user_state during shutdown can't silently swallow
+    every filler."""
+    def _broken_getter():
+        raise RuntimeError("user_state torn down")
+
+    inj = injector_factory(verbosity_getter=_broken_getter)
+    await inj._fire_after_delay()
+    # Treated as non-SILENT — frame still emits.
+    assert len(inj._pushed_frames) == 1
+
+
+@pytest.mark.asyncio
 async def test_phrases_match_backend(injector_factory) -> None:
     """Fish backend gets the [softly]-prefixed acks; others plain."""
     fish = injector_factory(tts_backend="fish")

@@ -131,11 +131,21 @@ class MicroAckInjector(FrameProcessor):
             # acoustic acks. Checked here rather than at _arm_timer so
             # a runtime /api/verbosity flip during the trigger window
             # is honored on the same turn.
-            if (
-                self._verbosity_getter is not None
-                and self._verbosity_getter() is Verbosity.SILENT
-            ):
-                return
+            #
+            # Wrapped in try/except: the getter is caller-provided; if
+            # it raises (e.g. user_state torn down mid-shutdown), the
+            # background task would otherwise fail with
+            # "Task exception was never retrieved" and silently skip
+            # the ack. Treat the failure as non-SILENT and continue —
+            # better to over-emit one filler than to crash the timer.
+            if self._verbosity_getter is not None:
+                try:
+                    verbosity = self._verbosity_getter()
+                except Exception as e:
+                    logger.warning(f"[micro-ack] verbosity_getter raised: {e}")
+                    verbosity = None
+                if verbosity is Verbosity.SILENT:
+                    return
             phrase = random.choice(self._phrases)
             self._last_ack_at = time.monotonic()
             with tracing.span("filler.micro_ack") as sp:
