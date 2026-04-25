@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -126,15 +127,30 @@ _PRIORITY_RANK: dict[Priority, int] = {
 # that barge in with multiple results back-to-back.
 _BID_THRESHOLD = 2
 
-# Affirmative / negative responses to the bid. Naive substring match.
+# Affirmative / negative responses to the bid. Word-boundary match so
+# "okayama" doesn't read as "okay" and "snowfall" doesn't read as "no".
+# Bare "what" was deliberately removed — too generic; it matched
+# "what time is it?" as accept. Multi-word phrases like "what are
+# they" still match.
 _BID_YES = (
     "yes", "yeah", "yep", "sure", "okay", "ok", "please",
-    "go ahead", "hear them", "what are they", "tell me", "what",
+    "go ahead", "hear them", "what are they", "tell me",
 )
 _BID_NO = (
     "no", "nope", "not now", "skip", "later", "never mind", "nevermind",
     "drop it", "forget it",
 )
+
+
+def _compile_bid_re(tokens: tuple[str, ...]) -> re.Pattern[str]:
+    return re.compile(
+        r"\b(?:" + "|".join(re.escape(t) for t in tokens) + r")\b",
+        re.IGNORECASE,
+    )
+
+
+_BID_YES_RE = _compile_bid_re(_BID_YES)
+_BID_NO_RE = _compile_bid_re(_BID_NO)
 
 
 class DeliveryController(FrameProcessor):
@@ -333,15 +349,14 @@ class DeliveryController(FrameProcessor):
     async def _resolve_bid(self, transcript: str) -> None:
         """Check the user's transcript against the held bid.
         Affirmative → drain; negative → clear; neither → stay held."""
-        low = transcript.lower()
-        if any(token in low for token in _BID_NO):
+        if _BID_NO_RE.search(transcript):
             logger.info("[delivery] bid declined — clearing held items")
             self._pending = [
                 p for p in self._pending if p.policy is not DeliveryPolicy.NEXT_SILENCE
             ]
             self._bid_issued = False
             return
-        if any(token in low for token in _BID_YES):
+        if _BID_YES_RE.search(transcript):
             logger.info("[delivery] bid accepted — draining")
             self._bid_issued = False
             await self._drain_eligible(new_transcript=None)
