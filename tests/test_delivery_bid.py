@@ -102,9 +102,11 @@ def test_no_regex_rejects_false_positives(text: str) -> None:
 
 
 def _stub_drain(ctrl: DeliveryController) -> list[bool]:
-    """Replace _drain_eligible with a recorder. Returns the call log."""
+    """Replace _drain_eligible with a recorder. Returns the call log.
+    Keeps the `new_transcript` parameter name because the production
+    code calls _drain_eligible(new_transcript=None) by keyword."""
     calls: list[bool] = []
-    async def _fake(new_transcript=None):
+    async def _fake(new_transcript: str | None = None) -> None:  # noqa: ARG001
         calls.append(True)
     ctrl._drain_eligible = _fake  # type: ignore[method-assign]
     return calls
