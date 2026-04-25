@@ -166,9 +166,16 @@ class ECAPAEmbedder:
     @staticmethod
     def _run(model: Any, wav: np.ndarray) -> np.ndarray:
         """Drive the speechbrain model. Wrapped so tests can stub the
-        whole thing without depending on torch at import time."""
+        whole thing without depending on torch at import time.
+
+        Forces wav to a contiguous numpy buffer before torch.from_numpy.
+        soxr.resample is contiguous in practice but the API doesn't
+        guarantee it; torch.from_numpy raises on non-contiguous input.
+        Cheap one-liner that prevents a hard-to-reproduce crash on
+        future soxr / numpy upgrades."""
         import torch
         with torch.no_grad():
+            wav = np.ascontiguousarray(wav)
             tensor = torch.from_numpy(wav).unsqueeze(0)  # (1, samples)
             emb = model.encode_batch(tensor)  # (1, 1, 192)
             return emb.detach().cpu().numpy()
