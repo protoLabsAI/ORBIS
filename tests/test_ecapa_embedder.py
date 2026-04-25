@@ -151,6 +151,74 @@ def test_loader_only_runs_on_first_encode_not_construction() -> None:
     # Still 0 if we never call encode()
 
 
+def test_concurrent_first_encodes_load_model_exactly_once() -> None:
+    """_MODEL_CACHE + _MODEL_LOCK exist for thread safety: two threads
+    constructing different embedders against the SAME (source, device)
+    must observe exactly one model load between them.
+
+    This test bypasses the per-instance _loader_factory injection point
+    (which short-circuits the cache) and exercises _load_speechbrain
+    directly via a patched lazy-import pattern — same code path the
+    real model loading uses."""
+    import threading
+
+    from agent import ecapa_embedder as mod
+
+    # Reset the process-wide cache so we count loads in isolation.
+    with mod._MODEL_LOCK:
+        mod._MODEL_CACHE.clear()
+
+    load_calls = {"n": 0}
+
+    class _SlowStub:
+        """Mimics the real load: takes time so the second thread will
+        race in on the first thread's load_speechbrain call if the
+        lock is missing."""
+
+        def __init__(self) -> None:
+            self.id = "stub"
+
+    def _slow_load(self) -> Any:  # type: ignore[no-untyped-def]
+        # Simulate the model construction window. Without the
+        # _MODEL_LOCK we'd see both threads enter here and increment.
+        import time
+        time.sleep(0.05)
+        load_calls["n"] += 1
+        return _SlowStub()
+
+    # Patch the instance method (the one _ensure_loaded calls when
+    # _loader_factory is None).
+    original = mod.ECAPAEmbedder._load_speechbrain
+    mod.ECAPAEmbedder._load_speechbrain = _slow_load  # type: ignore[method-assign]
+    try:
+        # Two independent embedders — both target the SAME cache key
+        # (default source, device=None) so they must serialize on the
+        # cache lock.
+        emb_a = mod.ECAPAEmbedder()
+        emb_b = mod.ECAPAEmbedder()
+
+        results: dict[str, Any] = {}
+
+        def _ensure(name: str, e: mod.ECAPAEmbedder) -> None:
+            results[name] = e._ensure_loaded()
+
+        t_a = threading.Thread(target=_ensure, args=("a", emb_a))
+        t_b = threading.Thread(target=_ensure, args=("b", emb_b))
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=5)
+        t_b.join(timeout=5)
+
+        assert load_calls["n"] == 1, \
+            f"_MODEL_LOCK should serialize loads; got {load_calls['n']}"
+        # Both threads observed the same cached model object.
+        assert results["a"] is results["b"]
+    finally:
+        mod.ECAPAEmbedder._load_speechbrain = original  # type: ignore[method-assign]
+        with mod._MODEL_LOCK:
+            mod._MODEL_CACHE.clear()
+
+
 # --- gate integration ----------------------------------------------------
 
 
