@@ -117,14 +117,15 @@ def test_save_creates_parent_dir(tmp_path: Path) -> None:
 
 class _MockEmbedder:
     """Deterministic embedder for tests. Returns a configured vector
-    regardless of input. Records call count for assertions."""
+    regardless of input. Records each call's (wav_bytes, sample_rate)
+    so tests can assert SR forwarding (the bug-2 regression)."""
 
     def __init__(self, vector: np.ndarray) -> None:
         self.vector = vector
-        self.calls = 0
+        self.calls: list[tuple[int, int]] = []  # (wav_size, sample_rate)
 
     def encode(self, wav: np.ndarray, sample_rate: int) -> np.ndarray:
-        self.calls += 1
+        self.calls.append((int(wav.size), int(sample_rate)))
         return self.vector
 
 
@@ -305,7 +306,11 @@ async def test_buffer_resets_between_utterances(captured_gate) -> None:
     await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
     await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
 
-    assert embedder.calls == 2
+    assert len(embedder.calls) == 2
+    # Each call sees its own utterance's bytes (800 samples = 800 ints from
+    # int16 PCM → 800 floats post-decode), not the cumulative buffer.
+    assert embedder.calls[0][0] == 800
+    assert embedder.calls[1][0] == 800
 
 
 @pytest.mark.asyncio
@@ -357,3 +362,204 @@ async def test_originals_always_passthrough(captured_gate) -> None:
         f, (OwnerVerifiedFrame, StrangerDetectedFrame)
     )]
     assert len(forwarded) == len(inputs)
+
+
+# --- design-review regression tests ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_outside_utterance_is_not_buffered(captured_gate) -> None:
+    """Bug 1 regression: audio frames arriving without a preceding
+    UserStartedSpeakingFrame must not be buffered. A degenerate VAD
+    state with two consecutive Stopped frames previously encoded stale
+    audio from the prior turn."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    # Real utterance — buffered correctly.
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    assert len(embedder.calls) == 1
+
+    # Spurious audio frames between utterances (echo-guard tail, etc.) —
+    # must NOT accumulate.
+    await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
+
+    # Second Stopped without a Started first — degenerate VAD. With the
+    # _speaking guard, this no-ops; pre-fix it would have encoded the
+    # spurious frames as if they were a real turn.
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    assert len(embedder.calls) == 1, \
+        "Stopped without preceding Started must not trigger encode"
+
+
+@pytest.mark.asyncio
+async def test_sample_rate_forwarded_to_embedder(captured_gate) -> None:
+    """Bug 2 regression: gate must capture frame.sample_rate and forward
+    it to encode(). Pre-fix it passed sample_rate=0, which the embedder
+    silently treated as 16k — feeding 48k PCM as 16k yields garbage
+    embeddings and (worse) the trust-fallback would promote a stranger
+    to OwnerVerifiedFrame."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    # WebRTC default is 48000; force that.
+    audio_48k = InputAudioRawFrame(
+        audio=np.zeros(800, dtype=np.int16).tobytes(),
+        sample_rate=48000,
+        num_channels=1,
+    )
+
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(audio_48k, FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert len(embedder.calls) == 1
+    _wav_size, captured_sr = embedder.calls[0]
+    assert captured_sr == 48000, \
+        "embedder must receive the actual transport sample rate"
+
+
+@pytest.mark.asyncio
+async def test_first_frame_pins_sample_rate_for_utterance(captured_gate) -> None:
+    """Sample rate is captured from the FIRST audio frame each utterance
+    and pinned for the rest. Avoids averaging if a buggy transport
+    flipped SR mid-utterance."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    f48k = InputAudioRawFrame(
+        audio=np.zeros(400, dtype=np.int16).tobytes(),
+        sample_rate=48000,
+        num_channels=1,
+    )
+    f16k = InputAudioRawFrame(
+        audio=np.zeros(400, dtype=np.int16).tobytes(),
+        sample_rate=16000,
+        num_channels=1,
+    )
+
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(f48k, FrameDirection.DOWNSTREAM)  # pins SR=48k
+    await gate.process_frame(f16k, FrameDirection.DOWNSTREAM)  # ignored for SR
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert embedder.calls[0][1] == 48000
+
+
+@pytest.mark.asyncio
+async def test_stranger_frame_carries_enum_not_string(captured_gate) -> None:
+    """Bug 3 regression: StrangerDetectedFrame.action is the
+    StrangerAction enum, not a raw string. Downstream consumers can
+    switch on the enum without re-parsing."""
+    owner_vec = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    stranger_vec = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=_MockEmbedder(stranger_vec),
+        threshold=0.5,
+        stranger_action=StrangerAction.DELEGATE_GUEST,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    strangers = [f for f, _ in gate.pushed if isinstance(f, StrangerDetectedFrame)]
+    assert len(strangers) == 1
+    assert isinstance(strangers[0].action, StrangerAction)
+    assert strangers[0].action is StrangerAction.DELEGATE_GUEST
+    # Enum-as-str inheritance means string equality still works for any
+    # legacy consumer that compares to the literal.
+    assert strangers[0].action == "delegate_guest"
+
+
+@pytest.mark.asyncio
+async def test_upstream_audio_does_not_buffer(captured_gate) -> None:
+    """An InputAudioRawFrame travelling UPSTREAM (control reverse path,
+    bug, etc.) must not enter the verification buffer. The gate sits on
+    the downstream input path; only DOWNSTREAM frames matter."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    # Spurious upstream audio frame — must be ignored.
+    await gate.process_frame(_audio_frame(samples=400), FrameDirection.UPSTREAM)
+    # Real downstream audio.
+    await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    # Only the 800-sample DOWNSTREAM frame entered the buffer. 400 from
+    # upstream did not.
+    assert len(embedder.calls) == 1
+    assert embedder.calls[0][0] == 800
+
+
+@pytest.mark.asyncio
+async def test_upstream_started_stopped_does_not_arm_or_fire(captured_gate) -> None:
+    """Started/Stopped going upstream must not flip _speaking or trigger
+    a verify pass. Otherwise an out-of-band reflux could fire false
+    StrangerDetectedFrames."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    # All three frames travelling upstream — gate should be inert.
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+    await gate.process_frame(_audio_frame(), FrameDirection.UPSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    verified = [f for f, _ in gate.pushed if isinstance(f, OwnerVerifiedFrame)]
+    strangers = [f for f, _ in gate.pushed if isinstance(f, StrangerDetectedFrame)]
+    assert verified == []
+    assert strangers == []
+    assert len(embedder.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_channel_audio_is_buffered_as_is(captured_gate) -> None:
+    """Multi-channel raw bytes flow through without channel handling.
+    Pinned as a known limitation: the gate doesn't deinterleave L+R
+    samples — production transports negotiate mono so this rarely fires.
+    Test exists to flag if/when transport configuration changes."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    stereo = InputAudioRawFrame(
+        audio=np.zeros(1600, dtype=np.int16).tobytes(),  # 800 samples × 2 ch
+        sample_rate=16000,
+        num_channels=2,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(stereo, FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    # Currently encoded as interleaved samples — test pins the behavior
+    # so any future change is intentional. Real fix: detect num_channels
+    # and downmix; out of scope for the foundation.
+    assert len(embedder.calls) == 1
+    assert embedder.calls[0][0] == 1600  # interleaved sample count
