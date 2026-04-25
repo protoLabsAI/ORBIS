@@ -29,7 +29,7 @@ import asyncio
 import logging
 import random
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -40,6 +40,8 @@ from pipecat.frames.frames import (
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from .filler import Verbosity
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +77,19 @@ class MicroAckInjector(FrameProcessor):
         trigger_ms: int = 1500,
         min_interval_secs: float = 4.0,
         enabled: bool = True,
+        # Callable returning the live verbosity. When SILENT, suppress
+        # emission. Live (not snapshot) so /api/verbosity flips take
+        # effect on the next ack without needing a session reconnect.
+        # None = no gate (back-compat for tests + callers that don't
+        # have a UserState handy).
+        verbosity_getter: Callable[[], Verbosity] | None = None,
     ) -> None:
         super().__init__()
         self._phrases: Sequence[str] = _FISH_ACKS if tts_backend == "fish" else _PLAIN_ACKS
         self._trigger_s = trigger_ms / 1000.0
         self._min_interval = min_interval_secs
         self._enabled = enabled
+        self._verbosity_getter = verbosity_getter
         self._bot_speaking = False
         self._last_ack_at = 0.0
         self._timer: asyncio.Task | None = None
@@ -113,17 +122,39 @@ class MicroAckInjector(FrameProcessor):
         self._timer = asyncio.create_task(self._fire_after_delay())
 
     async def _fire_after_delay(self) -> None:
+        from agent import tracing
         try:
             await asyncio.sleep(self._trigger_s)
             if self._bot_speaking:
                 return
+            # Live verbosity check: a silent persona shouldn't emit
+            # acoustic acks. Checked here rather than at _arm_timer so
+            # a runtime /api/verbosity flip during the trigger window
+            # is honored on the same turn.
+            #
+            # Wrapped in try/except: the getter is caller-provided; if
+            # it raises (e.g. user_state torn down mid-shutdown), the
+            # background task would otherwise fail with
+            # "Task exception was never retrieved" and silently skip
+            # the ack. Treat the failure as non-SILENT and continue —
+            # better to over-emit one filler than to crash the timer.
+            if self._verbosity_getter is not None:
+                try:
+                    verbosity = self._verbosity_getter()
+                except Exception as e:
+                    logger.warning(f"[micro-ack] verbosity_getter raised: {e}")
+                    verbosity = None
+                if verbosity is Verbosity.SILENT:
+                    return
             phrase = random.choice(self._phrases)
             self._last_ack_at = time.monotonic()
-            logger.info(f"[micro-ack] {phrase!r}")
-            await self.push_frame(
-                TTSSpeakFrame(phrase, append_to_context=False),
-                FrameDirection.DOWNSTREAM,
-            )
+            with tracing.span("filler.micro_ack") as sp:
+                sp.update(output=phrase)
+                logger.info(f"[micro-ack] {phrase!r}")
+                await self.push_frame(
+                    TTSSpeakFrame(phrase, append_to_context=False),
+                    FrameDirection.DOWNSTREAM,
+                )
         except asyncio.CancelledError:
             pass
 
