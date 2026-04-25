@@ -143,12 +143,29 @@ async def _stream_as_openai_chunks(
     starve while the model is decoding)."""
     model, tokenizer = await _get_model(model_id)
     # Apply the model's chat template so the prompt matches what the
-    # model was instruction-tuned for. Falls back to a join if the
-    # tokenizer doesn't have one (rare for instruct models).
+    # model was instruction-tuned for. Pass `enable_thinking=False` —
+    # Qwen3 / DeepSeek-R1 / similar reasoning models accept it as a
+    # template kwarg and drop the `<think>...</think>` preamble that
+    # would otherwise jam pipecat's sentence aggregator (TTS waits
+    # for sentence-break tokens that never arrive in the reasoning
+    # phase). Non-thinking models silently ignore unknown kwargs;
+    # try with the flag first, fall back without if the tokenizer
+    # raises (some templates are strict about unrecognized kwargs).
     try:
         prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=False,
         )
+    except TypeError:
+        # Older / strict templates don't accept enable_thinking — retry
+        # without. Models that don't have a thinking phase don't need
+        # the flag anyway.
+        try:
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+        except Exception:
+            prompt = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
     except Exception:
         # Last-ditch: stuff messages together with role tags.
         prompt = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
