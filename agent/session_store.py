@@ -28,6 +28,7 @@ import contextlib
 import json
 import logging
 import os
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +76,7 @@ def _lock_path(user_id: str) -> Path:
 
 
 @contextlib.contextmanager
-def _queue_lock(user_id: str):
+def _queue_lock(user_id: str) -> Generator[None, None, None]:
     """Cross-process advisory lock guarding stash/drain on a single
     user's queue. fcntl.flock is BSD-style on macOS/Linux — both writers
     must opt in for serialization to hold. ORBIS controls all writers
@@ -95,10 +96,8 @@ def _queue_lock(user_id: str):
             _fcntl.flock(f, _fcntl.LOCK_EX)
             yield
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 _fcntl.flock(f, _fcntl.LOCK_UN)
-            except Exception:
-                pass
 
 
 # --- Summary -----------------------------------------------------------------
@@ -176,6 +175,14 @@ def drain_stashed_deliveries(user_id: str) -> list[dict[str, Any]]:
     p = _pending_path(user_id)
     draining = _draining_path(user_id)
     result: list[dict[str, Any]] = []
+    # Tracks whether stale .draining items were already absorbed inside
+    # the lock. If unlink of that file fails AND no fresh pending.json
+    # arrives to replace it, the file persists post-lock. Without this
+    # flag, the post-lock branch would re-read it and double-replay
+    # the stale items. Set False the moment the file is replaced (via
+    # successful unlink OR via the pending.json atomic rename) so the
+    # post-lock read picks up genuinely fresh content.
+    absorbed_inside_lock = False
     try:
         with _queue_lock(user_id):
             # Recover items from a previous drain that crashed between
@@ -186,6 +193,7 @@ def drain_stashed_deliveries(user_id: str) -> list[dict[str, Any]]:
                     stale = json.loads(draining.read_text(encoding="utf-8"))
                     if isinstance(stale, list):
                         result.extend(stale)
+                        absorbed_inside_lock = True
                         logger.info(
                             f"[session_store] recovered {len(stale)} "
                             f"orphaned deliveries from prior drain for {user_id!r}"
@@ -194,15 +202,27 @@ def drain_stashed_deliveries(user_id: str) -> list[dict[str, Any]]:
                     pass
                 try:
                     draining.unlink()
+                    # Unlink succeeded — the absorbed items are gone
+                    # from disk; whatever appears at .draining next is
+                    # genuinely new content (probably from the rename
+                    # below).
+                    absorbed_inside_lock = False
                 except Exception:
                     pass
             if p.exists():
                 try:
                     p.replace(draining)  # atomic on POSIX
+                    # Fresh pending.json now lives at .draining and
+                    # MUST be read post-lock — overrides any stale
+                    # absorbed flag from above.
+                    absorbed_inside_lock = False
                 except FileNotFoundError:
                     pass
         # Outside the lock — we own .draining now via the atomic rename.
-        if draining.exists():
+        # Only re-read if we didn't already absorb its contents inside
+        # the lock; otherwise this would double-replay stale items
+        # whose unlink failed.
+        if draining.exists() and not absorbed_inside_lock:
             try:
                 data = json.loads(draining.read_text(encoding="utf-8"))
                 if isinstance(data, list):

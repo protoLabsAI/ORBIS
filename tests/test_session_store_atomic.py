@@ -27,7 +27,7 @@ def store(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("SESSION_STORE_DIR", str(tmp_path))
     import agent.session_store as ss
     importlib.reload(ss)
-    yield ss
+    return ss
 
 
 def _item(phrase: str) -> dict:
@@ -170,33 +170,70 @@ def test_corrupt_pending_replaced_on_next_stash(store, tmp_path: Path) -> None:
 # --- the R7/R8 regression cases ------------------------------------------
 
 
-def test_no_double_replay_when_unlink_fails(store, tmp_path: Path, monkeypatch) -> None:
-    """The R7 regression: previously the drain did read → unlink. If
-    unlink failed, the same items returned next call.
-
-    Now the drain renames first; the .draining file is the source of
-    truth from that point on. If unlink of .draining fails, the next
-    drain absorbs it via the recovery path — so each item replays
-    exactly once across the two drains."""
+def test_no_double_replay_after_crash_between_rename_and_unlink(
+    store, tmp_path: Path
+) -> None:
+    """Simulate a crash after rename (pending.json → .draining) but
+    before unlink. The first drain absorbs the .draining file; the
+    second drain finds nothing, ensuring no double-replay across
+    consecutive drains."""
     store.stash_delivery("u1", _item("once"))
     draining = tmp_path / "u1" / "pending.json.draining"
-
-    # Simulate "unlink failed" by making the path read-only after rename.
-    # Rather than monkey-patching unlink (fragile), we hand-roll the
-    # crash by:
-    #   1. Triggering rename via drain
-    #   2. Stopping before we unlink
-    # We can't easily intercept inside the function, so we test the
-    # equivalent: stash, manually rename to .draining, then drain.
     p = tmp_path / "u1" / "pending.json"
+
+    # Hand-roll the crash by manually renaming pending.json → .draining
+    # without invoking drain. Equivalent to: drain succeeded the rename,
+    # absorbed nothing yet, and crashed before reading.
     if p.exists():
         p.replace(draining)
+
     # First drain absorbs from .draining
     first = store.drain_stashed_deliveries("u1")
     assert len(first) == 1
     # Second drain — nothing left, no double-replay
     second = store.drain_stashed_deliveries("u1")
     assert second == []
+
+
+def test_no_double_replay_when_inside_lock_unlink_fails(
+    store, tmp_path: Path, monkeypatch
+) -> None:
+    """The CR-flagged double-replay edge: stale .draining absorbed
+    inside the lock, its unlink fails, no fresh pending.json arrives.
+    Pre-fix the post-lock branch re-read the same file; the absorbed-
+    flag now suppresses that second read."""
+    user_dir = tmp_path / "u1"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    draining = user_dir / "pending.json.draining"
+    draining.write_text(json.dumps([_item("orphaned-A"), _item("orphaned-B")]))
+    # NO pending.json — the post-lock branch's existence check on
+    # .draining is the only path that could re-read.
+
+    # Patch Path.unlink so it fails ONLY for the .draining file inside
+    # this user's dir, simulating an NFS hiccup or permission flip.
+    real_unlink = Path.unlink
+
+    def _fail_unlink(self: Path, *args, **kwargs) -> None:
+        if self.name == "pending.json.draining" and self.parent.name == "u1":
+            raise PermissionError("simulated unlink failure")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _fail_unlink)
+
+    items = store.drain_stashed_deliveries("u1")
+    # Each item appears EXACTLY once even though .draining survived
+    # the failed unlink and the post-lock branch checked again.
+    assert len(items) == 2
+    assert {i["phrase"] for i in items} == {"orphaned-A", "orphaned-B"}
+    # File still exists (the unlink failed) — next drain will absorb
+    # again. We restore unlink so the next call can clean up.
+    monkeypatch.undo()
+    leftover = store.drain_stashed_deliveries("u1")
+    # Recovery path absorbs the same items a final time on next drain
+    # because they were never deleted from disk. That's the recoverable
+    # side of the trade-off — better to replay them once more than to
+    # silently delete on a flaky filesystem.
+    assert len(leftover) == 2
 
 
 def test_concurrent_stash_serialises_under_lock(store, tmp_path: Path) -> None:
