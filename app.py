@@ -177,6 +177,46 @@ def _active_skill(user_id: str = "default"):
     return get_active_persona()
 
 
+def _resolve_skill_llm(skill) -> dict:
+    """Resolve LLM routing for a skill. Single source of truth shared by
+    the voice path (run_bot) and the inbound A2A path (text_agent).
+
+    Precedence per-field: persona.llm.{url,model,api_key,api_key_env}
+    overrides; env var fallback; finally module-level defaults.
+
+    `extra_body` follows the same kill-switch logic as the voice path:
+    user override always wins; custom URL forces None (avoids LiteLLM
+    400s on `chat_template_kwargs`); default endpoint sends
+    `enable_thinking=False`.
+
+    Returns a dict with keys: url, model, api_key, extra_body,
+    using_custom_url. Callers compose request kwargs from this.
+    """
+    skill_llm = (skill.llm if skill else None) or {}
+    using_custom_url = bool(skill_llm.get("url"))
+    url = str(skill_llm.get("url") or LLM_URL)
+    model = str(skill_llm.get("model") or LLM_SERVED_NAME)
+    if skill_llm.get("api_key"):
+        api_key = str(skill_llm["api_key"])
+    elif skill_llm.get("api_key_env"):
+        api_key = os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
+    else:
+        api_key = LLM_API_KEY
+    if "extra_body" in skill_llm:
+        extra_body = skill_llm["extra_body"] or None
+    elif using_custom_url:
+        extra_body = None
+    else:
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    return {
+        "url": url,
+        "model": model,
+        "api_key": api_key,
+        "extra_body": extra_body,
+        "using_custom_url": using_custom_url,
+    }
+
+
 def _recall_block(user_id: str) -> str:
     """Session-open memory callback. Composes a nudge block from:
       - the last 3 SQLite session summaries (structured), and
@@ -390,16 +430,24 @@ def _effective_prompt(
 
 from openai import AsyncOpenAI
 
-_text_client: AsyncOpenAI | None = None
+# Cache by (url, key) so repeated A2A turns don't rebuild the underlying
+# httpx connection pool. Keyed on the resolved tuple — when persona.llm
+# overrides land, we naturally route to a different cached client.
+_text_clients: dict[tuple[str, str], AsyncOpenAI] = {}
 _A2A_CONTEXTS: dict[str, list[dict]] = {}
 _A2A_MAX_TURNS = int(os.environ.get("A2A_MAX_TURNS", "10"))
 
 
-def _get_text_client() -> AsyncOpenAI:
-    global _text_client
-    if _text_client is None:
-        _text_client = AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_URL)
-    return _text_client
+def _get_text_client(url: str, api_key: str) -> AsyncOpenAI:
+    """Return a cached AsyncOpenAI for this (url, key). Honors per-skill
+    LLM overrides — the voice path and A2A path now hit the same
+    configured endpoint."""
+    cache_key = (url, api_key)
+    client = _text_clients.get(cache_key)
+    if client is None:
+        client = AsyncOpenAI(api_key=api_key, base_url=url)
+        _text_clients[cache_key] = client
+    return client
 
 
 _TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
@@ -448,17 +496,23 @@ async def text_agent(message: str, session_id: str) -> str:
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
     tools_openai = build_text_tool_schemas(session_delegates)
-    client = _get_text_client()
+    # Resolve persona.llm overrides — voice path and A2A path now share
+    # the same routing logic via _resolve_skill_llm. Closes R14: a user
+    # who configures a custom LLM in config/orbis.yaml gets that LLM for
+    # both voice turns AND inbound A2A turns.
+    llm_cfg = _resolve_skill_llm(skill)
+    client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
 
     reply = ""
     for _ in range(max(1, _TEXT_REACT_MAX_ITERATIONS)):
         kwargs: dict = {
-            "model": LLM_SERVED_NAME,
+            "model": llm_cfg["model"],
             "messages": messages,
             "max_tokens": skill.max_tokens,
             "temperature": skill.temperature,
-            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
         }
+        if llm_cfg["extra_body"] is not None:
+            kwargs["extra_body"] = llm_cfg["extra_body"]
         if tools_openai:
             kwargs["tools"] = tools_openai
             kwargs["tool_choice"] = "auto"
@@ -568,60 +622,19 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
 
     stt = make_stt()
 
-    # LLM routing. When persona.llm.{url, model, api_key, api_key_env}
-    # is set via config/orbis.yaml or the setup wizard, this session's
-    # chat completions route there instead of the env default. Falls
-    # back per-field to LLM_URL / LLM_SERVED_NAME / LLM_API_KEY env vars
-    # so a mix (e.g. custom url but rely-on-env key) works naturally.
-    skill_llm = skill.llm or {}
-    using_custom_llm = bool(skill_llm.get("url"))
-    llm_url = str(skill_llm.get("url") or LLM_URL)
-    llm_model = str(skill_llm.get("model") or LLM_SERVED_NAME)
-    if skill_llm.get("api_key"):
-        # Direct key stored in config/orbis.yaml — wizard-written path.
-        llm_api_key = str(skill_llm["api_key"])
-    elif skill_llm.get("api_key_env"):
-        llm_api_key = os.environ.get(
-            str(skill_llm["api_key_env"]), LLM_API_KEY
-        )
-    else:
-        llm_api_key = LLM_API_KEY
-    # Thinking/reasoning models (Qwen3, DeepSeek-R1, etc.) emit a
-    # <think>...</think> scratchpad before the user-visible reply. For a
-    # voice-first product that means dead air — no sentence break fires
-    # in the reasoning tokens, so TTS can't start streaming until the
-    # model finally transitions to the answer. We default to
-    # ``enable_thinking=False`` so the model skips that phase entirely.
-    #
-    # `chat_template_kwargs` rides inside OpenAI's extra_body. LiteLLM
-    # forwards it to vLLM verbatim; OpenAI/Anthropic/Gemini gateways
-    # ignore unknown fields. Any config that needs thinking on (or
-    # needs a different extra-body shape) can override via
-    # persona.llm.extra_body.
-    if "extra_body" in skill_llm:
-        # User-provided override always wins.
-        extra_body = skill_llm["extra_body"] or None
-    elif using_custom_llm:
-        # Custom URL = send a bare OpenAI-compat request. Don't try to
-        # inject reasoning-disable hints — every gateway / proxy /
-        # in-house wrapper has its own opinions about what fields are
-        # allowed, and an unfamiliar field can trip a WAF / 400 / 403
-        # depending on the stack. Specifically: proto-labs.ai's
-        # LiteLLM-backed gateway rejects `chat_template_kwargs`,
-        # `think`, and `enable_thinking` outright with 400 ("unsupported
-        # property"), and we observed even `reasoning_effort: minimal`
-        # triggering 403 ("Your request was blocked.") on certain
-        # model+system-prompt combos. Same pattern hit in the
-        # protoVoice seed before — the original code's `elif
-        # using_custom_llm: extra_body = None` was the right call. If
-        # a custom backend has a thinking-disable convention, the user
-        # opts in via persona.llm.extra_body explicitly.
-        extra_body = None
-    else:
-        # Default endpoint (the project-bundled vLLM) — safe to send
-        # the chat-template-kwargs convention vLLM understands. Skills
-        # / personas can override via extra_body for finer control.
-        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    # LLM routing — resolved by _resolve_skill_llm so the voice path and
+    # the A2A inbound text path share a single source of truth. Per-field
+    # precedence: persona.llm.{url,model,api_key,api_key_env,extra_body}
+    # → env vars (LLM_URL / LLM_SERVED_NAME / LLM_API_KEY) → defaults.
+    # The extra_body kill-switch protects custom URLs from LiteLLM 400s
+    # on chat_template_kwargs; see _resolve_skill_llm for the full
+    # rationale.
+    llm_cfg = _resolve_skill_llm(skill)
+    llm_url = llm_cfg["url"]
+    llm_model = llm_cfg["model"]
+    llm_api_key = llm_cfg["api_key"]
+    extra_body = llm_cfg["extra_body"]
+    using_custom_llm = llm_cfg["using_custom_url"]
 
     settings_kwargs: dict = {
         "model": llm_model,
