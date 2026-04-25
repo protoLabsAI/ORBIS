@@ -53,6 +53,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+from pipecat.frames.frames import CancelFrame, EndFrame
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,32 @@ class OllamaLLMService(BaseOpenAILLMService):
         # Separate httpx client for the native API. AsyncClient is
         # safe to reuse across requests + handles connection pooling.
         self._http = httpx.AsyncClient(timeout=request_timeout)
+
+    async def stop(self, frame: EndFrame):
+        """Close the per-instance AsyncClient on graceful shutdown.
+        Each voice session constructs a fresh OllamaLLMService, and
+        without this every disconnect leaks the keep-alive pool until
+        GC eventually runs."""
+        await self._aclose_http()
+        await super().stop(frame)
+
+    async def cancel(self, frame: CancelFrame):
+        """Same teardown on hard cancellation — pipecat fires either
+        ``stop`` (clean) or ``cancel`` (interrupted) but not both."""
+        await self._aclose_http()
+        await super().cancel(frame)
+
+    async def _aclose_http(self) -> None:
+        """Idempotent close. Pipecat can call stop and cancel back-to-back
+        in some teardown paths; the second call should be a no-op."""
+        client = getattr(self, "_http", None)
+        if client is None:
+            return
+        try:
+            await client.aclose()
+        except Exception as e:  # noqa: BLE001 — defensive on shutdown path
+            logger.debug(f"[ollama-llm] aclose error (ignored): {e}")
+        self._http = None
 
     @staticmethod
     def _derive_root(base_url: str) -> str:

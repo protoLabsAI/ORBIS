@@ -6,10 +6,15 @@ audio by the time the timer expires, emit a tiny acknowledgement (`mm`,
 `mhm`, `hm`, `okay`). Gives the user a sense of "I heard you" without
 waiting for the full response.
 
-Our baseline TTFA is ~500 ms, so the threshold sits at 500 ms — fast
-responses cancel the timer before it fires and no ack plays. Slow
-responses (tool calls, large prompts, model cold-start) trigger the
-ack to bridge the silence.
+The threshold defaults to 1500 ms — slow enough that a fast local LLM
+(e.g. gemma3n:e2b on M1, ~1 s end-to-end) cancels the timer before it
+fires, but fast enough to bridge the silence on tool calls, large
+prompts, or cold-starts. The original tuning was 500 ms, optimized
+for cloud-LLM latency profiles; on local hardware that fired so
+aggressively the ack played on every turn. The
+``persona.behavior.micro_ack.first_ms`` config key (read by app.py
+when constructing ``FillerSettings``) overrides the default per
+persona.
 
 Emission goes through `TTSSpeakFrame(append_to_context=False)` so the
 ack:

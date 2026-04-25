@@ -818,9 +818,11 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
         # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~500 ms of UserStoppedSpeaking, emit a quiet "mm" / "hm"
-        # so the agent feels responsive on slow turns. Cancels when the
-        # bot actually starts speaking. Vapi Fill Injection pattern.
+        # within ~1500 ms (default; per-persona override via
+        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
+        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
+        # Cancels when the bot actually starts speaking. Vapi Fill
+        # Injection pattern.
         MicroAckInjector(
             tts_backend=tts_backend,
             enabled=ma_cfg["enabled"],
@@ -1288,6 +1290,60 @@ async def llm_models(body: dict):
     )
 
 
+def _ollama_url_is_safe(url: str) -> bool:
+    """Reject non-local Ollama URLs to prevent the unauth ``/api/llm/pull``
+    route from being weaponized as an SSRF gadget.
+
+    The route is unauth (the wizard runs before an API key is set up).
+    Without this guard, a malicious page in the WKWebView (or anyone
+    on 127.0.0.1 with the ephemeral port) could pass any URL and have
+    the sidecar POST to it — most concerningly the cloud-metadata
+    endpoint at 169.254.169.254 if the user later runs ORBIS on a
+    cloud host.
+
+    Allowed:
+      - http(s) scheme
+      - loopback by name (``localhost``, ``ip6-localhost``)
+      - loopback or RFC-1918 private IPs (127.0.0.0/8, 10/8, 172.16/12,
+        192.168/16, fc00::/7, ::1)
+      - mDNS/Tailscale-style hostnames (``*.local``, ``*.lan``,
+        ``*.ts.net``) so users with Ollama on another box on their
+        tailnet still work
+
+    Rejected: everything else, including link-local 169.254.x.x
+    (cloud metadata) and any public hostname/IP.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in ("localhost", "ip6-localhost", "ip6-loopback"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # Hostname (not an IP literal). Constrain to local-network suffixes
+        # that aren't routable on the public internet.
+        return host.endswith(".local") or host.endswith(".lan") or host.endswith(".ts.net")
+    # IP literal — accept loopback + private; reject link-local, the
+    # all-zeros unspecified address (which on Linux means "any
+    # interface" and would be a confused-deputy invitation), and
+    # multicast. Python's `is_private` includes 169.254.0.0/16 (and
+    # IPv6 fe80::/10), which is exactly the cloud-metadata range we
+    # need to keep blocked, so check those out explicitly.
+    if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
 @app.post("/api/llm/pull")
 async def llm_pull(body: dict):
     """Stream an Ollama pull as Server-Sent Events.
@@ -1308,7 +1364,9 @@ async def llm_pull(body: dict):
     OpenAI-compat endpoint also works here.
 
     Unauth — same rationale as ``/api/llm/detect_local``: this runs
-    before the wizard has set up an API key.
+    before the wizard has set up an API key. URL is constrained by
+    ``_ollama_url_is_safe`` so the route can't be turned into an
+    SSRF gadget.
     """
     from fastapi.responses import StreamingResponse
     import httpx as _httpx
@@ -1320,6 +1378,15 @@ async def llm_pull(body: dict):
     raw_url = str(body.get("url") or "http://127.0.0.1:11434").rstrip("/")
     if raw_url.endswith("/v1"):
         raw_url = raw_url[:-3]
+    if not _ollama_url_is_safe(raw_url):
+        # Reject before opening a connection. The error is intentionally
+        # specific — the wizard prompts on the response, and there's
+        # no information leak: the validator only inspects the URL the
+        # caller already supplied.
+        return JSONResponse(
+            {"error": f"refusing to proxy non-local Ollama URL: {raw_url}"},
+            status_code=400,
+        )
 
     async def _stream():
         timeout = _httpx.Timeout(connect=5.0, read=None, write=None, pool=None)

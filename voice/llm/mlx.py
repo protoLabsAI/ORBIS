@@ -174,9 +174,25 @@ async def _stream_as_openai_chunks(
 
     # `stream_generate` is a synchronous Python generator; iterate it
     # in an executor and pump chunks across.
+    #
+    # Cross-thread bridge: the producer runs on a thread-pool executor,
+    # so it can't touch the asyncio.Queue directly — `put_nowait` and
+    # friends are only safe from the event-loop thread. Schedule each
+    # put via `run_coroutine_threadsafe` and block the producer on the
+    # returned Future so backpressure flows the right way (queue full →
+    # producer waits → MLX generator pauses naturally between tokens).
     queue: asyncio.Queue = asyncio.Queue(maxsize=64)
-    SENTINEL = object()
     final_meta: dict[str, Any] = {}
+
+    def _put(item: tuple[str, Any]) -> None:
+        """Cross-thread put with backpressure. Blocks the producer
+        thread until the asyncio side accepts the item."""
+        try:
+            asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+        except Exception as e:  # noqa: BLE001 — loop-shutdown race
+            # Loop went away mid-generation (consumer cancelled). Log
+            # once and let _producer's `finally` end gracefully.
+            logger.debug(f"[mlx-llm] queue put dropped (loop closed?): {e}")
 
     def _producer():
         n_tokens = 0
@@ -190,7 +206,7 @@ async def _stream_as_openai_chunks(
                     text = getattr(resp, "text", "") or ""
                     if text:
                         n_text_chunks += 1
-                        queue.put_nowait(("token", text))
+                        _put(("token", text))
                     final_meta["prompt_tokens"] = getattr(resp, "prompt_tokens", None)
                     final_meta["generation_tokens"] = getattr(resp, "generation_tokens", None)
             logger.info(
@@ -199,9 +215,9 @@ async def _stream_as_openai_chunks(
             )
         except Exception as e:
             logger.exception(f"[mlx-llm] generation crashed after {n_tokens} steps")
-            queue.put_nowait(("error", str(e)))
+            _put(("error", str(e)))
         finally:
-            queue.put_nowait(("done", None))
+            _put(("done", None))
 
     fut = loop.run_in_executor(None, _producer)
 
@@ -251,8 +267,12 @@ async def _stream_as_openai_chunks(
         )
     finally:
         # Make sure the executor task drains even if the consumer
-        # broke out early.
+        # broke out early. We log at DEBUG rather than swallowing
+        # silently — a producer crash here is rare but surfaces a
+        # real bug (model corruption, GPU OOM) that's worth a note
+        # in verbose logs even though it can't propagate up to the
+        # caller anymore (the stream is closed).
         try:
             await fut
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 — best-effort drain
+            logger.debug(f"[mlx-llm] producer drain error (ignored): {e}")

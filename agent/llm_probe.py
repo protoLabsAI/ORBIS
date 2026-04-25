@@ -82,7 +82,7 @@ async def _ping_mlx(url: str, model: str) -> dict:
             "latency_ms": latency_ms,
             "note": "First voice session will download the model (~2-5 GB).",
         }
-    if r.status_code == 401 or r.status_code == 404:
+    if r.status_code in (401, 404):
         return {
             "ok": False,
             "error": f"model '{hf_id}' not found on HuggingFace",

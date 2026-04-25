@@ -18,28 +18,28 @@ Selection precedence:
        upgrade to native inference. Disable with ``ORBIS_PREFER_MLX=0``.
     4. URL-shape detection — Ollama default port (11434) or hostname
        containing ``ollama``.
-    5. Probe ``GET <root>/api/version`` (Ollama-specific endpoint)
-       and route to OllamaLLMService if it returns 200 with a
-       version string.
-    6. Fall back to OpenAILLMService (covers OpenAI itself, vLLM,
+    5. Fall back to OpenAILLMService (covers OpenAI itself, vLLM,
        LiteLLM, LM Studio, OpenRouter, anything OpenAI-compatible).
 
-The probe is best-effort — at desktop scale a single round-trip is
-cheap, but failures are non-fatal: any timeout / connection error
-yields the OpenAI fallback. Result is cached per-(url) so repeated
-sessions don't re-probe.
+We deliberately don't perform a network probe. The previous version
+did a synchronous ``httpx.get(<root>/api/version, timeout=1.5)`` to
+catch the rare "Ollama on a non-default port and a non-Ollama
+hostname" config, but ``make_llm`` is called from inside the
+asyncio event loop during session setup, and a sync HTTP call there
+pins the loop for up to 1.5s on every cold-cache URL. Users with
+unusual Ollama deployments can set ``persona.llm.provider: ollama``
+explicitly — that's a one-line config edit, much cheaper than the
+loop-stall on every other user's hot path.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import platform
 import sys
 from typing import Any
 from urllib.parse import urlparse
 
-import httpx
 from pipecat.services.openai.llm import OpenAILLMService
 
 from .ollama import OllamaLLMService
@@ -122,11 +122,30 @@ def make_llm(
         resolved = "ollama"
 
     if resolved == "ollama":
-        logger.info(f"[llm-factory] using Ollama adapter for {base_url} model={model}")
+        # Pipecat stores persona overrides under `settings.extra`. The
+        # OpenAI flow forwards `extra["extra_body"]` straight into the
+        # SDK call. Ollama's native `/api/chat` doesn't take an
+        # `extra_body` envelope — it has its own top-level `think`
+        # field — so the factory translates here. Recognized shapes:
+        #
+        #   extra_body: { think: true }                    # native
+        #   extra_body: { chat_template_kwargs: { enable_thinking: ... } }
+        #
+        # The second form is what vLLM/Qwen3 personas already use, so
+        # accepting it lets the same `extra_body` config drive both
+        # backends. Default stays `False` (suppress reasoning preamble)
+        # since silent TTS during thinking is the primary failure mode
+        # the native adapter is meant to fix.
+        think = _resolve_ollama_think(settings)
+        logger.info(
+            f"[llm-factory] using Ollama adapter for {base_url} "
+            f"model={model} think={think}"
+        )
         return OllamaLLMService(
             api_key=api_key or "ollama",
             base_url=base_url,
             model=model,
+            think=think,
             settings=settings,
         )
 
@@ -144,6 +163,27 @@ def make_llm(
     return svc
 
 
+def _resolve_ollama_think(settings: Any) -> bool:
+    """Pull a ``think`` override out of ``settings.extra["extra_body"]``,
+    accepting either the native Ollama field name (``think``) or the
+    vLLM/Qwen3 chat-template convention (``chat_template_kwargs.enable_thinking``).
+
+    Returns the explicit value if either is set, else ``False`` (the
+    Ollama adapter's safer default — emitting reasoning content jams
+    pipecat's sentence aggregator and produces silent TTS).
+    """
+    extra = getattr(settings, "extra", None) or {}
+    extra_body = extra.get("extra_body") if isinstance(extra, dict) else None
+    if not isinstance(extra_body, dict):
+        return False
+    if "think" in extra_body:
+        return bool(extra_body["think"])
+    ct_kw = extra_body.get("chat_template_kwargs")
+    if isinstance(ct_kw, dict) and "enable_thinking" in ct_kw:
+        return bool(ct_kw["enable_thinking"])
+    return False
+
+
 def is_apple_silicon() -> bool:
     """Public probe — used by the wizard to decide whether to surface
     the MLX preset / install-helper UI. Module-level constant cached
@@ -153,31 +193,19 @@ def is_apple_silicon() -> bool:
 
 def _detect_provider(base_url: str) -> str | None:
     """Return ``"ollama"`` if the URL looks like an Ollama instance,
-    else None (caller falls back to OpenAI). Cached per-URL."""
+    else ``None`` (caller falls back to OpenAI-compat). Pure URL-shape
+    inspection — no network I/O. Users with non-standard Ollama
+    deployments should set ``persona.llm.provider: ollama`` instead
+    of relying on auto-detection. Result is cached per-URL since the
+    cost is trivial but lets the call stay free."""
     if not base_url:
         return None
     if base_url in _PROVIDER_CACHE:
         return _PROVIDER_CACHE[base_url] or None
 
-    if _looks_like_ollama_url(base_url):
-        _PROVIDER_CACHE[base_url] = "ollama"
-        return "ollama"
-
-    # Probe /api/version. Ollama-only endpoint; OpenAI/vLLM/LiteLLM
-    # all return 404. Cheap one-shot, 1.5s ceiling.
-    if os.environ.get("ORBIS_LLM_DETECT_DISABLE") == "1":
-        return None
-    root = base_url.rstrip("/").removesuffix("/v1")
-    try:
-        r = httpx.get(f"{root}/api/version", timeout=1.5)
-        if r.status_code == 200 and "version" in (r.text or ""):
-            _PROVIDER_CACHE[base_url] = "ollama"
-            return "ollama"
-    except (httpx.HTTPError, OSError):
-        pass
-
-    _PROVIDER_CACHE[base_url] = ""
-    return None
+    resolved = "ollama" if _looks_like_ollama_url(base_url) else ""
+    _PROVIDER_CACHE[base_url] = resolved
+    return resolved or None
 
 
 def _looks_like_ollama_url(base_url: str) -> bool:
@@ -188,7 +216,15 @@ def _looks_like_ollama_url(base_url: str) -> bool:
         parsed = urlparse(base_url)
     except ValueError:
         return False
-    if parsed.port == 11434:
+    # `parsed.port` is a property that re-parses the netloc and raises
+    # ValueError on inputs like ``http://localhost:abc/v1`` — the
+    # wizard accepts arbitrary URLs so we have to assume it can be fed
+    # garbage. Catch the parse error and treat it as "no port info."
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port == 11434:
         return True
     if "ollama" in (parsed.hostname or "").lower():
         return True

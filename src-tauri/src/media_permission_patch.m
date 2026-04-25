@@ -139,9 +139,20 @@ static void orbis_install_tick(void) {
 // MARK: - C entry point
 
 void orbis_install_media_capture_prompt(void) {
-    // Always trampoline to the main thread — NSWindow/WKWebView
-    // mutations are main-queue-only on AppKit.
-    dispatch_async(dispatch_get_main_queue(), ^{
-        orbis_install_tick();
+    // Per-WKWebView idempotency is handled by the associated-object
+    // marker, but the heartbeat loop itself is process-global —
+    // dispatch_after schedules another tick on every iteration, so a
+    // second call to this entry point would spawn a parallel chain
+    // and `orbis_install_tick` would run twice per second forever.
+    // Gate with a one-shot flag so multiple Rust-side callers (e.g.
+    // app re-init, or future plugins that also want this patch) only
+    // start the loop once.
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // Always trampoline to the main thread — NSWindow/WKWebView
+        // mutations are main-queue-only on AppKit.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            orbis_install_tick();
+        });
     });
 }

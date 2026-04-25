@@ -119,10 +119,18 @@ class LocalWhisperSTT(SegmentedSTTService):
                 t0 = time.time()
                 result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
                 text = (result.get("text") or "").strip()
+                # INFO log carries duration + length only — every voice
+                # utterance flows through here, so the full transcript
+                # at INFO would write the user's spoken content to
+                # whatever log sink the deployment uses (file, journald,
+                # remote shipper). The text is still observable at DEBUG
+                # for local debugging.
                 logger.info(
                     f"[stt.local] whisper {duration_s:.2f}s → "
-                    f"{(time.time() - t0):.2f}s → text={text!r}"
+                    f"{(time.time() - t0):.2f}s → {len(text)} chars"
                 )
+                if text:
+                    logger.debug(f"[stt.local] text={text!r}")
             except Exception as e:
                 sp.update(level="ERROR", status_message=str(e))
                 logger.error(f"[stt.local] inference failed: {e}")
