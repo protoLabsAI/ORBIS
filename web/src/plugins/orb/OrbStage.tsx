@@ -10,6 +10,7 @@ import { useActiveVariant } from './useOrbState';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
 import { useOrbState } from './useOrbState';
+import { pushStatusTransient } from '../status-pill/store';
 import type { FractalPreset } from './variants/fractal/presets';
 // Side-effect imports — variants register themselves on import.
 import './variants';
@@ -51,9 +52,22 @@ export function OrbStage() {
       transport === 'connecting' ||
       transport === 'authenticating';
     if (disconnected) {
-      client.connect().catch((err) => console.error('[orb] connect error:', err));
+      client.connect().catch((err) => {
+        console.error('[orb] connect error:', err);
+        // R10: surface in the status pill so the user knows the
+        // double-click did something. Common causes: backend
+        // unreachable, API key wrong, SDP timeout. 4s matches the
+        // duration used by RTVI Error events for UX consistency
+        // across error sources.
+        const detail = err instanceof Error ? err.message : String(err);
+        pushStatusTransient(`couldn't connect: ${detail}`, 4000);
+      });
     } else if (active) {
-      client.disconnect().catch((err) => console.error('[orb] disconnect error:', err));
+      client.disconnect().catch((err) => {
+        console.error('[orb] disconnect error:', err);
+        const detail = err instanceof Error ? err.message : String(err);
+        pushStatusTransient(`disconnect failed: ${detail}`, 4000);
+      });
     }
   };
 
