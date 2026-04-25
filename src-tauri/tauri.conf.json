@@ -33,6 +33,9 @@
     "longDescription": "An orb that talks to you, remembers you, and routes the heavy lifting to your configured agents. Voice-first. Single-owner. Runs on your own hardware.",
     "copyright": "Copyright (c) 2026 protoLabs Studio",
     "externalBin": ["binaries/orbis"],
+    "resources": {
+      "../config/orbis.example.yaml": "config/orbis.example.yaml"
+    },
     "macOS": {
       "entitlements": "./entitlements.plist",
       "hardenedRuntime": true

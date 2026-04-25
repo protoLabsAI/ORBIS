@@ -895,8 +895,13 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   );
 
   const onChangeDevice = (id: string) => {
+    // Reset verification when the user picks a different mic — the
+    // previous device's verified state shouldn't carry over to a fresh
+    // input that hasn't been tested. (CodeRabbit major #14 on PR #30
+    // and the duplicate finding on the second pass both flag this.)
     setDeviceIdState(id);
     setPreferredAudioDeviceId(id);
+    setVerified(false);
   };
 
   const refreshDevices = async () => {
