@@ -242,8 +242,16 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   const [test, setTest] = useState<TestState>({ kind: 'idle' });
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [local, setLocal] = useState<LocalDetected>({});
+  const [showAllProviders, setShowAllProviders] = useState(false);
 
   const current = LLM_PRESETS.find((p) => p.id === provider) ?? DEFAULT_LLM_PRESET;
+  // Show featured presets up front; reveal the long-tail OpenAI-compat
+  // providers (Groq / DeepSeek / OpenRouter / etc.) only if the user
+  // expands the accordion or has selected one of them already.
+  const visiblePresets = (showAllProviders || !current.featured)
+    ? LLM_PRESETS
+    : LLM_PRESETS.filter((p) => p.featured || p.id === provider);
+  const hiddenCount = LLM_PRESETS.length - visiblePresets.length;
 
   // Probe localhost for Ollama / LM Studio once on mount. Silent failure —
   // if they're not running, we just don't show the callout.
@@ -405,7 +413,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-        {LLM_PRESETS.map((p) => (
+        {visiblePresets.map((p) => (
           <button
             key={p.id}
             type="button"
@@ -424,6 +432,25 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           </button>
         ))}
       </div>
+
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllProviders(true)}
+          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          Show {hiddenCount} more providers ▾
+        </button>
+      )}
+      {showAllProviders && (
+        <button
+          type="button"
+          onClick={() => setShowAllProviders(false)}
+          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          Show fewer ▴
+        </button>
+      )}
 
       <div className="space-y-3">
         <div>
