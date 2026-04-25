@@ -47,8 +47,10 @@
 //!   CommandChild — we just make sure the guard drops.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -164,6 +166,39 @@ pub fn run() {
 async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     let shell = app.shell();
 
+    // Resolve the env vars the sidecar needs at boot:
+    //
+    // * `ORBIS_CONFIG` — agent/config_store.py defaults to the relative
+    //   path `config/orbis.yaml`. The bundled app spawns the sidecar
+    //   with cwd = `/`, so that relative path resolves to `/config/...`
+    //   which doesn't exist (and isn't writable). Point it at a stable,
+    //   writable location under the platform's app-data dir so reads
+    //   and the wizard's writes both target the same file across runs.
+    //
+    // * `START_VLLM` — `voice/lifecycle.py` defaults to spawning a
+    //   local vLLM child during FastAPI startup, blocking up to 120s
+    //   waiting for it to come up. The bundled python doesn't ship
+    //   vLLM (no CUDA on macOS, no NVIDIA drivers assumed), so the
+    //   spawn always fails and the app sits on the splash forever.
+    //   Disable by default; users running vLLM separately can override
+    //   in their shell.
+    //
+    // Pre-existing values in the parent env win — handy for `cargo
+    // tauri dev` where the developer may want to point at the repo's
+    // checked-in config or run a real vLLM.
+    let config_path = resolve_config_path(&app);
+    if let Some(parent) = config_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::warn!("couldn't create config dir {}: {e}", parent.display());
+        }
+    }
+    seed_default_config(&app, &config_path);
+    let start_vllm = std::env::var("START_VLLM").unwrap_or_else(|_| "0".to_string());
+    log::info!(
+        "sidecar env: ORBIS_CONFIG={} START_VLLM={start_vllm}",
+        config_path.display()
+    );
+
     // `sidecar("orbis")` resolves to `binaries/orbis-<target>` on the
     // bundle or `./binaries/orbis-<target>` during `tauri dev`.
     // Target-suffix resolution is Tauri's job — we just give the base
@@ -171,7 +206,9 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     let command = shell
         .sidecar("orbis")
         .map_err(|e| format!("couldn't find sidecar binary: {e}"))?
-        .args(["--host", "127.0.0.1", "--port", "0"]);
+        .args(["--host", "127.0.0.1", "--port", "0"])
+        .env("ORBIS_CONFIG", &config_path)
+        .env("START_VLLM", &start_vllm);
 
     let (mut rx, child) = command
         .spawn()
@@ -225,6 +262,75 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// First-run seed: if `config_path` doesn't exist yet, copy the bundled
+/// `config/orbis.example.yaml` resource into it. The example file ships
+/// with a working baked-in persona, sane TTS / orb defaults, and an
+/// empty `user_name` + missing `llm` block so the wizard still triggers
+/// for the things that need a human decision.
+///
+/// Any failure here is non-fatal — the sidecar handles a missing config
+/// (the wizard writes one from scratch). We log + move on so a
+/// resource-resolution edge case doesn't block boot.
+fn seed_default_config(app: &AppHandle, config_path: &PathBuf) {
+    if config_path.exists() {
+        return;
+    }
+    let resource = match app
+        .path()
+        .resolve("config/orbis.example.yaml", BaseDirectory::Resource)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("first-run seed: example resource resolve failed: {e}");
+            return;
+        }
+    };
+    if !resource.exists() {
+        log::warn!(
+            "first-run seed: example resource not present at {}",
+            resource.display()
+        );
+        return;
+    }
+    match std::fs::copy(&resource, config_path) {
+        Ok(_) => log::info!(
+            "first-run seed: copied {} → {}",
+            resource.display(),
+            config_path.display()
+        ),
+        Err(e) => log::warn!(
+            "first-run seed: copy {} → {} failed: {e}",
+            resource.display(),
+            config_path.display()
+        ),
+    }
+}
+
+/// Pick the path to use for `ORBIS_CONFIG`. Order:
+///
+///   1. `$ORBIS_CONFIG` from the parent env, if set + non-empty —
+///      lets `cargo tauri dev` point at the repo's checked-in YAML.
+///   2. `<app_data_dir>/orbis.yaml`, where `app_data_dir` is Tauri's
+///      platform-correct user-writable location (e.g. on macOS
+///      `~/Library/Application Support/<bundle-id>/`).
+///   3. Last-ditch fallback: `./orbis.yaml` next to the binary —
+///      only reached if Tauri's path resolver itself errors, which
+///      shouldn't happen in practice. Logged loudly so we notice.
+fn resolve_config_path(app: &AppHandle) -> PathBuf {
+    if let Ok(value) = std::env::var("ORBIS_CONFIG") {
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    match app.path().app_data_dir() {
+        Ok(dir) => dir.join("orbis.yaml"),
+        Err(e) => {
+            log::error!("app_data_dir resolve failed ({e}); falling back to ./orbis.yaml");
+            PathBuf::from("orbis.yaml")
+        }
+    }
 }
 
 /// Extract the URL from a `ORBIS_READY http://host:port` line. Ignores
