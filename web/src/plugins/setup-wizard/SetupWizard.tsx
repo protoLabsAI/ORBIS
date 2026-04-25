@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
-import { pullOllamaModel } from '@/shared/llm/ollamaPull';
+import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import { MicTest } from '@/shared/audio/MicTest';
 import {
@@ -370,25 +370,32 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         </div>
       )}
       {localCallouts.length === 0 && <OllamaInstallHelper />}
-      {local.ollama &&
-        !local.ollama.models.includes(DEFAULT_LLM_PRESET.model) && (
+      {provider === 'mlx' && (
+        <ModelPullCallout
+          source="mlx"
+          modelName={model || DEFAULT_LLM_PRESET.model}
+          onPulled={() => {
+            // Mark "test" as ok once the model is local — first
+            // voice session will load from disk in seconds.
+            setTest({ kind: 'ok', latency: 0 });
+          }}
+        />
+      )}
+      {provider === 'ollama' &&
+        local.ollama &&
+        !local.ollama.models.includes(model) && (
           <ModelPullCallout
-            modelName={DEFAULT_LLM_PRESET.model}
+            source="ollama"
+            modelName={model}
             ollamaUrl={local.ollama.url}
             onPulled={() => {
-              // Re-detect so the picker reflects the new model.
               api
                 .llmDetectLocal()
                 .then((found) => {
                   setLocal(found as LocalDetected);
-                  // Auto-apply Ollama with the freshly-pulled model so
-                  // the user can continue without manually clicking.
                   const next = (found as LocalDetected).ollama;
-                  if (next?.models.includes(DEFAULT_LLM_PRESET.model)) {
-                    setProvider('ollama');
-                    setUrl(next.url);
+                  if (next?.models.includes(model)) {
                     setAvailableModels(next.models);
-                    setModel(DEFAULT_LLM_PRESET.model);
                     setTest({ kind: 'idle' });
                   }
                 })
@@ -596,11 +603,15 @@ function OllamaInstallHelper() {
  */
 function ModelPullCallout({
   modelName,
+  source,
   ollamaUrl,
   onPulled,
 }: {
   modelName: string;
-  ollamaUrl: string;
+  /** 'ollama' uses /api/llm/pull; 'mlx' uses /api/llm/mlx/pull. */
+  source: 'ollama' | 'mlx';
+  /** Required when source='ollama'. */
+  ollamaUrl?: string;
   onPulled: () => void;
 }) {
   const [pulling, setPulling] = useState(false);
@@ -617,13 +628,16 @@ function ModelPullCallout({
     setPulling(true);
     setError(null);
     setDone(false);
-    setStatus('contacting Ollama');
+    setStatus(source === 'mlx' ? 'starting download' : 'contacting Ollama');
     setCompleted(0);
     setTotal(0);
     const ac = new AbortController();
     abortRef.current = ac;
     try {
-      for await (const evt of pullOllamaModel(modelName, ollamaUrl, { signal: ac.signal })) {
+      const stream = source === 'mlx'
+        ? pullMlxModel(modelName, { signal: ac.signal })
+        : pullOllamaModel(modelName, ollamaUrl ?? 'http://127.0.0.1:11434', { signal: ac.signal });
+      for await (const evt of stream) {
         if (evt.error) {
           setError(evt.error);
           continue;
@@ -650,12 +664,12 @@ function ModelPullCallout({
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
       <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
-        Recommended model not installed
+        {source === 'mlx' ? 'Built-in model — first run' : 'Recommended model not installed'}
       </div>
       <p className="text-[13px] text-zinc-400 mb-3">
-        Pull <code className="text-zinc-200">{modelName}</code> for the
-        fastest local voice loop on this machine. ~5.6 GB; takes a few
-        minutes on a normal connection.
+        {source === 'mlx'
+          ? <>Download <code className="text-zinc-200">{modelName}</code> from HuggingFace (~2-5 GB). One-time; cached locally for every future session.</>
+          : <>Pull <code className="text-zinc-200">{modelName}</code> for the fastest local voice loop on this machine. ~5.6 GB; takes a few minutes on a normal connection.</>}
       </p>
       {!pulling && !done && (
         <div className="flex items-center justify-between gap-3">

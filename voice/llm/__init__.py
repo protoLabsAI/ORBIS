@@ -6,14 +6,23 @@ adapters without app.py needing to know about them.
 
 Selection precedence:
 
-    1. Explicit ``provider`` kwarg (e.g. ``provider="ollama"``)
-    2. URL-shape detection — Ollama default port (11434) or
-       hostname containing ``ollama``
-    3. Probe ``GET <root>/api/version`` (Ollama-specific endpoint)
+    1. Explicit ``provider`` kwarg (``"mlx"``, ``"ollama"``, ``"openai"``).
+    2. ``mlx://`` URL scheme is the explicit "use the in-process MLX
+       adapter" signal. Model id follows the scheme:
+       ``mlx://mlx-community/gemma-3n-E2B-it-4bit``.
+    3. Apple-Silicon auto-prefer: if we're on macOS arm64 + ``mlx_lm``
+       is importable + the URL points at the project default Ollama
+       endpoint (``http://127.0.0.1:11434/v1``), prefer MLX with the
+       configured model id translated through the ``mlx-community/``
+       org. Lets users keep their existing Ollama config and silently
+       upgrade to native inference. Disable with ``ORBIS_PREFER_MLX=0``.
+    4. URL-shape detection — Ollama default port (11434) or hostname
+       containing ``ollama``.
+    5. Probe ``GET <root>/api/version`` (Ollama-specific endpoint)
        and route to OllamaLLMService if it returns 200 with a
-       version string
-    4. Fall back to OpenAILLMService (covers OpenAI itself, vLLM,
-       LiteLLM, LM Studio, OpenRouter, anything OpenAI-compatible)
+       version string.
+    6. Fall back to OpenAILLMService (covers OpenAI itself, vLLM,
+       LiteLLM, LM Studio, OpenRouter, anything OpenAI-compatible).
 
 The probe is best-effort — at desktop scale a single round-trip is
 cheap, but failures are non-fatal: any timeout / connection error
@@ -25,6 +34,8 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
+import sys
 from typing import Any
 from urllib.parse import urlparse
 
@@ -34,6 +45,24 @@ from pipecat.services.openai.llm import OpenAILLMService
 from .ollama import OllamaLLMService
 
 logger = logging.getLogger(__name__)
+
+# Cached at module level — checking platform + import availability
+# is essentially free but doing it once is cleaner.
+_IS_APPLE_SILICON = (
+    sys.platform == "darwin" and platform.machine() == "arm64"
+)
+
+
+def _import_mlx_service():
+    """Lazy MLX import — module imports `mlx_lm` at top, which is
+    Mac-arm64-only. Only call when we're sure we're on the right
+    platform. Returns the MLXLLMService class or None on failure."""
+    try:
+        from .mlx import MLXLLMService
+        return MLXLLMService
+    except Exception as e:
+        logger.warning(f"[llm-factory] mlx adapter unavailable: {e}")
+        return None
 
 # Cache of base_url → resolved provider, so repeated session creation
 # doesn't re-probe. Empty-string values mean "treat as OpenAI" (the
@@ -69,7 +98,29 @@ def make_llm(
     Returns:
         A constructed pipecat LLMService ready to attach to a pipeline.
     """
+    # Explicit mlx:// scheme always wins.
+    if base_url and base_url.startswith("mlx://"):
+        provider = provider or "mlx"
+        # Model is encoded in the URL after the scheme; strip and use
+        # the value directly, ignoring whatever was in `model`.
+        model = base_url[len("mlx://"):] or model
+
     resolved = (provider or _detect_provider(base_url) or "openai").lower()
+
+    # MLX is opt-in only — picked explicitly via the wizard's "Built-in
+    # (MLX)" preset (which sets a `mlx://...` URL) or via
+    # `provider="mlx"` in the persona config. We deliberately don't
+    # auto-upgrade Ollama users — pulling a different model under
+    # them, with a multi-GB first-run download, is the kind of
+    # surprise side-effect that erodes trust.
+    if resolved == "mlx":
+        mlx_cls = _import_mlx_service()
+        if mlx_cls is not None:
+            logger.info(f"[llm-factory] using MLX adapter model={model}")
+            return mlx_cls(model=model, settings=settings)
+        logger.warning("[llm-factory] mlx requested but unavailable; falling through to Ollama")
+        resolved = "ollama"
+
     if resolved == "ollama":
         logger.info(f"[llm-factory] using Ollama adapter for {base_url} model={model}")
         return OllamaLLMService(
@@ -91,6 +142,13 @@ def make_llm(
         # assumed to be real OpenAI-compat gateways that accept it.
         svc.supports_developer_role = False
     return svc
+
+
+def is_apple_silicon() -> bool:
+    """Public probe — used by the wizard to decide whether to surface
+    the MLX preset / install-helper UI. Module-level constant cached
+    at import time; safe to call repeatedly."""
+    return _IS_APPLE_SILICON
 
 
 def _detect_provider(base_url: str) -> str | None:

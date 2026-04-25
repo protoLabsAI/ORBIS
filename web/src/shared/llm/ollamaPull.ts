@@ -25,10 +25,30 @@ export async function* pullOllamaModel(
   url: string = 'http://127.0.0.1:11434',
   init?: { signal?: AbortSignal },
 ): AsyncGenerator<PullProgress> {
-  const resp = await fetch('/api/llm/pull', {
+  yield* streamPullSse('/api/llm/pull', { name, url }, init);
+}
+
+/**
+ * MLX equivalent — points at `/api/llm/mlx/pull` which downloads a
+ * `mlx-community/...` model from HuggingFace into the local cache so
+ * the first voice session doesn't pay the multi-GB download cost.
+ */
+export async function* pullMlxModel(
+  modelId: string,
+  init?: { signal?: AbortSignal },
+): AsyncGenerator<PullProgress> {
+  yield* streamPullSse('/api/llm/mlx/pull', { model: modelId }, init);
+}
+
+async function* streamPullSse(
+  endpoint: string,
+  body: Record<string, unknown>,
+  init?: { signal?: AbortSignal },
+): AsyncGenerator<PullProgress> {
+  const resp = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, url }),
+    body: JSON.stringify(body),
     signal: init?.signal,
   });
   if (!resp.body) {

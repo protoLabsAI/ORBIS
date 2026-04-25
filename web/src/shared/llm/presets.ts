@@ -24,10 +24,16 @@ export interface LLMPreset {
 export const LLM_PRESETS: LLMPreset[] = [
   // --- Local / self-hosted (the desktop-app happy path) ---
   {
+    id: 'mlx', label: 'Built-in (MLX)',
+    url: 'mlx://mlx-community/Llama-3.2-3B-Instruct-4bit', model: 'mlx-community/Llama-3.2-3B-Instruct-4bit',
+    needsKey: false,
+    blurb: 'Apple Silicon native — runs in-process via Apple’s MLX framework. Fastest on M-series. First-time download ~2GB; cached after that.',
+  },
+  {
     id: 'ollama', label: 'Ollama',
     url: 'http://127.0.0.1:11434/v1', model: 'gemma3n:e2b',
     needsKey: false,
-    blurb: 'Local. gemma3n:e2b — Google’s edge-tuned 2B-effective Matformer, fastest on M-series. Auto-detected if running.',
+    blurb: 'Local separate process. Use if you already run Ollama or want to share a model with other tools.',
   },
   {
     id: 'lm_studio', label: 'LM Studio',

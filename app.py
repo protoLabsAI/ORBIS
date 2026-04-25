@@ -1283,7 +1283,7 @@ async def llm_models(body: dict):
 
 
 @app.post("/api/llm/pull")
-async def llm_pull(body: dict[str, Any]):
+async def llm_pull(body: dict):
     """Stream an Ollama pull as Server-Sent Events.
 
     The wizard calls this when a user picks Ollama and the
@@ -1338,6 +1338,112 @@ async def llm_pull(body: dict[str, Any]):
                     yield "event: done\ndata: {}\n\n"
             except _httpx.HTTPError as e:
                 yield f"event: error\ndata: {str(e)[:200]}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/llm/mlx/pull")
+async def llm_mlx_pull(body: dict):
+    """Stream an MLX model download (via huggingface_hub) as SSE.
+
+    Frontend equivalent of ``/api/llm/pull`` but for the MLX path —
+    when the wizard's user picks the Built-in (MLX) preset, this
+    endpoint downloads the chosen ``mlx-community/...`` repo into
+    the HF cache directly so the first voice session doesn't pay
+    the multi-GB download cost. Emits ``data: {status, completed,
+    total}`` progress events while the download runs, then a final
+    ``event: done``.
+
+    Body: ``{"model": "mlx-community/gemma-3n-E2B-it-4bit"}``
+
+    Unauth — same rationale as ``/api/llm/detect_local``.
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    model_id = str(body.get("model") or "").strip()
+    if not model_id or "/" not in model_id:
+        return JSONResponse(
+            {"error": "model id required (e.g. mlx-community/gemma-3n-E2B-it-4bit)"},
+            status_code=400,
+        )
+
+    async def _stream():
+        try:
+            from huggingface_hub import snapshot_download, HfApi
+        except ImportError as e:
+            yield f"event: error\ndata: huggingface_hub not available: {e}\n\n"
+            return
+
+        loop = _asyncio.get_running_loop()
+        # HF_HOME can be set to override; otherwise the default is the
+        # XDG-ish cache. Read it from the env so we look in the same
+        # place huggingface_hub will write to.
+        hf_home = os.environ.get(
+            "HF_HOME", str(_Path.home() / ".cache/huggingface")
+        )
+        cache_dir = _Path(hf_home) / "hub" / f"models--{model_id.replace('/', '--')}"
+
+        def _dir_size(p: _Path) -> int:
+            if not p.exists():
+                return 0
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+        # Yield an immediate "starting" so the frontend stops sitting
+        # at zero while the size-probe runs.
+        yield 'data: {"status": "fetching repo metadata", "completed": 0, "total": 0}\n\n'
+
+        # Get total size in an executor — HfApi is sync.
+        total_bytes = 0
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: HfApi().repo_info(model_id, files_metadata=True)
+            )
+            for f in info.siblings or []:
+                if f.size:
+                    total_bytes += f.size
+        except Exception as e:
+            yield (
+                f'data: {{"status": "couldn\\u0027t read total size, '
+                f'progress percent will be missing: {str(e)[:100]}", '
+                f'"completed": 0, "total": 0}}\n\n'
+            )
+
+        yield (
+            f'data: {{"status": "downloading", "completed": 0, '
+            f'"total": {total_bytes}}}\n\n'
+        )
+
+        fut = loop.run_in_executor(None, snapshot_download, model_id)
+
+        last = -1
+        while not fut.done():
+            completed = _dir_size(cache_dir)
+            if completed != last:
+                yield (
+                    f'data: {{"status": "downloading", '
+                    f'"completed": {completed}, "total": {total_bytes}}}\n\n'
+                )
+                last = completed
+            await _asyncio.sleep(0.4)
+
+        try:
+            await fut
+        except Exception as e:
+            yield f"event: error\ndata: {str(e)[:200]}\n\n"
+            return
+
+        completed = _dir_size(cache_dir) or total_bytes
+        yield (
+            f'data: {{"status": "done", '
+            f'"completed": {completed}, "total": {total_bytes or completed}}}\n\n'
+        )
+        yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(
         _stream(),
