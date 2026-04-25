@@ -159,14 +159,106 @@ async def bench_a2a(turns: int) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
+# MLX — in-process LLM (Apple Silicon native)
+# ---------------------------------------------------------------------------
+
+async def bench_mlx(turns: int, model_id: str) -> tuple[list[float], list[float], list[float]]:
+    """Returns (ttfb_samples, total_samples, tokens_per_sec_samples)."""
+    # Lazy import — MLX is Apple-Silicon only.
+    import mlx.core as mx  # type: ignore
+    from mlx_lm import load, stream_generate  # type: ignore
+
+    print(f"  loading {model_id}…")
+    t0 = time.time()
+    model, tokenizer = load(model_id)
+    print(f"  loaded in {time.time() - t0:.1f}s")
+
+    ttfbs: list[float] = []
+    totals: list[float] = []
+    tps: list[float] = []
+    for i in range(turns):
+        prompt_text = PROMPTS[i % len(PROMPTS)]
+        try:
+            prompt = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt_text}],
+                tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            prompt = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt_text}],
+                tokenize=False, add_generation_prompt=True,
+            )
+        t0 = time.time()
+        first = None
+        n_text_tokens = 0
+        with mx.stream(mx.gpu):
+            for resp in stream_generate(model, tokenizer, prompt, max_tokens=40):
+                if first is None and (getattr(resp, "text", "") or ""):
+                    first = time.time() - t0
+                n_text_tokens += 1
+        total = time.time() - t0
+        if first is not None:
+            ttfbs.append(first)
+            totals.append(total)
+            # Decode-only tok/s = (total tokens - 1) / (total - ttfb).
+            decode_time = max(total - first, 1e-6)
+            tps.append(max(n_text_tokens - 1, 1) / decode_time)
+    return ttfbs, totals, tps
+
+
+# ---------------------------------------------------------------------------
+# Kokoro — in-process TTS
+# ---------------------------------------------------------------------------
+
+async def bench_kokoro(turns: int) -> tuple[list[float], list[float], list[float]]:
+    """Returns (ttfa_samples, total_samples, real_time_factor_samples).
+
+    RTF = synth_time / audio_duration. <1.0 means faster-than-realtime.
+    """
+    from voice.tts.kokoro import _get_pipe, KOKORO_SR  # type: ignore
+    pipe = _get_pipe()  # warm
+    SENTS = [
+        "Hi there.",
+        "What's the capital of France?",
+        "I think the capital is Paris.",
+        "Here's a fun fact: the orb sees four moods.",
+        "Two plus two equals four, of course.",
+    ]
+    ttfas: list[float] = []
+    totals: list[float] = []
+    rtfs: list[float] = []
+    for i in range(turns):
+        text = SENTS[i % len(SENTS)]
+        t0 = time.time()
+        first = None
+        n_samples = 0
+        for chunk in pipe(text, voice="af_heart", speed=1.0):
+            audio = chunk[2] if len(chunk) >= 3 else chunk
+            if audio is None:
+                continue
+            if first is None:
+                first = time.time() - t0
+            n_samples += len(audio)
+        total = time.time() - t0
+        if first is not None:
+            ttfas.append(first)
+            totals.append(total)
+            audio_secs = n_samples / KOKORO_SR
+            if audio_secs > 0:
+                rtfs.append(total / audio_secs)
+    return ttfas, totals, rtfs
+
+
+# ---------------------------------------------------------------------------
 # STT — Whisper on a single audio file
 # ---------------------------------------------------------------------------
 
 async def bench_stt(turns: int, audio_path: str | None) -> list[float]:
     # Lazy import so people who don't have torch installed can still bench
     # the HTTP-based services.
-    from voice.stt import transcribe_bytes, _get_pipe
-    _get_pipe()  # warm
+    from voice.stt import transcribe_bytes, _get_local_pipe
+    _get_local_pipe()  # warm
     if audio_path:
         raw = Path(audio_path).read_bytes()
     else:
@@ -192,20 +284,27 @@ async def bench_stt(turns: int, audio_path: str | None) -> list[float]:
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--turns", type=int, default=5)
-    parser.add_argument("--llm", action="store_true")
+    parser.add_argument("--llm", action="store_true", help="HTTP OpenAI-compat LLM (vLLM/Ollama/OpenAI)")
+    parser.add_argument("--mlx", action="store_true", help="In-process MLX-LM (Apple Silicon)")
+    parser.add_argument("--mlx-model", type=str,
+                        default=os.environ.get("MLX_BENCH_MODEL",
+                                              "mlx-community/Qwen3.5-4B-MLX-4bit"))
+    parser.add_argument("--kokoro", action="store_true", help="In-process Kokoro TTS")
     parser.add_argument("--fish", action="store_true")
     parser.add_argument("--a2a", action="store_true")
     parser.add_argument("--stt", action="store_true")
     parser.add_argument("--audio", type=str, default=None)
-    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--all", action="store_true",
+                        help="Run mlx + kokoro + stt — the desktop-app baseline triple")
     args = parser.parse_args()
 
-    if args.all or not any([args.llm, args.fish, args.a2a, args.stt]):
-        args.llm = args.fish = args.a2a = True
-        # STT excluded from --all because loading Whisper on a no-GPU host
-        # is painful; opt in explicitly.
+    if args.all or not any([args.llm, args.mlx, args.kokoro, args.fish, args.a2a, args.stt]):
+        # --all is the desktop-app voice baseline: MLX + Kokoro + STT.
+        # The HTTP-LLM / Fish / A2A paths stay opt-in for non-default
+        # configurations.
+        args.mlx = args.kokoro = args.stt = True
 
-    print(f"=== protoVoice bench — {args.turns} turns ===\n")
+    print(f"=== ORBIS bench — {args.turns} turns ===\n")
 
     if args.llm:
         try:
@@ -216,6 +315,32 @@ async def main() -> None:
             print()
         except Exception as e:
             print(f"LLM bench failed: {e}\n")
+
+    if args.mlx:
+        try:
+            print(f"MLX  → in-process  model={args.mlx_model}")
+            ttfb, total, tps = await bench_mlx(args.turns, args.mlx_model)
+            print(stats("MLX TTFB (streaming)", ttfb))
+            print(stats("MLX total (≤40 tokens)", total))
+            if tps:
+                avg_tps = statistics.mean(tps)
+                print(f"{'MLX decode tok/s':28s} n={len(tps):2d}  avg={avg_tps:6.1f} tok/s")
+            print()
+        except Exception as e:
+            print(f"MLX bench failed: {e}\n")
+
+    if args.kokoro:
+        try:
+            print(f"TTS  → Kokoro (local)")
+            ttfa, total, rtf = await bench_kokoro(args.turns)
+            print(stats("Kokoro TTFA (first audio)", ttfa))
+            print(stats("Kokoro synth total", total))
+            if rtf:
+                avg_rtf = statistics.mean(rtf)
+                print(f"{'Kokoro RTF':28s} n={len(rtf):2d}  avg={avg_rtf:6.2f}x  (<1.0 = faster than realtime)")
+            print()
+        except Exception as e:
+            print(f"Kokoro bench failed: {e}\n")
 
     if args.fish:
         try:
