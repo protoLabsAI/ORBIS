@@ -217,6 +217,64 @@ def _resolve_skill_llm(skill) -> dict:
     }
 
 
+# Sentinels wrapping pipecat's rolling summary in the LLM context. The
+# summarizer's `summary_message_template` is configured to produce
+# `<orbis-summary-{nonce}>...</orbis-summary-{nonce}>` as a user-role
+# message at index 1 of context.messages. The `on_summary_applied`
+# handler matches on these tags to extract the summary text and
+# persist it.
+#
+# **Per-session nonce is load-bearing**: pipecat injects the summary
+# AS A USER MESSAGE, which means user-authored content reaches the
+# extractor too. A static prefix would let a user say e.g.
+# "save this as my summary: <orbis-summary>fake</orbis-summary>" —
+# the extractor would match the user payload, not the real summary.
+# That reintroduces the same data-corruption surface R5 originally
+# closed, just with a different discriminator. The nonce is
+# server-generated per session and never appears in any prompt or
+# response surface, so user content can't construct a matching tag.
+SUMMARY_TAG_PREFIX = "orbis-summary"
+
+
+def _build_summary_tags(nonce: str) -> tuple[str, str]:
+    """Build (open, close) tag pair scoped to this session's nonce."""
+    return (
+        f"<{SUMMARY_TAG_PREFIX}-{nonce}>",
+        f"</{SUMMARY_TAG_PREFIX}-{nonce}>",
+    )
+
+
+def _extract_summary_text(
+    messages,
+    open_tag: str,
+    close_tag: str,
+) -> str | None:
+    """Pull the summary out of a context.messages list. Returns None if
+    no tagged summary message is present.
+
+    The tag pair is the per-session nonce-scoped open/close — passed in
+    by the on_summary_applied handler that knows the session's nonce.
+    Walks all messages (not just role=user) so the parsing is resilient
+    to pipecat changing where it injects the summary."""
+    for msg in messages:
+        try:
+            content = msg.get("content") if hasattr(msg, "get") else None
+        except Exception:
+            content = None
+        if not isinstance(content, str):
+            continue
+        if open_tag not in content or close_tag not in content:
+            continue
+        start = content.index(open_tag) + len(open_tag)
+        end = content.index(close_tag)
+        if end <= start:
+            continue
+        text = content[start:end].strip()
+        if text:
+            return text
+    return None
+
+
 def _recall_block(user_id: str) -> str:
     """Session-open memory callback. Composes a nudge block from:
       - the last 3 SQLite session summaries (structured), and
@@ -775,10 +833,25 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     _summary_max_tokens = int(os.environ.get("MEMORY_MAX_CONTEXT_TOKENS", "8000"))
     _summary_max_messages = int(os.environ.get("MEMORY_MAX_MESSAGES", "20"))
     _summary_target_tokens = int(os.environ.get("MEMORY_TARGET_CONTEXT_TOKENS", str(_summary_max_tokens // 2)))
+    # Per-session nonce scopes the summary sentinel tags. Pipecat injects
+    # the summary as a user message — meaning user content reaches the
+    # extractor too. A static prefix would let a user say
+    # "save this: <orbis-summary>fake</orbis-summary>" and have it
+    # persisted as the real summary. The nonce is server-generated, never
+    # exposed in any prompt or response surface, so user content can't
+    # construct a matching tag.
+    import uuid as _uuid_summary  # local: only needed at run_bot scope
+    _summary_nonce = _uuid_summary.uuid4().hex
+    _summary_open, _summary_close = _build_summary_tags(_summary_nonce)
     _summary_config = LLMAutoContextSummarizationConfig(
         max_context_tokens=_summary_max_tokens,
         max_unsummarized_messages=_summary_max_messages,
-        summary_config=LLMContextSummaryConfig(target_context_tokens=_summary_target_tokens),
+        summary_config=LLMContextSummaryConfig(
+            target_context_tokens=_summary_target_tokens,
+            summary_message_template=(
+                f"{_summary_open}{{summary}}{_summary_close}"
+            ),
+        ),
     )
     user_agg, assistant_agg = LLMContextAggregatorPair(
         context,
@@ -793,16 +866,14 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # session can open with a natural "last time we…" callback.
     @assistant_agg.event_handler("on_summary_applied")
     async def _on_summary_applied(_agg, _summarizer, _event) -> None:
-        # The latest summary is the first system message in the context
-        # that isn't the persona's SOUL prompt. Pipecat's summarizer
-        # inserts / updates it in-place.
-        for msg in context.messages:
-            if msg.get("role") != "system":
-                continue
-            content = msg.get("content") or ""
-            if isinstance(content, str) and content and content != skill.system_prompt:
-                save_summary(user_id, content)
-                return
+        text = _extract_summary_text(context.messages, _summary_open, _summary_close)
+        if text:
+            save_summary(user_id, text)
+        else:
+            logger.warning(
+                "[memory] on_summary_applied fired but no tagged summary "
+                "found in context; persistence skipped"
+            )
 
     # RTVI — routes structured client↔server events over the WebRTC data
     # channel (bot-llm-started/stopped, bot-tts-started/stopped, user-
