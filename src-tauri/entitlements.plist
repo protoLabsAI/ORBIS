@@ -10,26 +10,25 @@
     <true/>
     <key>com.apple.security.network.server</key>
     <true/>
-    <!-- Hardened-runtime exceptions WKWebView's WebContent subprocess
-         needs to operate under a Developer ID signed app. Without
-         allow-jit, WebContent's JavaScript JIT can't allocate
-         executable pages, which cascades into the WebRTC media
-         pipeline degrading silently — getUserMedia returns a stream
-         but the audio decode/transport path runs in interpreted mode
-         and Core Audio never wires up to a real input. The matching
-         allow-unsigned-executable-memory exception is what actually
-         lets the JIT pages execute. disable-library-validation lets
-         WebContent load WebKit's helper frameworks (the network
-         daemon, the GPU process) which on hardened runtime can fail
-         signature checks against our Team ID.
-         See https://developer.apple.com/documentation/security/hardened_runtime
-         for the full matrix. Safari has these implicitly via Apple's
-         system entitlements; Developer-ID apps have to opt in. -->
+    <!-- WKWebView's WebContent subprocess runs JavaScriptCore, which
+         needs MAP_JIT pages for the JS engine. Without allow-jit on a
+         hardened-runtime app the JS engine falls back to interpreted
+         mode and the WebRTC audio path silently fails to wire up to
+         Core Audio.
+
+         Earlier revs of this PR also carried
+         `allow-unsigned-executable-memory` and `disable-library-validation`
+         to work around a silent-deny mic failure (see commit b2bc203).
+         Those broader exceptions were dropped after the wry-side
+         WKUIDelegate patch in `src/media_permission_patch.m` started
+         intercepting media-capture before the WebContent JS path runs,
+         which appears to have removed the symptom that originally
+         required them. Apple's narrowest-entitlement guidance:
+         https://developer.apple.com/documentation/security/hardened_runtime
+         If silent-deny ever returns, the first move is to add back
+         `allow-unsigned-executable-memory` (the JIT-page exec exception)
+         not `disable-library-validation`. -->
     <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 </dict>
 </plist>
