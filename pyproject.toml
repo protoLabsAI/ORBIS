@@ -40,6 +40,10 @@ dependencies = [
 # env (NOISE_FILTER, SMART_TURN) is enabled.
 rnnoise = ["pipecat-ai[rnnoise]"]
 smart-turn = ["pipecat-ai[local-smart-turn]"]
+# Speaker verification — speechbrain ECAPA-TDNN for the speaker_gate
+# Phase 1 perception layer (#35). Install when enrolling a voiceprint;
+# without enrollment the gate stays in owner-trust passthrough.
+speaker-id = ["speechbrain>=1.0", "torchaudio"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 # Test-only: respx mocks httpx for the LLM-probe tests.
 test = ["pytest", "respx"]
