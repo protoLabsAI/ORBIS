@@ -39,6 +39,12 @@ src-tauri/icons/*
 src-tauri/target/
 src-tauri/gen/
 
-# PyApp local build output
+# PyApp local build output — `dist/` is the wheel/.tar.gz output
+# from `python -m build`; `dist-sdist/` is what scripts/build-desktop
+# uses to stage the sidecar source tarball before the PyApp wrap.
 dist/
+dist-sdist/
 
+# Claude Code agent state — per-machine scratch (scheduled task locks,
+# subagent metadata). Should never be versioned.
+.claude/
