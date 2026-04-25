@@ -47,6 +47,66 @@ PROMPTS = [
 ]
 
 
+def _hardware_fingerprint() -> str:
+    """One-line system summary attached to each bench run.
+
+    Bench numbers are only useful if you know what they were measured
+    on; surfacing this at the top of every run means screenshots or
+    pasted output are self-describing — no separate "what machine
+    did you measure on?" round-trip.
+    """
+    import platform as _p
+    bits = [f"host: {_p.system()} {_p.release()} {_p.machine()}"]
+    try:
+        if sys.platform == "darwin":
+            import subprocess as _sp
+            chip = _sp.check_output(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], text=True
+            ).strip()
+            mem_bytes = int(
+                _sp.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
+            )
+            ncpu = _sp.check_output(
+                ["sysctl", "-n", "hw.ncpu"], text=True
+            ).strip()
+            try:
+                model = _sp.check_output(
+                    ["sysctl", "-n", "hw.model"], text=True
+                ).strip()
+            except _sp.CalledProcessError:
+                model = "?"
+            bits.append(
+                f"  chip: {chip}  cores: {ncpu}  ram: {mem_bytes // (1024**3)} GB"
+            )
+            bits.append(f"  model: {model}")
+        else:
+            # Linux: read /proc/cpuinfo + /proc/meminfo. Trimmed to one
+            # line so output stays scannable.
+            try:
+                with open("/proc/cpuinfo") as f:
+                    chip = next(
+                        (
+                            ln.split(":", 1)[1].strip()
+                            for ln in f
+                            if ln.startswith("model name")
+                        ),
+                        "?",
+                    )
+                with open("/proc/meminfo") as f:
+                    mem_kb = int(
+                        next(
+                            ln for ln in f if ln.startswith("MemTotal:")
+                        ).split()[1]
+                    )
+                bits.append(f"  chip: {chip}  ram: {mem_kb // (1024 * 1024)} GB")
+            except (OSError, StopIteration):
+                pass
+    except Exception:
+        # Best-effort — never fail the bench because of an info probe.
+        pass
+    return "\n".join(bits)
+
+
 def stats(label: str, samples: list[float]) -> str:
     if not samples:
         return f"{label}: no samples"
@@ -304,7 +364,9 @@ async def main() -> None:
         # configurations.
         args.mlx = args.kokoro = args.stt = True
 
-    print(f"=== ORBIS bench — {args.turns} turns ===\n")
+    print(f"=== ORBIS bench — {args.turns} turns ===")
+    print(_hardware_fingerprint())
+    print()
 
     if args.llm:
         try:

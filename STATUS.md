@@ -16,7 +16,7 @@ memory + personality, pipecat voice pipeline with kokoro default TTS.
 permission lands via TCC (Developer-ID signed builds + a runtime
 WKUIDelegate patch + an AVCaptureDevice TCC shim), audio reaches
 Pipecat, Whisper transcribes (~250ms), MLX-LM in-process generates
-the reply (~350ms TTFB, 42 tok/s decode on M1 base), Kokoro speaks
+the reply (~350ms TTFB, 42 tok/s decode on M1 Pro 32GB), Kokoro speaks
 back (0.16× realtime). First-audio-out per turn ~1.0-1.2s on M1
 base; scales ~2× per Apple-Silicon generation.
 
@@ -76,13 +76,15 @@ full STT → LLM → TTS chain producing audio. 131 passing unit tests.
 - CI builds Developer-ID-signed + notarized .dmg via App Store
   Connect API key. Secrets pulled from Infisical → GitHub Actions.
 
-**Voice loop benchmarks (M1 base, current defaults)**
+**Voice loop benchmarks** — Apple M1 Pro 10-core 32GB (MacBookPro18,1),
+macOS 26.2, current defaults, 10-turn run:
 - STT (Whisper-base.en): 244ms p50 for 3s clip
-- LLM TTFB (MLX Qwen3.5-4B 4-bit): 346ms p50, 419ms p95
-- LLM decode: 42 tok/s steady-state
-- TTS (Kokoro): 336ms TTFA p50, 0.16× RTF (6× faster than realtime)
-- End-to-end first-audio-out: ~1.0-1.2s per turn
-- Repeatable: `python scripts/bench.py --turns 10`
+- LLM TTFB (MLX Qwen3.5-4B 4-bit): 327ms p50, 422ms p95
+- LLM decode: 45 tok/s steady-state
+- TTS (Kokoro): 294ms TTFA p50, 0.13× RTF (~7.7× faster than realtime)
+- End-to-end first-audio-out: ~1.0s per turn
+- Repeatable: `python scripts/bench.py --turns 10` (script prints
+  the hardware fingerprint at the top of every run for context)
 
 **API surface** (`/api/*`, auth-gated except where noted)
 | Route | Method | Auth | Purpose |
