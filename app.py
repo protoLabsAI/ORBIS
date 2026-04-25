@@ -910,6 +910,11 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         MicroAckInjector(
             tts_backend=tts_backend,
             enabled=ma_cfg["enabled"],
+            # Live verbosity getter — a /api/verbosity flip to SILENT
+            # silences the acoustic ack on the very next turn without
+            # a session reconnect. Closure captures user_state, which
+            # is the same object the API mutates.
+            verbosity_getter=lambda: user_state.filler_settings.verbosity,
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
         # Both placed after the gate — they need TranscriptionFrames and
