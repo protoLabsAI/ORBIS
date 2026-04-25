@@ -1,0 +1,338 @@
+# Voice round-trip lifecycle
+
+End-to-end audit of how an utterance flows from the user's mic, through the
+Pipecat pipeline, to the LLM, back through TTS, and into the user's speakers.
+Companion file `voice-lifecycle-risks.md` lists the latent bugs and gaps
+surfaced during this audit.
+
+Snapshot: 2026-04-25, branch `feat/desktop-voice-followup` post-merge of
+`origin/main`. Anchor file is `app.py` (1803 lines); the pipeline is built
+in `run_bot()` at `app.py:526-1051`.
+
+## Pipeline spine
+
+```
+transport.input()                              SmallWebRTCTransport, audio_in_filter=rnnoise?
+  -> EchoGuardSuppressor(_ECHO_STATE)          drops InputAudioRawFrame during/after bot TTS
+  -> RTVIProcessor                             inbound client->server data-channel msgs
+  -> stt                                       LocalWhisperSTT (default) | OpenAISTTService
+  -> user_agg                                  SileroVADAnalyzer + optional SmartTurn v3
+  -> BargeInGate                               swallows VAD spikes that resolve in <350ms
+  -> MicroAckInjector                          "mm/hm" ~1.5s after UserStoppedSpeaking
+  -> BackchannelController                     "mm-hmm" every ~6s during user utterance
+  -> DeliveryController                        out-of-band push messages, bid-then-drain
+  -> llm                                       OpenAILLMService | OllamaLLMService | MLXLLMService
+  -> tts                                       Kokoro | OpenAI | ElevenLabs | Fish
+  -> transport.output()                        emits TTSAudioRawFrame + Bot{Started,Stopped}SpeakingFrame
+  -> ProsodyTagStripper                        strips [softly]/[pause:N] from TextFrame for context
+  -> assistant_agg                             LLMContextAggregator + auto context summarization
+```
+(`app.py:801-848`)
+
+**Observers** (top-level, watch every frame, never transform):
+- `EchoGuardObserver(_ECHO_STATE)` — flips bot-speaking state from frames produced at `transport.output`.
+- Langfuse `turn_tracer` from `_tracing.make_turn_tracer(session_id, user_id)` (`app.py:854-857`).
+- `rtvi.create_rtvi_observer(RTVIObserverParams())` — emits structured client events over the data channel.
+
+**Out-of-band emitters** wired post-construction:
+- `delivery.set_emitter(task.queue_frame)` (`app.py:877`)
+- `backchannel.set_emitter(task.queue_frame)` (`app.py:878`)
+- Slow-tool progress loop at `app.py:929-931`
+
+All inject `TTSSpeakFrame(phrase, append_to_context=False)` so they never
+pollute LLM history.
+
+---
+
+## Stage 0 — Session bootstrap
+
+1. User double-clicks the orb canvas (`OrbStage.tsx:42-58`); `client.connect()` fires.
+2. Pipecat's `SmallWebRTCTransport` POSTs SDP to `/api/offer` with `X-API-Key` from localStorage `orbis.apiKey` (`web/src/voice/client.ts:24-31`, `web/src/auth/apiKey.ts:15-21`).
+3. `app.py:1148-1161`: `require_user` resolves user_id from header → on-connect closure schedules `run_bot(conn, user_id=user_id)` as a `BackgroundTask`.
+4. `current_user_id.set(user_id)` (`app.py:537`) — context var seen by tracing/session/filler stack.
+5. `on_client_connected` (`app.py:958-979`): scope tracer + delivery + session_id; `drain_stashed_deliveries(user_id)` re-feeds anything stashed from a prior disconnect; if non-empty, `delivery.replay_stashed(stashed)` re-enqueues into the new pipeline.
+6. `prewarm_all()` ran once at FastAPI startup (`app.py:1077-1093`) — Whisper, TTS model, vLLM probe, Kokoro phoneme cache.
+
+## Stage 1 — Mic acquisition
+
+- `<MicTest>` (`web/src/shared/audio/MicTest.tsx`) is a user-gesture gate — Safari/WKWebView only prompt for mic from a direct click handler.
+- Constraints are minimal: `audio: deviceId ? { deviceId: { exact: deviceId } } : true` (`MicTest.tsx:93-95`). No explicit sample rate / AEC / noise-suppression hints — defaults from `SmallWebRTCTransport`.
+- `AnalyserNode` (fftSize 512) drives a level meter; thresholds: `VERIFIED_RMS=0.04` (real voice) and `SILENT_FLOOR_RMS=0.003` over 8s (TCC silent-deny detection).
+- Tauri TCC shims (macOS):
+  - `src-tauri/src/mic_permission.m:21-35` — `[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio]` at boot. Without it the app never appears in System Settings → Microphone.
+  - `src-tauri/src/media_permission_patch.m:36-147` — swaps wry's `WKUIDelegate`. wry hardcodes `WKPermissionDecision::Grant`, which is JS-layer approval that bypasses TCC and yields a silent stream. The patch returns `Prompt` to honor TCC.
+
+## Stage 2 — Audio inflow + WebRTC
+
+- `SmallWebRTCTransport(TransportParams(audio_in_enabled, audio_out_enabled, audio_out_10ms_chunks=2, audio_in_filter=rnnoise?))` (`app.py:557-567`).
+- Video transceiver is intentionally negotiated even though we send no video — omitting it makes aiortc silently drop DTLS/SCTP (`web/src/voice/client.ts:18-21`).
+- Optional rnnoise filter when `NOISE_FILTER=rnnoise` (`app.py:252-266`); default off.
+- `transport.input()` produces `InputAudioRawFrame` instances. Inbound chunk size is **not** explicitly set; `audio_out_10ms_chunks=2` only sizes outbound packets (20 ms).
+
+## Stage 3 — Echo guard (input side)
+
+`agent/echo_guard.py`. Single shared `_ECHO_STATE` (`app.py:296`) is written by an observer at the top level and read by the suppressor in the pipeline.
+
+- **Observer** (writer): listens for `BotStartedSpeakingFrame` → `bot_speaking=True` and `BotStoppedSpeakingFrame` → `bot_speaking=False, bot_stopped_at=now()` (`echo_guard.py:67-75`). Top-level so it sees frames produced at `transport.output`.
+- **Suppressor** (reader, in pipeline): drops `InputAudioRawFrame` if `(HALF_DUPLEX and bot_speaking)` OR `now - bot_stopped_at < ECHO_GUARD_MS` (`echo_guard.py:106-111`). Defaults: `HALF_DUPLEX=0`, `ECHO_GUARD_MS=300`.
+- `HALF_DUPLEX=1` disables real-time barge-in entirely; `ECHO_GUARD_MS` catches the post-tail bleed browser AEC misses.
+- Only `InputAudioRawFrame` is dropped — control/transcript frames flow through unchanged.
+
+## Stage 4 — STT
+
+`voice/stt.py`. `STT_BACKEND=local` (default) → `LocalWhisperSTT` extending pipecat's `SegmentedSTTService`. `STT_BACKEND=openai` routes to `OpenAISTTService` with `STT_URL` (default `https://api.openai.com/v1`), `STT_MODEL=whisper-1`.
+
+- Default model: `WHISPER_MODEL=openai/whisper-large-v3-turbo`. CUDA→fp16+SDPA, CPU→fp32; **MPS is not in the device branch**.
+- Both backends are **batch / segmented** — Pipecat aggregates audio between VAD start/end markers and hands a WAV blob in. `run_stt(audio: bytes)` decodes via soundfile, downmixes to mono, soxr-resamples to 16 kHz, runs HF pipeline, yields **`TranscriptionFrame(text, user_id, time_now_iso8601())`** (`voice/stt.py:88-136`). **No `InterimTranscriptionFrame`** is ever emitted.
+- Empty transcription → silent no-op (`voice/stt.py:135-136`); decode/inference failure → `ErrorFrame` (`:97-100, :126-130`); both wrapped in span `stt.whisper`.
+
+## Stage 5 — User aggregator (VAD + turn-taking)
+
+`SileroVADAnalyzer()` constructed plain — no threshold overrides — and passed via `LLMUserAggregatorParams(vad_analyzer=…)` (`app.py:752, 770-777`). VAD frames produced: `UserStartedSpeakingFrame` / `UserStoppedSpeakingFrame`.
+
+`_build_user_turn_strategies()` (`app.py:269-291`) is gated on env `SMART_TURN`:
+- `off` (default) → `None` → naive VAD endpointing.
+- `local` | `v3` → `LocalSmartTurnAnalyzerV3` wrapped in `TurnAnalyzerUserTurnStopStrategy` — distinguishes mid-thought pauses from real turn boundaries.
+
+## Stage 6 — Barge-in gate
+
+`agent/bargein.py`. `grace_ms` default 350, env+persona overridable. State machine in `process_frame`:
+
+- `BotStartedSpeakingFrame` → `_bot_speaking=True`.
+- `UserStartedSpeakingFrame` while bot is speaking → **withhold**; stash as `_pending`, kick a `_on_grace_expired` timer, do not forward (`:75-84`).
+- `UserStoppedSpeakingFrame` arriving with pending → false positive (cough, "mm-hmm"); swallow both start AND stop, cancel timer, log `[bargein] rejected false positive` (`:87-92`).
+- `TranscriptionFrame` arriving with pending → real words; flush the held start, log `transcription confirmed — releasing interrupt` (`:95-100`).
+- Timer expires with pending still set → release anyway, log `grace elapsed — releasing interrupt` (`:104-111`).
+
+The gate emits no cancel/stop frames itself — it only chooses whether to release `UserStartedSpeakingFrame`. **Pipecat's own interrupt machinery downstream** flushes the in-flight TTS once the start frame arrives.
+
+**Tool-call cancellation on confirmed barge-in** (`app.py:953-956`): `on_function_calls_cancelled` event handler calls `_cancel_progress()` to kill the SLOW-tool progress narration tasks. Sync tools register with `cancel_on_interruption=True` (auto-cancelled by pipecat); async tools register `False` and survive — their result re-enters via `DeliveryController` later (`agent/tools.py:540-565`).
+
+---
+
+## The five utterance classes the bot can emit
+
+All non-conversational utterances pass `append_to_context=False` so LLM history stays clean.
+
+| # | Utterance | Trigger | Source | Append? |
+|---|---|---|---|---|
+| 1 | **Backchannel** ("mm-hmm") | DURING user speech, `first_after_secs=5.0` then every `interval_secs=6.0` | `FillerGenerator.backchannel()` → fresh LLM call | False (`backchannel.py:197`) |
+| 2 | **Micro-ack** ("mm/hm") | After `UserStoppedSpeaking`, if no agent audio in `trigger_ms=1500` | Hardcoded tuple `_PLAIN_ACKS` / `_FISH_ACKS`; `random.choice` | False (`micro_ack.py:118-119`) |
+| 3 | **Inline pre-tool preamble** | LLM emits it itself, in the same response as the tool_call | Main conversational LLM, instructed by `tool_use_block(verbosity, tts_backend)` (`filler.py:200-239`) | True (it's part of the assistant turn) |
+| 4 | **Slow-tool progress narration** | `on_function_calls_started` for `Latency.SLOW` sync tool only | `FillerGenerator.progress()` → fresh LLM call; two-tier 2s/6s then silence | False (`app.py:929-931`) |
+| 5 | **Push delivery** (a2a result, scheduled, replay) | `delivery.deliver(...)` | Whatever called it (delegate result, A2A push, drain_stashed) | False (`delivery.py:251-264`) |
+
+**Mutual exclusion**:
+- Backchannel cancels on `LLMFullResponseStartFrame` (earlier than audio) plus a `COMMIT_GRACE_MS=180` re-check plus an in-flight tag-drop on re-injected frames.
+- MicroAck cancels on `BotStartedSpeakingFrame` and re-checks `_bot_speaking` after sleep.
+- The progress loop only starts after `on_function_calls_started`, by which time the micro-ack timer is already dead.
+
+**FillerGenerator** (`agent/filler.py:292-411`):
+- Hits the routing LLM via `AsyncOpenAI` (`filler.py:303`); when Langfuse env is set, switches to `langfuse.openai` so each call becomes a generation span.
+- Uses the same small/fast routing LLM as persona, not the main conversational model.
+- `max_tokens=30, temperature=0.9, timeout=2.5s` — no cache, fresh call per emission.
+- 6-element `_Recent` deque feeds back as an "AVOID repeating" hint.
+- Verbosity tiers: `silent`/`brief`/`narrated`/`chatty`. `progress()` returns None for SILENT and BRIEF; `backchannel()` only for SILENT.
+- Fish backend gets the `[softly]/[pause:N]/[hmm]` tag vocabulary in the prompt; non-Fish gets a "plain text only" instruction AND a regex post-strip safety net.
+
+---
+
+## LLM call
+
+### Adapter selection (`voice/llm/__init__.py:73-144`)
+
+Precedence: `mlx://` URL → explicit `provider=` → `_detect_provider` heuristic (port 11434 / hostname `ollama` / `GET /api/version` probe ≤1.5s) → OpenAI fallback.
+
+- **`OllamaLLMService`** subclasses `BaseOpenAILLMService`, overrides `get_chat_completions` to hit `/api/chat` (NOT `/v1/chat/completions`) with `think: False`. Reasoning models (Qwen3, DeepSeek-R1, gemma3) on `/v1/...` emit a separate `reasoning` delta stream that pipecat's sentence aggregator never chunks → TTS waits 6-8s for a sentence break that never comes during reasoning. `/api/chat` honors `think` → first-token latency drops to 100-300ms (`ollama.py:1-44`).
+- **`MLXLLMService`** drives `mlx_lm.stream_generate` through a producer thread + `asyncio.Queue`; process-wide model cache `_MODELS` keyed by HF id; applies `enable_thinking=False` via `tokenizer.apply_chat_template`.
+- **OpenAI fallback** flips `svc.supports_developer_role = False` only when `using_custom_url=False` — bundled vLLM rejects `role: developer`; real gateways behind a custom URL get the modern field.
+
+### Provider quirks (`app.py:601-624`)
+
+```python
+if "extra_body" in skill_llm:        extra_body = skill_llm["extra_body"] or None
+elif using_custom_llm:               extra_body = None
+else:                                extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+```
+
+proto-labs.ai's LiteLLM gateway returns 400 on `chat_template_kwargs`/`think`/`enable_thinking`, and even `reasoning_effort: minimal` triggered 403 ("Your request was blocked.") on certain prompt+model combos. So custom URLs ship bare; the bundled vLLM is the only place we inject the field.
+
+### System prompt assembly (`_effective_prompt`, `app.py:330-382`)
+
+`\n\n`-joined in this order:
+
+1. `skill.system_prompt` — persona identity from `config/orbis.yaml`; `SYSTEM_PROMPT` env override applied in persona loader.
+2. `tool_use_block(verbosity, tts_backend)` — instructs inline pre-tool preamble (length varies by verbosity).
+3. `tool_response_block(verbosity)` — caps spoken-answer length (CHI 2025 18-25-word optimum).
+4. `plan_block(verbosity)` — empty at SILENT; otherwise spoken plan preamble for ≥3-step tasks.
+5. `repair_block()` — static; acknowledge → reframe → offer pattern.
+6. `user_block` — name nudge, only if `skill.user_name` set.
+7. `render_personality_block(mem)` (`agent/personality.py:57-106`) — 10 axes, magnitude buckets at `<0.15 neutral / <0.4 slightly / <0.75 plain / strongly`. Mood thresholds `valence>0.15` → bright/low, `arousal>0.15` → energetic/sleepy, `guardedness>0.15` → guarded.
+8. `apply_soft_neglect(mem)` (`agent/neglect.py:101-124`) — gap-driven mood targets. `<2d` valence +0.1; `<3d` valence -0.15 + guard 0.15; up to `>8d` capped at valence -0.4 / guardedness 0.7. Computed BEFORE personality block so it's visible from turn one. Set, not drifted.
+9. `_recall_block(user_id)` (`app.py:180-225`) — last 3 SQLite session rows via `prior_n(3)`, formatted as `<prior_sessions>` XML, plus `load_last_summary(user_id)` (rolling summary written by pipecat's auto-summarizer on a prior session). Closes with "IF any of this fits naturally, acknowledge it. Otherwise IGNORE this block."
+
+### Tool registry (`agent/tools.py`)
+
+All decorated tools are `Latency.FAST`, all sync, all return short spoken confirmations:
+
+| Tool | Params | Entitlement-gated? |
+|---|---|---|
+| `set_variant(name)` | name (req) | yes |
+| `apply_palette(name)` | name (req) | yes |
+| `adjust_param(key, value)` | both (req) | yes |
+| `save_preset(name)` | name (req) | yes |
+| `recall_preset(name)` | name (req) | **no** (recall always allowed) |
+| `adjust_personality(axis, delta)` | both (req) | no; clamped to `[-0.2, +0.2]`, DAL re-clamps at 0.3 |
+
+Hand-wired (not in `_TOOL_REGISTRY`):
+- **`delegate_to`**: per-session schema with `target` enum-restricted to live delegate names (`tools.py:364-393`); description enumerates each delegate's description so the LLM picks. A2A delegates get a `progress_cb` that calls `delivery.speak_now(msg, source=target)` per progress event.
+
+### Delegate dispatch (`agent/delegates.py`)
+
+- **A2A**: `dispatch_message_stream` first (SSE `message/stream`) → falls back to non-streaming on `A2ADispatchError`. `pushNotificationConfig: {url, token}` attached to initial request when `A2A_PUSH_URL` is set; callbacks land on `/a2a/push` (`a2a/server.py:288-376`).
+- **OpenAI-compat**: hand-rolled `httpx.post` (NOT the OpenAI SDK — avoids `x-stainless-*` fingerprint headers blocked by certain WAFs). `stream: false` so progress callbacks aren't wired here.
+
+### Function-call lifecycle in stream
+
+- Pipecat's `OpenAILLMService` streams tokens before AND after tool calls. The `tool_use_block` instructs the LLM to emit a one-line preamble *before* the tool call in the same response, so the user hears "checking the weather in Paris" naturally as the model decides to invoke `delegate_to` (`app.py:880-888`: "One LLM, one source of truth, no race conditions.").
+- `on_function_calls_started` doesn't block streaming; the progress loop runs as a background `asyncio.Task` in `progress_tasks`.
+- `on_function_calls_cancelled` fires on barge-in only for `cancel_on_interruption=True` tools.
+
+### Context summarization (`app.py:738-792`)
+
+Pipecat's built-in `LLMAutoContextSummarizationConfig` wired into `assistant_agg` (NOT a separate node). Defaults: `max_context_tokens=8000`, `max_unsummarized_messages=20`, `target_context_tokens=4000`. On threshold cross, summarizer compresses older history and emits `SummaryAppliedEvent`. `on_summary_applied` handler walks `context.messages` for the first system message whose content is **not** the persona prompt, persists via `save_summary(user_id, content)`.
+
+### Post-session
+
+`on_client_disconnected` (`app.py:981-1049`):
+
+1. `delivery.snapshot_pending()` → stash to `pending.json` per item.
+2. Walk `context.messages` for user/assistant turns → `mem.sessions.add(...)` to SQLite.
+3. Background task: `analyze_session_drift(turns, …)` runs a bounded LLM call (last 40 turns, ≤800 chars each, `max_tokens=400`) returning JSON `{deltas: [{axis, delta, reason}]}` with `|delta| ∈ [0.01, 0.15]`, ≤3 entries → `apply_drift` updates personality axes (DAL clamps at 0.3).
+4. `_tracing.flush()` → `task.cancel()`.
+
+---
+
+## TTS, audio out, delivery
+
+### TTS factory (`voice/tts/__init__.py`)
+
+Default `kokoro`. Each adapter passes `text_filters=[ProsodyTextFilter()]` so the TTS engine never sees `[softly]/[pause:N]` brackets — except Fish, which consumes them natively.
+
+| Backend | Sample rate | Streaming | Notes |
+|---|---|---|---|
+| **Kokoro** | 24 kHz | Yes (KPipeline generator yields chunks) | `KOKORO_VOICE=af_heart`, `KOKORO_LANG=a`. TTFB measured 294 ms p50, RTF 0.13. Module singleton `_pipe`; prewarm synthesizes "Hello." |
+| **OpenAI** | 24 kHz | Pipecat-internal | `TTS_OPENAI_MODEL=tts-1`, `voice=alloy`. Tested against OpenAI/LocalAI/OpenRouter/vllm-omni. |
+| **ElevenLabs** | 24 kHz | WebSocket | `eleven_turbo_v2_5`, default Rachel. `prewarm()` is a no-op. |
+| **Fish** | 44.1 kHz | Yes (raw int16 PCM, no WAV header despite `format=wav`) | Carry/odd-byte alignment loop required because soxr rejects odd-sized buffers (`fish.py:99-138`). 180s timeout for `torch.compile` cold path. |
+
+### `DeliveryController` (`agent/delivery.py`)
+
+The most-substantial agent module. Manages out-of-band utterances (push messages from async delegates, scheduled, replay-on-reconnect).
+
+- **Two enums classify items, not the controller:**
+  - `DeliveryPolicy = NOW | NEXT_SILENCE | WHEN_ASKED`
+  - `Priority = CRITICAL | TIME_SENSITIVE | ACTIVE | PASSIVE` (Apple `UNNotificationInterruptionLevel`-shaped)
+- **VAD coupling** via `process_frame` — flips `_user_speaking`, kicks `_settle_then_drain` after `_SILENCE_SETTLE_SECS=0.6` post-`UserStoppedSpeakingFrame` so the tail doesn't get stepped on.
+- **Bid-then-drain**: when `>=_BID_THRESHOLD=2` `NEXT_SILENCE` items are pending and not high-urgency, controller emits "I've got updates from Alice, Bob and Charlie — want to hear them?" Resolution via substring match against `_BID_NO`/`_BID_YES`.
+- **Watchdog** (1s tick, lazy-armed): force-emits stale `NEXT_SILENCE` after `DELIVERY_NEXT_SILENCE_FALLBACK_SECS=10` (mute case); drops `WHEN_ASKED` after `DELIVERY_WHEN_ASKED_TTL_SECS=600`.
+- **Backpressure**: `_prune_overflow` keeps top-3 by `(priority, enqueued_at)` past `_MAX_PENDING_AT_DRAIN=3`; TIME_SENSITIVE+ unconditionally retained.
+- **Persistence layer** (`agent/session_store.py`): file-backed `pending.json` per user.
+
+### Prosody tags — three-layer defense
+
+`agent/prosody.py`:
+
+1. `FillerGenerator` post-strips tags via regex for non-Fish (`filler.py:408-410`).
+2. TTS service `text_filters=[ProsodyTextFilter()]` runs INSIDE the TTS service before synthesis (`kokoro.py:51`, `openai.py:49`, `elevenlabs.py:61`).
+3. **`ProsodyTagStripper` placed AFTER `transport.output()`** (`app.py:840-844`) cleans `TextFrame` content before `assistant_agg` records it — so the LLM never sees its own bracket markup re-fed into context history. Regex `\[[a-z][a-z0-9_-]*(?::[^\]]*)?\]` is lowercase-leading so user text like `[Dr. Seuss]` survives.
+
+### Audio out
+
+`transport.output()` consumes `TTSAudioRawFrame(audio, sample_rate, num_channels=1, context_id)` and emits `BotStartedSpeakingFrame`/`BotStoppedSpeakingFrame` (consumed by EchoGuard, BargeInGate, Backchannel, MicroAck, tracing).
+
+`audio_out_10ms_chunks=2` batches outbound audio into 20 ms WebRTC packets — half the packet rate of the 10 ms minimum at the cost of ~20 ms first-packet buffering.
+
+**First-audio-out budget** (STATUS.md and code): MLX Qwen3.5-4B 4-bit TTFB 327 ms p50 + Kokoro TTFA 294 ms p50 + transport batching ~20 ms ≈ **~640 ms TTS-side, ~1.0–1.2s end-to-end** including STT and pipeline-frame hops.
+
+---
+
+## Frontend round-trip
+
+### RTVI events actually consumed (`web/src/voice/VoiceStateBridge.tsx`)
+
+| Event | Effect |
+|---|---|
+| `BotReady` | `state=idle` + 3s "connected — speak" toast in StatusPill |
+| `Error` | 4s "error: <msg>" toast |
+| `UserStartedSpeaking` | `state=listening` |
+| `UserStoppedSpeaking` | **No-op** ("next event wins") |
+| `UserTranscript` | `lastUserTranscript` only when `final===true` |
+| `BotLlmStarted` | `state=thinking` |
+| `BotStartedSpeaking` | `state=speaking` |
+| `BotStoppedSpeaking` | `state=idle` |
+| `BotTranscript` | `lastBotText` |
+| `LLMFunctionCallStarted` | `activeToolCall = {name, args}` |
+| `LLMFunctionCallStopped` | `activeToolCall = null` |
+
+Server events emitted but NOT consumed: `BotTtsStarted` / `BotTtsStopped` / `BotLlmStopped` (`useBotTurnEvents` hook in `hooks.ts:55-60` exposes them, no caller).
+
+### Orb visualization (`OrbStage.tsx`)
+
+- R3F + three.js + postprocessing (`LumaChromaticAberrationEffect`).
+- Audio→shader bridge via `usePipecatClientMediaTrack('audio', 'bot' | 'local')` → `useAudioEnvelopes` analyzer. Bot envelope drives `density/scale/asymmetry` in shader uniforms; voice state crossfades between presets (idle/listening/thinking/speaking, `STATE_XFADE_MS=600`).
+- **Self-modification round-trip is HTTP-only, not RTVI**: tool calls (`set_variant`, `apply_palette`, etc.) write `config/orbis.yaml` server-side; the running client only re-reads `/api/config` on next page load. The wizard's `selectStarter` workaround (`SetupWizard.tsx:763-771`) double-writes via direct `setVariant`/`applyPreset`. Live tool-driven orb mutation is not wired today.
+
+### Tauri shell + sidecar
+
+- Bundle: `externalBin: ["binaries/orbis"]`; capabilities pin to `binaries/orbis --host 127.0.0.1 --port 0`.
+- `entitlements.plist`: `audio-input`, `camera`, `network.client/server`, plus `cs.allow-jit` / `cs.allow-unsigned-executable-memory` / `cs.disable-library-validation` for WebContent's WebRTC media decode.
+- Sidecar spawn (`src-tauri/src/lib.rs`): pre-warm TCC dialog → install UIDelegate patch → resolve config path (`$ORBIS_CONFIG` else `<app_data_dir>/orbis.yaml`, no relative-path fallback) → seed example config if missing → spawn with `ORBIS_CONFIG=<path>` and `START_VLLM=<env or "0">` (default 0 — bundled python doesn't ship vLLM) → stream stdout for `ORBIS_READY http://...` line → navigate webview.
+
+---
+
+## Observability surface
+
+| Span / event | Layer | Source |
+|---|---|---|
+| `stt.whisper` | STT | `voice/stt.py:113-131` |
+| `backchannel.emit` | Filler | `agent/backchannel.py:170-193` |
+| `filler.progress` | Filler | `app.py:912-927` |
+| `delivery.speak_now` | Delivery | `agent/delivery.py:166-170` |
+| FillerGenerator chat completions | Filler | auto-captured when Langfuse env set (`agent/filler.py:35-41`) |
+| Pipeline frame metrics | Pipecat | `enable_metrics=True` (`app.py:861`) |
+| Turn-level Langfuse trace | Top-level | `_tracing.make_turn_tracer(session_id, user_id)` (`app.py:854-857`) |
+| RTVI data-channel events | Top-level | `rtvi.create_rtvi_observer(RTVIObserverParams())` |
+
+Notable log strings: `[echoguard] suppressing audio` / `resuming audio`; `[bargein] rejected false positive` / `transcription confirmed — releasing interrupt` / `grace elapsed — releasing interrupt`; `[filler:progress] {phrase!r}`; `[filler] tool cancelled (barge-in)`; `[stt.local] whisper {dur}s → {infer}s → text=…`. Counters: `_METRICS["sessions_total"/"sessions_active"/"tool_calls_total"]` + `tool_calls_by_name`.
+
+Telemetry gap: `MicroAckInjector` has no `tracing.span` — only an INFO log. Backchannel and progress have spans. No counters for filler emissions either.
+
+---
+
+## Configuration surface
+
+### Env vars (touched per layer)
+
+- **STT**: `STT_BACKEND`, `WHISPER_MODEL`, `STT_URL`, `STT_MODEL`
+- **VAD/turn**: `SMART_TURN` (off/local/v3)
+- **Echo**: `HALF_DUPLEX`, `ECHO_GUARD_MS`, `NOISE_FILTER`
+- **LLM**: `LLM_URL`, `LLM_SERVED_NAME`, `LLM_API_KEY`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `START_VLLM`, `VLLM_PORT`, `LLM_MODEL`, `ORBIS_LLM_DETECT_DISABLE`
+- **Memory**: `MEMORY_MAX_CONTEXT_TOKENS`, `MEMORY_MAX_MESSAGES`, `MEMORY_TARGET_CONTEXT_TOKENS`, `MEMORY_SUMMARIZE`
+- **Backchannel**: `BACKCHANNEL_FIRST_SECS`, `BACKCHANNEL_INTERVAL_SECS`, `BACKCHANNEL_COMMIT_GRACE_MS`
+- **Verbosity**: `VERBOSITY` (silent/brief/narrated/chatty)
+- **Delivery**: `DELIVERY_NEXT_SILENCE_FALLBACK_SECS`, `DELIVERY_WHEN_ASKED_TTL_SECS`, `SESSION_STORE_DIR`
+- **A2A push**: `A2A_PUSH_URL`, `A2A_PUSH_TOKEN`
+- **TTS**: `TTS_BACKEND`; per backend: `KOKORO_VOICE/LANG`, `TTS_OPENAI_*`, `ELEVENLABS_*`, `FISH_URL/TIMEOUT`
+
+### Per-skill `behavior` block
+
+`config/orbis.yaml`, parsed in `_resolve_behavior_block` (`app.py:310-327`):
+
+- `behavior.backchannel`: `false` | `{enabled, first_ms, interval_ms}`
+- `behavior.micro_ack`: `false` | `{enabled, first_ms}`
+- `behavior.bargein`: `false` | `{enabled, grace_ms}`
+
+Per-skill: `tts_backend`, `voice`, `llm.{url,model,api_key,api_key_env,provider,extra_body}`, `temperature`, `max_tokens`, `delegates`, `tools` (tool allow-list), `filler_verbosity`, `user_name`.
+
+Runtime: `GET/POST /api/verbosity` reads/writes `user_state_for(user.id).filler_settings.verbosity`.
