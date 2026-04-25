@@ -601,21 +601,25 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
     else:
-        # Disable reasoning/thinking on every backend we know about.
-        # Each gateway uses its own key; sending all of them in one
-        # extra_body means whichever endpoint gets hit picks up the
-        # right one and ignores the rest:
-        #   - vLLM / LiteLLM: chat_template_kwargs.enable_thinking
-        #   - Ollama (recent versions): top-level "think" boolean
-        #   - LM Studio: also accepts "reasoning_effort" / "think"
-        # Without disabling, gemma4 / qwen3 / DeepSeek-R1 stream
-        # `reasoning` deltas with empty `content` first, which jams
-        # pipecat's sentence-aggregator and TTS waits for tokens
-        # that never arrive until the reasoning phase finally ends.
-        extra_body = {
-            "chat_template_kwargs": {"enable_thinking": False},
-            "think": False,
-        }
+        # `reasoning_effort: "minimal"` is the OpenAI-standard hint to
+        # skip the reasoning/thinking preamble on models that have one
+        # (o1/o3, Claude Sonnet 3.5+ extended-thinking, gpt-4o-mini
+        # with reasoning, gemma3+ via Groq, qwen3+ via vLLM with the
+        # right wrapper). It's accepted by every modern OpenAI-compat
+        # gateway we've tested — including LiteLLM, which rejects the
+        # older `chat_template_kwargs` / `think` / `enable_thinking`
+        # variants as "unsupported property" and 400s the whole call.
+        #
+        # Models that DON'T have a reasoning mode silently ignore it.
+        # The Ollama-native adapter below uses /api/chat with `think`
+        # directly — extra_body's reasoning_effort doesn't reach it
+        # since OllamaLLMService skips the OpenAI-compat path entirely.
+        #
+        # Caveat: some hard-thinking models (e.g. the proto-labs.ai
+        # gateway's `protolabs/local`) ignore the hint server-side —
+        # they're bolted to thinking-mode regardless. Users with such
+        # a backend can override via persona.llm.extra_body.
+        extra_body = {"reasoning_effort": "minimal"}
 
     settings_kwargs: dict = {
         "model": llm_model,
