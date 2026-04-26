@@ -146,6 +146,34 @@ Per utterance, in this exact order:
 
 **Security**: `trust_remote_code=True` is required to load SenseVoice (FunASR loads custom Python from the model repo at load time). `_TRUSTED_REMOTE_CODE_MODELS` is a curated allow-list (default model + `iic/` mirror); a custom `SENSEVOICE_MODEL` outside the list refuses to load unless the operator opts in via `SENSEVOICE_TRUST_REMOTE_CODE=1`. Without trust, FunASR fails to load — the right failure: surface the RCE risk to the operator instead of silently executing untrusted code.
 
+## Stage 4.5 — Audio-tags tap (#66 Phase 3)
+
+`agent/audio_tags.py`. Sits between `SenseVoiceSTT` and `user_agg`. Subscribes to `EmotionFrame`, `AudioEventFrame`, `OwnerVerifiedFrame`/`StrangerDetectedFrame`, and `TranscriptionFrame`. Two responsibilities:
+
+**1. Per-turn mood writes (R15 fix)** — owner-verified emotion → `mem.personality.drift_mood(*deltas)`. Spec map (#66):
+
+| emotion | Δvalence | Δarousal |
+|---|---:|---:|
+| `happy` | +0.10 | +0.05 |
+| `surprised` | 0.00 | +0.10 |
+| `neutral` | 0.00 | 0.00 |
+| `sad` | −0.10 | −0.05 |
+| `fearful` | −0.05 | +0.10 |
+| `angry` | −0.15 | +0.15 |
+| `disgusted` | −0.10 | +0.05 |
+
+Stranger audio does NOT nudge the owner's mood — that gating is the load-bearing reason `EmotionFrame.speaker_verified` exists. Failures in `drift_mood` (DB locked, disk full) log loud + don't break the frame loop.
+
+**2. `[audio]` system-message injection** — before each `TranscriptionFrame` the tap pushes an `LLMMessagesAppendFrame` with role=`system`:
+
+```
+[audio] emotion=happy lang=en speaker=owner events=Laughter,BGM
+```
+
+`run_llm=False` so the annotation alone doesn't fire an LLM run; the `TranscriptionFrame` that follows does. The `audio_context_block` in the persona prompt teaches the LLM what the line means and explicitly forbids parroting it back. The annotation is omitted entirely when no `EmotionFrame` has been seen (e.g. `STT_BACKEND=local` — no SenseVoice → no annotation injection); the tap is safe to leave wired regardless of which STT backend is active.
+
+`AUDIO_TAGS=off` disables (passthrough). Default on. v5 non-emotion heads (SNR / environment / speaking-rate) deferred — the issue's `[audio]` example shows them but the v5 model integration is a separate dep concern.
+
 ## Stage 5 — User aggregator (VAD + turn-taking)
 
 `SileroVADAnalyzer()` constructed plain — no threshold overrides — and passed via `LLMUserAggregatorParams(vad_analyzer=…)` (`app.py:752, 770-777`). VAD frames produced: `UserStartedSpeakingFrame` / `UserStoppedSpeakingFrame`.
