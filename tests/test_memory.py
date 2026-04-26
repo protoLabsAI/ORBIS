@@ -387,6 +387,19 @@ def test_drift_mood_no_args_is_no_op(mem: Memory):
     assert abs(m.guardedness - 0.2) < 1e-6
 
 
+def test_drift_mood_no_args_does_not_touch_db(mem: Memory):
+    """No-op short-circuit must not bump updated_at — avoids hammering
+    the row on every per-turn frame that carries no affect signal.
+    Per-turn writers can call drift_mood unconditionally without
+    paying for the write when there's nothing to write."""
+    mem.personality.set_mood(valence=0.3)
+    before = mem.personality.get_mood()
+    mem.personality.drift_mood()  # all-None
+    after = mem.personality.get_mood()
+    assert before.updated_at == after.updated_at, \
+        "no-op drift_mood must not touch the row"
+
+
 # --- entitlement -------------------------------------------------------------
 
 
