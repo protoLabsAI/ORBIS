@@ -2,35 +2,51 @@
 
 Punch list of latent bugs, doc/code drift, dead wiring, and UX gaps surfaced
 during the round-trip audit. Companion file `voice-lifecycle.md` has the
-end-to-end spec. Snapshot 2026-04-25.
+end-to-end spec.
 
 Each item is sized rough-T-shirt and tagged with a domain so the list can be
 sorted by area later. Severity is from a UX/correctness lens, not engineering
 effort.
 
+Snapshot 2026-04-26 (main at v0.1.32). 9 of 16 items resolved by the
+PR stack below; details inline under each item plus a quick-reference
+table at the top.
+
 ---
 
-## R1. MicroAck doc/code drift on trigger window
+## Resolved
+
+| Risk | PR(s) | Released | Notes |
+|---|---|---|---|
+| **R1** — MicroAck doc/code drift | (Already correct on main; the audit captured stale state) | — | No code change required |
+| **R2** — MicroAck no Verbosity gate | [#42](https://github.com/protoLabsAI/ORBIS/pull/42) | v0.1.18 | Live `verbosity_getter` callable; SILENT suppresses emit. Plus telemetry: new `filler.micro_ack` Langfuse span |
+| **R5** — `on_summary_applied` discriminator | [#46](https://github.com/protoLabsAI/ORBIS/pull/46) | v0.1.17 | **Was worse than the audit said** — pipecat injects summary as a *user* message at index 1; old handler matched the assembled persona prompt and silently saved THAT as the "summary" every session. Fix: per-session UUID-nonce-scoped `<orbis-summary-{nonce}>` tags so user content can't trigger persistence (prompt-injection-resistant per CR Major) |
+| **R6** — `_BID_YES` includes `"what"` | [#41](https://github.com/protoLabsAI/ORBIS/pull/41) | v0.1.??? | Drop bare `"what"` + word-boundary regex |
+| **R7+R8** — Non-atomic stash/drain | [#47](https://github.com/protoLabsAI/ORBIS/pull/47) | — | Atomic-rename drain + fcntl-locked stash + crash-recovery for stale `.draining` files |
+| **R9** — `_bid_issued` not persisted | [#43](https://github.com/protoLabsAI/ORBIS/pull/43) | v0.1.20 | `bid_issued` flag stamped on each snapshot item; replay restores |
+| **R10+R11** — WebRTC connect errors / no connecting state | [#49](https://github.com/protoLabsAI/ORBIS/pull/49) | — | New `pushStatusTransient` store; OrbStage surfaces connect errors; StatusPill shows "connecting…" during handshake |
+| **R14** — `text_agent` hard-codes env LLM | [#44](https://github.com/protoLabsAI/ORBIS/pull/44) | — | New `_resolve_skill_llm` shared by `run_bot` + `text_agent` |
+| **R15** — Soft-neglect mood overwrites drift | [#60](https://github.com/protoLabsAI/ORBIS/pull/60) + [#70](https://github.com/protoLabsAI/ORBIS/pull/70) + [#73](https://github.com/protoLabsAI/ORBIS/pull/73) | v0.1.25 / v0.1.28 / v0.1.30 | Three-writer mood pattern: `set_mood` (operator), `drift_mood_toward` (session-open neglect), `drift_mood` (per-turn audio-tags). All three compose; no overwrites |
+
+Plus the **cross-cutting telemetry gap** (no Langfuse span on MicroAck) was closed with R2 in [#42](https://github.com/protoLabsAI/ORBIS/pull/42).
+
+Still open: R3, R4, R12, R13, R16. Details below.
+
+---
+
+## R1. ✅ RESOLVED — MicroAck doc/code drift on trigger window
 
 **Severity:** low (cosmetic)
 **Domain:** filler
-
-`app.py:821` comment says the micro-ack fires "within ~500 ms of UserStoppedSpeaking." The actual default is `trigger_ms: int = 1500` (`agent/micro_ack.py:70`). The bump is documented at `agent/micro_ack.py:65-69` (Ollama-native + small models always won the race and surfaced as "the bot says 'mm' before every reply") — but only at the call site, not at the comment site.
-
-**Fix sketch:** update the `app.py:821` comment to "within ~1.5s" or pull the default into a named constant referenced from both sites.
+**Status:** No code change required — the `app.py` comment already read "~1500 ms" in the live tree at audit time. The audit captured stale state.
 
 ---
 
-## R2. MicroAck has no Verbosity gate
+## R2. ✅ RESOLVED — MicroAck has no Verbosity gate
 
 **Severity:** medium
 **Domain:** filler / config
-
-`MicroAckInjector` checks only the boolean `enabled=` toggle; it does not consult `Verbosity.SILENT`. Personas configured `filler_verbosity: silent` still emit hardcoded "mm/hm" acks unless the operator also sets `behavior.micro_ack: false` on the same skill.
-
-By contrast, `BackchannelController` does honor `Verbosity.SILENT` (`backchannel.py:143-144`).
-
-**Fix sketch:** in `MicroAckInjector._fire_after_delay`, gate on `user_state.filler_settings.verbosity != Verbosity.SILENT` before pushing the frame.
+**Closed by:** [#42](https://github.com/protoLabsAI/ORBIS/pull/42) (v0.1.18). `MicroAckInjector` now takes a `verbosity_getter: Callable[[], Verbosity] | None` that's checked at fire time (so a runtime `/api/verbosity` flip is honored on the same turn). `app.py` wires `lambda: user_state.filler_settings.verbosity`. PR also closed the cross-cutting telemetry gap by adding the `filler.micro_ack` Langfuse span. PR #73 (v0.1.30) follow-up: defensive try/except around the getter so a torn-down user_state during shutdown can't crash the timer task.
 
 ---
 
@@ -61,86 +77,47 @@ Both `OllamaLLMService.get_chat_completions` (`voice/llm/ollama.py:119-128`) and
 
 ---
 
-## R5. `on_summary_applied` discriminator may not match
+## R5. ✅ RESOLVED — `on_summary_applied` discriminator never matched
 
-**Severity:** medium (silent data loss)
+**Severity:** ~~medium~~ **HIGH** (silent data corruption — worse than the audit said)
 **Domain:** memory
+**Closed by:** [#46](https://github.com/protoLabsAI/ORBIS/pull/46) (v0.1.17).
 
-The handler at `app.py:781-792` compares `content != skill.system_prompt` (raw persona prompt) against the first `system` message in `context.messages`. But the actual first system message is the *assembled* `_effective_prompt(skill, …)` output (`app.py:740-746`), which includes the persona prompt PLUS tool_use_block, plan_block, repair_block, personality, neglect, recall_block, etc. — the two strings will never be equal.
+**Worse than the audit thought**: pipecat's summarizer injects the rolling summary as a **user-role** message at `context.messages[1]`, not a system message. The old discriminator walked system messages and saved the *assembled `_effective_prompt`* as the "summary" every single session. Next session's `_recall_block` then loaded the persona prompt back as if it were the previous session's summary — silent prompt-context loop.
 
-If pipecat's summarizer inserts a NEW system message for the rolling summary, the handler picks it up correctly (the new message's content differs from BOTH persona and assembled prompt). If pipecat instead modifies the existing first system message, the handler still picks it up — but the loop body only saves the FIRST non-persona match, which is the unmatched assembled prompt itself.
-
-**Worst case:** rolling summaries silently never persist. Next session opens with no `## MEMORY — rolling summary` block, only `prior_n(3)` from the SQLite session log.
-
-**Fix sketch:** add a unit test that exercises the auto-summarization path and asserts `save_summary` was called with the right content. Also consider switching the discriminator to a structural marker (e.g. summarizer-emitted message has a known prefix or a sentinel field).
+**Fix**: pipecat's `summary_message_template` configured to wrap the generated summary in `<orbis-summary-{nonce}>...</orbis-summary-{nonce}>` tags scoped to a per-session UUID nonce (CR's Major call — without the nonce, user content could prompt-inject a fake summary). `_extract_summary_text(messages, open_tag, close_tag)` walks all messages looking for a tagged match. 23 tests including injection-resistance regressions.
 
 ---
 
-## R6. `_BID_YES` substring match includes `"what"`
+## R6. ✅ RESOLVED — `_BID_YES` substring match includes `"what"`
 
 **Severity:** medium (false-positive UX)
 **Domain:** delivery
-
-`agent/delivery.py:131` puts `"what"` in `_BID_YES`. Resolution uses substring match. A user who says "what time is it?" while a bid is being held will resolve as accept and flush the entire NEXT_SILENCE queue.
-
-**Fix sketch:** drop `"what"` from `_BID_YES`, or switch from substring to whole-word match (`re.search(r"\b{}\b", text)`). Prefer the latter — token-based matching is a general improvement.
+**Closed by:** [#41](https://github.com/protoLabsAI/ORBIS/pull/41). Dropped bare `"what"` from `_BID_YES` (multi-word `"what are they"` stays). Compiled both lists into word-boundary regexes (`\b...\b`) so "yesterday" no longer reads as "yes", "okayama" no longer as "okay", etc. 29 new tests cover the regression cases + the `_resolve_bid` integration paths.
 
 ---
 
-## R7. `drain_stashed_deliveries` is non-atomic
+## R7+R8. ✅ RESOLVED — non-atomic stash/drain
 
-**Severity:** low (single-owner mitigates, but still)
+**Severity:** ~~low~~ medium (CR found a Major double-replay edge in the original fix)
 **Domain:** delivery / persistence
-
-`agent/session_store.py:111-131` does `read JSON → unlink → return`. If the read succeeds but `unlink` fails (filesystem permission, EBUSY, etc.), the same items return next connect → **double playback**. No detection or de-dup.
-
-Single-owner usage makes this practical-safe but not formally safe.
-
-**Fix sketch:** rename the file (atomic on POSIX) before returning, or add a "drained" marker to each item. For real safety, move to SQLite with a transactional `SELECT ... DELETE`.
+**Closed by:** [#47](https://github.com/protoLabsAI/ORBIS/pull/47). Drain uses atomic-rename: `pending.json` → `pending.json.draining` → read → unlink. Stash uses fcntl-locked read-modify-write + `.tmp`-rename atomic write. Crash recovery: stale `.draining` files from prior crashed drains get absorbed on the next drain so items aren't orphaned. CR-flagged double-replay edge (when stale `.draining` was absorbed inside the lock AND its unlink failed AND no fresh pending arrived) closed via `absorbed_inside_lock` flag tracking. Test patches `Path.unlink` to fail to verify the regression. 13 tests.
 
 ---
 
-## R8. `stash_delivery` is non-locked read-modify-write
-
-**Severity:** low (single-owner mitigates)
-**Domain:** delivery / persistence
-
-Same file (`session_store.py:86-108`). Concurrent disconnects + drains could clobber. Practical-safe today.
-
-**Fix sketch:** combine with R7 — if the persistence layer becomes SQLite, both go away.
-
----
-
-## R9. `_bid_issued` not persisted across reconnect
+## R9. ✅ RESOLVED — `_bid_issued` not persisted across reconnect
 
 **Severity:** low
 **Domain:** delivery
-
-`DeliveryController.snapshot_pending()` (`agent/delivery.py:175-187`) emits `phrase / policy / priority / keywords / enqueued_at` but not `_bid_issued`. A reconnect mid-bid loses the held state and re-evaluates fresh — could re-bid, or could drain immediately.
-
-**Fix sketch:** include `bid_issued: bool` (and the bid phrase itself if you want to re-emit) in the snapshot, restore in `replay_stashed`.
+**Closed by:** [#43](https://github.com/protoLabsAI/ORBIS/pull/43) (v0.1.20). `snapshot_pending` stamps each pending item with the controller's current `bid_issued` flag. `replay_stashed` ORs the flags across replayed items: any `bid_issued=True` restores the controller flag before items go through `deliver()`, so the bid-then-drain gate sees the held state and waits for the user's next utterance instead of re-bidding. Replicated across items rather than stored separately because session_store is per-item-append. 7 tests.
 
 ---
 
-## R10. WebRTC connect errors are console-only
+## R10+R11. ✅ RESOLVED — WebRTC connect errors / no connecting state
 
-**Severity:** medium (UX dead end)
+**Severity:** medium (UX dead end + dead air)
 **Domain:** frontend
-
-`OrbStage.tsx:53-55` wraps `client.connect()` and `client.disconnect()` in promise chains that only `console.error('[orb] connect error:', err)`. There's no UI surface — the user double-clicks, nothing visible happens, and they have no way to know whether the backend is offline, the API key is wrong, or the SDP handshake timed out.
-
-**Fix sketch:** route the caught error into the StatusPill error transient (the same path `Error` RTVI events use), or surface a dedicated error banner. Bonus: detect 401 (bad API key) and link to settings.
-
----
-
-## R11. No "connecting" state in StatusPill
-
-**Severity:** medium (UX dead air)
-**Domain:** frontend
-
-Between double-click and `BotReady`, the orb sits idle and the StatusPill renders `null` (`StatusPill.tsx:32-43`). On a slow handshake (cold sidecar, big model load, network blip), this can feel like the click was ignored.
-
-**Fix sketch:** when `transportState ∈ {connecting, connected, ready}` AND no transient is active, render "connecting…" or "warming up…". Pulled directly from `usePipecatClientTransportState()` so no new state plumbing is needed.
+**Closed by:** [#49](https://github.com/protoLabsAI/ORBIS/pull/49). New `web/src/plugins/status-pill/store.ts` exposes `pushStatusTransient(text, ms)` so callers outside the RTVI event surface can push UI feedback. `OrbStage.tsx` connect/disconnect catch handlers route errors through it (4s transient, matching RTVI Error duration). `StatusPill` now shows `"connecting…"` when transport is in `{connecting, authenticating, connected}`; the existing `BotReady` toast takes over once handshake completes. Externally-pushed transients win over RTVI-driven ones so connect errors don't get overwritten by stale toasts.
 
 ---
 
@@ -174,29 +151,27 @@ The wizard's `selectStarter` workaround (`SetupWizard.tsx:763-771`) proves the g
 
 ---
 
-## R14. `text_agent` (A2A inbound) hard-codes env LLM
+## R14. ✅ RESOLVED — `text_agent` (A2A inbound) hard-codes env LLM
 
 **Severity:** medium (config inconsistency)
 **Domain:** llm / a2a
-
-`text_agent` (`app.py:413-525`) uses module-level `LLM_API_KEY` / `LLM_URL` for the inbound A2A path (`app.py:393-401`), ignoring `persona.llm.url/model/api_key` overrides set in `config/orbis.yaml`.
-
-Result: voice path and inbound A2A path can talk to different LLMs. A user who configures a custom LLM via the wizard will see voice answers from the custom endpoint and A2A answers from the env-default endpoint.
-
-**Fix sketch:** route `text_agent` through the same `make_llm` factory and persona-resolution logic as `run_bot`. Or document the discrepancy if intentional (it doesn't appear to be).
+**Closed by:** [#44](https://github.com/protoLabsAI/ORBIS/pull/44). New `_resolve_skill_llm(skill) -> dict` helper owns the LLM routing precedence (persona override → env var → default, plus the `extra_body` kill-switch for custom URLs). Both `run_bot` and `text_agent` call it. `_text_clients` cache keyed on `(url, key)` keeps connection pooling while naturally segregating clients when overrides change. 15 tests cover the precedence ladder + extra_body kill-switch.
 
 ---
 
-## R15. Soft-neglect mood is set, not drifted
+## R15. ✅ RESOLVED — Soft-neglect mood is set, not drifted
 
-**Severity:** info (by design, but worth knowing)
-**Domain:** personality
+**Severity:** medium (became Major when audio-tags landed in #66)
+**Domain:** personality / memory
+**Closed by:** [#60](https://github.com/protoLabsAI/ORBIS/pull/60) + [#70](https://github.com/protoLabsAI/ORBIS/pull/70) + [#73](https://github.com/protoLabsAI/ORBIS/pull/73). Three-writer pattern on `PersonalityDAL`:
 
-`agent/neglect.py:115-119` *sets* mood targets directly rather than drifting toward them. Comment at `:107-110` documents the rationale: "the shift needs to be visible from turn one."
+| API | Caller | Semantic |
+|---|---|---|
+| `set_mood` | Operator override (drawer / boot seed) | Snap-to-value |
+| `drift_mood_toward(step=0.7)` | `apply_soft_neglect` (session-open) | Blend `step%` toward target |
+| `drift_mood(*deltas)` | `AudioTagsTap` from #66 (per-turn) | Add delta; no-op when all-None |
 
-Trade-off: a single 8-day gap can override slow-drift mood adjustments accumulated over weeks of conversation. The slow-drift system gets steamrolled by the fast neglect system.
-
-**Fix sketch:** if behavior change wanted, switch to a weighted blend (e.g. `set` for first turn after gap, drift back over subsequent turns). Otherwise, no action — just document in `agent/neglect.py` that this is expected.
+Neglect now uses `drift_mood_toward(step=0.7)` so the per-turn drift from audio-tags isn't blown away on session-open. With `step=0.7`, the original "visible from turn one" requirement still holds: a 7-day gap from a `+0.6` valence baseline lands at `+0.005` (visibly negative-ward) instead of `-0.35` (the raw target). 13+ tests including a compose-with-per-turn-writes regression.
 
 ---
 
