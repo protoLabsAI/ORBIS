@@ -34,7 +34,8 @@
     "copyright": "Copyright (c) 2026 protoLabs Studio",
     "externalBin": ["binaries/orbis"],
     "resources": {
-      "../config/orbis.example.yaml": "config/orbis.example.yaml"
+      "../config/orbis.example.yaml": "config/orbis.example.yaml",
+      "../config/starter_orbs.yaml": "config/starter_orbs.yaml"
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
