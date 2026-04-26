@@ -21,13 +21,42 @@ KOKORO_SR = 24000
 _pipe = None
 
 
+def _detect_kokoro_device() -> str | None:
+    """Pick the best torch device for Kokoro. Returns ``None`` when no
+    accelerator is available so KPipeline falls back to its own default
+    (CPU). KPipeline accepts the standard torch device strings.
+
+    Mirrors ``agent.hardware.detect_device`` preference order
+    (cuda > mps > cpu) but doesn't raise on missing hardware — CI / tests
+    install kokoro on CPU-only boxes and that's the correct path there."""
+    try:
+        import torch  # noqa: PLC0415 — lazy so a missing torch doesn't 500 the import
+    except ImportError:
+        return None
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
+
+
+KOKORO_DEVICE = _detect_kokoro_device()
+
+
 def _get_pipe(lang: str = KOKORO_LANG):
     global _pipe
     if _pipe is None:
         from kokoro import KPipeline
-        logger.info(f"Loading Kokoro (lang={lang})")
+        logger.info(f"Loading Kokoro (lang={lang}, device={KOKORO_DEVICE or 'cpu'})")
         t0 = time.time()
-        _pipe = KPipeline(lang_code=lang)
+        # KPipeline accepts a torch device string. Passing None defers to
+        # the library default (CPU); pass the detected accelerator
+        # explicitly when we have one so KModel's weights land on it
+        # instead of CPU.
+        kpipe_kwargs: dict = {"lang_code": lang}
+        if KOKORO_DEVICE is not None:
+            kpipe_kwargs["device"] = KOKORO_DEVICE
+        _pipe = KPipeline(**kpipe_kwargs)
         list(_pipe("Hello.", voice=KOKORO_VOICE, speed=1))
         logger.info(f"Kokoro ready in {time.time() - t0:.1f}s")
     return _pipe

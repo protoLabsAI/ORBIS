@@ -44,7 +44,31 @@ STT_BACKEND = os.environ.get("STT_BACKEND", "local").lower()
 
 # Local backend
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _detect_torch_device() -> str:
+    """Pick the best available device for the HF Whisper pipeline.
+    Mirrors ``agent.hardware.detect_device``'s preference order
+    (cuda > mps > cpu) but never raises — STT also runs in tests / CI
+    where CPU fallback is correct, while ``detect_device`` is the
+    desktop-bundle gate that hard-fails when no accelerator is found."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+DEVICE = _detect_torch_device()
+# Half-precision on accelerators (CUDA + Apple MPS). Locally benchmarked
+# Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s audio (1.0x rtf)
+# vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x speedup with correct
+# output. CPU stays float32 since fp16 on CPU is slower.
+_WHISPER_DTYPE = torch.float16 if DEVICE in ("cuda", "mps") else torch.float32
+# `sdpa` attention is CUDA-only in transformers; MPS uses the eager path.
+_WHISPER_MODEL_KWARGS = (
+    {"attn_implementation": "sdpa"} if DEVICE == "cuda" else {}
+)
 
 # OpenAI-compatible backend (also used by LocalAI / OpenRouter / etc.)
 STT_URL = os.environ.get("STT_URL", "https://api.openai.com/v1")
@@ -68,9 +92,9 @@ def _get_local_pipe():
     _local_pipe = hf_pipeline(
         "automatic-speech-recognition",
         model=WHISPER_MODEL,
-        torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32,
+        torch_dtype=_WHISPER_DTYPE,
         device=DEVICE,
-        model_kwargs={"attn_implementation": "sdpa"} if DEVICE == "cuda" else {},
+        model_kwargs=_WHISPER_MODEL_KWARGS,
     )
     _local_pipe({"raw": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
     logger.info(f"Whisper ready in {time.time() - t0:.1f}s")
