@@ -3,19 +3,21 @@
 End-to-end audit of how an utterance flows from the user's mic, through the
 Pipecat pipeline, to the LLM, back through TTS, and into the user's speakers.
 Companion file `voice-lifecycle-risks.md` lists the latent bugs and gaps
-surfaced during this audit.
+surfaced during this audit (most now resolved — see the "Resolved" section
+at the top of that file). Companion file `voice-lifecycle-research.md`
+maps companion-stack experiments onto the pipe slots below.
 
-Snapshot: 2026-04-25, branch `feat/desktop-voice-followup` post-merge of
-`origin/main`. Anchor file is `app.py` (1803 lines); the pipeline is built
-in `run_bot()` at `app.py:526-1051`.
+Snapshot: 2026-04-26, main at v0.1.32. Anchor file is `app.py`; the
+pipeline is built in `run_bot()`.
 
 ## Pipeline spine
 
 ```
 transport.input()                              SmallWebRTCTransport, audio_in_filter=rnnoise?
   -> EchoGuardSuppressor(_ECHO_STATE)          drops InputAudioRawFrame during/after bot TTS
+  -> SpeakerGate                               #35 PR 1 — owner-vs-stranger via cosine cmp; default owner-trust
   -> RTVIProcessor                             inbound client->server data-channel msgs
-  -> stt                                       LocalWhisperSTT (default) | OpenAISTTService
+  -> stt                                       LocalWhisperSTT (default) | OpenAISTTService | SenseVoiceSTT (#66)
   -> user_agg                                  SileroVADAnalyzer + optional SmartTurn v3
   -> BargeInGate                               swallows VAD spikes that resolve in <350ms
   -> MicroAckInjector                          "mm/hm" ~1.5s after UserStoppedSpeaking
@@ -27,7 +29,12 @@ transport.input()                              SmallWebRTCTransport, audio_in_fi
   -> ProsodyTagStripper                        strips [softly]/[pause:N] from TextFrame for context
   -> assistant_agg                             LLMContextAggregator + auto context summarization
 ```
-(`app.py:801-848`)
+
+**SpeakerGate** placement (#35 PR 1) — between `EchoGuardSuppressor` and
+`RTVIProcessor`. Echo-guarded audio is the right input (bot-self bleed
+removed). Emits `OwnerVerifiedFrame` / `StrangerDetectedFrame` alongside
+the audio (originals always pass through). Default owner-trust until
+enrollment lands a voiceprint via the wizard.
 
 **Observers** (top-level, watch every frame, never transform):
 - `EchoGuardObserver(_ECHO_STATE)` — flips bot-speaking state from frames produced at `transport.output`.
@@ -62,6 +69,15 @@ pollute LLM history.
   - `src-tauri/src/mic_permission.m:21-35` — `[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio]` at boot. Without it the app never appears in System Settings → Microphone.
   - `src-tauri/src/media_permission_patch.m:36-147` — swaps wry's `WKUIDelegate`. wry hardcodes `WKPermissionDecision::Grant`, which is JS-layer approval that bypasses TCC and yields a silent stream. The patch returns `Prompt` to honor TCC.
 
+### Voiceprint enrollment (optional, #35 PR 1.3)
+
+Wizard step `enroll` between `mic` and `done`. Captures ~10s of owner audio via `web/src/shared/audio/recordWav.ts` (raw PCM through `ScriptProcessorNode`, downsampled to 16kHz, RIFF WAV blob — the backend's libsndfile decoder handles WAV but not WebM/Opus, so we encode client-side rather than add an ffmpeg dep).
+
+- `POST /api/voiceprint/enroll` accepts WAV bytes, decodes via soundfile, downmixes stereo, validates duration (3s min, 30s cap with silent truncation), encodes via `ECAPAEmbedder` from `agent/ecapa_embedder.py`, atomic-saves to `get_voiceprint_path()` (default `<data_dir>/voiceprint.npy`).
+- `GET /api/voiceprint/status` — `{enrolled, path, embedder_available}`. Wizard branches its UX on `embedder_available` — if speechbrain isn't installed (no `[speaker-id]` extra) it shows an "install to enable" panel instead of the recording flow.
+- `DELETE /api/voiceprint` — idempotent removal for re-enroll.
+- Skippable; gate stays in owner-trust mode without a voiceprint. Single-owner deployments without the `[speaker-id]` extra continue to work — the speaker_gate runs in passthrough mode.
+
 ## Stage 2 — Audio inflow + WebRTC
 
 - `SmallWebRTCTransport(TransportParams(audio_in_enabled, audio_out_enabled, audio_out_10ms_chunks=2, audio_in_filter=rnnoise?))` (`app.py:557-567`).
@@ -78,13 +94,57 @@ pollute LLM history.
 - `HALF_DUPLEX=1` disables real-time barge-in entirely; `ECHO_GUARD_MS` catches the post-tail bleed browser AEC misses.
 - Only `InputAudioRawFrame` is dropped — control/transcript frames flow through unchanged.
 
+## Stage 3.5 — Speaker verification (#35 PR 1)
+
+`agent/speaker_gate.py`. Sits between `EchoGuardSuppressor` and `RTVIProcessor`. Three operating modes:
+
+| Mode | Trigger | Output |
+|---|---|---|
+| **Disabled** | `behavior.speaker_gate.enabled=false` | Passthrough — no verification frame |
+| **Owner-trust** | No voiceprint OR no `[speaker-id]` extra OR empty buffer OR encode failure | `OwnerVerifiedFrame(score=1.0)` for every utterance — preserves no-auth single-user deployments |
+| **Live gate** | Voiceprint + `ECAPAEmbedder` both available | Cosine vs `threshold` (default 0.62) → owner or stranger frame |
+
+Frame contracts (`agent/speaker_gate.py`):
+- `OwnerVerifiedFrame(score)` — owner or trust-fallback
+- `StrangerDetectedFrame(score, action: StrangerAction)` — `WARN` | `REFUSE` | `DELEGATE_GUEST`
+- Original `InputAudioRawFrame` / VAD frames pass through unchanged so STT/VAD see the same audio.
+
+Embedder: `ECAPAEmbedder` (`agent/ecapa_embedder.py`) wraps `speechbrain/spkrec-ecapa-voxceleb` (~6M params, 192-dim, ~50ms CPU / ~5ms GPU). Lazy load + process-wide cache keyed on `(source, device)`. Resamples to 16kHz via soxr, pads short clips to 1s.
+
+Failure modes all route through owner-trust this session: corrupt voiceprint (raises `VoiceprintCorrupted`, logged ERROR, owner-trust this session — won't silently let strangers through after data loss), embedding shape mismatch, embedder exception. `_build_speaker_gate(sg_cfg)` constructs from `persona.behavior.speaker_gate` — defensive `threshold` parsing handles `null` / non-numeric typos with a logged fallback to 0.62 instead of crashing `run_bot`.
+
+Config schema (`config/orbis.yaml`):
+
+```yaml
+behavior:
+  speaker_gate:
+    enabled: true                              # default true when block exists
+    voiceprint_path: ~/.../voiceprint.npy      # platform-aware default via get_voiceprint_path()
+    threshold: 0.62                            # ECAPA tuning per #35
+    stranger_action: warn                      # warn | refuse | delegate_guest
+```
+
 ## Stage 4 — STT
 
-`voice/stt.py`. `STT_BACKEND=local` (default) → `LocalWhisperSTT` extending pipecat's `SegmentedSTTService`. `STT_BACKEND=openai` routes to `OpenAISTTService` with `STT_URL` (default `https://api.openai.com/v1`), `STT_MODEL=whisper-1`.
+`voice/stt.py`. Three backends:
 
-- Default model: `WHISPER_MODEL=openai/whisper-large-v3-turbo`. CUDA→fp16+SDPA, CPU→fp32; **MPS is not in the device branch**.
-- Both backends are **batch / segmented** — Pipecat aggregates audio between VAD start/end markers and hands a WAV blob in. `run_stt(audio: bytes)` decodes via soundfile, downmixes to mono, soxr-resamples to 16 kHz, runs HF pipeline, yields **`TranscriptionFrame(text, user_id, time_now_iso8601())`** (`voice/stt.py:88-136`). **No `InterimTranscriptionFrame`** is ever emitted.
-- Empty transcription → silent no-op (`voice/stt.py:135-136`); decode/inference failure → `ErrorFrame` (`:97-100, :126-130`); both wrapped in span `stt.whisper`.
+- **`STT_BACKEND=local`** (default) → `LocalWhisperSTT` (HF `automatic-speech-recognition` pipeline). Default model `WHISPER_MODEL=openai/whisper-large-v3-turbo`. CUDA→fp16+SDPA, CPU→fp32. MPS is not in the device branch.
+- **`STT_BACKEND=openai`** → `OpenAISTTService` against `STT_URL` (default `https://api.openai.com/v1`), `STT_MODEL=whisper-1`. Tested against OpenAI / LocalAI / OpenRouter / vllm-omni.
+- **`STT_BACKEND=sensevoice`** (#66) → `SenseVoiceSTT` via `voice/stt_sensevoice.py`. `FunAudioLLM/SenseVoiceSmall` (234M params, ~70ms Blackwell). One forward pass produces transcription + 7-class emotion + audio events. Requires `[sensevoice]` extra (`pip install -e ".[sensevoice]"`).
+
+All backends are **batch / segmented** — Pipecat aggregates audio between VAD start/end markers and hands a WAV blob in. `run_stt(audio: bytes)` decodes via soundfile, downmixes to mono, soxr-resamples to 16 kHz. **No `InterimTranscriptionFrame`** is emitted by any backend. Empty transcription → silent no-op; decode/inference failure → `ErrorFrame`. Wrapped in span `stt.whisper` (Whisper) / `stt.sensevoice` (SenseVoice).
+
+### SenseVoice frame emission
+
+Per utterance, in this exact order:
+
+1. **`EmotionFrame`** (`agent/frames.py`) — `emotion` (one of `EMOTION_LABELS`: neutral/happy/sad/angry/fearful/disgusted/surprised), `confidence` ("medium" until FunASR exposes calibrated logits), `lang` (en/zh/ja/ko/yue), `speaker_verified` (mirrors most-recent `OwnerVerifiedFrame`/`StrangerDetectedFrame` from upstream gate; defaults `True`), `audio_bytes` (raw WAV carried through for downstream re-inference).
+2. **`AudioEventFrame`** — sparse, only when non-Speech events were detected (BGM/Laughter/Applause/Cry/Cough/Sneeze/Breath). `Speech` is filtered out as redundant on a transcription.
+3. **`TranscriptionFrame`** — clean text; identical contract to the Whisper backend so existing downstream consumers are unaffected.
+
+`parse_sensevoice_output(raw_text)` is a pure function that maps FunASR's UPPERCASE emotion tags to our lowercase taxonomy and silently drops unknown tags so future FunASR versions don't crash the parse.
+
+**Security**: `trust_remote_code=True` is required to load SenseVoice (FunASR loads custom Python from the model repo at load time). `_TRUSTED_REMOTE_CODE_MODELS` is a curated allow-list (default model + `iic/` mirror); a custom `SENSEVOICE_MODEL` outside the list refuses to load unless the operator opts in via `SENSEVOICE_TRUST_REMOTE_CODE=1`. Without trust, FunASR fails to load — the right failure: surface the RCE risk to the operator instead of silently executing untrusted code.
 
 ## Stage 5 — User aggregator (VAD + turn-taking)
 
@@ -166,10 +226,23 @@ proto-labs.ai's LiteLLM gateway returns 400 on `chat_template_kwargs`/`think`/`e
 3. `tool_response_block(verbosity)` — caps spoken-answer length (CHI 2025 18-25-word optimum).
 4. `plan_block(verbosity)` — empty at SILENT; otherwise spoken plan preamble for ≥3-step tasks.
 5. `repair_block()` — static; acknowledge → reframe → offer pattern.
-6. `user_block` — name nudge, only if `skill.user_name` set.
-7. `render_personality_block(mem)` (`agent/personality.py:57-106`) — 10 axes, magnitude buckets at `<0.15 neutral / <0.4 slightly / <0.75 plain / strongly`. Mood thresholds `valence>0.15` → bright/low, `arousal>0.15` → energetic/sleepy, `guardedness>0.15` → guarded.
-8. `apply_soft_neglect(mem)` (`agent/neglect.py:101-124`) — gap-driven mood targets. `<2d` valence +0.1; `<3d` valence -0.15 + guard 0.15; up to `>8d` capped at valence -0.4 / guardedness 0.7. Computed BEFORE personality block so it's visible from turn one. Set, not drifted.
-9. `_recall_block(user_id)` (`app.py:180-225`) — last 3 SQLite session rows via `prior_n(3)`, formatted as `<prior_sessions>` XML, plus `load_last_summary(user_id)` (rolling summary written by pipecat's auto-summarizer on a prior session). Closes with "IF any of this fits naturally, acknowledge it. Otherwise IGNORE this block."
+6. **`audio_context_block()`** (#66 Phase 1) — explains the `[audio]` annotation `AudioTagsTap` injects per-turn (emotion / lang / speaker / events). Tells the LLM how to use the signal AND — load-bearing — never to parrot it back. Static (no verbosity branch). Wired unconditionally; safe-by-default because the block tells the LLM to ignore the line when missing fields.
+7. `user_block` — name nudge, only if `skill.user_name` set.
+8. `render_personality_block(mem)` (`agent/personality.py:57-106`) — 10 axes, magnitude buckets at `<0.15 neutral / <0.4 slightly / <0.75 plain / strongly`. Mood thresholds `valence>0.15` → bright/low, `arousal>0.15` → energetic/sleepy, `guardedness>0.15` → guarded.
+9. `apply_soft_neglect(mem)` (`agent/neglect.py:101-124`) — gap-driven mood targets. `<2d` valence +0.1; `<3d` valence -0.15 + guard 0.15; up to `>8d` capped at valence -0.4 / guardedness 0.7. Computed BEFORE personality block so it's visible from turn one. **Drifts via `drift_mood_toward(step=0.7)` (R15 fix, PR #60)** — composes with per-turn drift from `AudioTagsTap` instead of overwriting accumulated mood.
+10. `_recall_block(user_id)` (`app.py:180-225`) — last 3 SQLite session rows via `prior_n(3)`, formatted as `<prior_sessions>` XML, plus `load_last_summary(user_id)` (rolling summary written by pipecat's auto-summarizer on a prior session). Closes with "IF any of this fits naturally, acknowledge it. Otherwise IGNORE this block."
+
+### Mood three-writer pattern (R15 resolution)
+
+`PersonalityDAL` exposes three APIs that compose without overwriting each other:
+
+| API | Caller | Semantic |
+|---|---|---|
+| `set_mood(*, valence=, arousal=, guardedness=)` | Operator override (drawer UI, tests, boot seed) | Snap-to-value |
+| `drift_mood_toward(*, valence=, arousal=, guardedness=, step=0.7)` | Session-open shifts (`apply_soft_neglect`) | Blend `step%` of way toward target |
+| `drift_mood(*, valence_delta=, arousal_delta=, guardedness_delta=)` | Per-turn writers (`AudioTagsTap` from #66) | Add delta to current; no-op when all-None |
+
+Without this pattern, neglect's session-open `set_mood` would erase the prior session's per-turn drift.
 
 ### Tool registry (`agent/tools.py`)
 
