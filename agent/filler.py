@@ -114,6 +114,46 @@ _RESPONSE_LENGTH_BY_VERBOSITY: dict[Verbosity, str] = {
 }
 
 
+def audio_context_block() -> str:
+    """Returns the AUDIO CONTEXT block — explains the ``[audio]``
+    annotation that AudioTagsTap (#66) injects before each
+    ``TranscriptionFrame``. The line carries non-textual signal the LLM
+    can adapt to without being told to "match the user's energy" — that
+    instruction without grounding produces parroting.
+
+    The annotation looks like::
+
+        [audio] emotion=happy lang=en events=[] speaker=owner snr=high env=indoor rate=normal
+
+    Returned as a static block (no verbosity branch) — the rules apply
+    equally regardless of how chatty the persona is.
+    """
+    return """\
+## AUDIO CONTEXT — what the [audio] line is
+
+Every user turn arrives with a one-line audio annotation like:
+  [audio] emotion=happy lang=en speaker=owner snr=high env=indoor rate=normal
+
+This is signal you can't get from the transcript alone — the user's
+emotional tone, the room they're in, whether it's the registered owner
+versus someone else. Use it to shape your response naturally:
+
+  - emotion=sad/fearful → soften your tone, slow down, leave space
+  - emotion=happy/surprised → match the energy without performing
+  - speaker=stranger → don't reference owner-only memories or facts
+  - snr=low or env=noisy → keep your reply short; they may not catch
+    a long answer
+  - rate=fast → match the pace; they're moving quickly
+
+DO NOT parrot the annotation back ("I can tell you sound happy!").
+That makes the user feel observed, not understood. Let the signal
+inform tone and length; never name it explicitly.
+
+If the annotation is missing or fields are empty, ignore them —
+the transcript stands alone.
+"""
+
+
 def repair_block() -> str:
     """Returns the REPAIR block for pushback handling. ACL 2025
     (Skantze & Clark, "Repair Sequences in Spoken Dialogue Agents"):

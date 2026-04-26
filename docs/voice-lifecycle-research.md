@@ -128,21 +128,26 @@ two PRs:
    tunable from drawer UI without restart. Falls back to **owner-trust**
    when the voiceprint file is missing (preserves no-auth single-user
    deployments).
-2. **PR 2 — audio-tags side-channel.** [`protoLabsAI/orbis-audio-tags-v5-soft`](https://huggingface.co/protoLabsAI/orbis-audio-tags-v5-soft)
-   (8.32 M params, 1.78 ms Blackwell, low-hundreds-ms CPU). Two consumers:
-   (a) context-line injection into LLM system prompt with confidence
-   threshold 0.65, (b) mood-table writer. Gated on `OwnerVerifiedFrame`
-   so guest voices don't pollute owner mood.
+2. **PR 2 — audio-tags side-channel.** ~~Originally planned as a v5-soft tap~~
+   **Superseded by [#66](https://github.com/protoLabsAI/ORBIS/issues/66) (SenseVoice)**:
+   one model — `FunAudioLLM/SenseVoiceSmall`, 234 M params — does STT +
+   emotion (7-class, vs v5's 4) + audio events in a single 70 ms forward
+   pass. Replaces both `LocalWhisperSTT` and the planned v5-soft tap.
+   v5-soft's non-emotion heads (SNR / environment / speaking-rate) stay
+   as a secondary AudioTagsTap step; the emotion head is retired.
+   Frame contracts: `EmotionFrame` → `AudioEventFrame` (when present) →
+   `TranscriptionFrame` per utterance.
 
 **Open architectural questions raised by the lifecycle that #35 doesn't
 yet answer:**
 
-- Where does `apply_soft_neglect` (`agent/neglect.py:101-124`) interact with
-  audio-tag mood? Today neglect *sets* mood targets directly (R15 in the
-  risks doc). If audio-tags also writes mood per-turn, the two systems will
-  collide every session-open. Resolution: neglect should set a *baseline*
-  in `personality_axes`, not the per-turn `mood` row. Or audio-tags should
-  read the neglect-set mood and only drift from it.
+- ~~Where does `apply_soft_neglect` interact with audio-tag mood?~~
+  **Resolved**: PR #60 (R15 fix) added `drift_mood_toward(step=0.7)` to
+  the DAL and refactored neglect to use it. PR for #66 Phase 1 added
+  `drift_mood(*deltas)` for per-turn writers. Three writers, three APIs,
+  composable: `set_mood` (operator override), `drift_mood_toward`
+  (session-open shifts like neglect), `drift_mood` (per-turn shifts
+  like AudioTagsTap).
 - Should the audio-tags tap share Whisper's forward pass? STATUS.md notes
   v5-soft uses a Whisper-tiny encoder — opportunity to share features with
   whatever Whisper variant `voice/stt.py` loads. Default `WHISPER_MODEL=openai/whisper-large-v3-turbo`

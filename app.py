@@ -111,6 +111,7 @@ from agent.filler import (
     Latency,
     Settings as FillerSettings,
     Verbosity,
+    audio_context_block,
     plan_block,
     repair_block,
     tool_response_block,
@@ -566,6 +567,15 @@ def _effective_prompt(
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
+        # Audio-context block teaches the LLM what the [audio] line
+        # AudioTagsTap will inject means. Static — no runtime data, no
+        # branch — so it sits in every persona's prompt regardless of
+        # whether STT_BACKEND=sensevoice is enabled. When the tap isn't
+        # running the [audio] line just won't appear; the block tells
+        # the LLM to ignore the annotation when missing, so this is
+        # safe-by-default.
+        + "\n\n"
+        + audio_context_block()
         + (("\n\n" + user_block) if user_block else "")
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
