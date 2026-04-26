@@ -143,11 +143,24 @@ def captured_tap():
 # --- mood writes ---------------------------------------------------------
 
 
+# Mood writes are deferred to TranscriptionFrame arrival (see comment
+# in audio_tags.py:process_frame) so late-arriving SpeakerGate
+# decisions can flip speaker_verified before the write commits.
+# Each test pushes the EmotionFrame followed by a TranscriptionFrame
+# to trigger the deferred write.
+
+def _trans_frame() -> TranscriptionFrame:
+    return TranscriptionFrame("hi", "u", "2026-04-26T00:00:00Z")
+
+
 @pytest.mark.asyncio
 async def test_owner_happy_emotion_writes_mood_delta(captured_tap) -> None:
     tap = captured_tap()
-    f = EmotionFrame(emotion="happy", lang="en", speaker_verified=True)
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
     assert tap.fake_mem.personality.calls == [
         {"valence_delta": +0.10, "arousal_delta": +0.05},
     ]
@@ -156,8 +169,11 @@ async def test_owner_happy_emotion_writes_mood_delta(captured_tap) -> None:
 @pytest.mark.asyncio
 async def test_owner_angry_emotion_writes_mood_delta(captured_tap) -> None:
     tap = captured_tap()
-    f = EmotionFrame(emotion="angry", lang="en", speaker_verified=True)
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        EmotionFrame(emotion="angry", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
     assert tap.fake_mem.personality.calls == [
         {"valence_delta": -0.15, "arousal_delta": +0.15},
     ]
@@ -169,8 +185,11 @@ async def test_stranger_does_not_write_mood(captured_tap) -> None:
     mood register. This is the load-bearing reason EmotionFrame
     carries speaker_verified."""
     tap = captured_tap()
-    f = EmotionFrame(emotion="happy", lang="en", speaker_verified=False)
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=False),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
     assert tap.fake_mem.personality.calls == []
 
 
@@ -180,8 +199,11 @@ async def test_neutral_emotion_does_not_write_mood(captured_tap) -> None:
     (drift_mood would no-op too, but the early skip avoids the round-
     trip on the per-turn hot path)."""
     tap = captured_tap()
-    f = EmotionFrame(emotion="neutral", lang="en", speaker_verified=True)
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        EmotionFrame(emotion="neutral", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
     assert tap.fake_mem.personality.calls == []
 
 
@@ -191,8 +213,11 @@ async def test_unknown_emotion_does_not_write_mood(captured_tap, caplog) -> None
     _EMOTION_DELTAS, skip the write rather than guessing. Log debug
     so it's traceable but not noisy."""
     tap = captured_tap()
-    f = EmotionFrame(emotion="confused", lang="en", speaker_verified=True)
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
+    await tap.process_frame(
+        EmotionFrame(emotion="confused", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
     assert tap.fake_mem.personality.calls == []
 
 
@@ -210,11 +235,79 @@ async def test_drift_mood_failure_does_not_break_pipeline(captured_tap) -> None:
             self.personality = _BrokenMood()
 
     tap = captured_tap(mem=_BrokenMem())
-    f = EmotionFrame(emotion="happy", lang="en", speaker_verified=True)
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
     # Should not raise.
-    await tap.process_frame(f, FrameDirection.DOWNSTREAM)
-    # Frame still passes through.
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
+    # Both frames still passed through.
     assert any(isinstance(p, EmotionFrame) for p, _ in tap.pushed)
+    assert any(isinstance(p, TranscriptionFrame) for p, _ in tap.pushed)
+
+
+@pytest.mark.asyncio
+async def test_no_mood_write_until_transcription_arrives(captured_tap) -> None:
+    """The deferred-write contract: even an owner-verified happy
+    EmotionFrame must NOT write mood until the corresponding
+    TranscriptionFrame is observed. Without this, a late-arriving
+    StrangerDetectedFrame can't block the write that fires on
+    EmotionFrame entry (the CR-flagged race)."""
+    tap = captured_tap()
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    # No TranscriptionFrame yet → no write.
+    assert tap.fake_mem.personality.calls == []
+    # Transcription arrives → write commits.
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
+    assert len(tap.fake_mem.personality.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_stranger_frame_blocks_owner_mood_write(captured_tap) -> None:
+    """The CR-flagged race: EmotionFrame arrives flagged owner_verified=True,
+    but a StrangerDetectedFrame arrives BEFORE the TranscriptionFrame.
+    Pre-fix, the mood write fired on EmotionFrame entry and the late
+    stranger frame couldn't unwind it. Post-fix, the deferred write at
+    TranscriptionFrame time sees speaker_verified=False (flipped by the
+    stranger frame) and skips the write."""
+    tap = captured_tap()
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=True),
+        FrameDirection.DOWNSTREAM,
+    )
+    # Late stranger flip — must invalidate the eventual mood write.
+    await tap.process_frame(
+        StrangerDetectedFrame(score=0.3),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
+    # No write — stranger turn can't nudge owner mood even though
+    # the initial EmotionFrame was tagged verified.
+    assert tap.fake_mem.personality.calls == []
+
+
+@pytest.mark.asyncio
+async def test_late_owner_frame_unblocks_stranger_mood_write(captured_tap) -> None:
+    """The mirror case: EmotionFrame arrives speaker_verified=False
+    (e.g. SpeakerGate momentarily decided stranger), then an
+    OwnerVerifiedFrame corrects the call before TranscriptionFrame.
+    The deferred write should now fire — the user IS the owner."""
+    tap = captured_tap()
+    await tap.process_frame(
+        EmotionFrame(emotion="happy", lang="en", speaker_verified=False),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(
+        OwnerVerifiedFrame(score=0.85),
+        FrameDirection.DOWNSTREAM,
+    )
+    await tap.process_frame(_trans_frame(), FrameDirection.DOWNSTREAM)
+    assert tap.fake_mem.personality.calls == [
+        {"valence_delta": +0.10, "arousal_delta": +0.05},
+    ]
 
 
 # --- [audio] annotation injection -----------------------------------------
