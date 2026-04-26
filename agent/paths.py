@@ -78,6 +78,23 @@ def get_db_path() -> Path:
     return Path(override) if override else _default_data_dir() / "orbis.sqlite"
 
 
+def get_voiceprint_path() -> Path:
+    """Absolute path to the cached owner voiceprint.
+
+    Speaker-verification gate (#35) reads from here on session-open;
+    the wizard enrollment step writes here once. Platform-aware so
+    desktop and Docker each get an OS-natural location instead of a
+    cwd-relative ``data/voiceprint.npy`` file that breaks under
+    ``cd``.
+
+    Resolution:
+      1. ``SPEAKER_GATE_VOICEPRINT_PATH`` if set
+      2. ``<data_dir>/voiceprint.npy``
+    """
+    override = os.environ.get("SPEAKER_GATE_VOICEPRINT_PATH")
+    return Path(override) if override else _default_data_dir() / "voiceprint.npy"
+
+
 def get_cache_dir() -> Path:
     """Absolute path to the model-cache directory. Pure resolution —
     does not touch the filesystem. ``configure_hf_home`` creates the
