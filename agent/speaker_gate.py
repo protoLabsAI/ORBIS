@@ -46,6 +46,14 @@ logger = logging.getLogger(__name__)
 # --- Frame types ----------------------------------------------------------
 
 
+class StrangerAction(str, Enum):
+    """How the system should react to a stranger. The gate doesn't
+    enforce — it just labels the frame so consumers can branch."""
+    WARN = "warn"
+    REFUSE = "refuse"
+    DELEGATE_GUEST = "delegate_guest"
+
+
 @dataclass
 class OwnerVerifiedFrame(Frame):
     """Emitted on UserStoppedSpeaking when speaker embedding cosine-
@@ -59,15 +67,7 @@ class StrangerDetectedFrame(Frame):
     configured stranger_action — downstream processors decide what to do
     (warn the user, refuse the turn, route to a guest-handler delegate)."""
     score: float = 0.0
-    action: str = "warn"
-
-
-class StrangerAction(str, Enum):
-    """How the system should react to a stranger. The gate doesn't
-    enforce — it just labels the frame so consumers can branch."""
-    WARN = "warn"
-    REFUSE = "refuse"
-    DELEGATE_GUEST = "delegate_guest"
+    action: StrangerAction = StrangerAction.WARN
 
 
 # --- Voiceprint persistence ----------------------------------------------
@@ -178,6 +178,7 @@ class SpeakerGate(FrameProcessor):
         self._action = stranger_action
         self._enabled = enabled
         self._buf: list[bytes] = []
+        self._speaking: bool = False
         if not enabled:
             logger.info("[speaker_gate] disabled — passthrough")
         elif voiceprint is None:
@@ -194,19 +195,19 @@ class SpeakerGate(FrameProcessor):
         if self._enabled:
             if isinstance(frame, UserStartedSpeakingFrame):
                 self._buf = []
+                self._speaking = True
             elif isinstance(frame, InputAudioRawFrame):
                 # Only buffer between Started/Stopped — passthrough during
                 # idle/echo-guard windows so we don't accumulate forever.
-                # The caller is responsible for maintaining VAD state;
-                # here we just append whenever audio arrives. Empty buf
-                # at stop-time is treated as "no audio captured".
-                self._buf.append(frame.audio)
+                if self._speaking:
+                    self._buf.append((frame.audio, frame.sample_rate))
             elif isinstance(frame, UserStoppedSpeakingFrame):
-                await self._verify_and_emit(frame.metadata if hasattr(frame, "metadata") else None)
+                self._speaking = False
+                await self._verify_and_emit()
 
         await self.push_frame(frame, direction)
 
-    async def _verify_and_emit(self, _metadata) -> None:
+    async def _verify_and_emit(self) -> None:
         """Run verification on the current buffer, emit the result frame.
         Owner-trust fallback when we lack the means to verify."""
         if self._voiceprint is None or self._embedder is None or not self._buf:
@@ -216,12 +217,13 @@ class SpeakerGate(FrameProcessor):
             self._buf = []
             return
 
-        # Decode int16 PCM → float32 mono. The encoder will resample if
-        # its expected SR differs; we don't know the SR at this layer.
-        # The actual speechbrain wrapper handles SR conversion in its
-        # encode() method.
+        # Decode int16 PCM → float32 mono. Each buf entry is (audio_bytes, sample_rate).
+        # Use the sample_rate from the first frame; all frames in one utterance
+        # share the same transport sample rate.
         try:
-            joined = b"".join(self._buf)
+            audio_chunks, sample_rates = zip(*self._buf)
+            sample_rate = sample_rates[0]
+            joined = b"".join(audio_chunks)
             wav = np.frombuffer(joined, dtype=np.int16).astype(np.float32) / 32768.0
         except Exception as e:
             logger.warning(f"[speaker_gate] decode failed: {e} — owner-trust")
@@ -232,12 +234,7 @@ class SpeakerGate(FrameProcessor):
             return
 
         try:
-            # Sample rate at this layer is whatever the transport delivers;
-            # the embedder is responsible for resampling. We pass 0 as a
-            # sentinel "use your default" since pipecat doesn't expose SR
-            # on the frames at this stage. A real embedder will probe the
-            # transport config separately.
-            emb = self._embedder.encode(wav, sample_rate=0)
+            emb = self._embedder.encode(wav, sample_rate=sample_rate)
         except Exception as e:
             logger.warning(f"[speaker_gate] embed failed: {e} — owner-trust")
             await self.push_frame(
@@ -260,6 +257,6 @@ class SpeakerGate(FrameProcessor):
                 f"action={self._action.value}"
             )
             await self.push_frame(
-                StrangerDetectedFrame(score=score, action=self._action.value),
+                StrangerDetectedFrame(score=score, action=self._action),
                 FrameDirection.DOWNSTREAM,
             )

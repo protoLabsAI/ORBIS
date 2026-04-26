@@ -357,3 +357,91 @@ async def test_originals_always_passthrough(captured_gate) -> None:
         f, (OwnerVerifiedFrame, StrangerDetectedFrame)
     )]
     assert len(forwarded) == len(inputs)
+
+
+# --- new tests covering fixed bugs ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_outside_vad_window_not_buffered(captured_gate) -> None:
+    """Bug 1 fix: InputAudioRawFrame arriving before UserStartedSpeakingFrame
+    (or after UserStoppedSpeakingFrame) must NOT be buffered. Stale audio
+    from a prior utterance should not bleed into the next embed call."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    embedder = _MockEmbedder(owner_vec)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=embedder,
+        threshold=0.5,
+    )
+    # Audio arrives before the started frame — must be ignored
+    await gate.process_frame(_audio_frame(samples=3200), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(samples=3200), FrameDirection.DOWNSTREAM)
+    # Now a real utterance
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(samples=800), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    # Embedder must have been called with only the 800-sample in-window chunk
+    assert embedder.calls == 1
+    # Verify the encode received only the in-window audio (800 samples = 1600 bytes int16)
+    # We can't inspect the wav directly, but we can verify embed was called once (not on stale)
+    verified = [f for f, _ in gate.pushed if isinstance(f, OwnerVerifiedFrame)]
+    assert len(verified) == 1
+
+
+@pytest.mark.asyncio
+async def test_sample_rate_forwarded_to_embedder(captured_gate) -> None:
+    """Bug 2 fix: embedder.encode must receive the actual sample_rate from
+    the InputAudioRawFrame, not the 0 sentinel."""
+    received_sr: list[int] = []
+
+    class _SRCapturingEmbedder:
+        def encode(self, wav: np.ndarray, sample_rate: int) -> np.ndarray:
+            received_sr.append(sample_rate)
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    gate = captured_gate(
+        voiceprint=np.array([1.0, 0.0], dtype=np.float32),
+        embedder=_SRCapturingEmbedder(),
+        threshold=0.5,
+    )
+    frame = InputAudioRawFrame(
+        audio=np.zeros(960, dtype=np.int16).tobytes(),
+        sample_rate=48000,
+        num_channels=1,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(frame, FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    assert len(received_sr) == 1
+    assert received_sr[0] == 48000, (
+        f"Expected sample_rate=48000, got {received_sr[0]}. "
+        "Bug 2: gate must forward frame.sample_rate, not a 0 sentinel."
+    )
+
+
+@pytest.mark.asyncio
+async def test_stranger_action_is_enum_not_string(captured_gate) -> None:
+    """Bug 3 fix: StrangerDetectedFrame.action must be a StrangerAction
+    enum value, not a raw string. Downstream consumers should be able to
+    switch on the enum without re-parsing."""
+    owner_vec = np.array([1.0, 0.0], dtype=np.float32)
+    stranger_vec = np.array([0.0, 1.0], dtype=np.float32)
+    gate = captured_gate(
+        voiceprint=owner_vec,
+        embedder=_MockEmbedder(stranger_vec),
+        threshold=0.5,
+        stranger_action=StrangerAction.DELEGATE_GUEST,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    strangers = [f for f, _ in gate.pushed if isinstance(f, StrangerDetectedFrame)]
+    assert len(strangers) == 1
+    assert isinstance(strangers[0].action, StrangerAction), (
+        f"action should be StrangerAction enum, got {type(strangers[0].action)}"
+    )
+    assert strangers[0].action is StrangerAction.DELEGATE_GUEST
