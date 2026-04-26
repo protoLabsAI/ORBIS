@@ -226,6 +226,58 @@ class PersonalityDAL:
         self.conn.commit()
         return MoodValue(new_valence, new_arousal, new_guardedness, now)
 
+    def drift_mood(
+        self,
+        *,
+        valence_delta: float | None = None,
+        arousal_delta: float | None = None,
+        guardedness_delta: float | None = None,
+    ) -> MoodValue:
+        """Apply per-turn deltas on top of the current mood — the API
+        the per-turn writers (audio-tags / future per-turn affect
+        signals) call. Composes with ``drift_mood_toward`` (session-
+        open shifts) and ``set_mood`` (explicit overrides) without
+        anyone needing to know about the others.
+
+        For each non-None delta:: ``new = current + delta``, clamped to
+        ``[-1, +1]``. Unspecified dims keep their current value.
+
+        Doesn't accept a ``step`` — use ``drift_mood_toward`` if you
+        need target-blending semantics. The delta API is for "this turn
+        added X to the running mood" writes.
+        """
+        current = self.get_mood()
+        new_valence = (
+            _clamp(current.valence + valence_delta)
+            if valence_delta is not None
+            else current.valence
+        )
+        new_arousal = (
+            _clamp(current.arousal + arousal_delta)
+            if arousal_delta is not None
+            else current.arousal
+        )
+        new_guardedness = (
+            _clamp(current.guardedness + guardedness_delta)
+            if guardedness_delta is not None
+            else current.guardedness
+        )
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT INTO mood (id, valence, arousal, guardedness, updated_at)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                valence     = excluded.valence,
+                arousal     = excluded.arousal,
+                guardedness = excluded.guardedness,
+                updated_at  = excluded.updated_at
+            """,
+            (new_valence, new_arousal, new_guardedness, now),
+        )
+        self.conn.commit()
+        return MoodValue(new_valence, new_arousal, new_guardedness, now)
+
     def drift_mood_toward(
         self,
         *,

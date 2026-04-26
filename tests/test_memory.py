@@ -323,6 +323,70 @@ def test_drift_mood_toward_composes_with_per_turn_writes(mem: Memory):
     assert 0.0 < after_audio.guardedness < after_neglect.guardedness
 
 
+# --- drift_mood (per-turn delta API for #66 AudioTagsTap) -------------------
+
+
+def test_drift_mood_adds_delta(mem: Memory):
+    mem.personality.set_mood(valence=0.2, arousal=0.0, guardedness=0.0)
+    mem.personality.drift_mood(valence_delta=0.1, arousal_delta=0.05)
+    m = mem.personality.get_mood()
+    assert abs(m.valence - 0.3) < 1e-6
+    assert abs(m.arousal - 0.05) < 1e-6
+    # Untouched dim preserved.
+    assert m.guardedness == 0.0
+
+
+def test_drift_mood_clamps_above(mem: Memory):
+    mem.personality.set_mood(valence=0.9)
+    mem.personality.drift_mood(valence_delta=0.5)  # would land at 1.4
+    m = mem.personality.get_mood()
+    assert m.valence == 1.0
+
+
+def test_drift_mood_clamps_below(mem: Memory):
+    mem.personality.set_mood(valence=-0.9)
+    mem.personality.drift_mood(valence_delta=-0.5)
+    m = mem.personality.get_mood()
+    assert m.valence == -1.0
+
+
+def test_drift_mood_unspecified_dims_unchanged(mem: Memory):
+    mem.personality.set_mood(valence=0.4, arousal=-0.2, guardedness=0.3)
+    mem.personality.drift_mood(arousal_delta=0.1)
+    m = mem.personality.get_mood()
+    assert abs(m.valence - 0.4) < 1e-6
+    assert abs(m.arousal - (-0.1)) < 1e-6
+    assert abs(m.guardedness - 0.3) < 1e-6
+
+
+def test_drift_mood_composes_with_drift_toward(mem: Memory):
+    """The whole reason this API exists alongside drift_mood_toward:
+    session-open shifts (toward) and per-turn shifts (delta) compose
+    cleanly without anyone overwriting anyone else."""
+    # Session-open: 7-day gap target via drift_toward
+    mem.personality.drift_mood_toward(valence=-0.35, guardedness=0.55, step=0.7)
+    after_neglect = mem.personality.get_mood()
+
+    # Per-turn (audio-tags-style): owner sounds happy → +0.1 valence
+    mem.personality.drift_mood(valence_delta=0.1)
+    after_happy_turn = mem.personality.get_mood()
+
+    # Valence moved up exactly 0.1 — neglect's setting wasn't
+    # overwritten, just nudged.
+    assert abs(after_happy_turn.valence - (after_neglect.valence + 0.1)) < 1e-6
+    # Guardedness untouched by the per-turn delta.
+    assert after_happy_turn.guardedness == after_neglect.guardedness
+
+
+def test_drift_mood_no_args_is_no_op(mem: Memory):
+    mem.personality.set_mood(valence=0.3, arousal=-0.1, guardedness=0.2)
+    mem.personality.drift_mood()
+    m = mem.personality.get_mood()
+    assert abs(m.valence - 0.3) < 1e-6
+    assert abs(m.arousal - (-0.1)) < 1e-6
+    assert abs(m.guardedness - 0.2) < 1e-6
+
+
 # --- entitlement -------------------------------------------------------------
 
 
