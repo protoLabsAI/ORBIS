@@ -157,6 +157,12 @@ def make_stt() -> SegmentedSTTService:
             base_url=STT_URL,
             settings=STTSettings(model=STT_MODEL, language=None),
         )
+    if STT_BACKEND == "sensevoice":
+        # Lazy import keeps funasr in the [sensevoice] optional extra —
+        # local + openai backends still work without it installed.
+        from voice.stt_sensevoice import SenseVoiceSTT
+        logger.info("STT backend: sensevoice (FunAudioLLM/SenseVoiceSmall)")
+        return SenseVoiceSTT()
     if STT_BACKEND != "local":
         logger.warning(f"Unknown STT_BACKEND={STT_BACKEND!r}; falling back to local")
     return LocalWhisperSTT()
@@ -167,6 +173,10 @@ def prewarm() -> None:
         # No model-load step on a remote endpoint; pipecat's first call
         # opens the connection. Skip explicit warm.
         logger.info(f"STT backend: openai (no local prewarm)")
+        return
+    if STT_BACKEND == "sensevoice":
+        from voice.stt_sensevoice import prewarm as prewarm_sensevoice
+        prewarm_sensevoice()
         return
     _get_local_pipe()
 

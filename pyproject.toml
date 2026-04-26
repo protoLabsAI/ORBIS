@@ -44,6 +44,12 @@ smart-turn = ["pipecat-ai[local-smart-turn]"]
 # Phase 1 perception layer (#35). Install when enrolling a voiceprint;
 # without enrollment the gate stays in owner-trust passthrough.
 speaker-id = ["speechbrain>=1.0", "torchaudio"]
+# SenseVoice STT — FunAudioLLM/SenseVoiceSmall via funasr. Set
+# STT_BACKEND=sensevoice to enable; without this extra installed,
+# STT_BACKEND=local (Whisper) and STT_BACKEND=openai still work.
+# 234 M params, ~70 ms on Blackwell, low-hundreds-ms on CPU. Provides
+# STT + 7-class emotion + audio events in one forward pass per #66.
+sensevoice = ["funasr>=1.2"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 # Test-only: respx mocks httpx for the LLM-probe tests.
 test = ["pytest", "respx"]
