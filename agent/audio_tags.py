@@ -123,7 +123,12 @@ class AudioTagsTap(FrameProcessor):
             # AudioEventFrame is per-utterance; reset on each new
             # emotion (which marks a new utterance window).
             self._latest_events = []
-            self._maybe_write_mood(frame)
+            # Mood write deferred to TranscriptionFrame — see comment
+            # on _maybe_write_mood. EmotionFrame arrives before any
+            # late-arriving SpeakerGate corrections; writing here would
+            # mean a stranger-now-relabeled-as-stranger turn could have
+            # already nudged the owner mood by the time the
+            # StrangerDetectedFrame arrives.
         elif isinstance(frame, AudioEventFrame):
             self._latest_events = list(frame.events)
         elif isinstance(frame, OwnerVerifiedFrame):
@@ -138,6 +143,13 @@ class AudioTagsTap(FrameProcessor):
             if self._latest_emotion is not None:
                 self._latest_emotion.speaker_verified = False
         elif isinstance(frame, TranscriptionFrame):
+            # Mood write happens HERE, not on EmotionFrame, so all
+            # SpeakerGate decisions emitted earlier in the utterance
+            # window have been observed (CR fix on PR #81: a late
+            # StrangerDetectedFrame must block the mood write the
+            # initial EmotionFrame would have triggered).
+            if self._latest_emotion is not None:
+                self._maybe_write_mood(self._latest_emotion)
             await self._inject_audio_annotation(direction)
 
         await self.push_frame(frame, direction)

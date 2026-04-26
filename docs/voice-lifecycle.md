@@ -148,7 +148,7 @@ Per utterance, in this exact order:
 
 ## Stage 4.5 — Audio-tags tap (#66 Phase 3)
 
-`agent/audio_tags.py`. Sits between `SenseVoiceSTT` and `user_agg`. Subscribes to `EmotionFrame`, `AudioEventFrame`, `OwnerVerifiedFrame`/`StrangerDetectedFrame`, and `TranscriptionFrame`. Two responsibilities:
+`agent/audio_tags.py`. **Implemented**; planned pipeline placement is between `stt` and `user_agg` (Phase 4 wiring lands the construction call in `run_bot`). Subscribes to `EmotionFrame`, `AudioEventFrame`, `OwnerVerifiedFrame`/`StrangerDetectedFrame`, and `TranscriptionFrame`. Two responsibilities:
 
 **1. Per-turn mood writes (R15 fix)** — owner-verified emotion → `mem.personality.drift_mood(*deltas)`. Spec map (#66):
 
