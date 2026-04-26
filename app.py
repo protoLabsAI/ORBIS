@@ -97,6 +97,12 @@ from agent.echo_guard import (
     EchoGuardSuppressor,
 )
 from agent.delivery import DeliveryController
+from agent.speaker_gate import (
+    SpeakerGate,
+    StrangerAction,
+    VoiceprintCorrupted,
+    load_voiceprint,
+)
 from agent.prosody import ProsodyTagStripper
 from agent.filler import (
     FillerGenerator,
@@ -215,6 +221,78 @@ def _resolve_skill_llm(skill) -> dict:
         "extra_body": extra_body,
         "using_custom_url": using_custom_url,
     }
+
+
+def _build_speaker_gate(sg_cfg: dict) -> SpeakerGate:
+    """Construct the per-session SpeakerGate from persona behavior config.
+
+    Schema (under ``persona.behavior.speaker_gate``):
+      - ``enabled``: bool — defaults to True only when the block exists.
+        Empty/missing block → resolved by ``_resolve_behavior_block`` to
+        ``{enabled: True}``; a literal ``false`` disables.
+      - ``voiceprint_path``: str — file containing the cached owner
+        voiceprint. Default ``data/voiceprint.npy`` (relative to the
+        ORBIS data dir). Missing file → owner-trust mode (preserves
+        no-auth single-user deployment).
+      - ``threshold``: float — cosine similarity floor for owner.
+        Default 0.62 per the speechbrain ECAPA tuning in #35.
+      - ``stranger_action``: ``"warn"`` | ``"refuse"`` | ``"delegate_guest"``.
+        Labels the StrangerDetectedFrame; downstream consumers
+        (currently none — wired in PR 1.3+) decide enforcement.
+
+    A corrupt voiceprint file (vs simply missing) does NOT silently
+    fall back — surfaces the error so the operator can re-enroll.
+    """
+    if not sg_cfg.get("enabled", True):
+        return SpeakerGate(enabled=False)
+
+    voiceprint_path = sg_cfg.get("voiceprint_path") or os.environ.get(
+        "SPEAKER_GATE_VOICEPRINT_PATH", "data/voiceprint.npy"
+    )
+    threshold = float(sg_cfg.get("threshold", 0.62))
+    action_str = str(sg_cfg.get("stranger_action", "warn"))
+    try:
+        stranger_action = StrangerAction(action_str)
+    except ValueError:
+        logger.warning(
+            f"[speaker_gate] unknown stranger_action {action_str!r}; "
+            "falling back to 'warn'"
+        )
+        stranger_action = StrangerAction.WARN
+
+    # Lazy import the embedder so the speechbrain dep stays optional —
+    # deployments that haven't installed [speaker-id] still boot, just
+    # in owner-trust mode.
+    embedder = None
+    voiceprint = None
+    try:
+        voiceprint = load_voiceprint(voiceprint_path)
+    except VoiceprintCorrupted as e:
+        logger.error(
+            f"[speaker_gate] voiceprint at {voiceprint_path} is corrupt: {e}. "
+            "Re-enroll via the wizard or remove the file to start fresh. "
+            "Running in owner-trust mode this session."
+        )
+
+    if voiceprint is not None:
+        try:
+            from agent.ecapa_embedder import ECAPAEmbedder
+            embedder = ECAPAEmbedder()
+        except ImportError as e:
+            logger.warning(
+                f"[speaker_gate] voiceprint present but speechbrain "
+                f"not installed: {e}. Install via "
+                f"`pip install -e \".[speaker-id]\"`. Owner-trust this session."
+            )
+            embedder = None
+
+    return SpeakerGate(
+        embedder=embedder,
+        voiceprint=voiceprint,
+        threshold=threshold,
+        stranger_action=stranger_action,
+        enabled=True,
+    )
 
 
 # Sentinels wrapping pipecat's rolling summary in the LLM context. The
@@ -743,6 +821,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     bc_cfg = _resolve_behavior_block(behavior.get("backchannel"))
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
+    sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -882,12 +961,23 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # Reference: https://docs.pipecat.ai/server/frameworks/rtvi
     rtvi = RTVIProcessor(transport=transport)
 
+    speaker_gate = _build_speaker_gate(sg_cfg)
+
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
         # audio while the bot is speaking (HALF_DUPLEX) and for ECHO_GUARD_MS
         # after it stops. VAD downstream never sees the suppressed audio.
         EchoGuardSuppressor(_ECHO_STATE),
+        # Speaker-verification gate (#35 PR 1.2) — observes echo-guarded
+        # audio between UserStartedSpeakingFrame and UserStoppedSpeakingFrame,
+        # cosine-compares the per-utterance embedding to the cached
+        # voiceprint, emits OwnerVerifiedFrame / StrangerDetectedFrame
+        # alongside the audio (originals always pass through). Disabled
+        # by default (no voiceprint → owner-trust); enable by enrolling
+        # via the wizard (PR 1.3) and setting persona.behavior.speaker_gate
+        # in config/orbis.yaml.
+        speaker_gate,
         # RTVI processor near the top — forwards inbound client messages
         # (config, custom actions) into the pipeline and exposes the
         # push-channel for the observer.
