@@ -43,6 +43,26 @@ persona:
   max_tokens: 150
   filler_verbosity: brief      # silent | brief | narrated | chatty
 
+  behavior:
+    # Speaker-verification gate. Sits between transport.input and STT.
+    # Requires speechbrain: pip install -e ".[speaker-gate]"
+    # On first run the setup wizard prompts for enrollment; voiceprint
+    # saved to data/voiceprint.npy (or voiceprint_path below).
+    # Omit this block to run in owner-trust mode (no verification).
+    #
+    # speaker_gate:
+    #   enabled: true
+    #   voiceprint_path: data/voiceprint.npy
+    #   verification_threshold: 0.62   # cosine similarity; tune per-deployment
+    #   stranger_action: warn          # warn | refuse | delegate_guest
+
+    # Audio-tags side-channel. Only active when STT_BACKEND=sensevoice.
+    # EmotionFrame from SenseVoice nudges the mood SQLite state per turn
+    # (owner audio only) and injects a [audio] line into the LLM context.
+    #
+    # audio_tags:
+    #   enabled: true                  # overridden by AUDIO_TAGS=off env var
+
 voice:
   # Pipecat TTS backend. `kokoro` is the default and runs on CPU.
   # Alternatives:
