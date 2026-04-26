@@ -220,21 +220,33 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     }
     seed_default_config(&app, &config_path);
     let start_vllm = std::env::var("START_VLLM").unwrap_or_else(|_| "0".to_string());
+    let starter_orbs_path = resolve_starter_orbs_path(&app);
     log::info!(
         "sidecar env: ORBIS_CONFIG={} START_VLLM={start_vllm}",
         config_path.display()
     );
+    if let Some(p) = starter_orbs_path.as_ref() {
+        log::info!("sidecar env: ORBIS_STARTER_ORBS={}", p.display());
+    }
 
     // `sidecar("orbis")` resolves to `binaries/orbis-<target>` on the
     // bundle or `./binaries/orbis-<target>` during `tauri dev`.
     // Target-suffix resolution is Tauri's job — we just give the base
     // name that matches the externalBin entry in tauri.conf.json.
-    let command = shell
+    let mut command = shell
         .sidecar("orbis")
         .map_err(|e| format!("couldn't find sidecar binary: {e}"))?
         .args(["--host", "127.0.0.1", "--port", "0"])
         .env("ORBIS_CONFIG", &config_path)
         .env("START_VLLM", &start_vllm);
+    // Point the sidecar at the bundled starter-orbs YAML. Without this,
+    // agent/starter_orbs.py falls back to a cwd-relative
+    // "config/starter_orbs.yaml" path that doesn't exist in the
+    // installed app, and the wizard's "Pick your orb" step renders
+    // "No starters configured on the server."
+    if let Some(p) = starter_orbs_path.as_ref() {
+        command = command.env("ORBIS_STARTER_ORBS", p);
+    }
 
     let (mut rx, child) = command
         .spawn()
@@ -288,6 +300,34 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Resolve the bundled `config/starter_orbs.yaml` Resource path so we
+/// can point the sidecar's `ORBIS_STARTER_ORBS` env var at it. Returns
+/// None on resolution failure or when the resource isn't actually
+/// present (CI builds where the resource entry got dropped, dev runs
+/// without bundling, etc.) — the loader in agent/starter_orbs.py
+/// returns `[]` gracefully when its env-var path doesn't exist, so a
+/// missing resource just surfaces as the "no starters configured"
+/// wizard message instead of a hard crash.
+fn resolve_starter_orbs_path(app: &AppHandle) -> Option<PathBuf> {
+    match app
+        .path()
+        .resolve("config/starter_orbs.yaml", BaseDirectory::Resource)
+    {
+        Ok(p) if p.exists() => Some(p),
+        Ok(p) => {
+            log::warn!(
+                "starter_orbs resource resolved to {} but doesn't exist",
+                p.display()
+            );
+            None
+        }
+        Err(e) => {
+            log::warn!("starter_orbs resource resolve failed: {e}");
+            None
+        }
+    }
 }
 
 /// First-run seed: if `config_path` doesn't exist yet, copy the bundled
