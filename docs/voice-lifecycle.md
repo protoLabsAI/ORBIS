@@ -18,6 +18,7 @@ transport.input()                              SmallWebRTCTransport, audio_in_fi
   -> SpeakerGate                               #35 PR 1 — owner-vs-stranger via cosine cmp; default owner-trust
   -> RTVIProcessor                             inbound client->server data-channel msgs
   -> stt                                       LocalWhisperSTT (default) | OpenAISTTService | SenseVoiceSTT (#66)
+  -> AudioTagsTap                              #66 — per-turn mood writes + [audio] system msg injection
   -> user_agg                                  SileroVADAnalyzer + optional SmartTurn v3
   -> BargeInGate                               swallows VAD spikes that resolve in <350ms
   -> MicroAckInjector                          "mm/hm" ~1.5s after UserStoppedSpeaking
@@ -146,9 +147,9 @@ Per utterance, in this exact order:
 
 **Security**: `trust_remote_code=True` is required to load SenseVoice (FunASR loads custom Python from the model repo at load time). `_TRUSTED_REMOTE_CODE_MODELS` is a curated allow-list (default model + `iic/` mirror); a custom `SENSEVOICE_MODEL` outside the list refuses to load unless the operator opts in via `SENSEVOICE_TRUST_REMOTE_CODE=1`. Without trust, FunASR fails to load — the right failure: surface the RCE risk to the operator instead of silently executing untrusted code.
 
-## Stage 4.5 — Audio-tags tap (#66 Phase 3)
+## Stage 4.5 — Audio-tags tap (#66 Phase 3+4)
 
-`agent/audio_tags.py`. **Implemented**; planned pipeline placement is between `stt` and `user_agg` (Phase 4 wiring lands the construction call in `run_bot`). Subscribes to `EmotionFrame`, `AudioEventFrame`, `OwnerVerifiedFrame`/`StrangerDetectedFrame`, and `TranscriptionFrame`. Two responsibilities:
+`agent/audio_tags.py`. **Wired** between `stt` and `user_agg` (Phase 4). Constructed once per session via `make_audio_tags_tap(mem=get_memory())` in `run_bot`. Subscribes to `EmotionFrame`, `AudioEventFrame`, `OwnerVerifiedFrame`/`StrangerDetectedFrame`, and `TranscriptionFrame`. Two responsibilities:
 
 **1. Per-turn mood writes (R15 fix)** — owner-verified emotion → `mem.personality.drift_mood(*deltas)`. Spec map (#66):
 

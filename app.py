@@ -96,6 +96,7 @@ from agent.echo_guard import (
     EchoGuardState,
     EchoGuardSuppressor,
 )
+from agent.audio_tags import make_audio_tags_tap
 from agent.delivery import DeliveryController
 from agent.paths import get_voiceprint_path
 from agent.speaker_gate import (
@@ -988,6 +989,14 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
 
     speaker_gate = _build_speaker_gate(sg_cfg)
 
+    # AudioTagsTap (#66 Phase 4) — consumes EmotionFrame /
+    # AudioEventFrame from STT, writes per-turn mood deltas (owner only),
+    # injects [audio] system message before each TranscriptionFrame.
+    # No-op when STT_BACKEND=local|openai (no EmotionFrame source);
+    # safe to leave wired regardless of backend. Disable via
+    # AUDIO_TAGS=off env.
+    audio_tags = make_audio_tags_tap(mem=get_memory())
+
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
@@ -1008,6 +1017,15 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         # push-channel for the observer.
         rtvi,
         stt,
+        # AudioTagsTap reads EmotionFrame / AudioEventFrame /
+        # TranscriptionFrame from STT, writes per-turn mood deltas
+        # (owner only — gated on speaker_verified from SpeakerGate),
+        # and injects an [audio] system message before each user
+        # transcription so the LLM sees affect context BEFORE the
+        # words. audio_context_block() in the persona prompt teaches
+        # the LLM what to do with the [audio] line and forbids
+        # parroting it.
+        audio_tags,
         user_agg,
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
         # that resolve within the grace window as coughs / backchannels /
