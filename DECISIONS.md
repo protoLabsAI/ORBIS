@@ -82,12 +82,10 @@ capability comes through delegation.
 - `delegate_to(target, query)` — the spine. Existing A2A + OpenAI-
   compatible delegate infrastructure retained unchanged.
 
-### Orb self-modification (new — voice agent can tune its own face)
-- `set_variant(name)`
-- `apply_palette(name)`
-- `adjust_param(key, value)`
-- `save_preset(name)`
-- `recall_preset(name)`
+### Personality adjustment
+- `adjust_personality(axis, delta)` — explicit user-directed personality shifts
+
+Orb visual control (variant, palette, params, presets) is handled outside the LLM tool surface.
 
 ### User-interaction primitives (optional — add if useful)
 - `remember(fact)` — explicit commit to long-term memory

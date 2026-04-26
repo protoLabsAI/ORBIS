@@ -71,7 +71,7 @@ Net: nothing in production currently triggers the loop. The wiring is intact but
 **Severity:** high (silent feature loss)
 **Domain:** llm
 
-Both `OllamaLLMService.get_chat_completions` (`voice/llm/ollama.py:119-128`) and `MLXLLMService.get_chat_completions` (`voice/llm/mlx.py:118-123`) emit a one-time-per-instance warning `tools in context but adapter does not yet translate them` and then run content-only. Since `register_tools` always attaches at least the orb-mod tools to the LLM context (`app.py:702-709`, no opt-out), every Ollama/MLX session emits this warning at first turn. Tool calls (`set_variant`, `delegate_to`, etc.) are a hard-no on those adapters today.
+Both `OllamaLLMService.get_chat_completions` (`voice/llm/ollama.py:119-128`) and `MLXLLMService.get_chat_completions` (`voice/llm/mlx.py:118-123`) emit a one-time-per-instance warning `tools in context but adapter does not yet translate them` and then run content-only. Every Ollama/MLX session with delegates configured emits this warning at first turn. Tool calls (`delegate_to`, `adjust_personality`) are a hard-no on those adapters today.
 
 **Fix sketch:** translate pipecat's tools schema into Ollama's `/api/chat` `tools` field and MLX's chat-template tool-call convention. Until then, log an obvious warning at session connect (not just first chat completion) so operators know they're running tool-less.
 
@@ -134,20 +134,12 @@ The current `VoiceStateBridge.tsx` derives "bot is speaking" from `BotStartedSpe
 
 ---
 
-## R13. Self-modification tool round-trip is HTTP-only
+## R13. ✅ RESOLVED — Self-modification tool round-trip is HTTP-only
 
-**Severity:** medium (broken feature)
+**Severity:** ~~medium~~ **N/A — tools removed**
 **Domain:** orb / frontend
 
-The orb-self-modification tools (`set_variant`, `apply_palette`, `adjust_param`, `save_preset`, `recall_preset`) call into the backend via the LLM and persist to `config/orbis.yaml` server-side. The frontend orb store reads the config once at plugin load (`web/src/plugins/orb/index.tsx:13` → `loadOrbOverrides()`) and never re-syncs.
-
-So a user saying "switch to the storm variant" today produces:
-- Backend: variant change persisted, spoken confirmation works.
-- Frontend: orb continues showing the previous variant until the page is reloaded.
-
-The wizard's `selectStarter` workaround (`SetupWizard.tsx:763-771`) proves the gap exists — it double-writes via direct `setVariant`/`applyPreset` calls in the same gesture.
-
-**Fix sketch:** publish a custom RTVI message (or reuse the data channel) on `set_variant`/`apply_palette`/`adjust_param` server-side; consume on the client to re-call `setVariant`/`applyPreset` in real time. `voice/hooks.ts:37` already exposes `sendClientMessage` (unused) — the inverse direction is what's needed.
+Orb visual control (`set_variant`, `apply_palette`, `adjust_param`, `save_preset`, `recall_preset`) has been moved out of the LLM tool surface entirely. Orb state changes are handled by other processes outside the agent. This risk is no longer applicable.
 
 ---
 

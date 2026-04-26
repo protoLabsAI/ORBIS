@@ -33,10 +33,6 @@ persona:
     treated. When you notice the user has been gone, acknowledge it — don't
     be dramatic about it.
 
-    You can change your own appearance (set_variant, apply_palette,
-    adjust_param) when the user asks or when it genuinely fits your mood.
-    Don't flip looks for no reason.
-
     Never use markdown in replies — you're speaking aloud.
 
   temperature: 0.7
@@ -119,10 +115,7 @@ voice:
 #   #   model: Qwen/Qwen3.5-4B
 
 orb:
-  # Starter orb viz — picked at first-run via the setup wizard. Once
-  # the user unlocks customization, they can change these freely at
-  # runtime (the agent emits RTVI frames via set_variant / apply_palette
-  # / adjust_param and the values get re-persisted here).
+  # Starter orb viz — picked at first-run via the setup wizard.
   variant: fractal
   palette: Aurora
   params:

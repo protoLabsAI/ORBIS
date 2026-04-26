@@ -2147,10 +2147,8 @@ async def put_config(patch: dict, user: User = Depends(require_user)):
     from agent.entitlement import has_customization
 
     # Paid-tier gate — orb block changes require the customization
-    # unlock. This is the authoritative gate; the tool-call path
-    # (set_variant / apply_palette / adjust_param / save_preset)
-    # also gates, but a direct /api/config POST would otherwise
-    # bypass the tools entirely.
+    # unlock. This is the authoritative gate on direct /api/config
+    # POST requests.
     if isinstance(patch, dict) and patch.get("orb"):
         if not has_customization(get_memory()):
             raise HTTPException(

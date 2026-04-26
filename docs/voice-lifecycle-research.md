@@ -28,7 +28,7 @@ everywhere off the audio path:
 | **llm-context** | embeddings / rerank / tool-need | naive `prior_n(3)` (`app.py:180-225`) |
 | **text-post** | prosody / safety / style | tag stripper only (`agent/prosody.py`) |
 | **memory** | fact-worthy / coreference / decay | LLM-driven curator + 90-day half-life (`memory/facts.py`) |
-| **visual** | mood→palette / animation | manual `apply_palette` tool calls (`agent/tools.py:189-216`) |
+| **visual** | mood→palette / animation | state/mood composition layer (orb plugin; outside LLM tool surface) |
 
 Research fills these slots. This doc gives each pipe its concrete ORBIS
 attachment point — the frame type to subscribe to, the state to read/write,

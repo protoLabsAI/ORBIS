@@ -279,12 +279,9 @@ All decorated tools are `Latency.FAST`, all sync, all return short spoken confir
 
 | Tool | Params | Entitlement-gated? |
 |---|---|---|
-| `set_variant(name)` | name (req) | yes |
-| `apply_palette(name)` | name (req) | yes |
-| `adjust_param(key, value)` | both (req) | yes |
-| `save_preset(name)` | name (req) | yes |
-| `recall_preset(name)` | name (req) | **no** (recall always allowed) |
 | `adjust_personality(axis, delta)` | both (req) | no; clamped to `[-0.2, +0.2]`, DAL re-clamps at 0.3 |
+
+Orb visual control (variant, palette, params, presets) is handled outside the LLM tool surface.
 
 Hand-wired (not in `_TOOL_REGISTRY`):
 - **`delegate_to`**: per-session schema with `target` enum-restricted to live delegate names (`tools.py:364-393`); description enumerates each delegate's description so the LLM picks. A2A delegates get a `progress_cb` that calls `delivery.speak_now(msg, source=target)` per progress event.
@@ -383,7 +380,7 @@ Server events emitted but NOT consumed: `BotTtsStarted` / `BotTtsStopped` / `Bot
 
 - R3F + three.js + postprocessing (`LumaChromaticAberrationEffect`).
 - Audio→shader bridge via `usePipecatClientMediaTrack('audio', 'bot' | 'local')` → `useAudioEnvelopes` analyzer. Bot envelope drives `density/scale/asymmetry` in shader uniforms; voice state crossfades between presets (idle/listening/thinking/speaking, `STATE_XFADE_MS=600`).
-- **Self-modification round-trip is HTTP-only, not RTVI**: tool calls (`set_variant`, `apply_palette`, etc.) write `config/orbis.yaml` server-side; the running client only re-reads `/api/config` on next page load. The wizard's `selectStarter` workaround (`SetupWizard.tsx:763-771`) double-writes via direct `setVariant`/`applyPreset`. Live tool-driven orb mutation is not wired today.
+- Orb visual state changes (variant, palette, params) originate outside the LLM — handled by other processes. The `/api/config` PATCH endpoint is the write path; client re-reads on next load or via direct `setVariant`/`applyPreset` calls.
 
 ### Tauri shell + sidecar
 

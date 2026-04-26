@@ -147,10 +147,10 @@ ORBIS's voice agent has a deliberately small set of tools:
 - **`delegate_to(target, query)`** — hand off to one of your
   configured agents. A2A-compatible or OpenAI-compatible. Results
   stream back through the delivery controller and narrate naturally.
-- **`set_variant(name)`, `apply_palette(name)`, `adjust_param(key,
-  value)`, `save_preset(name)`, `recall_preset(name)`** — the orb
-  self-modifies its appearance when you ask ("be warmer", "try a
-  darker look"). Paid unlock gates non-starter variants.
+- **`adjust_personality(axis, delta)`** — shift a personality axis
+  when you explicitly ask ("be more playful", "be less sarcastic").
+
+Orb visual control is handled outside the agent's tool surface.
 
 Nothing else ships. Calculator, search, datetime — all subsumed by
 whatever agent you delegate to.

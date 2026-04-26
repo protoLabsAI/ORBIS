@@ -95,16 +95,10 @@ before declaring a release.
 - [ ] `delegate_to` with an OpenAI-compat target
 - [ ] Progress narration during a slow delegation (>5s) kicks in
 
-#### Orb self-modification
+#### Personality adjustment
 
-- [ ] Say "be warmer" — watch the pipeline log for `apply_palette →`;
-  confirm the client-side orb actually reflects the change
 - [ ] Say "be more playful" — `adjust_personality` triggers;
   personality_axes table updates
-- [ ] Without entitlement configured (dev mode default): variant
-  change works (dev mode is open). **With Stripe configured + no
-  purchase**: tool returns the "customization unlock" message
-  instead of applying
 
 #### Entitlement
 
