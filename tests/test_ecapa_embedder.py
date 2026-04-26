@@ -237,9 +237,13 @@ def test_works_with_speaker_gate(tmp_path) -> None:
     # Voiceprint is just a saved encoding from the same stub — cosine = 1.0
     cached = voice.copy()
 
-    # Construction validates that ECAPAEmbedder fits the gate's
-    # embedder protocol — instantiation will fail at __init__ time if
-    # the shape ever drifts.
+    # SpeakerGate.__init__ stores the embedder without validating the
+    # Embedder protocol at runtime (the protocol isn't @runtime_checkable
+    # and __init__ just assigns to self._embedder). Constructing the gate
+    # here is a wiring smoke — it shows the kwargs the production
+    # pipeline uses and would surface a TypeError on signature drift,
+    # but actual protocol mismatches only blow up later when
+    # gate.process_frame calls embedder.encode().
     SpeakerGate(
         embedder=emb,
         voiceprint=cached,
