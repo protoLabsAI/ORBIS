@@ -1,0 +1,43 @@
+name: 'Lint'
+
+# Runs ruff on every PR + push to main. Catches undefined-name
+# regressions (F821) and other pyflakes-equivalent F-rule issues that
+# would otherwise only surface at runtime — e.g. PR #44 deleted the
+# `skill_llm` local in app.py but left one orphan reference, which
+# 500'd every `/api/offer` call until #88 caught it manually.
+#
+# Cheap (~30s) so it gates PRs without slowing the iteration loop.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Pin ruff via the lint extra so the version stays in lockstep
+      # with whatever pyproject declares. Editable install is enough —
+      # we only need the metadata; ruff itself is the binary we run.
+      - name: Install ruff
+        run: pip install --upgrade 'ruff>=0.5'
+
+      - name: Ruff check
+        run: ruff check .

@@ -53,6 +53,13 @@ sensevoice = ["funasr>=1.2"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 # Test-only: respx mocks httpx for the LLM-probe tests.
 test = ["pytest", "respx"]
+# Lint — ruff catches F821 (undefined names), F401 (unused imports),
+# F841 (unused locals), and the rest of the pyflakes-equivalent F-set.
+# Wired into CI on every PR — see .github/workflows/lint.yml. The
+# regression that triggered this gate: PR #44 deleted the
+# `skill_llm` local but left one orphan reference, and every
+# `/api/offer` call 500'd in production until #88 caught it.
+lint = ["ruff>=0.5"]
 
 [project.scripts]
 orbis = "app:main"
@@ -85,3 +92,22 @@ filterwarnings = [
     # pipecat imports audioop — flagged by Python 3.13 but we're on 3.12.
     "ignore::DeprecationWarning:pipecat",
 ]
+
+[tool.ruff]
+# Match the project's minimum supported Python so the linter doesn't
+# flag features that are valid here.
+target-version = "py311"
+extend-exclude = [
+    ".venv",
+    "dist-sdist",
+    "web/dist",
+    "splash",
+    "src-tauri/target",
+]
+
+[tool.ruff.lint]
+# Pyflakes ("F") only for now — the goal is to catch undefined-name
+# regressions like the PR #44 `skill_llm` orphan. Adding pycodestyle
+# (E/W) would be noisy on the existing tree without an autofix pass;
+# we can opt in incrementally later.
+select = ["F"]

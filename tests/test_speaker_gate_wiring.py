@@ -12,7 +12,6 @@ This file tests the helper in isolation.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np

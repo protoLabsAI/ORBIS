@@ -22,7 +22,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from agent.delivery import DeliveryController, DeliveryPolicy, Priority
+from agent.delivery import DeliveryController, Priority
 
 logger = logging.getLogger(__name__)
 

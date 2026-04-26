@@ -172,7 +172,7 @@ def prewarm() -> None:
     if STT_BACKEND == "openai":
         # No model-load step on a remote endpoint; pipecat's first call
         # opens the connection. Skip explicit warm.
-        logger.info(f"STT backend: openai (no local prewarm)")
+        logger.info("STT backend: openai (no local prewarm)")
         return
     if STT_BACKEND == "sensevoice":
         from voice.stt_sensevoice import prewarm as prewarm_sensevoice
