@@ -111,9 +111,11 @@ def test_load_2d_raises(tmp_path: Path) -> None:
 
 def test_save_rejects_2d(tmp_path: Path) -> None:
     """Validation triggers before any disk write — uses tmp_path so the
-    test is portable and doesn't touch the real OS temp dir."""
+    test is portable and doesn't touch the real OS temp dir.
+    Matches the error message text so the test catches the *intended*
+    shape ValueError, not any other ValueError that might creep in."""
     target = tmp_path / "should-not-create.npy"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"must be 1-d"):
         save_voiceprint(target, np.zeros((2, 192)))
     assert not target.exists()
 

@@ -249,7 +249,18 @@ def _build_speaker_gate(sg_cfg: dict) -> SpeakerGate:
     voiceprint_path = sg_cfg.get("voiceprint_path") or os.environ.get(
         "SPEAKER_GATE_VOICEPRINT_PATH", "data/voiceprint.npy"
     )
-    threshold = float(sg_cfg.get("threshold", 0.62))
+    # threshold is user-configurable (config or runtime drawer), so a
+    # null / non-numeric typo must NOT abort run_bot. Warn and use the
+    # default rather than taking the session down.
+    raw_threshold = sg_cfg.get("threshold")
+    try:
+        threshold = 0.62 if raw_threshold is None else float(raw_threshold)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"[speaker_gate] invalid threshold {raw_threshold!r}; "
+            "falling back to 0.62"
+        )
+        threshold = 0.62
     action_str = str(sg_cfg.get("stranger_action", "warn"))
     try:
         stranger_action = StrangerAction(action_str)

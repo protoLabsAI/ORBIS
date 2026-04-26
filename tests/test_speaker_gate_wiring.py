@@ -95,11 +95,63 @@ def test_stranger_action_delegate_guest_resolves(helper, tmp_path) -> None:
 
 def test_unknown_stranger_action_falls_back_to_warn(helper, tmp_path, caplog) -> None:
     build, app = helper
+    import logging
+    with caplog.at_level(logging.WARNING):
+        gate = build({
+            "voiceprint_path": str(tmp_path / "nope.npy"),
+            "stranger_action": "ignite_self_destruct",
+        })
+    assert gate._action is app.StrangerAction.WARN
+    # Side-effect must be observed too — a silent fallback would mask
+    # config typos from the operator.
+    assert any(
+        "unknown stranger_action" in rec.message for rec in caplog.records
+    )
+
+
+# --- threshold parsing --------------------------------------------------
+
+
+def test_threshold_null_uses_default_quietly(helper, tmp_path, caplog) -> None:
+    """null in YAML / explicit None in config is a legitimate 'use the
+    default' signal — no warning expected, just silent fallback to
+    0.62. CR Major: pre-fix this raised TypeError on float(None) and
+    aborted run_bot."""
+    build, _ = helper
+    import logging
+    with caplog.at_level(logging.WARNING):
+        gate = build({
+            "voiceprint_path": str(tmp_path / "nope.npy"),
+            "threshold": None,
+        })
+    assert gate._threshold == pytest.approx(0.62)
+    # No warning — None is intentional, not a typo.
+    assert not any("invalid threshold" in rec.message for rec in caplog.records)
+
+
+def test_threshold_string_typo_falls_back(helper, tmp_path, caplog) -> None:
+    """Non-numeric typo (e.g. operator wrote 'high' instead of 0.7) →
+    warn + default, don't take down the session."""
+    build, _ = helper
+    import logging
+    with caplog.at_level(logging.WARNING):
+        gate = build({
+            "voiceprint_path": str(tmp_path / "nope.npy"),
+            "threshold": "high",
+        })
+    assert gate._threshold == pytest.approx(0.62)
+    assert any("invalid threshold" in rec.message for rec in caplog.records)
+
+
+def test_threshold_string_numeric_coerces(helper, tmp_path) -> None:
+    """A string that float() can parse (YAML sometimes serializes 0.5
+    as the string '0.5') still resolves cleanly."""
+    build, _ = helper
     gate = build({
         "voiceprint_path": str(tmp_path / "nope.npy"),
-        "stranger_action": "ignite_self_destruct",
+        "threshold": "0.55",
     })
-    assert gate._action is app.StrangerAction.WARN
+    assert gate._threshold == pytest.approx(0.55)
 
 
 # --- voiceprint resolution ----------------------------------------------
