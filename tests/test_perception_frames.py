@@ -17,11 +17,13 @@ from agent.filler import audio_context_block
 
 
 def test_emotion_labels_match_sensevoice_taxonomy() -> None:
-    """The seven labels SenseVoice produces. Locked here so a future
-    swap to a different STT can't silently change downstream consumers
-    (mood-delta map, audio_context_block, etc.) without an explicit
-    update to the constant."""
-    assert set(EMOTION_LABELS) == {
+    """The seven labels SenseVoice produces, in order. Locked here so
+    a future swap to a different STT can't silently change downstream
+    consumers (mood-delta map, audio_context_block, etc.) without an
+    explicit update to the constant. Tuple compare (vs set) catches
+    ordering drift — load-bearing because the issue #66 mood-delta
+    map and any future label-index lookups are positional."""
+    assert EMOTION_LABELS == (
         "neutral",
         "happy",
         "sad",
@@ -29,7 +31,7 @@ def test_emotion_labels_match_sensevoice_taxonomy() -> None:
         "fearful",
         "disgusted",
         "surprised",
-    }
+    )
 
 
 def test_confidence_buckets_are_three_tier() -> None:

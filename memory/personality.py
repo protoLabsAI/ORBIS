@@ -245,7 +245,18 @@ class PersonalityDAL:
         Doesn't accept a ``step`` — use ``drift_mood_toward`` if you
         need target-blending semantics. The delta API is for "this turn
         added X to the running mood" writes.
+
+        No-op short-circuit: when every delta is None there's nothing
+        to write — return the current mood without touching the row.
+        Avoids hammering the DB (and bumping ``updated_at``) on every
+        per-turn frame that happens to carry no affect signal.
         """
+        if (
+            valence_delta is None
+            and arousal_delta is None
+            and guardedness_delta is None
+        ):
+            return self.get_mood()
         current = self.get_mood()
         new_valence = (
             _clamp(current.valence + valence_delta)
