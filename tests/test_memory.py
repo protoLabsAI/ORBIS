@@ -244,6 +244,85 @@ def test_mood_partial_update_preserves_other_dims(mem: Memory):
     assert abs(m.guardedness - 0.1) < 1e-6
 
 
+# --- drift_mood_toward (R15 reconciliation API) -----------------------------
+
+
+def test_drift_mood_toward_step_one_matches_set(mem: Memory):
+    """step=1.0 fully snaps to target — equivalent to set_mood. Lets
+    callers opt out of blending when they need direct override."""
+    mem.personality.set_mood(valence=0.5)
+    mem.personality.drift_mood_toward(valence=-0.5, step=1.0)
+    m = mem.personality.get_mood()
+    assert abs(m.valence - (-0.5)) < 1e-6
+
+
+def test_drift_mood_toward_step_zero_is_noop(mem: Memory):
+    """step=0.0 is a no-op — no movement toward target."""
+    mem.personality.set_mood(valence=0.5)
+    mem.personality.drift_mood_toward(valence=-0.5, step=0.0)
+    m = mem.personality.get_mood()
+    assert abs(m.valence - 0.5) < 1e-6
+
+
+def test_drift_mood_toward_default_step_blends(mem: Memory):
+    """Default step=0.7: 70% of the way from current to target.
+    This is the soft-neglect / audio-tags shared blend strength."""
+    mem.personality.set_mood(valence=0.6)
+    mem.personality.drift_mood_toward(valence=-0.4)  # default step=0.7
+    m = mem.personality.get_mood()
+    # 0.6 + (-0.4 - 0.6) * 0.7 = 0.6 - 0.7 = -0.1
+    assert abs(m.valence - (-0.1)) < 1e-6
+
+
+def test_drift_mood_toward_unspecified_dims_unchanged(mem: Memory):
+    mem.personality.set_mood(valence=0.4, arousal=0.2, guardedness=0.3)
+    mem.personality.drift_mood_toward(valence=-1.0)  # only valence
+    m = mem.personality.get_mood()
+    assert abs(m.arousal - 0.2) < 1e-6
+    assert abs(m.guardedness - 0.3) < 1e-6
+
+
+def test_drift_mood_toward_clamps_to_unit_range(mem: Memory):
+    """Clamping protects against ill-formed inputs."""
+    mem.personality.set_mood(valence=0.9)
+    # Target outside [-1, +1]: drift formula could exceed bounds
+    # without clamp. Verify clamp holds.
+    mem.personality.drift_mood_toward(valence=2.0, step=1.0)
+    m = mem.personality.get_mood()
+    assert m.valence == 1.0
+
+
+def test_drift_mood_toward_invalid_step_raises(mem: Memory):
+    with pytest.raises(ValueError):
+        mem.personality.drift_mood_toward(valence=0.0, step=-0.1)
+    with pytest.raises(ValueError):
+        mem.personality.drift_mood_toward(valence=0.0, step=1.1)
+
+
+def test_drift_mood_toward_composes_with_per_turn_writes(mem: Memory):
+    """The whole reason for this API: a session-open shift (e.g. neglect)
+    plus a per-turn shift (e.g. audio-tags) should compose. After both
+    fire, the mood reflects both inputs — not whoever wrote last."""
+    # Session-open: 7-day gap target (valence=-0.35, guardedness=0.55)
+    mem.personality.drift_mood_toward(
+        valence=-0.35, guardedness=0.55, step=0.7
+    )
+    after_neglect = mem.personality.get_mood()
+    assert after_neglect.valence < -0.2  # neglect visible
+    assert after_neglect.guardedness > 0.3
+
+    # Per-turn (simulating audio-tags writer): owner sounds calm and
+    # warm — drift toward valence +0.3, guardedness 0.0
+    mem.personality.drift_mood_toward(
+        valence=0.3, guardedness=0.0, step=0.5
+    )
+    after_audio = mem.personality.get_mood()
+    # Mood is now between neglect and audio-tags input — not snapped
+    # to either. The two writers compose.
+    assert after_neglect.valence < after_audio.valence < 0.3
+    assert 0.0 < after_audio.guardedness < after_neglect.guardedness
+
+
 # --- entitlement -------------------------------------------------------------
 
 

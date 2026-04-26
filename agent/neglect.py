@@ -99,13 +99,18 @@ def _greeting_nudge(days: float) -> str:
 
 
 def apply_soft_neglect(mem) -> tuple[float | None, str]:
-    """Read days-since-last-session, adjust mood targets, return
-    (days, greeting_nudge_text). Call at session start.
+    """Read days-since-last-session, drift mood toward gap-targets,
+    return (days, greeting_nudge_text). Call at session start.
 
-    The mood is a soft target — we set it directly rather than
-    drifting, because the shift needs to be visible from turn one.
-    Interactions during the session nudge mood back toward neutral
-    naturally.
+    Uses ``drift_mood_toward(step=0.7)`` rather than ``set_mood`` so
+    accumulated per-turn drift from prior sessions isn't blown away.
+    The 0.7 step still snaps mood most of the way to the target —
+    visible from turn one as the original soft-neglect spec requires —
+    while leaving 30% weight on the prior mood. Resolves R15
+    (audio-tags PR 2 will write mood per-turn; the two systems must
+    compose, not overwrite).
+
+    Interactions during the session continue nudging mood naturally.
     """
     days = days_since_last_session(mem)
     if days is None:
@@ -114,9 +119,9 @@ def apply_soft_neglect(mem) -> tuple[float | None, str]:
     targets = _mood_targets_for_gap(days)
     if targets:
         try:
-            mem.personality.set_mood(**targets)
+            mem.personality.drift_mood_toward(step=0.7, **targets)
         except Exception as e:
-            logger.warning(f"[neglect] set_mood failed: {e}")
+            logger.warning(f"[neglect] drift_mood_toward failed: {e}")
 
     nudge = _greeting_nudge(days)
     if days >= 1.0:

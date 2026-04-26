@@ -192,14 +192,81 @@ class PersonalityDAL:
         arousal: float | None = None,
         guardedness: float | None = None,
     ) -> MoodValue:
-        """Set any subset of mood dims. Unspecified fields keep their
-        current value. All clamped to [-1, +1]."""
+        """**Direct-set mood**, overwriting whatever was there.
+
+        Intended for explicit operator overrides (drawer UI, tests) and
+        for boot-time seeding. Per-turn writers (audio-tags PR 2) and
+        session-open shifts (soft-neglect) should use ``drift_mood_toward``
+        so the two systems compose rather than overwriting each other —
+        a session-open ``set_mood`` undoes any per-turn drift the prior
+        session left behind.
+
+        Unspecified fields keep their current value. All clamped to
+        ``[-1, +1]``.
+        """
         current = self.get_mood()
         new_valence = _clamp(valence if valence is not None else current.valence)
         new_arousal = _clamp(arousal if arousal is not None else current.arousal)
         new_guardedness = _clamp(
             guardedness if guardedness is not None else current.guardedness
         )
+        now = _now()
+        self.conn.execute(
+            """
+            INSERT INTO mood (id, valence, arousal, guardedness, updated_at)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                valence     = excluded.valence,
+                arousal     = excluded.arousal,
+                guardedness = excluded.guardedness,
+                updated_at  = excluded.updated_at
+            """,
+            (new_valence, new_arousal, new_guardedness, now),
+        )
+        self.conn.commit()
+        return MoodValue(new_valence, new_arousal, new_guardedness, now)
+
+    def drift_mood_toward(
+        self,
+        *,
+        valence: float | None = None,
+        arousal: float | None = None,
+        guardedness: float | None = None,
+        step: float = 0.7,
+    ) -> MoodValue:
+        """Drift mood a fraction of the way from current toward each
+        specified target.
+
+        For each non-None dim, the new value is::
+
+            new = current + (target - current) * step
+
+        ``step=1.0`` is equivalent to ``set_mood`` (snap to target).
+        ``step=0.0`` is a no-op. Defaults to ``0.7`` — large enough that
+        a session-open shift is still visible from turn one (the
+        original soft-neglect requirement) while leaving 30% weight on
+        the prior mood, so accumulated per-turn drift from earlier
+        sessions isn't blown away.
+
+        This is the API session-open writers (soft-neglect) and per-turn
+        writers (future audio-tags) should use. Both blend cleanly into
+        a shared mood register — composition, not overwriting.
+
+        Unspecified dims keep their current value. All clamped to
+        ``[-1, +1]``.
+        """
+        if not 0.0 <= step <= 1.0:
+            raise ValueError(f"step must be in [0, 1]; got {step}")
+        current = self.get_mood()
+
+        def _drift(target: float | None, base: float) -> float:
+            if target is None:
+                return base
+            return _clamp(base + (target - base) * step)
+
+        new_valence = _drift(valence, current.valence)
+        new_arousal = _drift(arousal, current.arousal)
+        new_guardedness = _drift(guardedness, current.guardedness)
         now = _now()
         self.conn.execute(
             """
