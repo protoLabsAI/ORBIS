@@ -36,9 +36,27 @@ from voice.stt_sensevoice import (
 )
 
 
+import os as _os_for_skip
+
+# Real-model smoke test gating. Two conditions, both required:
+#   1. funasr is importable (the [sensevoice] extra is installed)
+#   2. RUN_SENSEVOICE_INTEGRATION env var is set
+#
+# Without (2), installing the extra would silently opt every developer
+# into a network-heavy model download as part of the default suite —
+# CR's hermetic-CI concern. Operators who actually want to verify the
+# real path set the env var explicitly.
+_funasr_importable = importlib.util.find_spec("funasr") is not None
+_integration_opted_in = _os_for_skip.environ.get(
+    "RUN_SENSEVOICE_INTEGRATION", ""
+).lower() in ("1", "true", "yes", "on")
+
 funasr_available = pytest.mark.skipif(
-    importlib.util.find_spec("funasr") is None,
-    reason="funasr not installed; install via [sensevoice] extra",
+    not (_funasr_importable and _integration_opted_in),
+    reason=(
+        "real-model smoke skipped — set RUN_SENSEVOICE_INTEGRATION=1 "
+        "with [sensevoice] extra installed to enable"
+    ),
 )
 
 
@@ -330,6 +348,88 @@ def test_real_load_without_funasr_raises_clear_error() -> None:
     stt = SenseVoiceSTT()
     with pytest.raises(ImportError, match="sensevoice"):
         stt._ensure_loaded()
+
+
+# --- trust_remote_code allow-list (CR-flagged RCE surface) ---------------
+
+
+def test_default_model_is_in_trusted_allowlist() -> None:
+    """The bundled default must be trusted out of the box — otherwise
+    every fresh deployment trips the warning."""
+    from voice.stt_sensevoice import _DEFAULT_MODEL, _TRUSTED_REMOTE_CODE_MODELS
+    assert _DEFAULT_MODEL in _TRUSTED_REMOTE_CODE_MODELS
+
+
+def test_trust_decision_for_default_model() -> None:
+    """SenseVoiceSmall is curated — trust_remote_code is safe to enable."""
+    from voice.stt_sensevoice import _trust_remote_code_for
+    assert _trust_remote_code_for("FunAudioLLM/SenseVoiceSmall") is True
+    assert _trust_remote_code_for("iic/SenseVoiceSmall") is True
+
+
+def test_trust_refused_for_unknown_model_without_opt_in(monkeypatch) -> None:
+    """A SENSEVOICE_MODEL outside the allow-list MUST NOT run upstream
+    Python without explicit operator acknowledgement. The CR'd RCE
+    vector — fixed."""
+    monkeypatch.delenv("SENSEVOICE_TRUST_REMOTE_CODE", raising=False)
+    from voice.stt_sensevoice import _trust_remote_code_for
+    assert _trust_remote_code_for("attacker/sneaky-model") is False
+    assert _trust_remote_code_for("totally/legit-model") is False
+
+
+@pytest.mark.parametrize("flag_value", ["1", "true", "yes", "on", "TRUE", "Yes"])
+def test_trust_opt_in_via_env_for_unknown_model(monkeypatch, flag_value) -> None:
+    """Operators who want to use a non-default model must explicitly
+    opt in via SENSEVOICE_TRUST_REMOTE_CODE=1. Multiple truthy spellings
+    accepted to match common env-var conventions."""
+    monkeypatch.setenv("SENSEVOICE_TRUST_REMOTE_CODE", flag_value)
+    from voice.stt_sensevoice import _trust_remote_code_for
+    assert _trust_remote_code_for("custom/research-model") is True
+
+
+@pytest.mark.parametrize("flag_value", ["", "0", "false", "no", "off", "maybe"])
+def test_trust_falsy_or_unset_env_does_not_opt_in(monkeypatch, flag_value) -> None:
+    monkeypatch.setenv("SENSEVOICE_TRUST_REMOTE_CODE", flag_value)
+    from voice.stt_sensevoice import _trust_remote_code_for
+    assert _trust_remote_code_for("custom/research-model") is False
+
+
+def test_load_funasr_wires_trust_decision_to_kwargs(monkeypatch) -> None:
+    """End-to-end: _load_funasr must propagate the gate result into
+    the AutoModel(trust_remote_code=...) call. Otherwise the gate is
+    cosmetic."""
+    captured = {}
+
+    class _FakeAutoModel:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    # Stand in for FunASR's AutoModel so we can read what got passed.
+    fake_funasr = type("M", (), {"AutoModel": _FakeAutoModel})
+    import sys
+    monkeypatch.setitem(sys.modules, "funasr", fake_funasr)
+
+    # Untrusted model + no env opt-in → trust_remote_code=False
+    monkeypatch.delenv("SENSEVOICE_TRUST_REMOTE_CODE", raising=False)
+    stt = SenseVoiceSTT(model="attacker/sneaky")
+    stt._load_funasr()
+    assert captured["trust_remote_code"] is False
+    assert captured["model"] == "attacker/sneaky"
+
+    captured.clear()
+
+    # Trusted model → trust_remote_code=True
+    stt2 = SenseVoiceSTT(model="FunAudioLLM/SenseVoiceSmall")
+    stt2._load_funasr()
+    assert captured["trust_remote_code"] is True
+
+    captured.clear()
+
+    # Untrusted but opted-in → trust_remote_code=True (operator owns risk)
+    monkeypatch.setenv("SENSEVOICE_TRUST_REMOTE_CODE", "1")
+    stt3 = SenseVoiceSTT(model="custom/research-model")
+    stt3._load_funasr()
+    assert captured["trust_remote_code"] is True
 
 
 # --- factory dispatch -----------------------------------------------------
