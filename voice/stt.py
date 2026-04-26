@@ -51,7 +51,15 @@ def _detect_torch_device() -> str:
     Mirrors ``agent.hardware.detect_device``'s preference order
     (cuda > mps > cpu) but never raises — STT also runs in tests / CI
     where CPU fallback is correct, while ``detect_device`` is the
-    desktop-bundle gate that hard-fails when no accelerator is found."""
+    desktop-bundle gate that hard-fails when no accelerator is found.
+
+    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
+    ``agent.hardware.detect_device``: pytest and the Docker CPU profile
+    set it to force CPU even when MPS / CUDA appear available
+    (CI macOS MPS reports `is_available()` but has too small a memory
+    budget for production-shaped workloads)."""
+    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
+        return "cpu"
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():

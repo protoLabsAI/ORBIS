@@ -28,7 +28,13 @@ def _detect_kokoro_device() -> str | None:
 
     Mirrors ``agent.hardware.detect_device`` preference order
     (cuda > mps > cpu) but doesn't raise on missing hardware — CI / tests
-    install kokoro on CPU-only boxes and that's the correct path there."""
+    install kokoro on CPU-only boxes and that's the correct path there.
+
+    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
+    ``agent.hardware.detect_device``: pytest + Docker CPU profile set it
+    to force CPU even when MPS / CUDA appear available."""
+    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
+        return None
     try:
         import torch  # noqa: PLC0415 — lazy so a missing torch doesn't 500 the import
     except ImportError:
