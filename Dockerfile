@@ -44,11 +44,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 # pyproject-driven install sees the requirement satisfied and doesn't
 # pull the wrong wheel.
 COPY pyproject.toml ./
+# Extract `[project] dependencies` from pyproject and write each to its
+# own line in /tmp/requirements.txt, then `pip install -r`. The earlier
+# `' '.join(...)` + shell-glob path fragmented PEP 508 environment
+# markers — `mlx-lm>=0.20; sys_platform == 'darwin'` got tokenized into
+# eight shell args, with `==` arriving at pip as a standalone arg and
+# failing the install. One-line-per-dep keeps markers intact.
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
         --index-url https://download.pytorch.org/whl/cu128 \
         torch && \
-    pip install --no-cache-dir $(python3 -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print(' '.join(d['project']['dependencies']))")
+    python3 -c "import tomllib; d=tomllib.load(open('pyproject.toml','rb')); print('\n'.join(d['project']['dependencies']))" > /tmp/requirements.txt && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Spacy model is required by Kokoro (fallback TTS).
 RUN pip install --no-cache-dir \
