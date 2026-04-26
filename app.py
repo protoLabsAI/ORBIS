@@ -90,6 +90,7 @@ from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.micro_ack import MicroAckInjector
 from agent.wake_word import WakeWordConfig, WakeWordDetector
+from agent.intent import IntentResult, IntentRouterProcessor, get_classifier, needs_tools
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -515,6 +516,10 @@ _METRICS: dict = {
     "tool_calls_total": 0,
     "tool_calls_by_name": {},
     "clone_requests_total": 0,
+    # Intent classifier metrics (#96).
+    "intent_turns_total": 0,
+    "intent_llm_bypassed": 0,
+    "intent_by_class": {},
 }
 
 
@@ -1017,6 +1022,49 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # AUDIO_TAGS=off env.
     audio_tags = make_audio_tags_tap(mem=get_memory())
 
+    # Intent router (#96) — classifies each TranscriptionFrame pre-LLM.
+    # For high-confidence "command" turns, dispatches the tool directly
+    # and suppresses the frame so the LLM is never called (~30% of turns).
+    # For all other intents, annotates the frame and passes through.
+    # Graceful no-op when intent model is unavailable (model not yet
+    # downloaded, or [intent] extra not installed).
+    async def _command_bypass_handler(text: str, result: IntentResult) -> None:
+        """Direct tool dispatch for high-confidence command turns.
+
+        Attempts to parse and execute the command via the LLM probe
+        (lightweight single-shot call to extract tool name + args), then
+        calls the tool handler directly and speaks the result — all without
+        a full LLM context round-trip.
+        """
+        from pipecat.frames.frames import TTSSpeakFrame
+        try:
+            from agent.llm_probe import probe_command
+            tool_name, tool_args, spoken = await probe_command(
+                text,
+                tools_schema=tools_schema,
+                llm_cfg=_resolve_skill_llm(skill),
+            )
+            if tool_name:
+                tool_result = await run_text_tool(
+                    tool_name, tool_args, delegates=session_delegates
+                )
+                logger.info(
+                    f"[intent] command bypass: tool={tool_name} "
+                    f"result={tool_result!r}"
+                )
+            spoken_text = spoken or tool_result or "Done."
+        except Exception as e:
+            logger.warning(f"[intent] command bypass error: {e}")
+            spoken_text = "Let me handle that."
+
+        await task.queue_frame(TTSSpeakFrame(spoken_text, append_to_context=False))
+
+    intent_router = IntentRouterProcessor(
+        classifier=get_classifier(),
+        command_handler=_command_bypass_handler,
+        metrics=_METRICS,
+    )
+
     pipeline = Pipeline([
         transport.input(),
         # Wake-word gate (#95) — pre-STT audio filter. When enabled,
@@ -1052,6 +1100,12 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         # the LLM what to do with the [audio] line and forbids
         # parroting it.
         audio_tags,
+        # Intent router (#96) — pre-LLM classifier. Sits between STT
+        # output and the context aggregator. High-confidence "command"
+        # turns bypass the LLM entirely; all other intents pass through
+        # annotated with their classification for downstream use.
+        # Gracefully no-ops when the intent model is unavailable.
+        intent_router,
         user_agg,
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
         # that resolve within the grace window as coughs / backchannels /
