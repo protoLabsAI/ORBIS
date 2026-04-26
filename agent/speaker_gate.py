@@ -99,24 +99,43 @@ class StrangerDetectedFrame(Frame):
 # --- Voiceprint persistence ----------------------------------------------
 
 
+class VoiceprintCorrupted(Exception):
+    """The voiceprint file exists but is unreadable or wrong-shaped.
+
+    Callers must distinguish this from "no voiceprint" (the wizard
+    hasn't enrolled yet, owner-trust is correct) — a corrupt file
+    means previous enrollment data is lost or tampered with, and the
+    deployment owner needs to know rather than silently dropping into
+    owner-trust mode (which would let any speaker pass).
+    """
+
+
 def load_voiceprint(path: str | Path) -> np.ndarray | None:
-    """Load a cached voiceprint from disk. Returns None when missing —
-    that triggers owner-trust fallback in the gate. Returns None (with
-    a warning log) when the file exists but is malformed; caller must
-    decide whether to proceed in fallback mode or refuse to start."""
+    """Load a cached voiceprint from disk.
+
+    Returns:
+        ``None`` when the file does not exist (no enrollment yet —
+        gate runs in owner-trust mode).
+
+    Raises:
+        ``VoiceprintCorrupted`` when the file exists but is unreadable
+        or has the wrong shape. The caller must decide whether to fall
+        back, refuse to start, or prompt re-enrollment — silently
+        dropping to owner-trust on corruption would mask data loss.
+    """
     p = Path(path)
     if not p.exists():
         return None
     try:
         emb = np.load(p)
     except Exception as e:
-        logger.warning(f"[speaker_gate] voiceprint at {p} unreadable: {e}")
-        return None
+        raise VoiceprintCorrupted(
+            f"voiceprint at {p} unreadable: {e}"
+        ) from e
     if emb.ndim != 1:
-        logger.warning(
-            f"[speaker_gate] voiceprint at {p} is {emb.ndim}-d; expected 1-d"
+        raise VoiceprintCorrupted(
+            f"voiceprint at {p} is {emb.ndim}-d; expected 1-d"
         )
-        return None
     return emb.astype(np.float32, copy=False)
 
 
@@ -293,7 +312,32 @@ class SpeakerGate(FrameProcessor):
             )
             return
 
-        score = cosine_similarity(emb, self._voiceprint)
+        # Coerce to a numpy 1-d float32 vector and check shape compatibility
+        # before scoring. A wrong-dimension embedder return (model swap,
+        # malformed cached voiceprint that slipped past load_voiceprint)
+        # would otherwise crash cosine_similarity and abort frame
+        # processing — same failure mode the rest of this function
+        # already routes through owner-trust.
+        try:
+            emb_arr = np.asarray(emb, dtype=np.float32).reshape(-1)
+        except Exception as e:
+            logger.warning(f"[speaker_gate] embedding coerce failed: {e} — owner-trust")
+            await self.push_frame(
+                OwnerVerifiedFrame(score=1.0), FrameDirection.DOWNSTREAM
+            )
+            return
+        if emb_arr.shape != self._voiceprint.shape:
+            logger.warning(
+                f"[speaker_gate] embedding shape {emb_arr.shape} != "
+                f"voiceprint shape {self._voiceprint.shape} — owner-trust "
+                "(check that the embedder model matches the enrolled voiceprint)"
+            )
+            await self.push_frame(
+                OwnerVerifiedFrame(score=1.0), FrameDirection.DOWNSTREAM
+            )
+            return
+
+        score = cosine_similarity(emb_arr, self._voiceprint)
 
         if score >= self._threshold:
             logger.info(f"[speaker_gate] owner verified (score={score:.3f})")

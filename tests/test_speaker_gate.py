@@ -33,6 +33,7 @@ from agent.speaker_gate import (
     SpeakerGate,
     StrangerAction,
     StrangerDetectedFrame,
+    VoiceprintCorrupted,
     cosine_similarity,
     load_voiceprint,
     save_voiceprint,
@@ -85,25 +86,36 @@ def test_save_and_load_roundtrip(tmp_path: Path) -> None:
 
 
 def test_load_missing_returns_none(tmp_path: Path) -> None:
+    """No file at all → no enrollment yet → caller should fall back to
+    owner-trust. Distinct from VoiceprintCorrupted."""
     assert load_voiceprint(tmp_path / "nope.npy") is None
 
 
-def test_load_corrupted_returns_none(tmp_path: Path) -> None:
+def test_load_corrupted_raises(tmp_path: Path) -> None:
+    """File exists but isn't a valid npy → enrollment data is lost or
+    tampered. Caller must decide (re-enroll prompt vs refuse to start);
+    silently dropping to owner-trust would let any speaker pass."""
     p = tmp_path / "bad.npy"
     p.write_bytes(b"not a real npy file")
-    assert load_voiceprint(p) is None
+    with pytest.raises(VoiceprintCorrupted):
+        load_voiceprint(p)
 
 
-def test_load_2d_returns_none(tmp_path: Path) -> None:
-    """We expect 1-d embeddings; a 2-d array is malformed."""
+def test_load_2d_raises(tmp_path: Path) -> None:
+    """Wrong shape — voiceprint is malformed, raise so caller knows."""
     p = tmp_path / "two_d.npy"
     np.save(p, np.zeros((2, 192), dtype=np.float32))
-    assert load_voiceprint(p) is None
+    with pytest.raises(VoiceprintCorrupted, match="2-d"):
+        load_voiceprint(p)
 
 
-def test_save_rejects_2d() -> None:
+def test_save_rejects_2d(tmp_path: Path) -> None:
+    """Validation triggers before any disk write — uses tmp_path so the
+    test is portable and doesn't touch the real OS temp dir."""
+    target = tmp_path / "should-not-create.npy"
     with pytest.raises(ValueError):
-        save_voiceprint("/tmp/should-not-create.npy", np.zeros((2, 192)))
+        save_voiceprint(target, np.zeros((2, 192)))
+    assert not target.exists()
 
 
 def test_save_creates_parent_dir(tmp_path: Path) -> None:
@@ -534,6 +546,54 @@ async def test_upstream_started_stopped_does_not_arm_or_fire(captured_gate) -> N
     assert verified == []
     assert strangers == []
     assert len(embedder.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_shape_mismatch_falls_back_to_owner_trust(captured_gate) -> None:
+    """CR-flagged: cosine_similarity raises on shape mismatch. The gate
+    must catch + route through owner-trust like the other failure
+    modes, not abort frame processing."""
+    voiceprint_192 = np.zeros(192, dtype=np.float32)
+    embedder_3d = _MockEmbedder(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+    gate = captured_gate(
+        voiceprint=voiceprint_192,
+        embedder=embedder_3d,
+        threshold=0.5,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    verified = [f for f, _ in gate.pushed if isinstance(f, OwnerVerifiedFrame)]
+    strangers = [f for f, _ in gate.pushed if isinstance(f, StrangerDetectedFrame)]
+    # Trusts the owner rather than crashing or emitting StrangerDetectedFrame
+    # with a meaningless score from the doomed cosine call.
+    assert len(verified) == 1
+    assert verified[0].score == 1.0
+    assert strangers == []
+
+
+@pytest.mark.asyncio
+async def test_embedding_coerce_failure_falls_back_to_owner_trust(captured_gate) -> None:
+    """If the embedder returns something np.asarray can't coerce
+    (string, opaque object), don't crash — fall back to owner-trust."""
+
+    class _BadEmbedder:
+        def encode(self, wav, sample_rate):
+            return "not a vector"
+
+    gate = captured_gate(
+        voiceprint=np.zeros(192, dtype=np.float32),
+        embedder=_BadEmbedder(),
+        threshold=0.5,
+    )
+    await gate.process_frame(UserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(_audio_frame(), FrameDirection.DOWNSTREAM)
+    await gate.process_frame(UserStoppedSpeakingFrame(), FrameDirection.DOWNSTREAM)
+
+    verified = [f for f, _ in gate.pushed if isinstance(f, OwnerVerifiedFrame)]
+    assert len(verified) == 1
+    assert verified[0].score == 1.0
 
 
 @pytest.mark.asyncio
