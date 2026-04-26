@@ -23,8 +23,6 @@ import soundfile as sf
 from pipecat.frames.frames import (
     ErrorFrame,
     TranscriptionFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 

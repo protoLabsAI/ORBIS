@@ -110,7 +110,6 @@ from agent.prosody import ProsodyTagStripper
 from agent.filler import (
     FillerGenerator,
     Latency,
-    Settings as FillerSettings,
     Verbosity,
     audio_context_block,
     plan_block,
@@ -133,11 +132,11 @@ from agent.tools import (
     run_text_tool,
 )
 from auth import load_users, require_user, user_registry
-from auth.users import DEFAULT_USER, User
+from auth.users import User
 from auth.context import current_session_id, current_user_id
-from agent.user_state import active_user_states, user_state_for, UserState
+from agent.user_state import active_user_states, user_state_for
 from voice import lifecycle
-from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt, transcribe_bytes
+from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -200,7 +199,9 @@ def _resolve_skill_llm(skill) -> dict:
     `enable_thinking=False`.
 
     Returns a dict with keys: url, model, api_key, extra_body,
-    using_custom_url. Callers compose request kwargs from this.
+    using_custom_url, provider. Callers compose request kwargs from
+    this. ``provider`` rides through to ``make_llm()`` so the adapter
+    factory can route Ollama-native vs OpenAI-compat correctly.
     """
     skill_llm = (skill.llm if skill else None) or {}
     using_custom_url = bool(skill_llm.get("url"))
@@ -224,6 +225,7 @@ def _resolve_skill_llm(skill) -> dict:
         "api_key": api_key,
         "extra_body": extra_body,
         "using_custom_url": using_custom_url,
+        "provider": skill_llm.get("provider"),
     }
 
 
@@ -816,7 +818,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         model=llm_model,
         api_key=llm_api_key,
         settings=OpenAILLMService.Settings(**settings_kwargs),
-        provider=skill_llm.get("provider"),
+        provider=llm_cfg["provider"],
         using_custom_url=using_custom_llm,
     )
 

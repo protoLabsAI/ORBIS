@@ -14,7 +14,6 @@ operational simplicity of single-file embedded storage.
 from __future__ import annotations
 
 import logging
-import math
 import sqlite3
 import uuid
 from datetime import datetime, timezone

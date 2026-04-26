@@ -146,7 +146,7 @@ def test_loader_only_runs_on_first_encode_not_construction() -> None:
         calls["n"] += 1
         return _StubModel()
 
-    emb = ECAPAEmbedder(_loader_factory=_factory)
+    ECAPAEmbedder(_loader_factory=_factory)
     assert calls["n"] == 0
     # Still 0 if we never call encode()
 
@@ -226,7 +226,6 @@ def test_works_with_speaker_gate(tmp_path) -> None:
     """End-to-end through the SpeakerGate Embedder protocol — confirms
     ECAPAEmbedder satisfies the protocol shape the gate expects."""
     from agent.speaker_gate import (
-        OwnerVerifiedFrame,
         SpeakerGate,
         cosine_similarity,
     )
@@ -238,7 +237,14 @@ def test_works_with_speaker_gate(tmp_path) -> None:
     # Voiceprint is just a saved encoding from the same stub — cosine = 1.0
     cached = voice.copy()
 
-    gate = SpeakerGate(
+    # SpeakerGate.__init__ stores the embedder without validating the
+    # Embedder protocol at runtime (the protocol isn't @runtime_checkable
+    # and __init__ just assigns to self._embedder). Constructing the gate
+    # here is a wiring smoke — it shows the kwargs the production
+    # pipeline uses and would surface a TypeError on signature drift,
+    # but actual protocol mismatches only blow up later when
+    # gate.process_frame calls embedder.encode().
+    SpeakerGate(
         embedder=emb,
         voiceprint=cached,
         threshold=0.95,

@@ -8,7 +8,6 @@ we can assert the saved voiceprint shape without downloading a model.
 from __future__ import annotations
 
 import io
-import struct
 from pathlib import Path
 from unittest.mock import patch
 

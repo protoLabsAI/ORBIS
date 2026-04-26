@@ -393,7 +393,7 @@ async def main() -> None:
 
     if args.kokoro:
         try:
-            print(f"TTS  → Kokoro (local)")
+            print("TTS  → Kokoro (local)")
             ttfa, total, rtf = await bench_kokoro(args.turns)
             print(stats("Kokoro TTFA (first audio)", ttfa))
             print(stats("Kokoro synth total", total))
