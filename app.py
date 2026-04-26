@@ -89,6 +89,7 @@ from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.micro_ack import MicroAckInjector
+from agent.wake_word import WakeWordConfig, WakeWordDetector
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -442,6 +443,21 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
 
 NOISE_FILTER = os.environ.get("NOISE_FILTER", "off").lower()  # off | rnnoise
 SMART_TURN = os.environ.get("SMART_TURN", "off").lower()      # off | local
+
+
+def _build_wake_word_detector(ww_cfg: dict) -> WakeWordDetector:
+    """Construct the WakeWordDetector from ``persona.behavior.wake_word``.
+
+    Config dict is the resolved ``behavior.wake_word`` block (from
+    ``_resolve_behavior_block``). Env vars (``WAKE_WORD``,
+    ``WAKE_WORD_MODEL``, etc.) are merged in ``WakeWordConfig.from_env()``
+    when no config block is present, so either path works.
+    """
+    if ww_cfg:
+        cfg = WakeWordConfig.from_dict(ww_cfg)
+    else:
+        cfg = WakeWordConfig.from_env()
+    return WakeWordDetector(cfg)
 
 
 def _build_audio_in_filter():
@@ -850,6 +866,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
+    ww_cfg = _resolve_behavior_block(behavior.get("wake_word"))
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -990,6 +1007,7 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     rtvi = RTVIProcessor(transport=transport)
 
     speaker_gate = _build_speaker_gate(sg_cfg)
+    wake_word = _build_wake_word_detector(ww_cfg)
 
     # AudioTagsTap (#66 Phase 4) — consumes EmotionFrame /
     # AudioEventFrame from STT, writes per-turn mood deltas (owner only),
@@ -1001,9 +1019,15 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
 
     pipeline = Pipeline([
         transport.input(),
-        # Echo-guard sits IMMEDIATELY after transport.input — drops mic
-        # audio while the bot is speaking (HALF_DUPLEX) and for ECHO_GUARD_MS
-        # after it stops. VAD downstream never sees the suppressed audio.
+        # Wake-word gate (#95) — pre-STT audio filter. When enabled,
+        # InputAudioRawFrames are silently dropped while the orb is
+        # sleeping; detection transitions to awake and emits WakeWordFrame.
+        # Disabled by default (no WAKE_WORD / WAKE_WORD_MODEL env vars,
+        # no behavior.wake_word block). Enable via env or orbis.yaml.
+        wake_word,
+        # Echo-guard sits after wake_word so suppressed audio is never
+        # processed by the wake detector, and wake-detected audio still
+        # gets echo-guarded before reaching STT.
         EchoGuardSuppressor(_ECHO_STATE),
         # Speaker-verification gate (#35 PR 1.2) — observes echo-guarded
         # audio between UserStartedSpeakingFrame and UserStoppedSpeakingFrame,

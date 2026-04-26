@@ -50,6 +50,10 @@ speaker-id = ["speechbrain>=1.0", "torchaudio"]
 # 234 M params, ~70 ms on Blackwell, low-hundreds-ms on CPU. Provides
 # STT + 7-class emotion + audio events in one forward pass per #66.
 sensevoice = ["funasr>=1.2"]
+# Wake-word detection — openWakeWord pre-STT audio gate (#95).
+# Supports custom .tflite/.onnx models trained with the openWakeWord
+# notebook; see scripts/train_wake_word.md.
+wake-word = ["openwakeword>=0.6"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 # Test-only: respx mocks httpx for the LLM-probe tests.
 test = ["pytest", "respx"]

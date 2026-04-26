@@ -63,6 +63,25 @@ persona:
     # audio_tags:
     #   enabled: true                  # overridden by AUDIO_TAGS=off env var
 
+    # Wake-word gate. Pre-STT audio filter using openWakeWord (#95).
+    # Requires: pip install -e ".[wake-word]"
+    # When enabled, InputAudioRawFrames are dropped until the phrase fires.
+    # Opt-in — omit this block for always-listening behaviour.
+    #
+    # Option A — custom model (train via scripts/train_wake_word.md):
+    # wake_word:
+    #   enabled: true
+    #   model_path: data/wake_word/hey_orbis.tflite  # .tflite or .onnx
+    #   threshold: 0.5
+    #   timeout: 30                    # seconds idle before returning to sleep
+    #
+    # Option B — pre-trained bundled model (dev/testing):
+    # wake_word:
+    #   enabled: true
+    #   name: hey jarvis               # hey jarvis | hey mycroft | alexa | hey rhasspy
+    #   threshold: 0.5
+    #   timeout: 30
+
 voice:
   # Pipecat TTS backend. `kokoro` is the default and runs on CPU.
   # Alternatives:
