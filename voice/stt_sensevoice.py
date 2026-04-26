@@ -63,6 +63,33 @@ _DEFAULT_MODEL = os.environ.get(
 _DEFAULT_DEVICE = os.environ.get("SENSEVOICE_DEVICE")  # None → funasr picks
 
 
+# Allow-list for models we'll load with ``trust_remote_code=True``.
+# FunASR / SenseVoice ship custom Python in the model repo; loading
+# without trust_remote_code refuses to run that code, which means the
+# model can't actually inference. Loading WITH trust_remote_code on a
+# user-controlled model id is an RCE vector — a malicious or
+# compromised upstream repo would execute arbitrary Python at load
+# time. We pin a curated allow-list of repos we've reviewed; a custom
+# SENSEVOICE_MODEL outside the list requires explicit acknowledgement
+# via SENSEVOICE_TRUST_REMOTE_CODE=1 so the operator owns the risk.
+_TRUSTED_REMOTE_CODE_MODELS: frozenset[str] = frozenset({
+    "FunAudioLLM/SenseVoiceSmall",
+    # Mirror published by the original authors; identical content.
+    "iic/SenseVoiceSmall",
+})
+
+
+def _trust_remote_code_for(model_id: str) -> bool:
+    """Return True only if it's safe to enable trust_remote_code for
+    this model — either a curated entry, or the operator has explicitly
+    acknowledged the risk via ``SENSEVOICE_TRUST_REMOTE_CODE=1``."""
+    if model_id in _TRUSTED_REMOTE_CODE_MODELS:
+        return True
+    return os.environ.get("SENSEVOICE_TRUST_REMOTE_CODE", "").lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # Process-wide model cache so multiple sessions / pipelines share one
 # load. Keyed on (model_id, device) so an upgrade or device flip lands
 # a fresh model instead of returning the cached old one.
@@ -281,15 +308,33 @@ class SenseVoiceSTT(SegmentedSTTService):
                 "`pip install -e \".[sensevoice]\"` or set "
                 "STT_BACKEND=local to use Whisper."
             ) from e
+
+        # trust_remote_code is gated through _trust_remote_code_for so a
+        # custom SENSEVOICE_MODEL that isn't in the curated allow-list
+        # refuses to run upstream Python without explicit operator
+        # acknowledgement. Without trust_remote_code, FunASR will fail
+        # to load SenseVoice — that's the right failure mode: surface
+        # the risk to the operator instead of silently executing
+        # arbitrary upstream code.
+        trust = _trust_remote_code_for(self._model_id)
+        if not trust:
+            logger.warning(
+                f"[stt.sensevoice] {self._model_id!r} is NOT in the "
+                "trusted-remote-code allow-list. Loading without "
+                "trust_remote_code will likely fail. To explicitly "
+                "trust this model, set SENSEVOICE_TRUST_REMOTE_CODE=1 "
+                "(this opts you into running arbitrary Python from the "
+                "model repo at load time)."
+            )
         kwargs: dict[str, Any] = {
             "model": self._model_id,
-            "trust_remote_code": True,
+            "trust_remote_code": trust,
         }
         if self._device:
             kwargs["device"] = self._device
         logger.info(
             f"[stt.sensevoice] loading {self._model_id} "
-            f"(device={self._device or 'auto'})"
+            f"(device={self._device or 'auto'}, trust_remote_code={trust})"
         )
         return AutoModel(**kwargs)
 
