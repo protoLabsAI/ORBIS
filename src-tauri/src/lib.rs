@@ -47,6 +47,8 @@
 //!   CommandChild — we just make sure the guard drops.
 
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -256,6 +258,23 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         state.store(child);
     }
 
+    // Write all sidecar stdout/stderr to a single rotating log file so
+    // developers can `tail -f` it without attaching to the process.
+    let log_path = app
+        .path()
+        .app_log_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("sidecar.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .ok();
+    log::info!("sidecar log: {}", log_path.display());
+
     // Retain recent stderr so a crash-before-ready surfaces something
     // actionable in the error dialog instead of "unknown error."
     let mut stderr_ring: VecDeque<String> = VecDeque::with_capacity(STDERR_RING_CAPACITY);
@@ -269,6 +288,9 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                     continue;
                 }
                 log::info!("[sidecar/stdout] {line}");
+                if let Some(f) = log_file.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
 
                 // Parse `ORBIS_READY http://<host>:<port>` — the
                 // contract added in #20 (agent/paths.py + app.py main).
@@ -285,6 +307,9 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                     continue;
                 }
                 log::info!("[sidecar/stderr] {line}");
+                if let Some(f) = log_file.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
                 if stderr_ring.len() == STDERR_RING_CAPACITY {
                     stderr_ring.pop_front();
                 }

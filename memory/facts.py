@@ -134,28 +134,12 @@ class FactsDAL:
         *,
         limit: int = 10,
         include_invalid: bool = False,
-        rerank: bool = True,
     ) -> list[FactRecord]:
-        """BM25 search across subject/relation/object, optionally reranked.
-
-        When ``rerank=True`` (default) and the reranker is available:
-          - BM25 retrieves up to 20 candidates (RERANK_CANDIDATE_N)
-          - ``RerankerService`` cross-encodes and returns top-``limit``
-          - Falls back to BM25 order gracefully if model unavailable
-
-        Touches ``last_accessed`` on matches so the curator's decay sees
-        recency signal.
-        """
+        """BM25 search across subject/relation/object. Touches
+        ``last_accessed`` on matches so the curator's decay sees
+        recency signal."""
         if not query or not query.strip():
             return []
-
-        # Fetch more candidates when reranking so the cross-encoder has
-        # a large enough pool to meaningfully reorder.
-        candidate_n = limit
-        if rerank:
-            from memory.reranker import _DEFAULT_CANDIDATE_N
-            candidate_n = max(limit, _DEFAULT_CANDIDATE_N)
-
         try:
             sql = """
                 SELECT f.*, bm25(facts_fts) AS score
@@ -166,7 +150,7 @@ class FactsDAL:
             if not include_invalid:
                 sql += " AND f.invalid_at IS NULL"
             sql += " ORDER BY score LIMIT ?"
-            cur = self.conn.execute(sql, (query.strip(), candidate_n))
+            cur = self.conn.execute(sql, (query.strip(), limit))
             rows = cur.fetchall()
         except sqlite3.OperationalError as exc:
             logger.debug(f"[facts] FTS search error: {exc}")
@@ -182,20 +166,7 @@ class FactsDAL:
             )
             self.conn.commit()
 
-        records = [self._row_to_record(r) for r in rows]
-
-        # Cross-encoder rerank — BM25 candidates → top-limit by relevance.
-        if rerank and len(records) > 1:
-            try:
-                from memory.reranker import get_reranker
-                reranker = get_reranker()
-                if reranker.enabled():
-                    records = reranker.rerank(query, records)
-                    return records[:limit]
-            except Exception as e:
-                logger.debug(f"[facts] reranker error (falling back to BM25): {e}")
-
-        return records[:limit]
+        return [self._row_to_record(r) for r in rows]
 
     def count(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) AS n FROM facts").fetchone()

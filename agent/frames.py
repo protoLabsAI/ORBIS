@@ -77,17 +77,3 @@ class AudioEventFrame(Frame):
     """
 
     events: list[str] = field(default_factory=list)
-
-
-@dataclass
-class WakeWordFrame(Frame):
-    """Emitted by ``WakeWordDetector`` when a wake phrase is detected.
-
-    Carries the model name / phrase label and the raw detection score
-    so downstream consumers (RTVI bridge, logging) have the full signal.
-    The orb frontend subscribes to the corresponding RTVI event to play
-    a brief wake pulse.
-    """
-
-    phrase: str = ""   # e.g. "hey_orbis" or "hey_jarvis"
-    score: float = 0.0

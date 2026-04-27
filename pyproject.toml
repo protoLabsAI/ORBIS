@@ -50,20 +50,6 @@ speaker-id = ["speechbrain>=1.0", "torchaudio"]
 # 234 M params, ~70 ms on Blackwell, low-hundreds-ms on CPU. Provides
 # STT + 7-class emotion + audio events in one forward pass per #66.
 sensevoice = ["funasr>=1.2"]
-# Wake-word detection — openWakeWord pre-STT audio gate (#95).
-# Supports custom .tflite/.onnx models trained with the openWakeWord
-# notebook; see scripts/train_wake_word.md.
-wake-word = ["openwakeword>=0.6"]
-# Intent classifier — sentence-transformers embedding + MLP head (#96).
-# Loads all-MiniLM-L6-v2 (88 MB) + intent_classifier_v0.pt (~500 KB).
-# Set INTENT_MODEL_PATH or place the .pt at data/intent/intent_classifier_v0.pt.
-# ~10ms inference on CPU; graceful no-op if not installed.
-intent = ["sentence-transformers>=3.0", "torch"]
-# Memory reranker — mxbai-rerank-xsmall-v1 cross-encoder (#96 Tier 1).
-# Reranks BM25 top-20 → top-5 facts before LLM context assembly.
-# 146 MB, ~70ms / 20 pairs on CPU. Works on Apple Silicon + Linux.
-# Graceful no-op (BM25 order) if not installed.
-rerank = ["sentence-transformers>=3.0"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
 # Test-only: respx mocks httpx for the LLM-probe tests.
 test = ["pytest", "respx"]
