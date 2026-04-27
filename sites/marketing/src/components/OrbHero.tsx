@@ -8,7 +8,6 @@ export function OrbHero() {
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [size, setSize] = useState(480);
 
-  // Respond to demo pill button events dispatched from Astro page script
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ state: VoiceState }>).detail;
@@ -20,7 +19,6 @@ export function OrbHero() {
     return () => window.removeEventListener('orbis:voiceState', handler);
   }, []);
 
-  // Responsive size
   useEffect(() => {
     const update = () => setSize(window.innerWidth < 640 ? 320 : 480);
     update();
@@ -28,27 +26,13 @@ export function OrbHero() {
     return () => window.removeEventListener('resize', update);
   }, []);
 
-  return (
-    <div className="flex flex-col items-center gap-6">
-      <OrbStandaloneCanvas voiceState={voiceState} size={size} />
+  // Sync active state back to the static pills rendered in Astro
+  useEffect(() => {
+    document.querySelectorAll<HTMLButtonElement>('[data-state-pill]').forEach((btn) => {
+      const active = btn.dataset.statePill === voiceState;
+      btn.setAttribute('data-active', String(active));
+    });
+  }, [voiceState]);
 
-      {/* Demo state toggles */}
-      <div className="flex gap-2 flex-wrap justify-center">
-        {STATES.map((s) => (
-          <button
-            key={s}
-            onClick={() => setVoiceState(s)}
-            className={[
-              'px-4 py-1.5 rounded-full text-sm font-medium border transition-all duration-200',
-              voiceState === s
-                ? 'border-sky-500/60 bg-sky-500/15 text-sky-400'
-                : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:border-white/20 hover:text-zinc-300',
-            ].join(' ')}
-          >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  return <OrbStandaloneCanvas voiceState={voiceState} size={size} />;
 }

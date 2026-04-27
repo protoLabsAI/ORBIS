@@ -1,4 +1,5 @@
 import { Canvas } from '@react-three/fiber';
+import { Suspense } from 'react';
 import { FractalVariant } from './variants/fractal/FractalVariant';
 import type { VoiceState } from './shared/stateSnapshot';
 
@@ -16,16 +17,23 @@ export function OrbStandaloneCanvas({
         height: size,
         borderRadius: '50%',
         overflow: 'hidden',
-        boxShadow: '0 0 80px rgba(14,165,233,0.15)',
       }}
     >
       <Canvas
-        camera={{ fov: 45, near: 0.1, far: 100, position: [0, 0, 13] }}
+        camera={{ fov: 45, near: 0.1, far: 100, position: [0, 0, 6.1] }}
         dpr={Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 1.5)}
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#000000' }}
+        onCreated={() => {
+          // Give the first frame a tick to paint before signalling ready
+          requestAnimationFrame(() => {
+            window.dispatchEvent(new CustomEvent('orbis:canvasReady'));
+          });
+        }}
       >
-        <FractalVariant voiceState={voiceState} />
+        <Suspense fallback={null}>
+          <FractalVariant voiceState={voiceState} />
+        </Suspense>
       </Canvas>
     </div>
   );

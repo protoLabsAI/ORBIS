@@ -5,8 +5,8 @@
   --color-surface-1: #111113;
   --color-surface-2: #18181b;
   --color-surface-3: #222225;
-  --color-accent:     #0ea5e9;
-  --color-accent-dim: #0284c7;
+  --color-accent:     #818cf8;
+  --color-accent-dim: #6366f1;
   --color-accent-alt: #f472b6;
   --color-muted: #71717a;
   --font-sans: 'Geist', system-ui, sans-serif;
@@ -26,7 +26,7 @@ body {
 
 /* Gradient text utility */
 .gradient-text {
-  background: linear-gradient(135deg, #0ea5e9 0%, #818cf8 50%, #f472b6 100%);
+  background: linear-gradient(135deg, #818cf8 0%, #a78bfa 40%, #f472b6 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

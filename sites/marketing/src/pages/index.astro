@@ -8,7 +8,44 @@ import { OrbHero } from '../components/OrbHero';
   <!-- Hero -->
   <section class="min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center gap-8 px-6 py-20 text-center">
 
-    <OrbHero client:only="react" />
+    <!-- Orb + pills — fixed dimensions so nothing shifts on hydration -->
+    <div class="flex flex-col items-center gap-6">
+
+      <!-- Fixed-size orb slot: skeleton shows until R3F paints -->
+      <div id="orb-slot" class="relative flex items-center justify-center"
+           style="width: 480px; height: 480px; max-width: min(480px, calc(100vw - 3rem));">
+
+        <!-- Static skeleton visible before hydration -->
+        <div id="orb-skeleton"
+             class="absolute inset-0 rounded-full flex items-center justify-center transition-opacity duration-700"
+             style="background: radial-gradient(circle at 40% 35%, #1e1b2e 0%, #09090b 70%);
+                    box-shadow: 0 0 100px rgba(129,140,248,0.25), 0 0 40px rgba(244,114,182,0.12);">
+          <div class="orb-skeleton-ring"
+               style="width: 55%; height: 55%; border-radius: 50%;
+                      border: 1.5px solid rgba(129,140,248,0.25);
+                      box-shadow: 0 0 32px rgba(129,140,248,0.12) inset, 0 0 32px rgba(129,140,248,0.12);">
+          </div>
+        </div>
+
+        <!-- React island mounts here — absolutely positioned so it doesn't affect layout -->
+        <div class="absolute inset-0 rounded-full overflow-hidden">
+          <OrbHero client:only="react" />
+        </div>
+      </div>
+
+      <!-- State pills — rendered in Astro, always visible, JS wires up active state -->
+      <div class="flex gap-2 flex-wrap justify-center" id="state-pills">
+        {(['idle', 'listening', 'thinking', 'speaking'] as const).map((s) => (
+          <button
+            data-state-pill={s}
+            data-active={s === 'idle' ? 'true' : 'false'}
+            class="state-pill px-4 py-1.5 rounded-full text-sm font-medium border transition-all duration-200"
+          >
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+    </div>
 
     <div class="flex flex-col items-center gap-4 max-w-2xl">
       <span class="text-accent font-mono text-sm uppercase tracking-widest">Voice + Personality for your agents</span>
@@ -26,9 +63,9 @@ import { OrbHero } from '../components/OrbHero';
         <a
           href="/download"
           class="px-6 py-3 rounded-lg font-medium text-white transition-colors"
-          style="background: #0ea5e9;"
-          onmouseover="this.style.background='#0284c7'"
-          onmouseout="this.style.background='#0ea5e9'"
+          style="background: #818cf8;"
+          onmouseover="this.style.background='#6366f1'"
+          onmouseout="this.style.background='#818cf8'"
         >
           Download for Mac
         </a>
@@ -51,23 +88,19 @@ import { OrbHero } from '../components/OrbHero';
     <div class="grid md:grid-cols-3 gap-4">
       {[
         {
-          icon: '🎙',
           heading: 'Voice-native',
           body: 'Wake word → speak → done. No typing, no switching windows. ORBIS hears you.',
         },
         {
-          icon: '🔒',
           heading: 'Runs locally',
           body: 'MLX on Apple Silicon. Your conversations stay on your machine.',
         },
         {
-          icon: '🔗',
           heading: 'Delegates anywhere',
           body: 'Connect any OpenAI-compatible agent, A2A endpoint, or local model. ORBIS routes the right request to the right brain.',
         },
-      ].map(({ icon, heading, body }) => (
+      ].map(({ heading, body }) => (
         <div class="border border-white/5 rounded-xl p-6" style="background: rgba(255,255,255,0.02)">
-          <div class="text-3xl mb-3">{icon}</div>
           <h3 class="text-white font-semibold mb-2">{heading}</h3>
           <p class="text-zinc-400 text-sm leading-relaxed">{body}</p>
         </div>
@@ -89,7 +122,7 @@ import { OrbHero } from '../components/OrbHero';
         { n: '3', heading: 'Done', body: 'Hear the response through your Mac\'s audio. No app-switching.' },
       ].map(({ n, heading, body }) => (
         <div class="flex flex-col items-center text-center gap-3">
-          <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-mono font-semibold text-accent border border-sky-500/30" style="background: rgba(14,165,233,0.08)">
+          <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-mono font-semibold text-accent border border-indigo-400/30" style="background: rgba(129,140,248,0.08)">
             {n}
           </div>
           <h3 class="text-white font-semibold">{heading}</h3>
@@ -106,9 +139,9 @@ import { OrbHero } from '../components/OrbHero';
       <a
         href="/download"
         class="px-6 py-3 rounded-lg font-medium text-white transition-colors"
-        style="background: #0ea5e9;"
-        onmouseover="this.style.background='#0284c7'"
-        onmouseout="this.style.background='#0ea5e9'"
+        style="background: #818cf8;"
+        onmouseover="this.style.background='#6366f1'"
+        onmouseout="this.style.background='#818cf8'"
       >
         Download for Mac
       </a>
@@ -117,3 +150,58 @@ import { OrbHero } from '../components/OrbHero';
   </section>
 
 </BaseLayout>
+
+<style>
+  /* State pill base + active states */
+  .state-pill {
+    border-color: rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.03);
+    color: #a1a1aa;
+  }
+  .state-pill:hover {
+    border-color: rgba(255,255,255,0.20);
+    color: #d4d4d8;
+  }
+  .state-pill[data-active="true"] {
+    border-color: rgba(129,140,248,0.60);
+    background: rgba(129,140,248,0.15);
+    color: #a5b4fc;
+  }
+
+  /* Skeleton pulse */
+  @keyframes orbPulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.97); }
+    50%       { opacity: 1;   transform: scale(1.03); }
+  }
+  .orb-skeleton-ring {
+    animation: orbPulse 2s ease-in-out infinite;
+  }
+
+  /* Responsive orb slot */
+  @media (max-width: 640px) {
+    #orb-slot { width: 320px !important; height: 320px !important; }
+  }
+</style>
+
+<script>
+  // Wire pill clicks → dispatch CustomEvent consumed by OrbHero React island
+  document.querySelectorAll<HTMLButtonElement>('[data-state-pill]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const state = btn.dataset.statePill!;
+      // Update active styling immediately (React will echo back via data-active too)
+      document.querySelectorAll<HTMLButtonElement>('[data-state-pill]').forEach((b) => {
+        b.dataset.active = String(b === btn);
+      });
+      window.dispatchEvent(new CustomEvent('orbis:voiceState', { detail: { state } }));
+    });
+  });
+
+  // Fade out the static skeleton once the React canvas fires its ready event
+  window.addEventListener('orbis:canvasReady', () => {
+    const skeleton = document.getElementById('orb-skeleton');
+    if (skeleton) {
+      skeleton.style.opacity = '0';
+      skeleton.style.pointerEvents = 'none';
+    }
+  });
+</script>

@@ -12,7 +12,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
     <section class="mb-12">
       <h2 class="text-xl font-semibold text-white mb-4">1. Installation</h2>
       <ol class="space-y-2 text-zinc-300 text-sm">
-        <li>1. <a href="/download" class="text-sky-400 hover:text-sky-300 transition-colors">Download the .dmg</a> from the download page.</li>
+        <li>1. <a href="/download" class="text-indigo-400 hover:text-indigo-300 transition-colors">Download the .dmg</a> from the download page.</li>
         <li>2. Open the .dmg and drag ORBIS to Applications.</li>
         <li>3. Launch ORBIS and allow microphone access when macOS prompts.</li>
         <li>4. The setup wizard opens automatically on first launch.</li>
@@ -39,10 +39,10 @@ import BaseLayout from '../layouts/BaseLayout.astro';
   api_key: sk-...
   model: gpt-4o-mini</code></pre>
 
-      <div class="border-l-2 border-sky-500/40 pl-4 mb-4">
+      <div class="border-l-2 border-indigo-400/40 pl-4 mb-4">
         <p class="text-zinc-400 text-sm">For Ollama: set <code class="font-mono text-xs">base_url: http://localhost:11434/v1</code> and <code class="font-mono text-xs">api_key: ollama</code>.</p>
       </div>
-      <div class="border-l-2 border-sky-500/40 pl-4">
+      <div class="border-l-2 border-indigo-400/40 pl-4">
         <p class="text-zinc-400 text-sm">For on-device MLX (M1+): set <code class="font-mono text-xs">provider: mlx</code> and <code class="font-mono text-xs">model: mlx-community/Qwen2.5-7B-Instruct-4bit</code> (or any MLX-compatible model).</p>
       </div>
     </section>
@@ -80,7 +80,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
           { href: 'https://github.com/protolabsstudio/ORBIS/blob/main/HANDOFF.md', label: 'Developer handoff (HANDOFF.md)' },
         ].map(({ href, label }) => (
           <li>
-            <a href={href} target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 transition-colors">
+            <a href={href} target="_blank" rel="noopener noreferrer" class="text-indigo-400 hover:text-indigo-300 transition-colors">
               {label} →
             </a>
           </li>

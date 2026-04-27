@@ -21,10 +21,10 @@ import changelog from '../../data/changelog.json';
             <!-- Dot -->
             <div class="shrink-0 w-[1.625rem] h-[1.625rem] mt-0.5 rounded-full border flex items-center justify-center z-10"
                  style={i === 0
-                   ? 'background: rgba(14,165,233,0.15); border-color: rgba(14,165,233,0.5);'
+                   ? 'background: rgba(129,140,248,0.15); border-color: rgba(129,140,248,0.5);'
                    : 'background: #18181b; border-color: rgba(255,255,255,0.1);'}>
               <div class="w-1.5 h-1.5 rounded-full"
-                   style={i === 0 ? 'background: #0ea5e9;' : 'background: #52525b;'}></div>
+                   style={i === 0 ? 'background: #818cf8;' : 'background: #52525b;'}></div>
             </div>
 
             <!-- Content -->
@@ -32,9 +32,9 @@ import changelog from '../../data/changelog.json';
               <div class="flex flex-wrap items-center gap-3 mb-3">
                 <a
                   href={dmgUrl}
-                  class="px-2 py-0.5 rounded font-mono text-sm border transition-colors hover:border-sky-500/50"
+                  class="px-2 py-0.5 rounded font-mono text-sm border transition-colors hover:border-indigo-400/50"
                   style={i === 0
-                    ? 'background: rgba(14,165,233,0.1); border-color: rgba(14,165,233,0.35); color: #0ea5e9;'
+                    ? 'background: rgba(129,140,248,0.1); border-color: rgba(129,140,248,0.35); color: #818cf8;'
                     : 'background: #18181b; border-color: rgba(255,255,255,0.08); color: #a1a1aa;'}
                 >
                   {version}
@@ -42,7 +42,7 @@ import changelog from '../../data/changelog.json';
                 <span class="text-zinc-500 text-sm">{date}</span>
                 {i === 0 && (
                   <span class="px-1.5 py-0.5 rounded text-xs font-mono border"
-                        style="background: rgba(14,165,233,0.08); border-color: rgba(14,165,233,0.25); color: #0ea5e9;">
+                        style="background: rgba(129,140,248,0.08); border-color: rgba(129,140,248,0.25); color: #818cf8;">
                     latest
                   </span>
                 )}
