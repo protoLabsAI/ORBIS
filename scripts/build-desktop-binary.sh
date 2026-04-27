@@ -19,8 +19,7 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
 if [ -z "${VERSION}" ]; then
-  VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-  VERSION="v${VERSION}"
+  VERSION="v$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
 fi
 VERSION_NO_V="${VERSION#v}"
 
