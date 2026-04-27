@@ -137,7 +137,6 @@ from auth import load_users, require_user, user_registry
 from auth.users import User
 from auth.context import current_session_id, current_user_id
 from agent.user_state import active_user_states, user_state_for
-from voice import lifecycle
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
@@ -1391,7 +1390,6 @@ def prewarm_all() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    lifecycle.start()
     # Prewarm off the event loop so the startup handshake isn't blocked by
     # TTS / STT / LLM cold starts; we just begin work in the background.
     asyncio.get_running_loop().run_in_executor(None, prewarm_all)
@@ -1442,7 +1440,6 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):
                 pass
         await _handler.close()
-        lifecycle.stop()
 
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
@@ -2272,7 +2269,6 @@ def main():
 
     def _shutdown(_sig, _frame):
         logger.info("Shutting down")
-        lifecycle.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _shutdown)
