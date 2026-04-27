@@ -17,7 +17,6 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from memory.facts import FactRecord, FactsDAL
 from memory.reranker import RerankerService, _DEFAULT_TOP_K, _fact_to_text

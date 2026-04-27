@@ -19,7 +19,10 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
 if [ -z "${VERSION}" ]; then
-  VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+  # Use venv Python (3.11) if available for tomllib; fall back to grep
+  PY3="$(command -v .venv/bin/python3 || command -v python3.11 || echo python3)"
+  VERSION="$("${PY3}" -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])' 2>/dev/null \
+    || grep '^version' pyproject.toml | head -1 | sed 's/version = "//;s/"//')"
   VERSION="v${VERSION}"
 fi
 VERSION_NO_V="${VERSION#v}"

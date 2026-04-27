@@ -90,7 +90,7 @@ from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.micro_ack import MicroAckInjector
 from agent.wake_word import WakeWordConfig, WakeWordDetector
-from agent.intent import IntentResult, IntentRouterProcessor, get_classifier, needs_tools
+from agent.intent import IntentResult, IntentRouterProcessor, get_classifier
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,

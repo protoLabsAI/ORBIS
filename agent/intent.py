@@ -314,7 +314,7 @@ class IntentRouterProcessor(FrameProcessor):
         super().__init__()
         self._classifier = classifier
         self._command_handler = command_handler
-        self._metrics = metrics if metrics is not None else {}
+        self._app_metrics = metrics if metrics is not None else {}
         self._last_result: Optional[IntentResult] = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -346,8 +346,8 @@ class IntentRouterProcessor(FrameProcessor):
                 await self.push_frame(frame, direction)
                 return
             # Suppress frame — LLM is not called for this turn.
-            self._metrics["intent_llm_bypassed"] = (
-                self._metrics.get("intent_llm_bypassed", 0) + 1
+            self._app_metrics["intent_llm_bypassed"] = (
+                self._app_metrics.get("intent_llm_bypassed", 0) + 1
             )
             logger.info(
                 f"[intent] bypassed LLM for command turn "
@@ -361,7 +361,7 @@ class IntentRouterProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
     def _update_metrics(self, result: IntentResult) -> None:
-        m = self._metrics
+        m = self._app_metrics
         m["intent_turns_total"] = m.get("intent_turns_total", 0) + 1
         by_class = m.setdefault("intent_by_class", {})
         by_class[result.intent] = by_class.get(result.intent, 0) + 1

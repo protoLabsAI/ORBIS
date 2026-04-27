@@ -17,10 +17,6 @@ patched to return a deterministic mock Model whose predict() we control.
 
 from __future__ import annotations
 
-import asyncio
-import os
-from dataclasses import dataclass
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import numpy as np

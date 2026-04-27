@@ -12,13 +12,10 @@ The actual ML model is never loaded — IntentClassifier._load() is monkeypatche
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from pipecat.frames.frames import Frame, SystemFrame, TranscriptionFrame
+from pipecat.frames.frames import SystemFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection
 
 from agent.intent import (

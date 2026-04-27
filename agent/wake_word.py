@@ -42,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -323,6 +323,8 @@ class WakeWordDetector(FrameProcessor):
         """Lazily load the openWakeWord model. Returns None on failure."""
         if self._oww_model is not None:
             return self._oww_model
+        if getattr(self, "_oww_unavailable", False):
+            return None
         try:
             from openwakeword.model import Model  # type: ignore[import]
         except ImportError:
@@ -330,6 +332,7 @@ class WakeWordDetector(FrameProcessor):
                 "[wake_word] openwakeword not installed. "
                 'Run: pip install -e ".[wake-word]"'
             )
+            self._oww_unavailable = True
             return None
 
         if self._cfg.model_path:
