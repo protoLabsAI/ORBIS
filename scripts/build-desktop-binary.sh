@@ -100,4 +100,17 @@ else
 fi
 
 echo "[build-desktop] Wrote ${OUT} ($(du -h "${OUT}" | cut -f1))"
+
+# Copy into src-tauri/binaries so Tauri picks it up without a manual step.
+TAURI_BIN="src-tauri/binaries/orbis-${TARGET}${SUFFIX}"
+cp "${OUT}" "${TAURI_BIN}"
+echo "[build-desktop] Copied to ${TAURI_BIN}"
+
+# Bust the pyapp cache so the next app launch always runs the new version.
+PYAPP_CACHE="${HOME}/Library/Application Support/pyapp/orbis"
+if [ -d "${PYAPP_CACHE}" ]; then
+  rm -rf "${PYAPP_CACHE}"
+  echo "[build-desktop] Cleared pyapp cache at ${PYAPP_CACHE}"
+fi
+
 echo "[build-desktop] Smoke-test: ORBIS_ALLOW_CPU=1 ${OUT} --port 0"
