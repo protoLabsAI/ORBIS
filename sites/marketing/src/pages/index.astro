@@ -3,7 +3,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import { OrbHero } from '../components/OrbHero';
 ---
 
-<BaseLayout title="ORBIS — Voice AI Companion for Mac">
+<BaseLayout title="ORBIS — Voice AI Companion">
 
   <!-- Hero -->
   <section class="min-h-[calc(100vh-3.5rem)] flex flex-col items-center justify-center gap-8 px-6 py-20 text-center">
@@ -56,7 +56,7 @@ import { OrbHero } from '../components/OrbHero';
       </h1>
 
       <p class="text-lg text-zinc-400 max-w-xl">
-        ORBIS sits between you and your agents — listening, routing, and responding with a presence that feels native to your Mac.
+        ORBIS sits between you and your agents — listening, routing, and responding with a presence that feels native to your workflow.
       </p>
 
       {/* <!-- Coming soon — restore when ready to launch:
@@ -68,7 +68,7 @@ import { OrbHero } from '../components/OrbHero';
           onmouseover="this.style.background='#6366f1'"
           onmouseout="this.style.background='#818cf8'"
         >
-          Download for Mac
+          Download
         </a>
         <a
           href="https://github.com/protolabsstudio/ORBIS"
@@ -79,7 +79,7 @@ import { OrbHero } from '../components/OrbHero';
           View on GitHub
         </a>
       </div>
-      <span class="text-zinc-500 text-sm">macOS 13+ · Apple Silicon · Free</span>
+      <span class="text-zinc-500 text-sm">Windows · macOS · Linux · Free</span>
       --> */}
 
       <div class="mt-2 px-5 py-2.5 rounded-lg border border-white/10 text-zinc-400 text-sm font-mono tracking-wide"
@@ -99,7 +99,7 @@ import { OrbHero } from '../components/OrbHero';
         },
         {
           heading: 'Runs locally',
-          body: 'MLX on Apple Silicon. Your conversations stay on your machine.',
+          body: 'Local-first by default. Your conversations stay on your machine — no cloud required.',
         },
         {
           heading: 'Delegates anywhere',
@@ -125,7 +125,7 @@ import { OrbHero } from '../components/OrbHero';
       {[
         { n: '1', heading: 'Wake', body: 'Say the wake word. ORBIS opens the pipeline.' },
         { n: '2', heading: 'Speak', body: 'Ask anything. ORBIS routes to the right agent, model, or tool.' },
-        { n: '3', heading: 'Done', body: 'Hear the response through your Mac\'s audio. No app-switching.' },
+        { n: '3', heading: 'Done', body: 'Hear the response. No app-switching, no typing.' },
       ].map(({ n, heading, body }) => (
         <div class="flex flex-col items-center text-center gap-3">
           <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-mono font-semibold text-accent border border-indigo-400/30" style="background: rgba(129,140,248,0.08)">
@@ -150,11 +150,11 @@ import { OrbHero } from '../components/OrbHero';
         onmouseover="this.style.background='#6366f1'"
         onmouseout="this.style.background='#818cf8'"
       >
-        Download for Mac
+        Download
       </a>
-      <p class="text-zinc-500 text-sm">macOS 13+ · Apple Silicon for local LLM · Intel supported with cloud models</p>
+      <p class="text-zinc-500 text-sm">Windows · macOS · Linux · Free</p>
       --> */}
-      <p class="text-zinc-500 text-sm">macOS 13+ · Apple Silicon · Coming soon</p>
+      <p class="text-zinc-500 text-sm">Windows · macOS · Linux · Coming soon</p>
     </div>
   </section>
 
