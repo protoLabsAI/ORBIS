@@ -1,0 +1,80 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import changelog from '../../data/changelog.json';
+---
+
+<BaseLayout
+  title="Changelog — ORBIS"
+  description="Release history for ORBIS — voice-first AI companion for Mac."
+>
+  <div class="max-w-2xl mx-auto px-6 py-24">
+    <h1 class="text-4xl font-bold text-white mb-2">Changelog</h1>
+    <p class="text-zinc-400 mb-16 text-lg">Every release, newest first.</p>
+
+    <div class="relative">
+      <!-- Timeline spine -->
+      <div class="absolute left-[3.25rem] top-2 bottom-0 w-px" style="background: rgba(255,255,255,0.06)"></div>
+
+      <ol class="space-y-12">
+        {changelog.map(({ version, date, changes, dmgUrl }, i) => (
+          <li class="flex gap-6 relative">
+            <!-- Dot -->
+            <div class="shrink-0 w-[1.625rem] h-[1.625rem] mt-0.5 rounded-full border flex items-center justify-center z-10"
+                 style={i === 0
+                   ? 'background: rgba(14,165,233,0.15); border-color: rgba(14,165,233,0.5);'
+                   : 'background: #18181b; border-color: rgba(255,255,255,0.1);'}>
+              <div class="w-1.5 h-1.5 rounded-full"
+                   style={i === 0 ? 'background: #0ea5e9;' : 'background: #52525b;'}></div>
+            </div>
+
+            <!-- Content -->
+            <div class="flex-1 pb-2">
+              <div class="flex flex-wrap items-center gap-3 mb-3">
+                <a
+                  href={dmgUrl}
+                  class="px-2 py-0.5 rounded font-mono text-sm border transition-colors hover:border-sky-500/50"
+                  style={i === 0
+                    ? 'background: rgba(14,165,233,0.1); border-color: rgba(14,165,233,0.35); color: #0ea5e9;'
+                    : 'background: #18181b; border-color: rgba(255,255,255,0.08); color: #a1a1aa;'}
+                >
+                  {version}
+                </a>
+                <span class="text-zinc-500 text-sm">{date}</span>
+                {i === 0 && (
+                  <span class="px-1.5 py-0.5 rounded text-xs font-mono border"
+                        style="background: rgba(14,165,233,0.08); border-color: rgba(14,165,233,0.25); color: #0ea5e9;">
+                    latest
+                  </span>
+                )}
+              </div>
+
+              <ul class="space-y-1.5">
+                {changes.map((change) => (
+                  <li class="flex items-start gap-2 text-sm text-zinc-300">
+                    <span class="text-zinc-600 mt-0.5 shrink-0">—</span>
+                    <span>{change}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    <div class="mt-16 pt-8 border-t border-white/5">
+      <p class="text-zinc-500 text-sm">
+        Full release notes and source on{' '}
+        <a
+          href="https://github.com/protolabsstudio/ORBIS/releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2"
+        >
+          GitHub Releases
+        </a>
+        .
+      </p>
+    </div>
+  </div>
+</BaseLayout>

@@ -1,0 +1,92 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Getting Started — ORBIS Docs" description="Install ORBIS, connect an LLM, and start using voice AI on your Mac in minutes.">
+  <div class="max-w-2xl mx-auto px-6 py-24 prose-custom">
+
+    <h1 class="text-4xl font-bold text-white mb-2">Getting Started</h1>
+    <p class="text-zinc-400 mb-12 text-lg">Get ORBIS running on your Mac in under five minutes.</p>
+
+    <!-- 1. Installation -->
+    <section class="mb-12">
+      <h2 class="text-xl font-semibold text-white mb-4">1. Installation</h2>
+      <ol class="space-y-2 text-zinc-300 text-sm">
+        <li>1. <a href="/download" class="text-sky-400 hover:text-sky-300 transition-colors">Download the .dmg</a> from the download page.</li>
+        <li>2. Open the .dmg and drag ORBIS to Applications.</li>
+        <li>3. Launch ORBIS and allow microphone access when macOS prompts.</li>
+        <li>4. The setup wizard opens automatically on first launch.</li>
+      </ol>
+    </section>
+
+    <!-- 2. First launch -->
+    <section class="mb-12 border-t border-white/5 pt-10">
+      <h2 class="text-xl font-semibold text-white mb-4">2. First launch</h2>
+      <p class="text-zinc-400 text-sm leading-relaxed mb-3">
+        The 5-step setup wizard covers everything: LLM connection, microphone check, wake word, persona name, and optional delegate agents. You can re-run it any time from the tray icon.
+      </p>
+    </section>
+
+    <!-- 3. Connecting an LLM -->
+    <section class="mb-12 border-t border-white/5 pt-10">
+      <h2 class="text-xl font-semibold text-white mb-4">3. Connecting an LLM</h2>
+      <p class="text-zinc-400 text-sm leading-relaxed mb-4">
+        ORBIS supports any OpenAI-compatible endpoint, Ollama, and on-device MLX (Apple Silicon only). Configure in <code class="text-xs bg-zinc-800 px-1.5 py-0.5 rounded font-mono">orbis.yaml</code>:
+      </p>
+      <pre class="bg-[#111113] border border-white/5 rounded-xl p-5 text-sm font-mono text-zinc-300 overflow-x-auto mb-4"><code>llm:
+  provider: openai-compat   # or: ollama | mlx
+  base_url: https://api.openai.com/v1
+  api_key: sk-...
+  model: gpt-4o-mini</code></pre>
+
+      <div class="border-l-2 border-sky-500/40 pl-4 mb-4">
+        <p class="text-zinc-400 text-sm">For Ollama: set <code class="font-mono text-xs">base_url: http://localhost:11434/v1</code> and <code class="font-mono text-xs">api_key: ollama</code>.</p>
+      </div>
+      <div class="border-l-2 border-sky-500/40 pl-4">
+        <p class="text-zinc-400 text-sm">For on-device MLX (M1+): set <code class="font-mono text-xs">provider: mlx</code> and <code class="font-mono text-xs">model: mlx-community/Qwen2.5-7B-Instruct-4bit</code> (or any MLX-compatible model).</p>
+      </div>
+    </section>
+
+    <!-- 4. Adding a delegate -->
+    <section class="mb-12 border-t border-white/5 pt-10">
+      <h2 class="text-xl font-semibold text-white mb-4">4. Adding a delegate</h2>
+      <p class="text-zinc-400 text-sm leading-relaxed mb-4">
+        Delegates are downstream agents ORBIS can route tasks to. They expose an A2A-compatible or OpenAI-compatible endpoint. Add them in <code class="text-xs bg-zinc-800 px-1.5 py-0.5 rounded font-mono">orbis.yaml</code>:
+      </p>
+      <pre class="bg-[#111113] border border-white/5 rounded-xl p-5 text-sm font-mono text-zinc-300 overflow-x-auto"><code>delegates:
+  - name: coder
+    url: http://localhost:8001
+    description: "Writes and runs code"
+  - name: researcher
+    url: https://my-agent.example.com
+    description: "Searches the web and summarises"</code></pre>
+    </section>
+
+    <!-- 5. Config file location -->
+    <section class="mb-12 border-t border-white/5 pt-10">
+      <h2 class="text-xl font-semibold text-white mb-4">5. Config file location</h2>
+      <p class="text-zinc-400 text-sm mb-3">The main config lives at:</p>
+      <pre class="bg-[#111113] border border-white/5 rounded-xl p-5 text-sm font-mono text-zinc-300 overflow-x-auto"><code>~/Library/Application Support/ORBIS/orbis.yaml</code></pre>
+      <p class="text-zinc-500 text-sm mt-3">Changes are hot-reloaded — no restart required for most settings.</p>
+    </section>
+
+    <!-- 6. Further reading -->
+    <section class="border-t border-white/5 pt-10">
+      <h2 class="text-xl font-semibold text-white mb-4">6. Further reading</h2>
+      <ul class="space-y-2 text-sm">
+        {[
+          { href: 'https://github.com/protolabsstudio/ORBIS', label: 'GitHub README' },
+          { href: 'https://github.com/protolabsstudio/ORBIS/blob/main/DECISIONS.md', label: 'Architecture decisions (DECISIONS.md)' },
+          { href: 'https://github.com/protolabsstudio/ORBIS/blob/main/HANDOFF.md', label: 'Developer handoff (HANDOFF.md)' },
+        ].map(({ href, label }) => (
+          <li>
+            <a href={href} target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 transition-colors">
+              {label} →
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+  </div>
+</BaseLayout>

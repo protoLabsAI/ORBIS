@@ -13,6 +13,8 @@ node_modules/
 
 # ORBIS runtime state — per-install user DB + session artifacts.
 data/
+# Marketing site changelog data is committed (build-time static asset).
+!sites/marketing/data/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

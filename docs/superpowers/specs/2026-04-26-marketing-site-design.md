@@ -236,7 +236,7 @@ interface OrbHeroProps {
 }
 ```
 
-The Astro page passes `voiceState` from a `<script>` that listens for the demo pill button clicks. Since Astro islands can't receive reactive props from outside JS, the component listens on a `CustomEvent` dispatched from the pill buttons' `<script>` tag.
+The Astro page passes `voiceState` from a `<script>` that listens for the demo chip button clicks. Since Astro islands can't receive reactive props from outside JS, the component listens on a `CustomEvent` (`orbis:voiceState`) dispatched from the chip buttons' `<script>` tag. A second event (`orbis:playAudio`) triggers the pre-recorded audio playback (see §10).
 
 ### Canvas setup
 
