@@ -1,15 +1,18 @@
 ---
+/* Restore when launching:
 const links = [
   { href: '/download', label: 'Download' },
   { href: '/changelog', label: 'Changelog' },
 ];
 const currentPath = Astro.url.pathname;
+*/
 ---
 
 <nav class="fixed top-0 inset-x-0 z-50 h-14 border-b border-white/5 backdrop-blur-xl" style="background: rgba(9,9,11,0.80)">
   <div class="max-w-5xl mx-auto px-6 h-full flex items-center justify-between">
     <a href="/" class="text-white font-semibold tracking-tight text-lg">ORBIS</a>
 
+    {/* Restore nav links + GitHub icon when launching:
     <div class="flex items-center gap-6">
       {links.map(({ href, label }) => (
         <a
@@ -24,7 +27,6 @@ const currentPath = Astro.url.pathname;
           {label}
         </a>
       ))}
-
       <a
         href="https://github.com/protolabsstudio/ORBIS"
         target="_blank"
@@ -37,5 +39,6 @@ const currentPath = Astro.url.pathname;
         </svg>
       </a>
     </div>
+    */}
   </div>
 </nav>
