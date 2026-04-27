@@ -1193,6 +1193,10 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         _tracing.start_session(sid)
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
+        # Reset echo-guard state so stale bot_stopped_at from a previous
+        # session doesn't suppress audio at the start of a new one.
+        _ECHO_STATE.bot_speaking = False
+        _ECHO_STATE.bot_stopped_at = None
         logger.info(f"client connected (user={user_id!r})")
         # Replay any deliveries that arrived while we were disconnected
         # (a2a pushes, slow_research completions, scheduled messages).
