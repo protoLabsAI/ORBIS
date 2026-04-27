@@ -159,8 +159,8 @@ Orb visual control (variant, palette, params, presets) is handled outside the LL
 - **Starter orb acquisition:** user picks one of N from a curated
   pool shipped with the binary. Not random — user chooses. Starter
   pool definition is implementation detail.
-- **Self-modification via conversation.** The orb-control tools above
-  let the agent change its own appearance in response to user requests.
+- **Self-modification via conversation.** Orb appearance changes are
+  driven by external process signals, not LLM tool calls.
 - **Paid unlock:** full editing of all variants + all palettes +
   per-param tweaking behind a one-time purchase.
 
