@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'sites/marketing/**'
+      - '.github/workflows/marketing-deploy.yml'
+  workflow_dispatch:
 
 concurrency:
   group: marketing-deploy
