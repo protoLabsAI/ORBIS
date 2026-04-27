@@ -43,7 +43,6 @@ from urllib.parse import urlparse
 from pipecat.services.openai.llm import OpenAILLMService
 
 from .ollama import OllamaLLMService
-from .protolabs import ProtoLabsLLMService
 
 logger = logging.getLogger(__name__)
 
@@ -147,16 +146,6 @@ def make_llm(
             base_url=base_url,
             model=model,
             think=think,
-            settings=settings,
-        )
-
-    # ProtoLabs gateway: reasoning model returns text in delta.reasoning_content
-    # instead of delta.content — use the remapping subclass.
-    if base_url and "proto-labs.ai" in base_url:
-        logger.info(f"[llm-factory] using ProtoLabs adapter for {base_url} model={model}")
-        return ProtoLabsLLMService(
-            api_key=api_key,
-            base_url=base_url,
             settings=settings,
         )
 
