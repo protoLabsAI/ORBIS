@@ -4,8 +4,6 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>ORBIS uses your microphone for real-time voice conversation with the orb.</string>
-    <key>NSCameraUsageDescription</key>
-    <string>ORBIS does not use your camera; this declaration covers WebRTC device enumeration only.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>ORBIS uses AppleEvents to manage its own background sidecar process.</string>
     <key>NSHumanReadableCopyright</key>

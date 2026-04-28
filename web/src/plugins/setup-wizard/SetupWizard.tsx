@@ -57,18 +57,14 @@ export function SetupWizard() {
   );
 }
 
+// In the Tauri desktop app window.__TAURI__ is injected synchronously
+// before React mounts, so we can read it at module init time — no async
+// healthz round-trip needed, and no flash of the wrong step.
+const IS_TAURI = typeof window !== 'undefined' && '__TAURI__' in window;
+
 function WizardFlow({ onFinish }: { onFinish: () => void }) {
   const [step, setStep] = useState<Step>('welcome');
-  const [audioTransport, setAudioTransport] = useState<'native' | 'webrtc'>('webrtc');
-
-  useEffect(() => {
-    fetch('/healthz')
-      .then((r) => r.json())
-      .then((d) => {
-        if (d?.audio?.transport === 'native') setAudioTransport('native');
-      })
-      .catch(() => {});
-  }, []);
+  const audioTransport: 'native' | 'webrtc' = IS_TAURI ? 'native' : 'webrtc';
 
   if (step === 'hatching') {
     return <HatchAnimation onDone={onFinish} />;

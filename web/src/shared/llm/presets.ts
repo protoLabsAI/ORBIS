@@ -124,7 +124,7 @@ export const LLM_PRESETS: LLMPreset[] = [
   // --- Custom ---
   {
     id: 'custom', label: 'Custom',
-    url: '', model: '',
+    url: 'https://api.proto-labs.ai/v1', model: 'protolabs/fast',
     needsKey: true, keyPlaceholder: 'api key (optional)', featured: true,
     blurb: 'Paste your own OpenAI-compatible URL — works for any gateway, proxy, or custom endpoint.',
   },

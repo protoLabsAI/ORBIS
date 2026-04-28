@@ -39,6 +39,10 @@ export default defineConfig({
         // Precache the app shell. API responses are never cached.
         globPatterns: ['**/*.{js,css,html,woff2,png,svg}'],
         runtimeCaching: [],
+        // Take over immediately on update — critical for the Tauri webview
+        // which never closes (a waiting SW would never activate otherwise).
+        skipWaiting: true,
+        clientsClaim: true,
       },
       devOptions: { enabled: true, type: 'module' },
     }),
