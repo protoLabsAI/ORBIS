@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { invoke } from '@tauri-apps/api/core';
+import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 import { api, type StarterOrb } from '@/lib/api';
 import { authHeaders } from '@/auth/apiKey';
 import { LLM_PRESETS } from '@/shared/llm/presets';
@@ -1119,51 +1120,6 @@ function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 }
 
 
-function NativeLevelMeter({ deviceName }: { deviceName: string }) {
-  const [level, setLevel] = useState(0);
-  useEffect(() => {
-    const id = setInterval(async () => {
-      try {
-        const rms = await invoke<number>('get_audio_level');
-        // Boost RMS to make the meter feel responsive (typical speech ~0.02–0.1)
-        setLevel(Math.min(1, rms * 6));
-      } catch {
-        // engine not started yet
-      }
-    }, 80);
-    return () => clearInterval(id);
-  }, [deviceName]);
-
-  const bars = 20;
-  return (
-    <div className="space-y-2">
-      <div className="flex gap-0.5 h-6 items-end">
-        {Array.from({ length: bars }).map((_, i) => {
-          const threshold = (i + 1) / bars;
-          const active = level >= threshold;
-          return (
-            <div
-              key={i}
-              className={`flex-1 rounded-sm transition-all duration-75 ${
-                active
-                  ? i / bars < 0.6
-                    ? 'bg-emerald-500'
-                    : i / bars < 0.85
-                    ? 'bg-yellow-400'
-                    : 'bg-red-500'
-                  : 'bg-zinc-800'
-              }`}
-              style={{ height: `${40 + (i / bars) * 60}%` }}
-            />
-          );
-        })}
-      </div>
-      <p className="text-xs text-zinc-600 text-center">
-        Speak to test — level meter reflects live input
-      </p>
-    </div>
-  );
-}
 
 function MicStep({
   onNext,

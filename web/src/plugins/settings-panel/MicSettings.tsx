@@ -1,80 +1,134 @@
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Panel } from '@/components/ui/panel';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { MicTest } from '@/shared/audio/MicTest';
 import {
   getPreferredAudioDeviceId,
   setPreferredAudioDeviceId,
   subscribePreferredAudioDeviceId,
 } from '@/shared/audio/preferredDevice';
+import { useVoiceStateSelector } from '@/voice/hooks';
+import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 
-/**
- * Mic tab for the settings drawer — re-runs the same `getUserMedia`
- * gate the wizard does so the user can verify input levels any time.
- * Device enumeration is gated on already-granted permission (browsers
- * only expose labeled `audioinput` devices after a successful grant),
- * so we hide the device picker until the user has tested once.
- */
 export function MicSettings() {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceIdState] = useState<string>(() =>
+  const audioTransport = useVoiceStateSelector((s) => s.audioTransport);
+  const isNative = audioTransport === 'native';
+
+  // --- native state ---
+  const [nativeDevices, setNativeDevices] = useState<string[]>([]);
+  const [nativeDevice, setNativeDevice] = useState<string>('');
+
+  // --- webrtc state ---
+  const [browserDevices, setBrowserDevices] = useState<MediaDeviceInfo[]>([]);
+  const [browserDeviceId, setBrowserDeviceId] = useState<string>(() =>
     getPreferredAudioDeviceId(),
   );
 
-  const refreshDevices = async () => {
+  // --- shared init ---
+  useEffect(() => {
+    if (isNative) {
+      invoke<string[]>('list_audio_inputs')
+        .then((devs) => {
+          setNativeDevices(devs);
+          const saved = getPreferredAudioDeviceId();
+          setNativeDevice(devs.includes(saved) ? saved : devs[0] ?? '');
+        })
+        .catch(() => {});
+    } else {
+      void refreshBrowserDevices();
+    }
+    return subscribePreferredAudioDeviceId(setBrowserDeviceId);
+  }, [isNative]);
+
+  const refreshBrowserDevices = async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
-      setDevices(all.filter((d) => d.kind === 'audioinput'));
+      setBrowserDevices(all.filter((d) => d.kind === 'audioinput'));
     } catch {
-      // Permission not yet granted — the MicTest inside handles that
-      // path; we just won't have a useful device list until after.
+      // permission not yet granted
     }
   };
 
-  useEffect(() => {
-    void refreshDevices();
-    // Stay in sync if the wizard's mic step writes a different id while
-    // the settings panel is open.
-    return subscribePreferredAudioDeviceId(setDeviceIdState);
-  }, []);
+  const onChangeNative = (name: string) => {
+    setNativeDevice(name);
+    setPreferredAudioDeviceId(name);
+  };
 
-  const onChangeDevice = (id: string) => {
-    setDeviceIdState(id);
+  const onChangeBrowser = (id: string) => {
+    setBrowserDeviceId(id);
     setPreferredAudioDeviceId(id);
   };
 
   return (
     <Panel title="Microphone">
       <div className="space-y-3">
-        {devices.length > 0 && (
-          <label className="block">
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
-              Input device
+        {/* Device picker */}
+        {isNative ? (
+          nativeDevices.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-wider text-zinc-500">
+                Input device
+              </p>
+              <Select value={nativeDevice} onValueChange={onChangeNative}>
+                <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+                  <SelectValue placeholder="System default" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800">
+                  {nativeDevices.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-            <select
-              value={deviceId}
-              onChange={(e) => onChangeDevice(e.target.value)}
-              className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
-            >
-              <option value="">System default</option>
-              {devices.map((d) => (
-                <option key={d.deviceId} value={d.deviceId}>
-                  {d.label || `Device ${d.deviceId.slice(0, 6)}`}
-                </option>
-              ))}
-            </select>
-          </label>
+          )
+        ) : (
+          browserDevices.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-wider text-zinc-500">
+                Input device
+              </p>
+              <Select value={browserDeviceId} onValueChange={onChangeBrowser}>
+                <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+                  <SelectValue placeholder="System default" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800">
+                  <SelectItem value="">System default</SelectItem>
+                  {browserDevices.map((d) => (
+                    <SelectItem key={d.deviceId} value={d.deviceId}>
+                      {d.label || `Device ${d.deviceId.slice(0, 6)}`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )
         )}
-        <MicTest
-          key={deviceId /* rebuild stream when device changes */}
-          deviceId={deviceId || undefined}
-          onPermissionGranted={refreshDevices}
-          onVerified={refreshDevices}
-        />
+
+        {/* Level meter */}
+        {isNative ? (
+          <NativeLevelMeter deviceName={nativeDevice} />
+        ) : (
+          <MicTest
+            key={browserDeviceId}
+            deviceId={browserDeviceId || undefined}
+            onPermissionGranted={refreshBrowserDevices}
+            onVerified={refreshBrowserDevices}
+          />
+        )}
+
         <p className="text-[11px] text-zinc-600 leading-relaxed">
-          The selection persists across reloads and is plumbed into
-          Pipecat's voice client, so the next voice session uses this
-          input. "System default" means whatever macOS picks at the
-          time of the session.
+          {isNative
+            ? 'Device selection is passed to the native audio engine. Changes take effect on the next voice session.'
+            : 'The selection persists across reloads and is plumbed into the voice client. "System default" means whatever macOS picks at the time of the session.'}
         </p>
       </div>
     </Panel>
