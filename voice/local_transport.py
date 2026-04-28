@@ -261,3 +261,16 @@ class LocalAudioTransport(BaseTransport):
             await self._writer.drain()
         except Exception as e:
             logger.error(f"[local_transport] control write error: {e}")
+
+    async def _send_control_nowait(self, code: int) -> None:
+        """Write a control frame without awaiting drain — safe to call from
+        an observer where blocking the pipeline event loop must be avoided.
+        Best-effort: if the writer is gone or errors, silently returns."""
+        if not self._writer:
+            return
+        frame = _encode_control(code)
+        try:
+            self._writer.write(frame)
+            # Don't await drain — let the OS buffer absorb the small control frame.
+        except Exception as e:
+            logger.debug(f"[local_transport] control_nowait write error: {e}")

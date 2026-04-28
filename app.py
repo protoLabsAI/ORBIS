@@ -76,6 +76,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm import make_llm
 from voice.transport_factory import AUDIO_TRANSPORT, make_transport
+from voice.native_bargein import NativeBargeInObserver
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -1086,6 +1087,15 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         user_id=None,  # multi-tenant work assigns per-client ids later
     )
 
+    # In native mode, also observe for barge-in so the Rust CPAL ring is
+    # flushed immediately when the user interrupts the bot.
+    from voice.local_transport import LocalAudioTransport as _LocalAudioTransport
+    _native_observers = (
+        [NativeBargeInObserver(transport)]
+        if AUDIO_TRANSPORT == "native" and isinstance(transport, _LocalAudioTransport)
+        else []
+    )
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
@@ -1098,6 +1108,7 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
             # bot-tts-*, user-*, function-call-*). Client consumption
             # will land with the React frontend migration.
             rtvi.create_rtvi_observer(params=RTVIObserverParams()),
+            *_native_observers,
         ],
     )
 
