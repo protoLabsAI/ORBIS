@@ -79,6 +79,7 @@ from voice.transport_factory import AUDIO_TRANSPORT, make_transport
 from voice.native_bargein import NativeBargeInObserver
 from voice.tee_processor import LocalAudioOutputSink, TeeOutputProcessor, WebRTCOutputSink
 from voice.multi_input_mixer import MultiInputMixer
+from voice.sse_bus import sse_bus
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -751,6 +752,65 @@ _native_tee: TeeOutputProcessor | None = None
 _native_mixer: MultiInputMixer | None = None
 
 
+# ---------------------------------------------------------------------------
+# Phase 5: SSE state observer
+# ---------------------------------------------------------------------------
+
+class SseBusObserver:
+    """Pipeline observer that mirrors bot state transitions onto sse_bus.
+
+    Publishes ``bot-state``, ``transcript``, and ``session`` events so the
+    frontend can drive the orb animation in native audio mode (where the
+    WebRTC RTVI data channel is absent).
+    """
+
+    def __init__(self) -> None:
+        from pipecat.frames.frames import (
+            BotStartedSpeakingFrame,
+            BotStoppedSpeakingFrame,
+            LLMFullResponseStartFrame,
+            TranscriptionFrame,
+            UserStartedSpeakingFrame,
+            LLMTextFrame,
+        )
+        self._BotStartedSpeakingFrame = BotStartedSpeakingFrame
+        self._BotStoppedSpeakingFrame = BotStoppedSpeakingFrame
+        self._LLMFullResponseStartFrame = LLMFullResponseStartFrame
+        self._TranscriptionFrame = TranscriptionFrame
+        self._UserStartedSpeakingFrame = UserStartedSpeakingFrame
+        self._LLMTextFrame = LLMTextFrame
+        self._bot_text_buf: list[str] = []
+
+    async def on_push_frame(self, src, dst, frame, direction, timestamp) -> None:
+        """Called by pipecat for every frame traversal."""
+        F = frame  # brevity
+        if isinstance(F, self._BotStartedSpeakingFrame):
+            self._bot_text_buf.clear()
+            await sse_bus.publish("bot-state", {"state": "speaking"})
+        elif isinstance(F, self._BotStoppedSpeakingFrame):
+            # Emit the accumulated bot text as a final transcript.
+            if self._bot_text_buf:
+                text = "".join(self._bot_text_buf)
+                await sse_bus.publish("transcript", {"source": "bot", "text": text, "final": True})
+                self._bot_text_buf.clear()
+            await sse_bus.publish("bot-state", {"state": "idle"})
+        elif isinstance(F, self._UserStartedSpeakingFrame):
+            await sse_bus.publish("bot-state", {"state": "listening"})
+        elif isinstance(F, self._LLMFullResponseStartFrame):
+            await sse_bus.publish("bot-state", {"state": "thinking"})
+        elif isinstance(F, self._TranscriptionFrame):
+            if F.text:
+                await sse_bus.publish("transcript", {
+                    "source": "user",
+                    "text": F.text,
+                    "final": F.final if hasattr(F, "final") else True,
+                })
+        elif isinstance(F, self._LLMTextFrame):
+            # Accumulate bot response text; emitted as one transcript on BotStopped.
+            if F.text:
+                self._bot_text_buf.append(F.text)
+
+
 async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport=None) -> None:
     """One bot instance per connected client.
 
@@ -1141,6 +1201,9 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
             # bot-tts-*, user-*, function-call-*). Client consumption
             # will land with the React frontend migration.
             rtvi.create_rtvi_observer(params=RTVIObserverParams()),
+            # Phase 5: SSE bus observer — mirrors state transitions to
+            # /api/events so the frontend works in native audio mode.
+            SseBusObserver(),
             *_native_observers,
         ],
     )
@@ -1249,6 +1312,9 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         _tracing.start_session(sid)
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
+        # Phase 5: notify SSE subscribers that a session has started.
+        await sse_bus.publish("session", {"event": "start", "session_id": sid})
+        await sse_bus.publish("bot-state", {"state": "idle"})
         # Reset echo-guard state so stale bot_stopped_at from a previous
         # session doesn't suppress audio at the start of a new one.
         _ECHO_STATE.bot_speaking = False
@@ -1330,6 +1396,9 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         state.active_session_id = None
         _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
+        # Phase 5: notify SSE subscribers that the session has ended.
+        await sse_bus.publish("session", {"event": "end"})
+        await sse_bus.publish("bot-state", {"state": "idle"})
         _cancel_progress()
         if _native_mixer is not None:
             _native_mixer.stop()
@@ -1544,6 +1613,28 @@ async def health():
             "smart_turn": SMART_TURN,
         },
     }
+
+
+@app.get("/api/events")
+async def events(user: User = Depends(require_user)):
+    """Server-Sent Events stream of real-time bot state for native audio mode.
+
+    The frontend (VoiceStateBridge) subscribes here when AUDIO_TRANSPORT=native
+    so it can animate the orb and update the status pill without a WebRTC
+    connection.  In WebRTC mode the RTVI data channel is used instead and this
+    endpoint is still available but typically unused.
+
+    Events emitted:
+        bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
+        transcript  {"source": "user"|"bot", "text": "...", "final": true|false}
+        session     {"event": "start"|"end", "session_id": "..."}
+    """
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        sse_bus.subscribe(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/metrics")

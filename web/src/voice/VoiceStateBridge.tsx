@@ -2,28 +2,62 @@ import { RTVIEvent } from '@pipecat-ai/client-js';
 import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
 import { useEffect } from 'react';
 import { voiceStore } from './state';
+import { useNativeBridge } from './useNativeBridge';
 
 /**
  * Invisible component — subscribes to RTVI events and drives the
  * derived voiceStore. Mount once, inside PipecatClientProvider.
  *
- * State-machine mapping:
+ * State-machine mapping (WebRTC / RTVI path):
  *   UserStartedSpeaking        → listening
  *   BotLlmStarted              → thinking
  *   BotStartedSpeaking         → speaking
- *   BotStoppedSpeaking + user-silent → idle (resolved by settle)
+ *   BotStoppedSpeaking         → idle
+ *
+ * Native audio path:
+ *   On mount, fetches /healthz to detect AUDIO_TRANSPORT=native.
+ *   If native, useNativeBridge() opens an EventSource on /api/events and
+ *   translates SSE events into the same voiceStore updates, so the orb
+ *   and status pill behave identically regardless of audio backend.
  */
 export function VoiceStateBridge() {
   const transportState = usePipecatClientTransportState();
 
-  // Transport-level state flows into the snapshot.
+  // Detect audio transport mode once on mount by reading /healthz.
+  // This is a one-shot fetch — AUDIO_TRANSPORT never changes at runtime.
+  useEffect(() => {
+    fetch('/healthz')
+      .then((r) => r.json())
+      .then((data) => {
+        const transport = data?.audio?.transport ?? 'webrtc';
+        voiceStore.update({
+          audioTransport: transport === 'native' ? 'native' : 'webrtc',
+        });
+      })
+      .catch(() => {
+        // Server not ready yet or CORS issue — keep default 'webrtc'.
+      });
+  }, []);
+
+  // Phase 5: open the SSE bridge in native mode.
+  // useNativeBridge is a no-op when audioTransport !== 'native'.
+  useNativeBridge();
+
+  // Transport-level state flows into the snapshot (WebRTC path only).
+  // In native mode, transportState stays 'disconnected' (no WebRTC) — the
+  // SSE bridge sets connected=true / transportState='ready' independently.
   useEffect(() => {
     voiceStore.update({
       transportState,
       connected: transportState === 'ready' || transportState === 'connected',
     });
     if (transportState === 'disconnected') {
-      voiceStore.update({ state: 'idle' });
+      // Only reset connected to false in WebRTC mode; in native mode the
+      // SSE bridge owns the connected flag.
+      const snap = voiceStore.getSnapshot();
+      if (snap.audioTransport !== 'native') {
+        voiceStore.update({ state: 'idle' });
+      }
     }
   }, [transportState]);
 

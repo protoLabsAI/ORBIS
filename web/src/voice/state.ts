@@ -17,6 +17,8 @@ export interface VoiceSnapshot {
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
   sessionId: string | null;
+  /** 'native' when AUDIO_TRANSPORT=native (CPAL desktop); 'webrtc' otherwise. */
+  audioTransport: 'native' | 'webrtc';
   // Rolling counters — handy for plugins to notice "something happened"
   // without holding full event lists.
   epoch: number;
@@ -30,6 +32,7 @@ const INITIAL: VoiceSnapshot = {
   lastBotText: null,
   activeToolCall: null,
   sessionId: null,
+  audioTransport: 'webrtc',
   epoch: 0,
 };
 
