@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { RTVIEvent } from '@pipecat-ai/client-js';
 import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
+import { useVoiceStateSelector } from '@/voice/hooks';
 import { statusPillStore } from './store';
 
 const IDLE_HINT = 'double-click the orb to start';
+const NATIVE_HINT = 'just speak';
 const CONNECTING_HINT = 'connecting…';
 const CONNECTED_HINT = 'connected — speak';
 const FADE_MS = 3000;
 
 export function StatusPill() {
   const transport = usePipecatClientTransportState();
+  const audioTransport = useVoiceStateSelector((s) => s.audioTransport);
+  const isNative = audioTransport === 'native';
   const [transient, setTransient] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
   const externalTransient = useSyncExternalStore(
@@ -67,6 +71,9 @@ export function StatusPill() {
   let text: string | null;
   if (overlay) {
     text = overlay;
+  } else if (isNative) {
+    // In native mode the pipeline is always running — no connect needed.
+    text = NATIVE_HINT;
   } else if (connecting) {
     text = CONNECTING_HINT;
   } else if (disconnected) {
