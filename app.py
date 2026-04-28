@@ -784,9 +784,9 @@ class SseBusObserver:
         self._LLMTextFrame = LLMTextFrame
         self._bot_text_buf: list[str] = []
 
-    async def on_push_frame(self, src, dst, frame, direction, timestamp) -> None:
-        """Called by pipecat for every frame traversal."""
-        F = frame  # brevity
+    async def on_push_frame(self, data) -> None:
+        """Called by pipecat for every frame traversal (Pipecat 1.1+ API)."""
+        F = data.frame  # brevity
         if isinstance(F, self._BotStartedSpeakingFrame):
             self._bot_text_buf.clear()
             await sse_bus.publish("bot-state", {"state": "speaking"})
@@ -812,6 +812,10 @@ class SseBusObserver:
             # Accumulate bot response text; emitted as one transcript on BotStopped.
             if F.text:
                 self._bot_text_buf.append(F.text)
+
+    async def cleanup(self) -> None:
+        """Pipecat 1.1+ calls cleanup() on all observers at teardown."""
+        pass
 
 
 async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport=None) -> None:
