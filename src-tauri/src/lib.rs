@@ -120,6 +120,31 @@ impl AudioEngineState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tauri IPC commands — native audio
+// ---------------------------------------------------------------------------
+
+/// Return the names of all CPAL input devices on the host.
+/// Only compiled when the `native-audio` feature is active.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn list_audio_inputs() -> Vec<String> {
+    audio::engine::AudioEngine::list_input_devices()
+}
+
+/// Return the current microphone RMS level (0.0–1.0) from the running
+/// engine, or 0.0 if the engine hasn't started yet.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn get_audio_level(state: tauri::State<AudioEngineState>) -> f32 {
+    state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|e| e.current_rms()))
+        .unwrap_or(0.0)
+}
+
 /// Tauri-managed state: the currently-spawned sidecar child, guarded
 /// so the exit handler can kill it from outside the async task.
 struct Sidecar {
@@ -169,6 +194,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .invoke_handler({
+            #[cfg(feature = "native-audio")]
+            { tauri::generate_handler![list_audio_inputs, get_audio_level] }
+            #[cfg(not(feature = "native-audio"))]
+            { tauri::generate_handler![] }
+        })
         .manage(Sidecar::new())
         .setup(|app| {
             // Register native audio engine state. Must be done in setup()

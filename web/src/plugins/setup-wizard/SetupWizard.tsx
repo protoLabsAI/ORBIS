@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { invoke } from '@tauri-apps/api/core';
 import { api, type StarterOrb } from '@/lib/api';
 import { authHeaders } from '@/auth/apiKey';
 import { LLM_PRESETS } from '@/shared/llm/presets';
@@ -1111,6 +1119,52 @@ function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 }
 
 
+function NativeLevelMeter({ deviceName }: { deviceName: string }) {
+  const [level, setLevel] = useState(0);
+  useEffect(() => {
+    const id = setInterval(async () => {
+      try {
+        const rms = await invoke<number>('get_audio_level');
+        // Boost RMS to make the meter feel responsive (typical speech ~0.02–0.1)
+        setLevel(Math.min(1, rms * 6));
+      } catch {
+        // engine not started yet
+      }
+    }, 80);
+    return () => clearInterval(id);
+  }, [deviceName]);
+
+  const bars = 20;
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-0.5 h-6 items-end">
+        {Array.from({ length: bars }).map((_, i) => {
+          const threshold = (i + 1) / bars;
+          const active = level >= threshold;
+          return (
+            <div
+              key={i}
+              className={`flex-1 rounded-sm transition-all duration-75 ${
+                active
+                  ? i / bars < 0.6
+                    ? 'bg-emerald-500'
+                    : i / bars < 0.85
+                    ? 'bg-yellow-400'
+                    : 'bg-red-500'
+                  : 'bg-zinc-800'
+              }`}
+              style={{ height: `${40 + (i / bars) * 60}%` }}
+            />
+          );
+        })}
+      </div>
+      <p className="text-xs text-zinc-600 text-center">
+        Speak to test — level meter reflects live input
+      </p>
+    </div>
+  );
+}
+
 function MicStep({
   onNext,
   onBack,
@@ -1121,105 +1175,126 @@ function MicStep({
   audioTransport: 'native' | 'webrtc';
 }) {
   const [verified, setVerified] = useState(audioTransport === 'native');
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceIdState] = useState<string>(() =>
+  // WebRTC browser devices
+  const [browserDevices, setBrowserDevices] = useState<MediaDeviceInfo[]>([]);
+  const [browserDeviceId, setBrowserDeviceId] = useState<string>(() =>
     getPreferredAudioDeviceId(),
   );
+  // Native CPAL devices
+  const [nativeDevices, setNativeDevices] = useState<string[]>([]);
+  const [nativeDevice, setNativeDevice] = useState<string>('');
 
-  const onChangeDevice = (id: string) => {
-    // Reset verification when the user picks a different mic — the
-    // previous device's verified state shouldn't carry over to a fresh
-    // input that hasn't been tested. (CodeRabbit major #14 on PR #30
-    // and the duplicate finding on the second pass both flag this.)
-    setDeviceIdState(id);
+  const onChangeBrowserDevice = (id: string) => {
+    setBrowserDeviceId(id);
     setPreferredAudioDeviceId(id);
     setVerified(false);
   };
 
-  const refreshDevices = async () => {
+  const onChangeNativeDevice = (name: string) => {
+    setNativeDevice(name);
+    // Persist so the sidecar can pick it up on restart
+    setPreferredAudioDeviceId(name);
+  };
+
+  const refreshBrowserDevices = async () => {
     try {
       const all = await navigator.mediaDevices.enumerateDevices();
-      // Browsers only expose labeled audioinput devices once permission
-      // has been granted, so the picker stays empty until after the
-      // first successful test — that's why MicTest's onVerified hook
-      // also calls back into this refresh.
-      setDevices(all.filter((d) => d.kind === 'audioinput'));
+      setBrowserDevices(all.filter((d) => d.kind === 'audioinput'));
     } catch {
-      // Permission not yet granted — picker stays hidden.
+      // permission not yet granted — picker stays empty
     }
   };
 
   useEffect(() => {
-    if (audioTransport !== 'native') void refreshDevices();
+    if (audioTransport === 'native') {
+      invoke<string[]>('list_audio_inputs')
+        .then((devs) => {
+          setNativeDevices(devs);
+          if (devs.length > 0) setNativeDevice(devs[0]);
+        })
+        .catch(() => {});
+    } else {
+      void refreshBrowserDevices();
+    }
   }, [audioTransport]);
-
-  // Native mode: mic is owned by the CPAL/Rust layer — no getUserMedia.
-  if (audioTransport === 'native') {
-    return (
-      <div className="space-y-6">
-        <div className="text-center space-y-2">
-          <h2 className="text-lg text-zinc-200">Microphone</h2>
-          <p className="text-sm text-zinc-500 max-w-sm mx-auto">
-            Audio is handled natively by the desktop app. Mic access is
-            managed by macOS — no browser permission needed.
-          </p>
-          <p className="text-xs text-zinc-600 max-w-sm mx-auto">
-            To change the input device, use System Settings → Sound, or the
-            ORBIS settings panel after setup.
-          </p>
-        </div>
-        <div className="flex justify-between pt-2">
-          <Button variant="ghost" onClick={onBack}>Back</Button>
-          <Button onClick={onNext}>Continue</Button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Microphone</h2>
         <p className="text-sm text-zinc-500 max-w-sm mx-auto">
-          ORBIS is voice-first. Grant mic access and watch the level meter
-          react to your voice before we hatch.
+          ORBIS is voice-first.{' '}
+          {audioTransport === 'native'
+            ? 'Select your input device and watch the level meter react to your voice.'
+            : 'Grant mic access and watch the level meter react to your voice before we hatch.'}
         </p>
       </div>
 
-      {devices.length > 0 && (
-        <label className="block">
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
-            Input device
+      {/* Device picker — shadcn Select for both paths */}
+      {audioTransport === 'native' ? (
+        nativeDevices.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-xs uppercase tracking-wider text-zinc-500">
+              Input device
+            </p>
+            <Select value={nativeDevice} onValueChange={onChangeNativeDevice}>
+              <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+                <SelectValue placeholder="System default" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-900 border-zinc-800">
+                {nativeDevices.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-          <select
-            value={deviceId}
-            onChange={(e) => onChangeDevice(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
-          >
-            <option value="">System default</option>
-            {devices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>
-                {d.label || `Device ${d.deviceId.slice(0, 6)}`}
-              </option>
-            ))}
-          </select>
-        </label>
+        )
+      ) : (
+        browserDevices.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-xs uppercase tracking-wider text-zinc-500">
+              Input device
+            </p>
+            <Select value={browserDeviceId} onValueChange={onChangeBrowserDevice}>
+              <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+                <SelectValue placeholder="System default" />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-900 border-zinc-800">
+                <SelectItem value="">System default</SelectItem>
+                {browserDevices.map((d) => (
+                  <SelectItem key={d.deviceId} value={d.deviceId}>
+                    {d.label || `Device ${d.deviceId.slice(0, 6)}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )
       )}
 
-      <MicTest
-        key={deviceId /* rebuild stream when device changes */}
-        deviceId={deviceId || undefined}
-        onPermissionGranted={() => void refreshDevices()}
-        onVerified={() => {
-          setVerified(true);
-          void refreshDevices();
-        }}
-      />
+      {/* Level meter */}
+      {audioTransport === 'native' ? (
+        <NativeLevelMeter deviceName={nativeDevice} />
+      ) : (
+        <MicTest
+          key={browserDeviceId}
+          deviceId={browserDeviceId || undefined}
+          onPermissionGranted={() => void refreshBrowserDevices()}
+          onVerified={() => {
+            setVerified(true);
+            void refreshBrowserDevices();
+          }}
+        />
+      )}
 
       <div className="flex justify-between pt-2">
         <Button variant="ghost" onClick={onBack}>Back</Button>
         <div className="flex gap-2">
-          <Button variant="ghost" onClick={onNext}>Skip for now</Button>
+          {audioTransport !== 'native' && (
+            <Button variant="ghost" onClick={onNext}>Skip for now</Button>
+          )}
           <Button onClick={onNext} disabled={!verified}>Continue</Button>
         </div>
       </div>

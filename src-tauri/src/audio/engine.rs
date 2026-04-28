@@ -10,6 +10,7 @@
 //! callback drains.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -46,6 +47,9 @@ pub struct AudioEngine {
     playback_ring: PlaybackRing,
     /// AEC processor, shared with the input callback.
     aec: Arc<Mutex<AecProcessor>>,
+    /// Current input RMS level (0.0–1.0), updated by the input callback.
+    /// Stored as f32 bits in an AtomicU32 for lock-free reads from the UI.
+    rms: Arc<AtomicU32>,
     // Keep streams alive — they stop when dropped.
     _input_stream: Stream,
     _output_stream: Stream,
@@ -94,9 +98,10 @@ impl AudioEngine {
 
         let aec = Arc::new(Mutex::new(AecProcessor::from_env()));
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
+        let rms = Arc::new(AtomicU32::new(0));
 
         let input_stream =
-            build_input_stream(&input_device, tx.clone(), Arc::clone(&aec))?;
+            build_input_stream(&input_device, tx.clone(), Arc::clone(&aec), Arc::clone(&rms))?;
         let output_stream = build_output_stream(&output_device, Arc::clone(&playback_ring))?;
 
         input_stream
@@ -110,9 +115,15 @@ impl AudioEngine {
             tx,
             playback_ring,
             aec,
+            rms,
             _input_stream: input_stream,
             _output_stream: output_stream,
         })
+    }
+
+    /// Current microphone RMS level (0.0–1.0), updated every mic frame.
+    pub fn current_rms(&self) -> f32 {
+        f32::from_bits(self.rms.load(Ordering::Relaxed))
     }
 
     /// Enqueue TTS PCM samples for playback.
@@ -165,6 +176,7 @@ fn build_input_stream(
     device: &Device,
     tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     aec: Arc<Mutex<AecProcessor>>,
+    rms: Arc<AtomicU32>,
 ) -> Result<Stream, String> {
     // Try to get a 16 kHz mono config; fall back to default supported.
     let config = preferred_input_config(device)?;
@@ -196,6 +208,20 @@ fn build_input_stream(
                             (avg * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16
                         })
                         .collect();
+
+                    // Update RMS for the UI level meter (computed on raw
+                    // f32 mono before resampling for accuracy).
+                    let rms_val = {
+                        let sum_sq: f32 = data
+                            .chunks(channels)
+                            .map(|ch| {
+                                let avg = ch.iter().sum::<f32>() / channels as f32;
+                                avg * avg
+                            })
+                            .sum();
+                        (sum_sq / data.len().max(1) as f32).sqrt()
+                    };
+                    rms.store(rms_val.to_bits(), Ordering::Relaxed);
 
                     // Resample to 16 kHz if needed.
                     let resampled = if native_rate != MIC_SAMPLE_RATE {
