@@ -784,8 +784,16 @@ class SseBusObserver:
         self._LLMTextFrame = LLMTextFrame
         self._bot_text_buf: list[str] = []
 
+    async def on_pipeline_started(self) -> None:
+        """Pipecat 1.1+ pipeline started signal."""
+        pass
+
+    async def on_process_frame(self, data) -> None:
+        """Pipecat 1.1+ per-processor frame event; not used here."""
+        pass
+
     async def on_push_frame(self, data) -> None:
-        """Called by pipecat for every frame traversal (Pipecat 1.1+ API)."""
+        """Called by pipecat for every frame push between processors."""
         F = data.frame  # brevity
         if isinstance(F, self._BotStartedSpeakingFrame):
             self._bot_text_buf.clear()
