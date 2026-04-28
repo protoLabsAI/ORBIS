@@ -50,7 +50,10 @@ use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+#[cfg(feature = "native-audio")]
+mod audio;
 
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent};
@@ -89,6 +92,33 @@ const STDERR_RING_CAPACITY: usize = 80;
 
 /// Exit code the Python hardware probe uses. See agent/hardware.py.
 const HARDWARE_EXIT_CODE: i32 = 2;
+
+/// Tauri-managed state: the native CPAL audio engine, kept alive for
+/// the duration of the app. Only present when `native-audio` feature
+/// is compiled in and `AUDIO_TRANSPORT=native` is set at runtime.
+#[cfg(feature = "native-audio")]
+struct AudioEngineState {
+    engine: Mutex<Option<Arc<audio::engine::AudioEngine>>>,
+}
+
+#[cfg(feature = "native-audio")]
+impl AudioEngineState {
+    fn new() -> Self {
+        Self { engine: Mutex::new(None) }
+    }
+    fn store(&self, engine: Arc<audio::engine::AudioEngine>) {
+        if let Ok(mut g) = self.engine.lock() {
+            *g = Some(engine);
+        }
+    }
+    fn flush_playback(&self) {
+        if let Ok(g) = self.engine.lock() {
+            if let Some(e) = g.as_ref() {
+                e.flush_playback();
+            }
+        }
+    }
+}
 
 /// Tauri-managed state: the currently-spawned sidecar child, guarded
 /// so the exit handler can kill it from outside the async task.
@@ -141,6 +171,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Sidecar::new())
         .setup(|app| {
+            // Register native audio engine state. Must be done in setup()
+            // so it's available before supervise_sidecar runs.
+            #[cfg(feature = "native-audio")]
+            app.manage(AudioEngineState::new());
+
             let handle = app.handle().clone();
             // Spawn the sidecar on an async task so setup() returns
             // immediately + the splash window renders while the
@@ -168,6 +203,11 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<Sidecar>() {
                     log::info!("app exit requested — killing sidecar");
                     state.kill();
+                }
+                // Flush CPAL playback ring so audio doesn't click on exit.
+                #[cfg(feature = "native-audio")]
+                if let Some(state) = app_handle.try_state::<AudioEngineState>() {
+                    state.flush_playback();
                 }
             }
         });
@@ -231,6 +271,50 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         log::info!("sidecar env: ORBIS_STARTER_ORBS={}", p.display());
     }
 
+    // --- Native audio engine (optional) ---
+    // Start CPAL mic/speaker engine and Unix socket server when
+    // AUDIO_TRANSPORT=native. The socket path is passed to the sidecar
+    // as ORBIS_AUDIO_SOCK so Python can connect to it.
+    #[cfg(feature = "native-audio")]
+    let native_audio_sock: Option<std::path::PathBuf> = {
+        if std::env::var("AUDIO_TRANSPORT").as_deref() == Ok("native") {
+            let (mic_tx, mic_rx) =
+                tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
+            match audio::engine::AudioEngine::new(None, mic_tx) {
+                Ok(engine) => {
+                    let engine = Arc::new(engine);
+                    if let Some(state) = app.try_state::<AudioEngineState>() {
+                        state.store(Arc::clone(&engine));
+                    }
+                    let sock_server = match audio::socket::SocketServer::bind() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return Err(format!("native audio socket bind failed: {e}"));
+                        }
+                    };
+                    let sock_path = sock_server.path().clone();
+                    log::info!(
+                        "orbis_audio_sock={}",
+                        sock_path.display()
+                    );
+                    // Accept loop runs in a background task.
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = sock_server.accept_and_run(engine, mic_rx).await {
+                            log::error!("[audio/socket] accept_and_run failed: {e}");
+                        }
+                    });
+                    Some(sock_path)
+                }
+                Err(e) => {
+                    log::warn!("[audio] failed to start native audio engine: {e} — falling back to WebRTC");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
     // `sidecar("orbis")` resolves to `binaries/orbis-<target>` on the
     // bundle or `./binaries/orbis-<target>` during `tauri dev`.
     // Target-suffix resolution is Tauri's job — we just give the base
@@ -248,6 +332,12 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // "No starters configured on the server."
     if let Some(p) = starter_orbs_path.as_ref() {
         command = command.env("ORBIS_STARTER_ORBS", p);
+    }
+    // Pass the native audio socket path to Python when running in
+    // native mode. Python reads ORBIS_AUDIO_SOCK to connect.
+    #[cfg(feature = "native-audio")]
+    if let Some(ref sock_path) = native_audio_sock {
+        command = command.env("ORBIS_AUDIO_SOCK", sock_path);
     }
 
     let (mut rx, child) = command
