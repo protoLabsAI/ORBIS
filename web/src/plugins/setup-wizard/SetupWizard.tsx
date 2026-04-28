@@ -59,6 +59,16 @@ export function SetupWizard() {
 
 function WizardFlow({ onFinish }: { onFinish: () => void }) {
   const [step, setStep] = useState<Step>('welcome');
+  const [audioTransport, setAudioTransport] = useState<'native' | 'webrtc'>('webrtc');
+
+  useEffect(() => {
+    fetch('/healthz')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.audio?.transport === 'native') setAudioTransport('native');
+      })
+      .catch(() => {});
+  }, []);
 
   if (step === 'hatching') {
     return <HatchAnimation onDone={onFinish} />;
@@ -92,6 +102,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
             <MicStep
               onNext={() => setStep('enroll')}
               onBack={() => setStep('pick')}
+              audioTransport={audioTransport}
             />
           )}
           {step === 'enroll' && (
@@ -1104,8 +1115,16 @@ function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 }
 
 
-function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [verified, setVerified] = useState(false);
+function MicStep({
+  onNext,
+  onBack,
+  audioTransport,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  audioTransport: 'native' | 'webrtc';
+}) {
+  const [verified, setVerified] = useState(audioTransport === 'native');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceIdState] = useState<string>(() =>
     getPreferredAudioDeviceId(),
@@ -1135,8 +1154,31 @@ function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   };
 
   useEffect(() => {
-    void refreshDevices();
-  }, []);
+    if (audioTransport !== 'native') void refreshDevices();
+  }, [audioTransport]);
+
+  // Native mode: mic is owned by the CPAL/Rust layer — no getUserMedia.
+  if (audioTransport === 'native') {
+    return (
+      <div className="space-y-6">
+        <div className="text-center space-y-2">
+          <h2 className="text-lg text-zinc-200">Microphone</h2>
+          <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+            Audio is handled natively by the desktop app. Mic access is
+            managed by macOS — no browser permission needed.
+          </p>
+          <p className="text-xs text-zinc-600 max-w-sm mx-auto">
+            To change the input device, use System Settings → Sound, or the
+            ORBIS settings panel after setup.
+          </p>
+        </div>
+        <div className="flex justify-between pt-2">
+          <Button variant="ghost" onClick={onBack}>Back</Button>
+          <Button onClick={onNext}>Continue</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
