@@ -275,9 +275,11 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // Start CPAL mic/speaker engine and Unix socket server when
     // AUDIO_TRANSPORT=native. The socket path is passed to the sidecar
     // as ORBIS_AUDIO_SOCK so Python can connect to it.
+    // When compiled with --features native-audio the desktop app always
+    // runs in native mode — no env var override required.
     #[cfg(feature = "native-audio")]
     let native_audio_sock: Option<std::path::PathBuf> = {
-        if std::env::var("AUDIO_TRANSPORT").as_deref() == Ok("native") {
+        if true {
             let (mic_tx, mic_rx) =
                 tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
             match audio::engine::AudioEngine::new(None, mic_tx) {
@@ -333,11 +335,14 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     if let Some(p) = starter_orbs_path.as_ref() {
         command = command.env("ORBIS_STARTER_ORBS", p);
     }
-    // Pass the native audio socket path to Python when running in
-    // native mode. Python reads ORBIS_AUDIO_SOCK to connect.
+    // Pass AUDIO_TRANSPORT=native + socket path to Python when built
+    // with native-audio. Python reads both to activate the CPAL pipeline
+    // and to report the correct transport in /healthz.
     #[cfg(feature = "native-audio")]
     if let Some(ref sock_path) = native_audio_sock {
-        command = command.env("ORBIS_AUDIO_SOCK", sock_path);
+        command = command
+            .env("AUDIO_TRANSPORT", "native")
+            .env("ORBIS_AUDIO_SOCK", sock_path);
     }
 
     let (mut rx, child) = command

@@ -378,7 +378,7 @@ jobs:
             unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           fi
           echo "Signing mode: ${SIGNED}"
-          cargo tauri build
+          cargo tauri build --features native-audio
 
       - name: Locate installer artifact
         shell: bash
