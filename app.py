@@ -55,6 +55,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -111,7 +112,7 @@ from agent.speaker_gate import (
     load_voiceprint,
     save_voiceprint,
 )
-from agent.prosody import ProsodyTagStripper
+from agent.prosody import ProsodyTagStripper, ThinkTagStripper
 from agent.filler import (
     FillerGenerator,
     Latency,
@@ -1001,7 +1002,14 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     )
 
     _turn_strategies = _build_user_turn_strategies()
-    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer()}
+    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.85,   # default 0.7 — stricter to avoid ambient triggers
+            start_secs=0.3,    # default 0.2
+            stop_secs=0.4,     # default 0.2 — longer pause before cutting
+            min_volume=0.75,   # default 0.6 — ignore low-level noise/fan hum
+        )
+    )}
     if _turn_strategies is not None:
         # Only pass user_turn_strategies when we actually built one — passing
         # None keeps the default (naive VAD endpointing).
@@ -1161,6 +1169,10 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         # clients simultaneously. In WebRTC-only mode it falls back to
         # the standard transport.output() single-sink node.
         _output_node,
+        # Strip LLM chain-of-thought blocks (<think>…</think>) before TTS
+        # and context. Safety net for models that emit thinking tokens even
+        # when enable_thinking=False is set (e.g. groq reasoning variants).
+        ThinkTagStripper(),
         # Strip Fish-style prosody tags from TextFrames before the
         # assistant aggregator sees them, so tags don't accumulate in LLM
         # context for future turns. Applies regardless of backend — safety

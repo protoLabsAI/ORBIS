@@ -39,6 +39,15 @@ _BRACKET_TAG_RE = re.compile(r"\[[a-z][a-z0-9_-]*(?::[^\]]*)?\]")
 # SSML break tags: `<break time="300ms"/>` or `<break/>`.
 _SSML_BREAK_RE = re.compile(r"<break\b[^/>]*/?>", re.IGNORECASE)
 
+# Thinking / chain-of-thought blocks emitted by some models (Qwen3,
+# DeepSeek-R1, etc.) that leak into the voice pipeline when
+# enable_thinking is not suppressed at the model layer.
+# Matches <think>…</think> including multi-line and partial open tags
+# that haven't been closed yet.
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+# Partial open tag at the very end of a buffer (not yet closed).
+_THINK_OPEN_RE = re.compile(r"<think>.*$", re.IGNORECASE | re.DOTALL)
+
 
 def strip_tags(text: str) -> str:
     """Remove bracket prosody tags + SSML breaks from text. Safe for all
@@ -51,6 +60,17 @@ def strip_tags(text: str) -> str:
     # newlines. Multiple spaces around a stripped tag → one space.
     out = re.sub(r"[ \t]{2,}", " ", out)
     return out.strip(" \t")
+
+
+def strip_think_blocks(text: str) -> str:
+    """Remove complete <think>…</think> blocks and any unclosed <think>…
+    tail. Used as a safety net regardless of enable_thinking setting."""
+    if not text or "<think" not in text.lower():
+        return text
+    out = _THINK_BLOCK_RE.sub("", text)
+    out = _THINK_OPEN_RE.sub("", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip()
 
 
 class ProsodyTextFilter(BaseTextFilter):
@@ -76,3 +96,54 @@ class ProsodyTagStripper(FrameProcessor):
             if cleaned != frame.text:
                 frame.text = cleaned
         await self.push_frame(frame, direction)
+
+
+class ThinkTagStripper(FrameProcessor):
+    """Drops <think>…</think> blocks from LLM TextFrames before they reach
+    TTS or the assistant aggregator.
+
+    Some models (Qwen3, DeepSeek-R1, groq reasoning variants) emit
+    chain-of-thought inside <think> tags even when thinking is nominally
+    disabled. This processor accumulates text across frames so a block
+    that spans multiple streamed chunks is also caught.
+
+    Place BEFORE ProsodyTagStripper and TTS in the pipeline."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._buf = ""
+        self._in_think = False
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if not (isinstance(frame, TextFrame) and frame.text):
+            await self.push_frame(frame, direction)
+            return
+
+        self._buf += frame.text
+        out = ""
+
+        while self._buf:
+            if self._in_think:
+                end = self._buf.lower().find("</think>")
+                if end == -1:
+                    # Still inside think block, consume everything so far.
+                    self._buf = ""
+                    break
+                # Found closing tag — skip past it.
+                self._buf = self._buf[end + len("</think>"):]
+                self._in_think = False
+            else:
+                start = self._buf.lower().find("<think>")
+                if start == -1:
+                    out += self._buf
+                    self._buf = ""
+                    break
+                out += self._buf[:start]
+                self._buf = self._buf[start + len("<think>"):]
+                self._in_think = True
+
+        if out:
+            frame.text = out
+            await self.push_frame(frame, direction)
+        # else: frame was entirely think content — drop it silently
