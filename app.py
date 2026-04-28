@@ -77,6 +77,8 @@ from pipecat.services.openai.llm import OpenAILLMService
 from voice.llm import make_llm
 from voice.transport_factory import AUDIO_TRANSPORT, make_transport
 from voice.native_bargein import NativeBargeInObserver
+from voice.tee_processor import LocalAudioOutputSink, TeeOutputProcessor, WebRTCOutputSink
+from voice.multi_input_mixer import MultiInputMixer
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -741,6 +743,13 @@ FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 
 _handler = SmallWebRTCRequestHandler()
 
+# Phase 4: TTS fanout — populated by lifespan() when AUDIO_TRANSPORT=native.
+# offer() adds / removes WebRTCOutputSink entries so WebRTC clients hear TTS.
+_native_tee: TeeOutputProcessor | None = None
+# Phase 4: mic mixer — populated alongside _native_tee; WebRTC offer() routes
+# mic audio in via push_webrtc so both CPAL and WebRTC mic frames compete.
+_native_mixer: MultiInputMixer | None = None
+
 
 async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport=None) -> None:
     """One bot instance per connected client.
@@ -1004,6 +1013,26 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     # AUDIO_TAGS=off env.
     audio_tags = make_audio_tags_tap(mem=get_memory())
 
+    # Phase 4: build the output node.  In native mode we use a TeeOutputProcessor
+    # so TTS audio fans to both the CPAL speaker and any connected WebRTC clients.
+    # The module-level _native_tee is populated here so offer() can dynamically
+    # register / deregister WebRTCOutputSink entries without a restart.
+    global _native_tee, _native_mixer  # noqa: PLW0603
+    from voice.local_transport import LocalAudioTransport as _LocalAudioTransport_  # local alias
+    if AUDIO_TRANSPORT == "native" and isinstance(transport, _LocalAudioTransport_):
+        _cpal_sink = LocalAudioOutputSink(transport)
+        _output_node = TeeOutputProcessor(sinks=[_cpal_sink], name="TeeOutput")
+        _native_tee = _output_node
+        # Mic mixer: CPAL frames arrive via transport._reader_loop push_frame
+        # (already wired). WebRTC mic frames are pushed via mixer.push_webrtc
+        # from the offer() handler. The mixer emits winners into the pipeline
+        # via task.queue_frame — wired below after task creation.
+        _native_mixer = MultiInputMixer()
+    else:
+        _output_node = transport.output()
+        _native_tee = None
+        _native_mixer = None
+
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
@@ -1067,7 +1096,11 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
         # doesn't filter.
         tts,
-        transport.output(),
+        # In native mode the output node is a TeeOutputProcessor so TTS
+        # audio fans to both the CPAL speaker and any connected WebRTC
+        # clients simultaneously. In WebRTC-only mode it falls back to
+        # the standard transport.output() single-sink node.
+        _output_node,
         # Strip Fish-style prosody tags from TextFrames before the
         # assistant aggregator sees them, so tags don't accumulate in LLM
         # context for future turns. Applies regardless of backend — safety
@@ -1117,6 +1150,13 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
     backchannel.set_emitter(task.queue_frame)
+
+    # Phase 4: start the mic mixer if we are in native mode. The mixer
+    # emits the dominant-source InputAudioRawFrame into the pipeline via
+    # task.queue_frame. WebRTC mic frames arrive via push_webrtc() called
+    # from the offer() on_client_connected handler.
+    if _native_mixer is not None:
+        _native_mixer.start(task.queue_frame)
 
     # --- Duplex speak-while-thinking ---
     # Pre-tool acknowledgement ("hmm, let me check") is now emitted INLINE
@@ -1291,6 +1331,8 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
         _cancel_progress()
+        if _native_mixer is not None:
+            _native_mixer.stop()
         await task.cancel()
 
     await PipelineRunner(handle_sigint=False).run(task)
@@ -1418,13 +1460,49 @@ async def offer(
     bg: BackgroundTasks,
     user: User = Depends(require_user),
 ):
-    # In native mode the desktop app uses CPAL audio directly — there is
-    # no WebRTC session to offer. PWA/browser clients should still be able
-    # to connect via WebRTC once Phase 4 (TTS fanout) is implemented.
+    # Phase 4: native mode now accepts WebRTC offers — the TeeOutputProcessor
+    # fans TTS audio to both the CPAL speaker and this WebRTC client.
     if AUDIO_TRANSPORT == "native":
-        raise HTTPException(
-            status_code=410,
-            detail="WebRTC offer not available in native audio mode (Phase 4 pending)",
+        if _native_tee is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Native pipeline not yet ready — try again in a moment.",
+            )
+
+        tee = _native_tee
+        mixer = _native_mixer
+
+        async def on_native_conn(conn):
+            from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+            # Build a lightweight WebRTC transport just for this client's
+            # audio I/O.  We do NOT start a separate run_bot() — the shared
+            # native pipeline already owns the LLM/TTS chain.
+            from pipecat.transports.base_transport import TransportParams as _TP
+            webrtc_transport = SmallWebRTCTransport(
+                conn,
+                params=_TP(audio_out_enabled=True, audio_in_enabled=True),
+            )
+            out_sink = WebRTCOutputSink(webrtc_transport.output())
+            await tee.add_sink(out_sink)
+            logger.info("[phase4] WebRTC client connected — sink registered")
+
+            @webrtc_transport.event_handler("on_client_connected")
+            async def _wrtc_connect(_t, _c):
+                pass  # sink already added above
+
+            @webrtc_transport.event_handler("on_client_disconnected")
+            async def _wrtc_disconnect(_t, _c):
+                await tee.remove_sink(out_sink)
+                logger.info("[phase4] WebRTC client disconnected — sink removed")
+
+            # Route WebRTC mic frames into the mixer if available.
+            if mixer is not None:
+                @webrtc_transport.event_handler("on_audio_frame")
+                async def _wrtc_audio(_t, frame):
+                    mixer.push_webrtc(frame)
+
+        return await _handler.handle_web_request(
+            request=req, webrtc_connection_callback=on_native_conn
         )
 
     # Capture the resolved user id in the closure so run_bot can key
