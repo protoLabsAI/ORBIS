@@ -1,6 +1,113 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-27 (native CPAL audio transport Phases 1–5 + orb-control tool removal). Branch: `main`.*
+*Last updated 2026-04-28 (voice pipeline broken — triage in progress). Branch: `main`.*
+
+---
+
+## 🔴 ACTIVE INCIDENT: Voice completely non-functional
+
+**Symptom:** App launches, orb shows, but speaking does nothing. No STT, no LLM, no TTS.
+
+### Root cause (confirmed from log at 14:03:32)
+
+```
+ERROR | TaskObserver::<app.SseBusObserver>::_proxy_task_handler
+  unexpected exception (task_observer.py:191):
+  'SseBusObserver' object has no attribute 'on_process_frame'
+```
+
+`SseBusObserver` (in `app.py`) implements Pipecat's `TaskObserver` protocol.
+**Pipecat was upgraded from 1.0.0 → 1.1.0** between builds. The 1.1.0
+protocol requires four methods; `on_process_frame` was missing. The observer
+task crashes immediately at pipeline start — before any audio frames ever flow.
+All downstream processing (Whisper STT → LLM → Kokoro TTS) is dead.
+
+### Status of fix
+
+The fix **has been committed to `app.py`** (commit `de524e9`, then `cf1a26c`).
+Verify all four methods are present:
+
+```bash
+grep -n "on_process_frame\|on_pipeline_started\|on_push_frame\|async def cleanup" \
+  /Users/kj/dev/ORBIS/app.py
+```
+
+Expected (all four present in `SseBusObserver`):
+```
+~803: async def on_pipeline_started(self) -> None:
+~807: async def on_process_frame(self, data) -> None:
+~811: async def on_push_frame(self, data) -> None:
+~835: async def cleanup(self) -> None:
+```
+
+**BUT the running app is still using the old 0.1.43 sidecar binary** (Python
+source baked in at `cargo install pyapp` time). A new sidecar + Tauri rebuild
+is required to pick up the fix.
+
+Also note: the `on_push_frame` signature changed — old was positional args
+`(src, dst, frame, direction, timestamp)`, new is a single `data` object
+with `data.frame`. Both already fixed in `app.py`.
+
+### To fix: rebuild and launch
+
+```bash
+cd /Users/kj/dev/ORBIS
+
+# Bump version in pyproject.toml if desired, then:
+
+# 1. Build Python sdist
+.venv/bin/python -m build --sdist --outdir dist-sdist
+
+# 2. Check version
+ls dist-sdist/*.tar.gz | tail -1   # e.g. orbis-0.1.43.tar.gz
+
+# 3. Build sidecar (set VERSION accordingly)
+VERSION=0.1.43
+PYAPP_PROJECT_NAME=orbis \
+PYAPP_PROJECT_VERSION=$VERSION \
+PYAPP_PROJECT_PATH=$(pwd)/dist-sdist/orbis-$VERSION.tar.gz \
+PYAPP_PYTHON_VERSION=3.11 \
+PYAPP_EXEC_SPEC=app:main \
+PYAPP_FULL_ISOLATION=1 \
+cargo install pyapp --root /tmp/pyapp-build-fix --locked --force
+
+# 4. Stage sidecar
+cp /tmp/pyapp-build-fix/bin/pyapp src-tauri/binaries/orbis-aarch64-apple-darwin
+
+# 5. Tauri build
+cargo tauri build --features native-audio --bundles app
+
+# 6. Kill, CLEAR CACHE (critical!), launch
+pkill -9 -f "pyapp/orbis|ORBIS" 2>/dev/null
+rm -rf ~/Library/Application\ Support/pyapp/orbis   # MUST clear or old Python runs
+open src-tauri/target/release/bundle/macos/ORBIS.app
+```
+
+> ⚠️ **Always clear `~/Library/Application\ Support/pyapp/orbis/` before launching
+> after a sidecar rebuild.** PyApp uses a content hash for its env cache —
+> if the hash matches an old env, the new Python source is never executed.
+
+### Secondary issues (fix after voice works)
+
+1. **RTVIProcessor double-registration** — warning in log:
+   `PipelineTask#0: RTVIProcessor and RTVIObserver found, skipping default ones`
+   Pipecat 1.1 auto-adds RTVIProcessor; it's also being added explicitly in the
+   pipeline construction in `app.py`. Find and remove the explicit one:
+   `grep -n "RTVIProcessor\|RTVIObserver" app.py`
+
+2. **LLM prewarm fires before config loads** — `LLM prewarm skipped: [Errno 61]
+   Connection refused` in log. Prewarm uses the `LLM_URL` env var (defaults to
+   localhost) before `orbis.yaml` is read. Move prewarm to after config load, or
+   read the URL from config first.
+
+3. **Voiceprint/enroll wizard step** — user wants this step removed or skipped.
+   File: `web/src/plugins/setup-wizard/SetupWizard.tsx`
+
+4. **VAD tuning** — tightened this session but not yet verified working.
+   `VADParams(confidence=0.85, start_secs=0.3, stop_secs=0.4, min_volume=0.75)` in `app.py`.
+   May need to loosen if VAD is now too strict (not triggering at all vs triggering too much).
+
+---
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
