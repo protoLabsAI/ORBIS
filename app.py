@@ -112,7 +112,7 @@ from agent.speaker_gate import (
     load_voiceprint,
     save_voiceprint,
 )
-from agent.prosody import ProsodyTagStripper, ThinkTagStripper
+from agent.prosody import ProsodyTagStripper
 from agent.filler import (
     FillerGenerator,
     Latency,
@@ -220,9 +220,11 @@ def _resolve_skill_llm(skill) -> dict:
         api_key = LLM_API_KEY
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
-    elif using_custom_url:
-        extra_body = None
     else:
+        # Always suppress thinking tokens. Custom-URL gateways that don't
+        # understand chat_template_kwargs should ignore unknown extra_body
+        # keys rather than 400 — if a gateway does error, the operator
+        # should set extra_body: null explicitly in their skill config.
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
     return {
         "url": url,
@@ -1169,10 +1171,6 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         # clients simultaneously. In WebRTC-only mode it falls back to
         # the standard transport.output() single-sink node.
         _output_node,
-        # Strip LLM chain-of-thought blocks (<think>…</think>) before TTS
-        # and context. Safety net for models that emit thinking tokens even
-        # when enable_thinking=False is set (e.g. groq reasoning variants).
-        ThinkTagStripper(),
         # Strip Fish-style prosody tags from TextFrames before the
         # assistant aggregator sees them, so tags don't accumulate in LLM
         # context for future turns. Applies regardless of backend — safety
