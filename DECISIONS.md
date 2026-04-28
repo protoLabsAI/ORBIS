@@ -358,6 +358,46 @@ They're considered part of the supported architecture, not
 workarounds — wry's media-capture default isn't going to change
 upstream anytime soon, and the Apple-side requirements are stable.
 
+---
+
+## Amendment — 2026-04-27: Dual-transport audio architecture
+
+**Supersedes:** "Pipecat stays as-is. WebRTC, STT, TTS, VAD, voice-quality controllers — all kept."
+
+**What changed:** The transport layer is no longer always WebRTC. On desktop (Tauri), audio is routed through native CPAL (CoreAudio on macOS) via a Rust sidecar — no WebRTC session is opened. WebRTC remains the first-class path for browser/PWA clients.
+
+**Decision:** Support two first-class audio transports in the same codebase, selected at startup via `AUDIO_TRANSPORT=native|webrtc`. Both feed the same shared Pipecat pipeline session.
+
+```
+AUDIO_TRANSPORT=native  →  CPAL mic → Unix socket → LocalAudioTransport
+                         → MultiInputMixer → shared pipeline
+                         → TeeFrameProcessor → LocalAudioOutputSink (CPAL speakers)
+                                             → WebRTCOutputSink (if a WebRTC client joins)
+
+AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
+```
+
+**Why:**
+- WebRTC in a Tauri WKWebView requires two Obj-C shims, TCC registration, and hardened-runtime entitlements. Even then, the audio stack is mediated by the browser engine, limiting AEC and device control.
+- CPAL gives direct CoreAudio access: device selection, sample-rate negotiation, native AEC via speexdsp, lower latency (~20ms less round-trip).
+
+**Architecture toggle:** `AUDIO_TRANSPORT` env var (set by Tauri at spawn; manually overridable for dev/test). The `native-audio` Cargo feature compiles the CPAL engine into `src-tauri`; omitting it produces a WebRTC-only desktop build.
+
+**SSE state bridge (Phase 5):** In native mode, no RTVI data channel exists, so the frontend reads voice state from a new SSE endpoint (`GET /api/events`) that the `SseBusObserver` pipeline observer publishes to. `VoiceStateBridge.tsx` detects native mode via `/healthz` on mount and activates the `useNativeBridge` hook instead of relying on RTVI events.
+
+**New modules:**
+- `voice/transport_factory.py` — `make_transport()`; `AUDIO_TRANSPORT` constant
+- `voice/local_transport.py` — `LocalAudioInputTransport` / `LocalAudioOutputTransport`
+- `voice/sse_bus.py` — `SseBus`; `/api/events` fan-out
+- `voice/native_bargein.py` — `NativeBargeInObserver`
+- `voice/tee_processor.py` — `TeeFrameProcessor`, output sinks
+- `voice/multi_input_mixer.py` — `MultiInputMixer`
+- `web/src/voice/useNativeBridge.ts` — SSE subscriber hook
+
+**Orb-control tools removed (same session):** `set_variant`, `apply_palette`, `adjust_param`, `save_preset`, `recall_preset` removed from the LLM tool surface entirely. Future orb state changes come from external process signals, not LLM function calls. See `DECISIONS.md` — removed tools section above.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:

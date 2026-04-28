@@ -1,6 +1,6 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-24 (PR #28 + #30 voice / desktop arc). Branch: `main` + `feat/desktop-voice-followup` (PR #30 open).*
+*Last updated 2026-04-27 (native CPAL audio transport Phases 1–5 + orb-control tool removal). Branch: `main`.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -12,17 +12,20 @@ time, remembers you across sessions, and delegates heavy reasoning to
 your configured agents. Single-owner, tailnet-hostable, SQLite-backed
 memory + personality, pipecat voice pipeline with kokoro default TTS.
 
-**Desktop voice loop functional end-to-end on Apple Silicon.** Mic
-permission lands via TCC (Developer-ID signed builds + a runtime
-WKUIDelegate patch + an AVCaptureDevice TCC shim), audio reaches
-Pipecat, Whisper transcribes (~250ms), MLX-LM in-process generates
-the reply (~350ms TTFB, 42 tok/s decode on M1 Pro 32GB), Kokoro speaks
-back (0.16× realtime). First-audio-out per turn ~1.0-1.2s on M1
-base; scales ~2× per Apple-Silicon generation.
+**Desktop voice loop functional end-to-end on Apple Silicon.** Native
+CPAL audio (mic + speaker) bypasses WebRTC entirely on desktop —
+Rust sidecar captures from CoreAudio via CPAL, sends PCM over a
+Unix socket to Python `LocalAudioTransport`, which feeds the shared
+Pipecat pipeline. WebRTC remains the first-class browser/PWA path.
+Whisper transcribes (~250ms), MLX-LM replies (~350ms TTFB, 42 tok/s
+on M1 Pro 32GB), Kokoro speaks back (0.16× realtime). First-audio-out
+~1.0–1.2s per turn.
 
-Repo is **runnable + tested live** — setup wizard ships end-to-end
-on Mac desktop build, voice session connects + responds with the
-full STT → LLM → TTS chain producing audio. 131 passing unit tests.
+Frontend bridges native-mode state via SSE (`/api/events`) — orb
+animates correctly without a WebRTC connection.
+
+Repo is **runnable + tested live** — setup wizard + voice session
+confirmed on Mac desktop build. **493 passing unit tests** (2 skipped).
 
 ## Where we are
 
@@ -30,7 +33,7 @@ full STT → LLM → TTS chain producing audio. 131 passing unit tests.
 
 - **Repo:** [github.com/protoLabsAI/ORBIS](https://github.com/protoLabsAI/ORBIS)
 - **Branch:** `main` (no release tag cut yet)
-- **Tests:** 131 passing (`pytest`), zero failures
+- **Tests:** 493 passing, 2 skipped (`pytest`), zero failures
 - **Build:** frontend bundles cleanly; Dockerfile restored + runnable
 - **Live verified:** setup wizard + hatch animation + voice session
   round-trip confirmed working on first-user test box, AND in the
@@ -52,7 +55,7 @@ full STT → LLM → TTS chain producing audio. 131 passing unit tests.
   half-life decay), personality axes, mood, entitlement cache
 - Personality rendering into prompt + post-session drift analyzer
 - Soft-neglect mood shifts over days of silence
-- Tool surface: `delegate_to` + 5 orb-control tools + `adjust_personality`
+- Tool surface: `delegate_to` + `adjust_personality` (orb-control tools removed — handled via external process signals, not LLM)
 - TTS pluggable: kokoro / openai-compat / elevenlabs / fish
 - **LLM factory** (`voice/llm/`) — pluggable adapters: OpenAI-compat,
   Ollama-native (uses /api/chat so `think:false` actually works),
@@ -104,9 +107,10 @@ macOS 26.2, current defaults, 10-turn run:
 | `entitlement` | GET | ✓ | Paid-tier state |
 | `entitlement/checkout` | POST | ✓ | Stripe Checkout session |
 | `stripe/webhook` | POST | sig | Grant/revoke entitlement |
-| `offer` | POST/PATCH | ✓ | WebRTC signalling |
+| `offer` | POST/PATCH | ✓ | WebRTC signalling (browser/PWA path only) |
+| `events` | GET | ✓ | SSE stream: `bot-state`, `transcript`, `session` events (native audio path) |
 | `metrics` | GET | ✓ | Counters |
-| `healthz` | GET | — | Process shape |
+| `healthz` | GET | — | Process shape; `audio.transport` field shows `native`\|`webrtc` |
 
 **Frontend (React + Vite + shadcn)**
 - First-run setup wizard (welcome → names → llm → pick → done → hatch)
@@ -171,7 +175,7 @@ agent/                         voice-pipeline + agent glue
   config_store.py              read/write + schema validation
   entitlement.py               Stripe checkout / webhook / refresh
   llm_probe.py                 ping + list_models + detect_local
-  tools.py                     delegate_to + 5 orb tools + adjust_personality
+  tools.py                     delegate_to + adjust_personality
   delegates.py                 A2A + OpenAI-compat unified dispatch
   filler.py / delivery.py      voice-pipeline natural-filler machinery
   backchannel.py / micro_ack.py / bargein.py / echo_guard.py / prosody.py
@@ -186,11 +190,20 @@ auth/                          single-owner API-key auth
 
 a2a/                           A2A inbound + outbound
 memory/                        SQLite memory backend (sessions/facts/personality/mood/entitlement)
-voice/                         STT + TTS pipecat adapters (kokoro/openai/elevenlabs/fish)
+voice/                         STT + TTS pipecat adapters + native audio transport
+  transport_factory.py         make_transport(); AUDIO_TRANSPORT env-var toggle
+  local_transport.py           LocalAudioInputTransport / LocalAudioOutputTransport (CPAL path)
+  sse_bus.py                   SseBus singleton: /api/events fan-out; pub/sub; heartbeat
+  native_bargein.py            NativeBargeInObserver: flushes both CPAL + WebRTC outputs
+  tee_processor.py             TeeFrameProcessor; LocalAudioOutputSink; WebRTCOutputSink
+  multi_input_mixer.py         MultiInputMixer: arbitrates CPAL mic vs WebRTC mic frames
 
 web/src/
   App.tsx                      side-effect imports; top-level PipecatClient
-  voice/                       pipecat client + state bridge
+  voice/                       pipecat client + state bridge + native SSE bridge
+    VoiceStateBridge.tsx       RTVI event → voiceStore; detects native mode via /healthz
+    useNativeBridge.ts         EventSource('/api/events') subscriber; backoff reconnect
+    state.ts                   VoiceSnapshot store (audioTransport field added)
   components/Drawer.tsx        Sheet + Voice/Orb tabs
   plugins/
     orb/                       R3F orb + variants + store + broadcast bus
@@ -217,7 +230,10 @@ tests/                         pytest: 131 cases
   test_config_endpoint_gate.py /api/config paid-tier gate
   test_entitlement.py          Stripe glue
   test_llm_probe.py            ping/models/detect_local (respx-mocked)
-docs/                          orb-visualizer.md only
+  test_sse_bus.py              SseBus pub/sub, multi-subscriber, heartbeat, wire format
+docs/
+  native-audio-transport.md   Phase 1–5 architecture + implementation notes
+  orb-visualizer.md
 ```
 
 ## Quick-start
@@ -230,15 +246,25 @@ cp .env.example .env                             # edit LLM_URL if running local
 cp config/orbis.example.yaml config/orbis.yaml   # optional; wizard writes it
 cp config/users.example.yaml config/users.yaml   # tailnet only
 
-# Run dev
+# Run dev (WebRTC / browser mode — default)
 cd web && bun install && bun run dev             # :5173
 python app.py                                    # :7866
+
+# Run dev (native CPAL mode — desktop only)
+# 1. Build Rust sidecar with native-audio feature
+cd src-tauri && cargo build --features native-audio
+# 2. Launch server with AUDIO_TRANSPORT=native
+AUDIO_TRANSPORT=native python app.py
 
 # First-run: the wizard appears. To re-run it:
 # in browser console: localStorage.removeItem('orbis.setupComplete'); location.reload()
 
+# Verify SSE stream (native mode)
+curl -N http://127.0.0.1:7866/api/events -H "X-API-Key: <key>"
+# → : connected\n\n  then periodic ": \n\n" ticks
+
 # Tests
-python -m pytest                                  # 131 passing
+python -m pytest                                  # 493 passing, 2 skipped
 python -m pip install -e '.[test]'                # respx for LLM-probe tests
 ```
 

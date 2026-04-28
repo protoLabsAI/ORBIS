@@ -1,6 +1,6 @@
 # Native CPAL Audio Transport
 
-**Status:** Planned  
+**Status:** Implemented — Phases 1–5 complete (2026-04-27)  
 **Decision date:** 2026-04-27
 
 ## Goal
@@ -93,15 +93,21 @@ Files to modify:
 - `app.py` — insert `MultiInputMixer` before VAD, insert `TeeFrameProcessor` after Kokoro; extend `NativeBargeInObserver` to flush both outputs
 
 ### Phase 5 — Frontend Wiring
-Files to create:
-- `web/src/voice/NativeVoiceStateBridge.tsx` — SSE subscriber, updates voiceStore
+Files created:
+- `voice/sse_bus.py` — `SseBus` singleton; waker-task design; pub/sub fan-out
+- `voice/local_transport.py` — `LocalAudioInputTransport` / `LocalAudioOutputTransport`
+- `voice/transport_factory.py` — `make_transport()` + `AUDIO_TRANSPORT` constant
+- `voice/native_bargein.py` — `NativeBargeInObserver`
+- `voice/tee_processor.py` — `TeeFrameProcessor`, `LocalAudioOutputSink`, `WebRTCOutputSink`
+- `voice/multi_input_mixer.py` — `MultiInputMixer`
+- `web/src/voice/useNativeBridge.ts` — SSE subscriber hook; updates voiceStore; exponential backoff reconnect
 
-Files to modify:
-- `app.py` — add `GET /api/voice/events` SSE, `POST /api/session/toggle`, `POST /api/audio/device`
-- `web/src/App.tsx` — branch on `VITE_AUDIO_TRANSPORT`: native renders `NativeVoiceStateBridge` instead of `PipecatClientProvider`+`Audio`; orb double-click POSTs to `/api/session/toggle`
-- `web/src/plugins/orb/OrbStage.tsx` — native connect/disconnect via fetch, not `client.connect()`
-- `web/src/plugins/setup-wizard/SetupWizard.tsx` — device picker POSTs to `/api/audio/device`
-- `web/src/plugins/settings-panel/MicSettings.tsx` — same
+Files modified:
+- `app.py` — `GET /api/events` SSE endpoint (implemented as `/api/events`, not `/api/voice/events`); `SseBusObserver` pipeline observer; session start/end events; `SseBusObserver` wired into `PipelineTask`
+- `web/src/voice/VoiceStateBridge.tsx` — `/healthz` transport-mode detection; `useNativeBridge()` call
+- `web/src/voice/state.ts` — `audioTransport` field added to `VoiceSnapshot`
+
+Note: `/api/session/toggle` and `/api/audio/device` were descoped from Phase 5. They remain future work.
 
 **Not changed:** `MicTest.tsx` — still uses `getUserMedia` for level meter only (fine)
 

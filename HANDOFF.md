@@ -139,8 +139,8 @@ before declaring a release.
 
 - **Tool-call translation gap in Ollama + MLX adapters.** Both new
   adapters log a one-time warning and proceed content-only when the
-  pipecat context has tool calls — meaning `delegate_to` and the
-  orb-control tools won't reach gemma3+/qwen3+ on Ollama or any
+  pipecat context has tool calls — meaning `delegate_to` and
+  `adjust_personality` won't reach gemma3+/qwen3+ on Ollama or any
   model on MLX yet. OpenAI-compat path still has full tool support;
   cloud users unaffected. See `voice/llm/ollama.py` + `mlx.py`
   header comments.
