@@ -75,6 +75,7 @@ from pipecat.utils.context.llm_context_summarization import (
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm import make_llm
+from voice.transport_factory import AUDIO_TRANSPORT, make_transport
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.request_handler import (
     SmallWebRTCPatchRequest,
@@ -740,13 +741,14 @@ FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 _handler = SmallWebRTCRequestHandler()
 
 
-async def run_bot(webrtc_connection, user_id: str = "default") -> None:
-    """One bot instance per connected WebRTC client.
+async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport=None) -> None:
+    """One bot instance per connected client.
+
+    In webrtc mode (default): called per WebRTC connection from /api/offer.
+    In native mode: called once from lifespan with a pre-built LocalAudioTransport.
 
     `user_id` is resolved at `/api/offer` time from the X-API-Key header
-    and passed in via a closure. Defaults to "default" for direct callers
-    that bypass the auth layer (unlikely in practice — the only entry
-    point is `/api/offer`).
+    and passed in via a closure. Defaults to "default" for direct callers.
     """
     # Set context vars so deep-stack code (tracing spans, session_store
     # lookups, filler generators) can pick up the right user/session
@@ -771,17 +773,20 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         f"voice={skill.voice!r} verbosity={user_state.filler_settings.verbosity.value}"
     )
 
-    transport = SmallWebRTCTransport(
-        webrtc_connection=webrtc_connection,
-        params=TransportParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            audio_out_10ms_chunks=2,
-            # Optional in-filter (rnnoise) for noise reduction on the mic
-            # stream. Wired only when NOISE_FILTER is enabled in env.
+    # Build or reuse transport.
+    # In native mode a pre-built LocalAudioTransport is passed in from lifespan.
+    # In webrtc mode we construct SmallWebRTCTransport per connection.
+    if transport is None:
+        transport = make_transport(
+            webrtc_connection=webrtc_connection,
             audio_in_filter=_build_audio_in_filter(),
-        ),
-    )
+        )
+
+    # In native mode, Rust handles AEC — disable the Python echo guard.
+    # Override guard_ms on the shared state object so EchoGuardSuppressor
+    # and EchoGuardObserver both see 0 without needing a new constructor param.
+    if AUDIO_TRANSPORT == "native":
+        _ECHO_STATE.guard_ms = 0
 
     stt = make_stt()
 
@@ -1356,9 +1361,34 @@ async def lifespan(app: FastAPI):
         _entitlement_refresh_loop(), name="orbis-entitlement"
     )
 
+    # Native audio transport — start the persistent pipeline on boot.
+    # In webrtc mode run_bot() is spawned per-connection from /api/offer.
+    native_pipeline_task: asyncio.Task | None = None
+    if AUDIO_TRANSPORT == "native":
+        from voice.local_transport import LocalAudioTransport
+        sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
+        if not sock_path:
+            logger.warning(
+                "[native audio] AUDIO_TRANSPORT=native but ORBIS_AUDIO_SOCK not set — "
+                "native pipeline will not start; WebRTC /api/offer is still available"
+            )
+        else:
+            native_transport = LocalAudioTransport(sock_path=sock_path)
+            native_pipeline_task = asyncio.create_task(
+                run_bot(transport=native_transport, user_id="default"),
+                name="orbis-native-pipeline",
+            )
+            logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
+
     try:
         yield
     finally:
+        if native_pipeline_task and not native_pipeline_task.done():
+            native_pipeline_task.cancel()
+            try:
+                await native_pipeline_task
+            except (asyncio.CancelledError, Exception):
+                pass
         for t in (curator_task, entitlement_task):
             t.cancel()
             try:
@@ -1377,6 +1407,15 @@ async def offer(
     bg: BackgroundTasks,
     user: User = Depends(require_user),
 ):
+    # In native mode the desktop app uses CPAL audio directly — there is
+    # no WebRTC session to offer. PWA/browser clients should still be able
+    # to connect via WebRTC once Phase 4 (TTS fanout) is implemented.
+    if AUDIO_TRANSPORT == "native":
+        raise HTTPException(
+            status_code=410,
+            detail="WebRTC offer not available in native audio mode (Phase 4 pending)",
+        )
+
     # Capture the resolved user id in the closure so run_bot can key
     # its per-user state correctly. pipecat's on_client_connected
     # fires synchronously inside handle_web_request after the SDP is
@@ -1409,6 +1448,7 @@ async def health():
         ],
         "persona": get_active_persona().slug,
         "audio": {
+            "transport": AUDIO_TRANSPORT,
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
             "noise_filter": NOISE_FILTER,
