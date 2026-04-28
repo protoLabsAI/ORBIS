@@ -60,8 +60,9 @@ def test_url_override_marks_custom(helper) -> None:
     cfg = helper(_skill(url="https://custom.example/v1"))
     assert cfg["url"] == "https://custom.example/v1"
     assert cfg["using_custom_url"] is True
-    # custom URL kill-switch — extra_body must be None to avoid LiteLLM 400s
-    assert cfg["extra_body"] is None
+    # enable_thinking=False is sent to all endpoints including custom URLs.
+    # Operators who need to suppress it can set extra_body: null explicitly.
+    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def test_model_override(helper) -> None:
@@ -135,7 +136,7 @@ def test_custom_url_with_default_model_and_key(helper) -> None:
     assert cfg["model"] == "env-default-model"
     assert cfg["api_key"] == "env-default-key"
     assert cfg["using_custom_url"] is True
-    assert cfg["extra_body"] is None  # kill-switch active
+    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def test_full_persona_override(helper) -> None:
