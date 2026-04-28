@@ -35,6 +35,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Support both LANGFUSE_HOST (internal convention) and LANGFUSE_BASE_URL
+# (Langfuse's own SDK default / cloud dashboard export name).
+if not os.environ.get("LANGFUSE_HOST") and os.environ.get("LANGFUSE_BASE_URL"):
+    os.environ["LANGFUSE_HOST"] = os.environ["LANGFUSE_BASE_URL"]
+
 _ENABLED = all(
     os.environ.get(k, "").strip()
     for k in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
