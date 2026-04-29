@@ -88,6 +88,52 @@ STT_API_KEY = os.environ.get("STT_API_KEY", "not-needed")
 # Local Whisper — HF transformers pipeline
 # ---------------------------------------------------------------------------
 
+# Whisper hallucinates confidently on silence/noise. The gates below
+# are tuned for the native CPAL path on M1 internal mic (no AGC) — but
+# AFTER voice/local_transport.py applies the MIC_GAIN multiplier.
+# Override via env vars for a different mic profile.
+_STT_MIN_RMS = float(os.environ.get("STT_MIN_RMS", "0.07"))
+
+# Short outputs (< _STT_MIN_TEXT_LEN chars) from low-energy chunks
+# (RMS < _STT_STRONG_RMS) are dropped. Real utterances clear at least
+# one of these — a long sentence at any volume, or a short word at
+# clear-speech volume.
+_STT_MIN_TEXT_LEN = int(os.environ.get("STT_MIN_TEXT_LEN", "10"))
+_STT_STRONG_RMS = float(os.environ.get("STT_STRONG_RMS", "0.15"))
+
+# Common Whisper artifacts when the input is silence / breath / room tone.
+# Match after lowercase + punctuation/whitespace normalization. Keep this
+# list conservative — false positives steal real user input.
+_HALLUCINATION_PHRASES = frozenset(
+    s.strip().lower().rstrip(".!?,") for s in [
+        "thanks for watching",
+        "thank you for watching",
+        "thanks for watching!",
+        "thanks for watching.",
+        "thank you for watching.",
+        "thanks for listening",
+        "thank you for listening",
+        "thank you",
+        "thanks",
+        "you",
+        "yeah",
+        "bye",
+        "okay",
+        ".com",
+        "[music]",
+        "[silence]",
+        "♪",
+    ]
+)
+
+
+def _is_whisper_hallucination(text: str) -> bool:
+    if not text:
+        return False
+    norm = text.strip().lower().rstrip(".!?,")
+    return norm in _HALLUCINATION_PHRASES
+
+
 _local_pipe = None
 
 
@@ -142,6 +188,15 @@ class LocalWhisperSTT(SegmentedSTTService):
             f"[stt.local] decoded sr_in={sr} samples={data.size} "
             f"duration={duration_s:.2f}s rms={rms:.4f}"
         )
+        # Whisper hallucinates confidently on near-silent audio
+        # ("Thanks for watching", "you", ".com", etc. — artifacts from
+        # YouTube training data). VAD with a relaxed min_volume can let
+        # quiet chunks through; this is the second gate. The threshold is
+        # below typical speech (RMS ~0.03–0.10 on the M1 internal mic
+        # without AGC) but above ambient/breath (~0.005–0.015).
+        if rms < _STT_MIN_RMS:
+            logger.info(f"[stt.local] skipped — rms {rms:.4f} below threshold {_STT_MIN_RMS}")
+            return
         with tracing.span(
             "stt.whisper",
             input={"sample_rate": 16000, "audio_seconds": round(duration_s, 2)},
@@ -151,6 +206,24 @@ class LocalWhisperSTT(SegmentedSTTService):
                 t0 = time.time()
                 result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
                 text = (result.get("text") or "").strip()
+                if _is_whisper_hallucination(text):
+                    logger.info(f"[stt.local] dropped hallucination: {text!r}")
+                    text = ""
+                # Short outputs from sub-speech-energy chunks (sniffs,
+                # clicks, keyboard taps) tend to be junk that wasn't in
+                # our static blocklist. Require either a normal RMS OR
+                # enough characters to look like a real utterance.
+                elif text and len(text) < _STT_MIN_TEXT_LEN and rms < _STT_STRONG_RMS:
+                    logger.info(
+                        f"[stt.local] dropped short low-rms output: {text!r} "
+                        f"(rms={rms:.4f}, len={len(text)})"
+                    )
+                    text = ""
+                elif text:
+                    # Log the full transcript at INFO when something
+                    # passes the gates — useful for tuning the filters
+                    # without flipping the whole logger to DEBUG.
+                    logger.info(f"[stt.local] transcript: {text!r}")
                 # INFO log carries duration + length only — every voice
                 # utterance flows through here, so the full transcript
                 # at INFO would write the user's spoken content to

@@ -48,6 +48,23 @@ HEADER_LEN = struct.calcsize(HEADER_FMT)  # 8
 TTS_SAMPLE_RATE = 24_000
 MIC_SAMPLE_RATE = 16_000
 
+# Software gain applied to incoming mic samples before they reach the
+# pipeline. The CPAL path has no AGC (unlike WebRTC's getUserMedia),
+# so the M1 internal mic delivers ~0.03–0.05 RMS for normal speech —
+# below VAD's typical min_volume threshold. Boosting here lifts both
+# VAD and STT into a usable range without touching Rust. Override via
+# MIC_GAIN env var if a different mic profile needs less/more.
+_MIC_GAIN = float(os.environ.get("MIC_GAIN", "8.0"))
+
+
+def _apply_gain_i16(audio: bytes, gain: float) -> bytes:
+    """Multiply i16 LE PCM samples by `gain`, clipping to int16 range.
+    Vectorized; numpy is already loaded by the STT path."""
+    import numpy as np
+    arr = np.frombuffer(audio, dtype=np.int16)
+    boosted = np.clip(arr.astype(np.int32) * gain, -32768, 32767).astype(np.int16)
+    return boosted.tobytes()
+
 
 def _encode_pcm_frame(samples_bytes: bytes, sample_rate: int) -> bytes:
     """Encode a PCM payload into the wire-protocol frame."""
@@ -214,6 +231,8 @@ class LocalAudioTransport(BaseTransport):
 
                 if direction == DIR_MIC_TO_PYTHON:
                     # Mic audio from Rust CPAL — push into the pipeline.
+                    if _MIC_GAIN != 1.0:
+                        body = _apply_gain_i16(body, _MIC_GAIN)
                     frame = InputAudioRawFrame(
                         audio=body,
                         sample_rate=int(sample_rate),

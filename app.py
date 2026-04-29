@@ -873,11 +873,14 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
             audio_in_filter=_build_audio_in_filter(),
         )
 
-    # In native mode, Rust handles AEC — disable the Python echo guard.
-    # Override guard_ms on the shared state object so EchoGuardSuppressor
-    # and EchoGuardObserver both see 0 without needing a new constructor param.
+    # In native mode, the Rust-side AEC (src-tauri/src/audio/aec.rs) is
+    # currently a thin delay-line subtractor — not strong enough on its
+    # own once we apply the software mic gain in voice/local_transport.py.
+    # Keep the Python echo guard active with a longer window than the
+    # WebRTC default so amplified speaker bleed doesn't false-trigger
+    # VAD/MicroAck on the bot's own tail. Override via NATIVE_ECHO_GUARD_MS.
     if AUDIO_TRANSPORT == "native":
-        _ECHO_STATE.guard_ms = 0
+        _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
 
     stt = make_stt()
 
@@ -945,6 +948,16 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
+    # Backchannel + micro-ack assume the WebRTC mic path with AGC + browser
+    # echo cancellation. On the native CPAL path the speaker-bleed-into-mic
+    # crosses VAD threshold (especially with software mic gain), so the
+    # listener-acks fire on the bot's own tail. Default both off when
+    # AUDIO_TRANSPORT=native unless the persona explicitly enabled them.
+    if AUDIO_TRANSPORT == "native":
+        if behavior.get("backchannel") is None:
+            bc_cfg["enabled"] = False
+        if behavior.get("micro_ack") is None:
+            ma_cfg["enabled"] = False
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -1024,10 +1037,15 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     _turn_strategies = _build_user_turn_strategies()
     _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.85,   # default 0.7 — stricter to avoid ambient triggers
-            start_secs=0.3,    # default 0.2
+            confidence=0.7,    # default 0.7
+            start_secs=0.2,    # default 0.2
             stop_secs=0.4,     # default 0.2 — longer pause before cutting
-            min_volume=0.75,   # default 0.6 — ignore low-level noise/fan hum
+            min_volume=0.2,    # default 0.6 — lowered for native CPAL path.
+                               # voice/local_transport.py applies an 8x mic gain
+                               # (MIC_GAIN env var) so boosted speech RMS lands
+                               # ~0.20–0.40, well above this threshold; ambient
+                               # stays under it. STT_MIN_RMS (in voice/stt.py) is
+                               # the second gate against Whisper silence-hallucinations.
         )
     )}
     if _turn_strategies is not None:
@@ -1220,6 +1238,13 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
+        # Native CPAL pipeline is persistent for the lifetime of the app:
+        # mic frames flow continuously regardless of UI state, so the
+        # default "cancel after 5min idle" behavior tears down the
+        # pipeline while the user is mid-wizard / between turns. WebRTC
+        # path keeps the default since each browser session has its own
+        # short-lived task.
+        cancel_on_idle_timeout=AUDIO_TRANSPORT != "native",
         # Observers see every frame at the pipeline level without
         # being a transformation node.
         observers=[
