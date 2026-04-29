@@ -2,19 +2,27 @@
 //!
 //! Opens the default (or named) CoreAudio device for input at 16 kHz
 //! mono and for output at 24 kHz mono. If the device doesn't natively
-//! support those rates, rubato resamples in the stream callback.
+//! support those rates, we resample (linearly) in the stream callback.
 //!
 //! Mic frames (320 samples = 20 ms at 16 kHz) are sent to the socket
 //! layer via an unbounded channel. TTS frames are received from the
 //! socket layer and pushed into a playback ring buffer that the output
 //! callback drains.
+//!
+//! TODO(cpal-0.18+): migrate from `DeviceTrait::name()` (deprecated in
+//! 0.17) to `description()` for human-readable strings + `id()` for
+//! stable device identification. Held back today because the user's
+//! saved-preference store keys on `name()` strings and changing the
+//! match value would invalidate existing settings; do this with a
+//! migration path when we touch the preferred-device store next.
+#![allow(deprecated)]
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
 
 use super::aec::AecProcessor;
 
@@ -55,10 +63,8 @@ pub struct AudioEngine {
     _output_stream: Stream,
 }
 
-// CPAL streams are !Send by default on some platforms. We only ever
-// access them via drop (cleanup), so this is safe.
-unsafe impl Send for AudioEngine {}
-unsafe impl Sync for AudioEngine {}
+// cpal 0.17.0 made Stream Send on all hosts (RustAudio/cpal#818, #1021).
+// AudioEngine is naturally Send/Sync without an unsafe impl.
 
 impl AudioEngine {
     /// Open the default input and output devices and start streaming.
@@ -184,10 +190,10 @@ fn build_input_stream(
         "[audio] input config: {:?} {}ch {}Hz",
         config.sample_format(),
         config.channels(),
-        config.sample_rate().0
+        config.sample_rate()
     );
 
-    let native_rate = config.sample_rate().0;
+    let native_rate = config.sample_rate();
     let channels = config.channels() as usize;
     let stream_config: StreamConfig = config.into();
 
@@ -268,10 +274,10 @@ fn build_output_stream(
         "[audio] output config: {:?} {}ch {}Hz",
         config.sample_format(),
         config.channels(),
-        config.sample_rate().0
+        config.sample_rate()
     );
 
-    let native_rate = config.sample_rate().0;
+    let native_rate = config.sample_rate();
     let channels = config.channels() as usize;
     let stream_config: StreamConfig = config.into();
 
@@ -348,10 +354,10 @@ fn preferred_input_config(device: &Device) -> Result<cpal::SupportedStreamConfig
     for range in supported {
         if range.channels() == 1
             && range.sample_format() == SampleFormat::F32
-            && range.min_sample_rate() <= SampleRate(MIC_SAMPLE_RATE)
-            && range.max_sample_rate() >= SampleRate(MIC_SAMPLE_RATE)
+            && range.min_sample_rate() <= MIC_SAMPLE_RATE
+            && range.max_sample_rate() >= MIC_SAMPLE_RATE
         {
-            return Ok(range.with_sample_rate(SampleRate(MIC_SAMPLE_RATE)));
+            return Ok(range.with_sample_rate(MIC_SAMPLE_RATE));
         }
     }
     // Fallback: use device default (we'll resample in the callback).
@@ -367,10 +373,10 @@ fn preferred_output_config(device: &Device) -> Result<cpal::SupportedStreamConfi
 
     for range in supported {
         if range.sample_format() == SampleFormat::F32
-            && range.min_sample_rate() <= SampleRate(TTS_SAMPLE_RATE)
-            && range.max_sample_rate() >= SampleRate(TTS_SAMPLE_RATE)
+            && range.min_sample_rate() <= TTS_SAMPLE_RATE
+            && range.max_sample_rate() >= TTS_SAMPLE_RATE
         {
-            return Ok(range.with_sample_rate(SampleRate(TTS_SAMPLE_RATE)));
+            return Ok(range.with_sample_rate(TTS_SAMPLE_RATE));
         }
     }
     device
