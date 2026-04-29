@@ -1245,6 +1245,13 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         # path keeps the default since each browser session has its own
         # short-lived task.
         cancel_on_idle_timeout=AUDIO_TRANSPORT != "native",
+        # We construct RTVIProcessor + RTVIObserver explicitly below
+        # (the linker hooks them in at the right pipeline depth). Pipecat
+        # 1.1's default behavior is to auto-add both, then log a warning
+        # when it finds ours: "RTVIProcessor and RTVIObserver found,
+        # skipping default ones." Disabling the auto-add silences the
+        # warning without changing behavior.
+        enable_rtvi=False,
         # Observers see every frame at the pipeline level without
         # being a transformation node.
         observers=[
