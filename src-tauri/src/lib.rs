@@ -193,12 +193,19 @@ pub fn run() {
     }
 
     tauri::Builder::default()
-        // tauri-plugin-log: unifies Rust + sidecar stdio + frontend
-        // console into a rotating file at the OS log dir. The sidecar
-        // log stream tee'd in via log::info!(target:"sidecar", ...)
-        // (see supervise_sidecar) lands in the same file as our own
-        // log::info! and the frontend's window.__TAURI__-bridged
-        // console output. Replaces env_logger.
+        // tauri-plugin-log: unifies Rust + sidecar stdio into a
+        // rotating file at the OS log dir. The sidecar log stream
+        // tee'd in via log::info!(target:"sidecar", ...) (see
+        // supervise_sidecar) lands in the same file as our own
+        // log::info! call sites. Replaces env_logger.
+        //
+        // Webview target deliberately omitted: the plugin's frontend
+        // capture injects JS into the WKWebView via an early-init
+        // script, which hangs fetch() calls in production builds the
+        // *first* time the wizard tries to POST /api/config (the
+        // "Saving…" stuck-forever bug). Frontend logs go to the
+        // Safari Web Inspector when devtools are enabled; not into
+        // orbis.log.
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -207,7 +214,6 @@ pub fn run() {
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("orbis".into()),
                     }),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
                 ])
                 .max_file_size(50_000_000) // 50 MB
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
@@ -215,6 +221,12 @@ pub fn run() {
         )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // tauri-plugin-http: routes JS fetch() through Rust + reqwest,
+        // bypassing WKWebView's silent POST drop on macOS arm64
+        // (tauri-apps/tauri#11854, #13166, #13878). Frontend imports
+        // `fetch` from `@tauri-apps/plugin-http`. Origin allow-list
+        // is in capabilities/default.json.
+        .plugin(tauri_plugin_http::init())
         .invoke_handler({
             #[cfg(feature = "native-audio")]
             { tauri::generate_handler![list_audio_inputs, get_audio_level, clear_browsing_data] }
