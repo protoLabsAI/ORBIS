@@ -1,7 +1,9 @@
 """LocalAudioTransport — native desktop audio transport for ORBIS.
 
-Connects to the Rust CPAL engine via a Unix socket using the Phase 1
-wire protocol. Replaces SmallWebRTCTransport when AUDIO_TRANSPORT=native.
+Connects to the Rust CPAL engine via a Unix socket. The only voice
+transport since DECISIONS.md amendment 2026-04-28 dropped the
+WebRTC / browser path; src-tauri/src/audio/socket.rs is the other
+half of the protocol.
 
 Wire protocol (8-byte header, little-endian):
   [0..2]  u16  direction  0x0001=mic→python  0x0002=python→speaker  0x0010=control

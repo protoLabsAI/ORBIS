@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""protoVoice — Pipecat pipeline with duplex filler (through M2).
+"""ORBIS — Pipecat pipeline (Apple Silicon native, single transport).
 
-Pipeline:
+Pipeline (all in-process Python; mic + speaker frames cross a Unix
+socket to the Rust CPAL engine in src-tauri/):
 
-  browser mic → SmallWebRTCTransport.input()
-              → LocalWhisperSTT
-              → user aggregator (VAD attached here in pipecat 1.0)
-              → OpenAILLMService — has `deep_research` tool registered
-              → TTS (Fish sidecar by default, Kokoro fallback)
-              → SmallWebRTCTransport.output()
-              → assistant aggregator
+  CPAL mic (Rust) → Unix socket → LocalAudioTransport.input()
+                  → LocalWhisperSTT
+                  → user aggregator (VAD attached here)
+                  → OpenAILLMService — tools registered for delegate_to etc.
+                  → TTS (Kokoro default; ElevenLabs / OpenAI-compat / Fish opt-in)
+                  → LocalAudioTransport.output() → Unix socket → CPAL speaker (Rust)
+                  → assistant aggregator
 
-Duplex (M2):
+Native is the only supported transport — see DECISIONS.md amendment
+2026-04-28 ("Apple Silicon (+ iOS planned) only; drop web/PWA").
+
+Duplex behavior:
   - on `on_function_calls_started`: queue a TTSSpeakFrame opening filler
   - `_progress_loop()`: emit periodic progress phrases while the tool runs
   - tool handlers are wrapped so they cancel the progress loop on return
-
-Still ahead: M3 async tool inbox + push-interrupt (`cancel_on_interruption=False`),
-M4 real tool set, M5 memory + skills + SOUL.
 """
 
 import argparse
@@ -51,7 +52,7 @@ from agent.paths import configure_hf_home  # noqa: E402
 _cache_dir = configure_hf_home()
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -76,19 +77,10 @@ from pipecat.utils.context.llm_context_summarization import (
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm import make_llm
-from voice.transport_factory import AUDIO_TRANSPORT, make_transport
+from voice.local_transport import LocalAudioTransport
 from voice.native_bargein import NativeBargeInObserver
-from voice.tee_processor import LocalAudioOutputSink, TeeOutputProcessor, WebRTCOutputSink
-from voice.multi_input_mixer import MultiInputMixer
 from voice.sse_bus import sse_bus
-from pipecat.transports.base_transport import TransportParams
-from pipecat.transports.smallwebrtc.request_handler import (
-    SmallWebRTCPatchRequest,
-    SmallWebRTCRequest,
-    SmallWebRTCRequestHandler,
-)
 from pipecat.frames.frames import TTSSpeakFrame
-from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
@@ -751,14 +743,6 @@ WEB_DIST = Path(__file__).parent / "web" / "dist"
 # legacy static/index.html. `auto` (default) picks react when web/dist exists.
 FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 
-_handler = SmallWebRTCRequestHandler()
-
-# Phase 4: TTS fanout — populated by lifespan() when AUDIO_TRANSPORT=native.
-# offer() adds / removes WebRTCOutputSink entries so WebRTC clients hear TTS.
-_native_tee: TeeOutputProcessor | None = None
-# Phase 4: mic mixer — populated alongside _native_tee; WebRTC offer() routes
-# mic audio in via push_webrtc so both CPAL and WebRTC mic frames compete.
-_native_mixer: MultiInputMixer | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -832,14 +816,13 @@ class SseBusObserver:
         pass
 
 
-async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport=None) -> None:
-    """One bot instance per connected client.
+async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | None = None) -> None:
+    """Run the persistent native voice pipeline.
 
-    In webrtc mode (default): called per WebRTC connection from /api/offer.
-    In native mode: called once from lifespan with a pre-built LocalAudioTransport.
-
-    `user_id` is resolved at `/api/offer` time from the X-API-Key header
-    and passed in via a closure. Defaults to "default" for direct callers.
+    Called once from lifespan with a pre-built LocalAudioTransport that
+    bridges to the Rust CPAL engine over a Unix socket. The pipeline
+    runs for the lifetime of the app — `cancel_on_idle_timeout=False`
+    on the PipelineTask keeps it alive across UI idle periods.
     """
     # Set context vars so deep-stack code (tracing spans, session_store
     # lookups, filler generators) can pick up the right user/session
@@ -864,23 +847,26 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         f"voice={skill.voice!r} verbosity={user_state.filler_settings.verbosity.value}"
     )
 
-    # Build or reuse transport.
-    # In native mode a pre-built LocalAudioTransport is passed in from lifespan.
-    # In webrtc mode we construct SmallWebRTCTransport per connection.
+    # Caller (lifespan) builds the transport. Direct invocations (tests
+    # or alternate entry points) can also pass a pre-built one.
     if transport is None:
-        transport = make_transport(
-            webrtc_connection=webrtc_connection,
-            audio_in_filter=_build_audio_in_filter(),
-        )
+        sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
+        if not sock_path:
+            raise RuntimeError(
+                "run_bot() requires either a transport= kwarg or "
+                "ORBIS_AUDIO_SOCK env var pointing at the Rust CPAL "
+                "engine's unix socket."
+            )
+        transport = LocalAudioTransport(sock_path=sock_path)
 
-    # In native mode, the Rust-side AEC (src-tauri/src/audio/aec.rs) is
-    # currently a thin delay-line subtractor — not strong enough on its
-    # own once we apply the software mic gain in voice/local_transport.py.
-    # Keep the Python echo guard active with a longer window than the
-    # WebRTC default so amplified speaker bleed doesn't false-trigger
-    # VAD/MicroAck on the bot's own tail. Override via NATIVE_ECHO_GUARD_MS.
-    if AUDIO_TRANSPORT == "native":
-        _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
+    # The Rust-side AEC (src-tauri/src/audio/aec.rs) is currently a thin
+    # delay-line subtractor — not strong enough on its own once we apply
+    # the software mic gain in voice/local_transport.py. Keep the Python
+    # echo guard active with a longer window so amplified speaker bleed
+    # doesn't false-trigger VAD/MicroAck on the bot's own tail. Phase 2
+    # (AVAudioEngine voice-processing IO) supersedes this entirely.
+    # Override via NATIVE_ECHO_GUARD_MS env var.
+    _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
 
     stt = make_stt()
 
@@ -948,16 +934,17 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
-    # Backchannel + micro-ack assume the WebRTC mic path with AGC + browser
-    # echo cancellation. On the native CPAL path the speaker-bleed-into-mic
-    # crosses VAD threshold (especially with software mic gain), so the
-    # listener-acks fire on the bot's own tail. Default both off when
-    # AUDIO_TRANSPORT=native unless the persona explicitly enabled them.
-    if AUDIO_TRANSPORT == "native":
-        if behavior.get("backchannel") is None:
-            bc_cfg["enabled"] = False
-        if behavior.get("micro_ack") is None:
-            ma_cfg["enabled"] = False
+    # Backchannel + micro-ack were originally tuned against the WebRTC
+    # mic path's AGC + browser echo cancellation. On the native CPAL
+    # path the speaker-bleed-into-mic crosses VAD threshold (especially
+    # with software mic gain), so the listener-acks fire on the bot's
+    # own tail. Default both off unless the persona explicitly enabled
+    # them. Phase 2 (real AEC via AVAudioEngine) lets us flip the
+    # default back to on.
+    if behavior.get("backchannel") is None:
+        bc_cfg["enabled"] = False
+    if behavior.get("micro_ack") is None:
+        ma_cfg["enabled"] = False
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -1119,25 +1106,9 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     # AUDIO_TAGS=off env.
     audio_tags = make_audio_tags_tap(mem=get_memory())
 
-    # Phase 4: build the output node.  In native mode we use a TeeOutputProcessor
-    # so TTS audio fans to both the CPAL speaker and any connected WebRTC clients.
-    # The module-level _native_tee is populated here so offer() can dynamically
-    # register / deregister WebRTCOutputSink entries without a restart.
-    global _native_tee, _native_mixer  # noqa: PLW0603
-    from voice.local_transport import LocalAudioTransport as _LocalAudioTransport_  # local alias
-    if AUDIO_TRANSPORT == "native" and isinstance(transport, _LocalAudioTransport_):
-        _cpal_sink = LocalAudioOutputSink(transport)
-        _output_node = TeeOutputProcessor(sinks=[_cpal_sink], name="TeeOutput")
-        _native_tee = _output_node
-        # Mic mixer: CPAL frames arrive via transport._reader_loop push_frame
-        # (already wired). WebRTC mic frames are pushed via mixer.push_webrtc
-        # from the offer() handler. The mixer emits winners into the pipeline
-        # via task.queue_frame — wired below after task creation.
-        _native_mixer = MultiInputMixer()
-    else:
-        _output_node = transport.output()
-        _native_tee = None
-        _native_mixer = None
+    # Single transport, single output node — no fanout needed now that
+    # the WebRTC client path is removed (DECISIONS.md amendment 2026-04-28).
+    _output_node = transport.output()
 
     pipeline = Pipeline([
         transport.input(),
@@ -1202,10 +1173,8 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
         # doesn't filter.
         tts,
-        # In native mode the output node is a TeeOutputProcessor so TTS
-        # audio fans to both the CPAL speaker and any connected WebRTC
-        # clients simultaneously. In WebRTC-only mode it falls back to
-        # the standard transport.output() single-sink node.
+        # Single transport.output() — sends TTS PCM frames over the
+        # unix socket to the Rust CPAL playback ring.
         _output_node,
         # Strip Fish-style prosody tags from TextFrames before the
         # assistant aggregator sees them, so tags don't accumulate in LLM
@@ -1226,25 +1195,18 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         user_id=None,  # multi-tenant work assigns per-client ids later
     )
 
-    # In native mode, also observe for barge-in so the Rust CPAL ring is
-    # flushed immediately when the user interrupts the bot.
-    from voice.local_transport import LocalAudioTransport as _LocalAudioTransport
-    _native_observers = (
-        [NativeBargeInObserver(transport)]
-        if AUDIO_TRANSPORT == "native" and isinstance(transport, _LocalAudioTransport)
-        else []
-    )
+    # Barge-in observer flushes the Rust CPAL playback ring immediately
+    # when the user interrupts the bot.
+    _native_observers = [NativeBargeInObserver(transport)]
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
-        # Native CPAL pipeline is persistent for the lifetime of the app:
-        # mic frames flow continuously regardless of UI state, so the
-        # default "cancel after 5min idle" behavior tears down the
-        # pipeline while the user is mid-wizard / between turns. WebRTC
-        # path keeps the default since each browser session has its own
-        # short-lived task.
-        cancel_on_idle_timeout=AUDIO_TRANSPORT != "native",
+        # The native CPAL pipeline is persistent for the lifetime of the
+        # app: mic frames flow continuously regardless of UI state, so
+        # Pipecat's default "cancel after 5 min idle" tears it down
+        # mid-wizard / between turns. Disable.
+        cancel_on_idle_timeout=False,
         # We construct RTVIProcessor + RTVIObserver explicitly below
         # (the linker hooks them in at the right pipeline depth). Pipecat
         # 1.1's default behavior is to auto-add both, then log a warning
@@ -1273,13 +1235,6 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
     backchannel.set_emitter(task.queue_frame)
-
-    # Phase 4: start the mic mixer if we are in native mode. The mixer
-    # emits the dominant-source InputAudioRawFrame into the pipeline via
-    # task.queue_frame. WebRTC mic frames arrive via push_webrtc() called
-    # from the offer() on_client_connected handler.
-    if _native_mixer is not None:
-        _native_mixer.start(task.queue_frame)
 
     # --- Duplex speak-while-thinking ---
     # Pre-tool acknowledgement ("hmm, let me check") is now emitted INLINE
@@ -1460,8 +1415,6 @@ async def run_bot(webrtc_connection=None, user_id: str = "default", *, transport
         await sse_bus.publish("session", {"event": "end"})
         await sse_bus.publish("bot-state", {"state": "idle"})
         _cancel_progress()
-        if _native_mixer is not None:
-            _native_mixer.stop()
         await task.cancel()
 
     await PipelineRunner(handle_sigint=False).run(task)
@@ -1543,24 +1496,24 @@ async def lifespan(app: FastAPI):
         _entitlement_refresh_loop(), name="orbis-entitlement"
     )
 
-    # Native audio transport — start the persistent pipeline on boot.
-    # In webrtc mode run_bot() is spawned per-connection from /api/offer.
+    # Start the persistent native voice pipeline. The Rust shell sets
+    # ORBIS_AUDIO_SOCK to the unix socket the CPAL engine is listening
+    # on — direct `python app.py` runs without that env var (e.g. the
+    # test suite, A2A-only deployments) skip the pipeline cleanly.
+    sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
     native_pipeline_task: asyncio.Task | None = None
-    if AUDIO_TRANSPORT == "native":
-        from voice.local_transport import LocalAudioTransport
-        sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
-        if not sock_path:
-            logger.warning(
-                "[native audio] AUDIO_TRANSPORT=native but ORBIS_AUDIO_SOCK not set — "
-                "native pipeline will not start; WebRTC /api/offer is still available"
-            )
-        else:
-            native_transport = LocalAudioTransport(sock_path=sock_path)
-            native_pipeline_task = asyncio.create_task(
-                run_bot(transport=native_transport, user_id="default"),
-                name="orbis-native-pipeline",
-            )
-            logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
+    if sock_path:
+        native_transport = LocalAudioTransport(sock_path=sock_path)
+        native_pipeline_task = asyncio.create_task(
+            run_bot(transport=native_transport, user_id="default"),
+            name="orbis-native-pipeline",
+        )
+        logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
+    else:
+        logger.info(
+            "[native audio] ORBIS_AUDIO_SOCK not set — native pipeline skipped "
+            "(this is normal for `python app.py` outside the Tauri shell)"
+        )
 
     try:
         yield
@@ -1577,78 +1530,9 @@ async def lifespan(app: FastAPI):
                 await t
             except (asyncio.CancelledError, Exception):
                 pass
-        await _handler.close()
 
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
-
-
-@app.post("/api/offer")
-async def offer(
-    req: SmallWebRTCRequest,
-    bg: BackgroundTasks,
-    user: User = Depends(require_user),
-):
-    # Phase 4: native mode now accepts WebRTC offers — the TeeOutputProcessor
-    # fans TTS audio to both the CPAL speaker and this WebRTC client.
-    if AUDIO_TRANSPORT == "native":
-        if _native_tee is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Native pipeline not yet ready — try again in a moment.",
-            )
-
-        tee = _native_tee
-        mixer = _native_mixer
-
-        async def on_native_conn(conn):
-            from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-            # Build a lightweight WebRTC transport just for this client's
-            # audio I/O.  We do NOT start a separate run_bot() — the shared
-            # native pipeline already owns the LLM/TTS chain.
-            from pipecat.transports.base_transport import TransportParams as _TP
-            webrtc_transport = SmallWebRTCTransport(
-                conn,
-                params=_TP(audio_out_enabled=True, audio_in_enabled=True),
-            )
-            out_sink = WebRTCOutputSink(webrtc_transport.output())
-            await tee.add_sink(out_sink)
-            logger.info("[phase4] WebRTC client connected — sink registered")
-
-            @webrtc_transport.event_handler("on_client_connected")
-            async def _wrtc_connect(_t, _c):
-                pass  # sink already added above
-
-            @webrtc_transport.event_handler("on_client_disconnected")
-            async def _wrtc_disconnect(_t, _c):
-                await tee.remove_sink(out_sink)
-                logger.info("[phase4] WebRTC client disconnected — sink removed")
-
-            # Route WebRTC mic frames into the mixer if available.
-            if mixer is not None:
-                @webrtc_transport.event_handler("on_audio_frame")
-                async def _wrtc_audio(_t, frame):
-                    mixer.push_webrtc(frame)
-
-        return await _handler.handle_web_request(
-            request=req, webrtc_connection_callback=on_native_conn
-        )
-
-    # Capture the resolved user id in the closure so run_bot can key
-    # its per-user state correctly. pipecat's on_client_connected
-    # fires synchronously inside handle_web_request after the SDP is
-    # accepted, and can't read FastAPI request headers from there.
-    user_id = user.id
-
-    async def on_conn(conn):
-        bg.add_task(run_bot, conn, user_id=user_id)
-    return await _handler.handle_web_request(request=req, webrtc_connection_callback=on_conn)
-
-
-@app.patch("/api/offer")
-async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
-    await _handler.handle_patch_request(req)
-    return {"status": "success"}
 
 
 @app.get("/healthz")
@@ -1666,7 +1550,7 @@ async def health():
         ],
         "persona": get_active_persona().slug,
         "audio": {
-            "transport": AUDIO_TRANSPORT,
+            "transport": "native",
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
             "noise_filter": NOISE_FILTER,
@@ -1677,12 +1561,11 @@ async def health():
 
 @app.get("/api/events")
 async def events(user: User = Depends(require_user)):
-    """Server-Sent Events stream of real-time bot state for native audio mode.
+    """Server-Sent Events stream of real-time bot state.
 
-    The frontend (VoiceStateBridge) subscribes here when AUDIO_TRANSPORT=native
-    so it can animate the orb and update the status pill without a WebRTC
-    connection.  In WebRTC mode the RTVI data channel is used instead and this
-    endpoint is still available but typically unused.
+    The frontend (VoiceStateBridge) subscribes here so it can animate
+    the orb and update the status pill. Drives the native audio path —
+    WebRTC was removed in DECISIONS.md amendment 2026-04-28.
 
     Events emitted:
         bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
@@ -2382,9 +2265,8 @@ def _serve_react() -> bool:
 
 @app.get("/")
 async def index():
-    # New (react) or legacy (vanilla) SPA. Canonical p2p-webrtc client
-    # adds BOTH audio+video transceivers (required by SmallWebRTCTransport)
-    # and queues ICE until pc_id is known.
+    # React SPA when web/dist exists; legacy vanilla static fallback
+    # otherwise.
     if _serve_react():
         return FileResponse(str(WEB_DIST / "index.html"))
     return FileResponse(str(STATIC_DIR / "index.html"))
