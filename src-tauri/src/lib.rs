@@ -182,17 +182,10 @@ impl Sidecar {
 }
 
 pub fn run() {
-    // env_logger so `RUST_LOG=debug` surfaces the sidecar stream + our
-    // own parsing logs during development.
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .parse_default_env()
-        .try_init();
-
     // Kick the macOS TCC consent dialog for mic + camera now, before
     // the webview opens. Completion blocks fire async but that's fine
     // — by the time the user interacts with the app the grant has
-    // landed and the webview's `getUserMedia` will pick it up. See
+    // landed and the audio engine's CPAL open will pick it up. See
     // `src/mic_permission.m` for the full why.
     #[cfg(target_os = "macos")]
     unsafe {
@@ -200,6 +193,26 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // tauri-plugin-log: unifies Rust + sidecar stdio + frontend
+        // console into a rotating file at the OS log dir. The sidecar
+        // log stream tee'd in via log::info!(target:"sidecar", ...)
+        // (see supervise_sidecar) lands in the same file as our own
+        // log::info! and the frontend's window.__TAURI__-bridged
+        // console output. Replaces env_logger.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("orbis".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .max_file_size(50_000_000) // 50 MB
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler({
