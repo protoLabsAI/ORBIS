@@ -14,37 +14,25 @@ export default defineConfig({
     // Import `.glsl` / `.vert` / `.frag` as strings with hot-reload.
     // Powers the R3F shader-material pipeline under plugins/orb/variants/.
     glsl({ minify: false, watch: true }),
+    // PWA service worker self-destructs on next launch for any user
+    // who has the previous PWA installed. The web/PWA target was
+    // dropped on 2026-04-28 (DECISIONS.md amendment of that date) —
+    // ORBIS is now Apple-Silicon-only via the Tauri shell, where a
+    // service worker only causes stale-cache failure modes.
+    //
+    // Once we're confident no users are on the legacy installable
+    // PWA path, this whole VitePWA() call goes away in a follow-up.
     VitePWA({
+      selfDestroying: true,
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
-      manifest: {
-        name: 'ORBIS',
-        short_name: 'ORBIS',
-        description: 'Voice-first AI companion — an orb that talks back, remembers you, and routes to your agents.',
-        theme_color: '#0a0a0a',
-        background_color: '#0a0a0a',
-        display: 'standalone',
-        start_url: '/',
-        scope: '/',
-        icons: [
-          { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
-          { src: '/pwa-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-        ],
-      },
       workbox: {
-        // Never intercept the voice pipeline's signalling / media routes.
-        // The service worker must stay out of /api/* and /.well-known/*.
         navigateFallbackDenylist: [/^\/api\//, /^\/\.well-known\//, /^\/static\//],
-        // Precache the app shell. API responses are never cached.
-        globPatterns: ['**/*.{js,css,html,woff2,png,svg}'],
+        globPatterns: [],
         runtimeCaching: [],
-        // Take over immediately on update — critical for the Tauri webview
-        // which never closes (a waiting SW would never activate otherwise).
         skipWaiting: true,
         clientsClaim: true,
       },
-      devOptions: { enabled: true, type: 'module' },
+      devOptions: { enabled: false, type: 'module' },
     }),
   ],
   resolve: {

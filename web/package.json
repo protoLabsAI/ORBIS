@@ -11,9 +11,6 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
-    "@pipecat-ai/client-js": "^1.7.0",
-    "@pipecat-ai/client-react": "^1.2.1",
-    "@pipecat-ai/small-webrtc-transport": "^1.10.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.0",
     "@react-three/postprocessing": "^3.0.4",

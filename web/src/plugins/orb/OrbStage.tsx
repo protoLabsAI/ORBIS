@@ -1,11 +1,6 @@
 import { useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
-import {
-  usePipecatClient,
-  usePipecatClientMediaTrack,
-  usePipecatClientTransportState,
-} from '@pipecat-ai/client-react';
 import { useActiveVariant } from './useOrbState';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
@@ -17,58 +12,26 @@ import './variants';
 
 /**
  * Primary orb canvas. Hosts a Canvas + whichever variant is active.
- * Also owns double-click-to-connect: on mouse, dblclick triggers
- * client.connect(); on touch, a single tap does.
+ *
+ * Pre-2026-04-28 this also owned double-click-to-connect for the
+ * WebRTC path and read MediaStreams from PipecatClient for the
+ * audio-reactive shaders. The web/PWA path was dropped (DECISIONS.md
+ * amendment of that date), audio runs entirely in the Rust CPAL
+ * engine, and the orb no longer has access to live waveform data.
+ * Audio reactivity will return in a later phase via a sidecar-pushed
+ * envelope feed.
  */
 export function OrbStage() {
   const variant = useActiveVariant();
   const voiceState = useVoiceStateSelector((s) => s.state);
-  const audioTransport = useVoiceStateSelector((s) => s.audioTransport);
-  const botTrack = usePipecatClientMediaTrack('audio', 'bot');
-  const localTrack = usePipecatClientMediaTrack('audio', 'local');
-  const client = usePipecatClient();
-  const transport = usePipecatClientTransportState();
 
-  const botStream = useMemo(
-    () => (botTrack ? new MediaStream([botTrack]) : null),
-    [botTrack],
-  );
-  const localStream = useMemo(
-    () => (localTrack ? new MediaStream([localTrack]) : null),
-    [localTrack],
-  );
+  const botStream = useMemo<MediaStream | null>(() => null, []);
+  const localStream = useMemo<MediaStream | null>(() => null, []);
 
-  // Double-click / double-tap toggles the voice session.
-  // In native mode the pipeline is always running via CPAL — double-click
-  // just shows a hint; no WebRTC connect/disconnect needed.
+  // Double-click / double-tap shows a transient "listening…" hint —
+  // the pipeline is always live, so there's nothing to "connect".
   const onDoubleClick = () => {
-    if (audioTransport === 'native') {
-      pushStatusTransient('listening…', 1500);
-      return;
-    }
-    if (!client) return;
-    const disconnected =
-      transport === 'disconnected' ||
-      transport === 'initialized' ||
-      transport === 'error';
-    const active =
-      transport === 'ready' ||
-      transport === 'connected' ||
-      transport === 'connecting' ||
-      transport === 'authenticating';
-    if (disconnected) {
-      client.connect().catch((err) => {
-        console.error('[orb] connect error:', err);
-        const detail = err instanceof Error ? err.message : String(err);
-        pushStatusTransient(`couldn't connect: ${detail}`, 4000);
-      });
-    } else if (active) {
-      client.disconnect().catch((err) => {
-        console.error('[orb] disconnect error:', err);
-        const detail = err instanceof Error ? err.message : String(err);
-        pushStatusTransient(`disconnect failed: ${detail}`, 4000);
-      });
-    }
+    pushStatusTransient('listening…', 1500);
   };
 
   if (!variant) {

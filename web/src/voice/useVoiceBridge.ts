@@ -1,24 +1,26 @@
 /**
- * useNativeBridge — SSE bridge for AUDIO_TRANSPORT=native mode.
+ * useVoiceBridge — SSE bridge between the Python sidecar and voiceStore.
  *
- * When the desktop app uses CPAL audio directly there is no WebRTC session,
- * so RTVI events never fire.  This hook opens an EventSource on /api/events
- * and translates the server-sent state transitions into voiceStore updates
- * so the orb, status pill, and any plugin that reads voiceStore work
- * identically in native mode.
+ * Opens an EventSource on /api/events and translates server-sent state
+ * transitions into voiceStore updates so the orb, status pill, and any
+ * plugin reading voiceStore stay in sync with the pipeline.
  *
  * Lifecycle
  * ---------
- * - Activated only when voiceStore.audioTransport === 'native'.
- * - EventSource is opened on mount (or when audioTransport flips to 'native').
+ * - EventSource opens on mount.
  * - On error: reconnects with exponential backoff (1 s → 2 s → 4 s … max 30 s).
- * - On unmount: EventSource is closed.  No memory leak.
+ * - On unmount: EventSource is closed.
  *
  * Events consumed
  * ---------------
  *   bot-state  { state: 'idle'|'listening'|'thinking'|'speaking' }
  *   transcript { source: 'user'|'bot', text: string, final: boolean }
  *   session    { event: 'start'|'end', session_id?: string }
+ *
+ * Pre-2026-04-28 this was named useNativeBridge and gated behind
+ * voiceStore.audioTransport === 'native'. The web/PWA / WebRTC path
+ * was dropped (DECISIONS.md amendment of that date) and SSE is now
+ * the only path; the gate and rename followed.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -28,8 +30,7 @@ const MIN_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
 const BACKOFF_FACTOR = 2;
 
-export function useNativeBridge(): void {
-  const audioTransport = voiceStore.getSnapshot().audioTransport;
+export function useVoiceBridge(): void {
   const backoffRef = useRef(MIN_BACKOFF_MS);
   const esRef = useRef<EventSource | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,8 +58,7 @@ export function useNativeBridge(): void {
 
     es.addEventListener('open', () => {
       backoffRef.current = MIN_BACKOFF_MS; // reset on successful open
-      // Mark as connected so StatusPill shows the right hint.
-      voiceStore.update({ connected: true, transportState: 'ready' });
+      voiceStore.update({ connected: true });
     });
 
     es.addEventListener('bot-state', (e: MessageEvent) => {
@@ -99,9 +99,7 @@ export function useNativeBridge(): void {
     });
 
     es.addEventListener('error', () => {
-      // EventSource fired an error — connection lost or server restarted.
-      // Mark as disconnected and schedule a reconnect.
-      voiceStore.update({ connected: false, transportState: 'disconnected', state: 'idle' });
+      voiceStore.update({ connected: false, state: 'idle' });
       es.close();
       esRef.current = null;
 
@@ -115,8 +113,7 @@ export function useNativeBridge(): void {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (audioTransport !== 'native') return;
     open();
     return close;
-  }, [audioTransport, open, close]);
+  }, [open, close]);
 }

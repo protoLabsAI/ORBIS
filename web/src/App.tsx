@@ -1,11 +1,4 @@
-import { useRef } from 'react';
-import type { PipecatClient } from '@pipecat-ai/client-js';
-import {
-  PipecatClientProvider,
-  PipecatClientAudio,
-} from '@pipecat-ai/client-react';
 import { Drawer } from '@/components/Drawer';
-import { buildClient } from './voice/client';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 // Side-effect imports — each plugin registers at module load.
@@ -17,12 +10,16 @@ import './plugins/settings-panel';
 import './plugins/setup-wizard';
 import './plugins/mood';
 
+/**
+ * Pre-2026-04-28 this was wrapped in PipecatClientProvider +
+ * PipecatClientAudio for the WebRTC client. The web/PWA path was
+ * dropped (DECISIONS.md amendment of that date) — voice state now
+ * arrives via the SSE bridge in VoiceStateBridge, audio I/O happens
+ * in the Rust CPAL engine, the React tree just renders.
+ */
 function App() {
-  const clientRef = useRef<PipecatClient | null>(null);
-  if (!clientRef.current) clientRef.current = buildClient();
-
   return (
-    <PipecatClientProvider client={clientRef.current}>
+    <>
       <VoiceStateBridge />
       <div className="fixed inset-0 overflow-hidden bg-[#0a0a0a]">
         <Slot name="stage" />
@@ -30,8 +27,7 @@ function App() {
         <Slot name="overlay-bottom" />
         <Drawer />
       </div>
-      <PipecatClientAudio />
-    </PipecatClientProvider>
+    </>
   );
 }
 
