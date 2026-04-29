@@ -92,7 +92,7 @@ STT_API_KEY = os.environ.get("STT_API_KEY", "not-needed")
 # are tuned for the native CPAL path on M1 internal mic (no AGC) — but
 # AFTER voice/local_transport.py applies the MIC_GAIN multiplier.
 # Override via env vars for a different mic profile.
-_STT_MIN_RMS = float(os.environ.get("STT_MIN_RMS", "0.07"))
+_STT_MIN_RMS = float(os.environ.get("STT_MIN_RMS", "0.04"))
 
 # Short outputs (< _STT_MIN_TEXT_LEN chars) from low-energy chunks
 # (RMS < _STT_STRONG_RMS) are dropped. Real utterances clear at least
