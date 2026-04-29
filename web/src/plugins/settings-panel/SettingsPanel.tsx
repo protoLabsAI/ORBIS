@@ -1,4 +1,5 @@
 import { Panel } from '@/components/ui/panel';
+import { Diagnostics } from './Diagnostics';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { TTSSettings } from './TTSSettings';
@@ -24,6 +25,7 @@ export function SettingsPanel() {
           <code className="mx-1">.env.example</code>. UI pending.
         </p>
       </Panel>
+      <Diagnostics />
     </div>
   );
 }

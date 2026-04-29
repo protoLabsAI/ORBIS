@@ -134,6 +134,25 @@ fn get_audio_level(state: tauri::State<AudioEngineState>) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Clear the WKWebView's storage (cookies, IndexedDB, localStorage,
+/// service-worker registrations, fetch cache). Use when stale frontend
+/// state is suspected — typically a rebuilt sidecar is being served by
+/// a service worker that's caching the old bundle's API responses, or
+/// localStorage carries setupComplete from a previous user.
+///
+/// Replaces the offline `rm -rf ~/Library/WebKit/<bid>/` step in
+/// `scripts/nuke-and-rebuild.sh` for the runtime-clear case (when the
+/// app is up but acting weird). The script still does the offline wipe
+/// for the rebuild path because it has to handle both bundle IDs and
+/// the file system can't be mutated through this IPC after the process
+/// exits.
+#[tauri::command]
+async fn clear_browsing_data(webview: tauri::Webview) -> Result<(), String> {
+    webview
+        .clear_all_browsing_data()
+        .map_err(|e| format!("clear_all_browsing_data: {e}"))
+}
+
 /// Tauri-managed state: the currently-spawned sidecar child, guarded
 /// so the exit handler can kill it from outside the async task.
 struct Sidecar {
@@ -185,9 +204,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler({
             #[cfg(feature = "native-audio")]
-            { tauri::generate_handler![list_audio_inputs, get_audio_level] }
+            { tauri::generate_handler![list_audio_inputs, get_audio_level, clear_browsing_data] }
             #[cfg(not(feature = "native-audio"))]
-            { tauri::generate_handler![] }
+            { tauri::generate_handler![clear_browsing_data] }
         })
         .manage(Sidecar::new())
         .setup(|app| {
