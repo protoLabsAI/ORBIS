@@ -14,3 +14,9 @@
 pub mod aec;
 pub mod engine;
 pub mod socket;
+
+// Phase 2 — opt-in via the `voice-processing` Cargo feature. Replaces
+// the CPAL input path with AVAudioEngine voice-processing IO (Apple-
+// tuned AEC + AGC + NS, per WWDC23-10235). Output stays on CPAL.
+#[cfg(all(feature = "voice-processing", target_os = "macos"))]
+pub mod voice_processing_input;

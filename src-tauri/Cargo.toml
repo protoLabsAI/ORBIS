@@ -34,6 +34,36 @@ cpal   = { version = "0.17", optional = true }
 rubato = { version = "0.15", optional = true }
 tokio  = { version = "1",   optional = true, features = ["net", "io-util", "sync", "rt"] }
 
+# Phase 2 — Apple voice-processing IO via AVAudioEngine. Replaces the
+# CPAL input path on macOS with Apple-tuned AEC + AGC + NS (per
+# WWDC23-10235). Output stays on CPAL. Opt-in via the
+# `voice-processing` feature flag while the integration soaks; once
+# verified live the flag becomes the default for native-audio builds
+# and the CPAL input path is deleted.
+[target.'cfg(target_os = "macos")'.dependencies.objc2]
+version = "0.6"
+optional = true
+[target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
+version = "0.3"
+optional = true
+features = ["NSError", "NSObject"]
+[target.'cfg(target_os = "macos")'.dependencies.objc2-avf-audio]
+version = "0.3"
+optional = true
+features = [
+  "AVAudioEngine",
+  "AVAudioNode",
+  "AVAudioIONode",
+  "AVAudioFormat",
+  "AVAudioBuffer",
+  "AVAudioTime",
+  "AVAudioTypes",
+  "block2",
+]
+[target.'cfg(target_os = "macos")'.dependencies.block2]
+version = "0.6"
+optional = true
+
 [features]
 # Gate all native audio code behind this feature so the default build
 # is byte-for-byte identical to before. Enable with:
@@ -42,6 +72,18 @@ tokio  = { version = "1",   optional = true, features = ["net", "io-util", "sync
 # is set in the environment — the Cargo feature controls compilation,
 # the env var controls behaviour at runtime.
 native-audio = ["dep:cpal", "dep:rubato", "dep:tokio"]
+# Phase 2 — Apple AVAudioEngine voice-processing input (AEC + AGC + NS).
+# Implies native-audio. Off by default while soaking; enable with:
+#   cargo tauri build --features native-audio,voice-processing
+# Once verified live this becomes the default and the CPAL input path
+# is deleted.
+voice-processing = [
+  "native-audio",
+  "dep:objc2",
+  "dep:objc2-foundation",
+  "dep:objc2-avf-audio",
+  "dep:block2",
+]
 
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]

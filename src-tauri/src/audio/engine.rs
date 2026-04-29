@@ -53,14 +53,25 @@ pub struct AudioEngine {
     pub tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     /// TTS playback ring shared with the CPAL output callback.
     playback_ring: PlaybackRing,
-    /// AEC processor, shared with the input callback.
+    /// AEC processor, shared with the CPAL input callback when that
+    /// path is in use. With voice-processing IO, Apple does AEC and
+    /// this Mutex is unused — kept for ABI compatibility while both
+    /// paths coexist.
     aec: Arc<Mutex<AecProcessor>>,
-    /// Current input RMS level (0.0–1.0), updated by the input callback.
+    /// Current input RMS level (0.0–1.0), updated by whichever input
+    /// path is active.
     /// Stored as f32 bits in an AtomicU32 for lock-free reads from the UI.
     rms: Arc<AtomicU32>,
     // Keep streams alive — they stop when dropped.
+    // CPAL input is gated off when the voice-processing feature is on;
+    // AVAudioEngine takes its place as the input source.
+    #[cfg(not(feature = "voice-processing"))]
     _input_stream: Stream,
     _output_stream: Stream,
+    /// AVAudioEngine voice-processing input (Phase 2). Only present
+    /// when the `voice-processing` Cargo feature is enabled.
+    #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+    _vp_input: super::voice_processing_input::VoiceProcessingInput,
 }
 
 // cpal 0.17.0 made Stream Send on all hosts (RustAudio/cpal#818, #1021).
@@ -72,28 +83,13 @@ impl AudioEngine {
     /// `input_device_name` — if `Some`, selects the named CPAL input
     ///   device; if `None`, uses the host default.
     pub fn new(
+        #[cfg_attr(feature = "voice-processing", allow(unused_variables))]
         input_device_name: Option<&str>,
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     ) -> Result<Self, String> {
         let host = cpal::default_host();
 
-        // --- Input device ---
-        let input_device = match input_device_name {
-            Some(name) => host
-                .input_devices()
-                .map_err(|e| format!("enumerate input devices: {e}"))?
-                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-                .ok_or_else(|| format!("input device '{name}' not found"))?,
-            None => host
-                .default_input_device()
-                .ok_or_else(|| "no default input device".to_string())?,
-        };
-        log::info!(
-            "[audio] input device: {}",
-            input_device.name().unwrap_or_default()
-        );
-
-        // --- Output device ---
+        // --- Output device (always CPAL — Phase 2 only swaps input) ---
         let output_device = host
             .default_output_device()
             .ok_or_else(|| "no default output device".to_string())?;
@@ -106,24 +102,52 @@ impl AudioEngine {
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
         let rms = Arc::new(AtomicU32::new(0));
 
-        let input_stream =
-            build_input_stream(&input_device, tx.clone(), Arc::clone(&aec), Arc::clone(&rms))?;
         let output_stream = build_output_stream(&output_device, Arc::clone(&playback_ring))?;
-
-        input_stream
-            .play()
-            .map_err(|e| format!("input stream play: {e}"))?;
         output_stream
             .play()
             .map_err(|e| format!("output stream play: {e}"))?;
+
+        // --- Input path: feature-gated ---
+        #[cfg(not(feature = "voice-processing"))]
+        let _input_stream = {
+            let input_device = match input_device_name {
+                Some(name) => host
+                    .input_devices()
+                    .map_err(|e| format!("enumerate input devices: {e}"))?
+                    .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                    .ok_or_else(|| format!("input device '{name}' not found"))?,
+                None => host
+                    .default_input_device()
+                    .ok_or_else(|| "no default input device".to_string())?,
+            };
+            log::info!(
+                "[audio] input device: {} (CPAL)",
+                input_device.name().unwrap_or_default()
+            );
+            let stream =
+                build_input_stream(&input_device, tx.clone(), Arc::clone(&aec), Arc::clone(&rms))?;
+            stream
+                .play()
+                .map_err(|e| format!("input stream play: {e}"))?;
+            stream
+        };
+
+        #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+        let _vp_input = {
+            log::info!("[audio] input path: AVAudioEngine voice-processing");
+            super::voice_processing_input::VoiceProcessingInput::new(tx.clone())?
+        };
 
         Ok(Self {
             tx,
             playback_ring,
             aec,
             rms,
-            _input_stream: input_stream,
+            #[cfg(not(feature = "voice-processing"))]
+            _input_stream,
             _output_stream: output_stream,
+            #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+            _vp_input,
         })
     }
 
@@ -178,6 +202,11 @@ impl AudioEngine {
 /// Build the CPAL input stream. Target 16 kHz mono i16; if the device
 /// doesn't support that natively, we request the closest supported
 /// config and resample in the callback.
+///
+/// Phase 2: this function is unused when the `voice-processing` feature
+/// is enabled — AVAudioEngine takes over the input path. Gated to avoid
+/// dead-code warnings.
+#[cfg(not(feature = "voice-processing"))]
 fn build_input_stream(
     device: &Device,
     tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
@@ -344,6 +373,7 @@ fn build_output_stream(
 // Device config helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(not(feature = "voice-processing"))]
 fn preferred_input_config(device: &Device) -> Result<cpal::SupportedStreamConfig, String> {
     // Prefer 16 kHz mono f32 → i16 conversion happens in callback.
     // Fall back to default if unsupported.
