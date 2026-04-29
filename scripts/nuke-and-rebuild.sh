@@ -187,6 +187,27 @@ APP="${ROOT}/src-tauri/target/release/bundle/macos/ORBIS.app"
 ok "bundle: ${APP}"
 
 # ---------------------------------------------------------------------------
+# 6a. Ad-hoc codesign with a STABLE identifier
+# ---------------------------------------------------------------------------
+# macOS TCC keys mic + camera + screen-recording grants on the binary's
+# code signature requirement (csreq). When we ad-hoc sign with no
+# explicit --identifier, codesign picks one from the bundle's
+# Info.plist (CFBundleIdentifier) — usually fine — but `cargo run` and
+# direct binary launches via terminal end up with a *different*
+# csreq tied to the binary's path/name, producing a second TCC entry
+# (orbis-tauri vs studio.protolabs.orbis). The result: every rebuild
+# re-prompts for mic permission AND the WKWebView state caches stick
+# around in two parallel ~/Library/WebKit/<bid>/ trees.
+#
+# Forcing the same --identifier on every dev build collapses both
+# launch paths to one TCC entry and one WebKit storage tree.
+# Production builds via the desktop-build CI workflow use a real
+# Developer ID identity — this is purely the dev-loop fix.
+log "ad-hoc signing with stable identifier (TCC stability across rebuilds)…"
+codesign --force --deep --sign - --identifier studio.protolabs.orbis "${APP}"
+ok "signed: $(codesign -dvv "${APP}" 2>&1 | grep -E 'Identifier|Signature' | head -2 | xargs)"
+
+# ---------------------------------------------------------------------------
 # 7. Final pyapp cache wipe (paranoia)
 # ---------------------------------------------------------------------------
 # pyapp's env cache is content-hashed by sdist. Even with same version
