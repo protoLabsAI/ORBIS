@@ -67,6 +67,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import (
+    RTVIObserver,
     RTVIObserverParams,
     RTVIProcessor,
 )
@@ -746,74 +747,83 @@ FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 
 
 # ---------------------------------------------------------------------------
-# Phase 5: SSE state observer
+# SSE state observer (subclass of pipecat's RTVIObserver)
 # ---------------------------------------------------------------------------
 
-class SseBusObserver:
-    """Pipeline observer that mirrors bot state transitions onto sse_bus.
+class SseBusObserver(RTVIObserver):
+    """RTVI observer subclass that fans every message out via /api/events SSE.
 
-    Publishes ``bot-state``, ``transcript``, and ``session`` events so the
-    frontend can drive the orb animation in native audio mode (where the
-    WebRTC RTVI data channel is absent).
+    Subclassing ``RTVIObserver`` keeps us aligned with pipecat's
+    canonical event vocabulary — the same one ``pipecat-client-react``
+    speaks — so when we eventually adopt that client, the wire format
+    is already compatible. We just translate each RTVI message into
+    our existing SSE event names instead of pushing it into a WebRTC
+    data channel.
+
+    Pre-2026-04-28 this was a hand-rolled Frame observer that
+    duplicated the RTVIObserver mapping logic against ``LLMTextFrame``
+    /  ``BotStartedSpeakingFrame`` / etc. directly. The third research
+    stream (see ``docs/native-audio-direction.md``) flagged that as
+    forking the RTVI vocabulary; this rewrite keeps the dispatch
+    surface in pipecat's hands and only customizes the egress.
+
+    Frontend wire format (unchanged) — these are what ``useVoiceBridge``
+    on the React side subscribes to:
+
+        bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
+        transcript  {"source": "user"|"bot", "text": str, "final": bool}
+        session     {"event": "start"|"end", "session_id": str?}
     """
 
-    def __init__(self) -> None:
-        from pipecat.frames.frames import (
-            BotStartedSpeakingFrame,
-            BotStoppedSpeakingFrame,
-            LLMFullResponseStartFrame,
-            TranscriptionFrame,
-            UserStartedSpeakingFrame,
-            LLMTextFrame,
-        )
-        self._BotStartedSpeakingFrame = BotStartedSpeakingFrame
-        self._BotStoppedSpeakingFrame = BotStoppedSpeakingFrame
-        self._LLMFullResponseStartFrame = LLMFullResponseStartFrame
-        self._TranscriptionFrame = TranscriptionFrame
-        self._UserStartedSpeakingFrame = UserStartedSpeakingFrame
-        self._LLMTextFrame = LLMTextFrame
+    def __init__(self, rtvi, *, params: RTVIObserverParams | None = None) -> None:
+        super().__init__(rtvi, params=params or RTVIObserverParams())
         self._bot_text_buf: list[str] = []
 
-    async def on_pipeline_started(self) -> None:
-        """Pipecat 1.1+ pipeline started signal."""
-        pass
+    async def send_rtvi_message(self, model, exclude_none: bool = True) -> None:
+        # Skip the WebRTC transport push (no transport in native mode
+        # anyway — super() guards on ``self._rtvi``, but we'd just be
+        # paying the dispatch cost). Translate to SSE instead.
+        await self._fan_to_sse(model)
 
-    async def on_process_frame(self, data) -> None:
-        """Pipecat 1.1+ per-processor frame event; not used here."""
-        pass
-
-    async def on_push_frame(self, data) -> None:
-        """Called by pipecat for every frame push between processors."""
-        F = data.frame  # brevity
-        if isinstance(F, self._BotStartedSpeakingFrame):
+    async def _fan_to_sse(self, model) -> None:
+        # Lazy import keeps the message classes off the module-load path.
+        from pipecat.processors.frameworks.rtvi.models import (
+            BotLLMStartedMessage,
+            BotLLMTextMessage,
+            BotStartedSpeakingMessage,
+            BotStoppedSpeakingMessage,
+            UserStartedSpeakingMessage,
+            UserTranscriptionMessage,
+        )
+        if isinstance(model, BotStartedSpeakingMessage):
             self._bot_text_buf.clear()
             await sse_bus.publish("bot-state", {"state": "speaking"})
-        elif isinstance(F, self._BotStoppedSpeakingFrame):
-            # Emit the accumulated bot text as a final transcript.
+        elif isinstance(model, BotStoppedSpeakingMessage):
             if self._bot_text_buf:
                 text = "".join(self._bot_text_buf)
-                await sse_bus.publish("transcript", {"source": "bot", "text": text, "final": True})
+                await sse_bus.publish(
+                    "transcript",
+                    {"source": "bot", "text": text, "final": True},
+                )
                 self._bot_text_buf.clear()
             await sse_bus.publish("bot-state", {"state": "idle"})
-        elif isinstance(F, self._UserStartedSpeakingFrame):
+        elif isinstance(model, UserStartedSpeakingMessage):
             await sse_bus.publish("bot-state", {"state": "listening"})
-        elif isinstance(F, self._LLMFullResponseStartFrame):
+        elif isinstance(model, BotLLMStartedMessage):
             await sse_bus.publish("bot-state", {"state": "thinking"})
-        elif isinstance(F, self._TranscriptionFrame):
-            if F.text:
-                await sse_bus.publish("transcript", {
-                    "source": "user",
-                    "text": F.text,
-                    "final": F.final if hasattr(F, "final") else True,
-                })
-        elif isinstance(F, self._LLMTextFrame):
-            # Accumulate bot response text; emitted as one transcript on BotStopped.
-            if F.text:
-                self._bot_text_buf.append(F.text)
-
-    async def cleanup(self) -> None:
-        """Pipecat 1.1+ calls cleanup() on all observers at teardown."""
-        pass
+        elif isinstance(model, UserTranscriptionMessage):
+            data = model.data
+            if data and getattr(data, "text", None):
+                await sse_bus.publish(
+                    "transcript",
+                    {"source": "user", "text": data.text, "final": bool(getattr(data, "final", True))},
+                )
+        elif isinstance(model, BotLLMTextMessage):
+            # Accumulate bot response text; emitted as one transcript
+            # on BotStoppedSpeakingMessage above.
+            data = model.data
+            if data and getattr(data, "text", None):
+                self._bot_text_buf.append(data.text)
 
 
 async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | None = None) -> None:
@@ -1207,25 +1217,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # Pipecat's default "cancel after 5 min idle" tears it down
         # mid-wizard / between turns. Disable.
         cancel_on_idle_timeout=False,
-        # We construct RTVIProcessor + RTVIObserver explicitly below
-        # (the linker hooks them in at the right pipeline depth). Pipecat
-        # 1.1's default behavior is to auto-add both, then log a warning
-        # when it finds ours: "RTVIProcessor and RTVIObserver found,
-        # skipping default ones." Disabling the auto-add silences the
-        # warning without changing behavior.
+        # We construct RTVIProcessor explicitly above and SseBusObserver
+        # is itself a subclass of RTVIObserver — Pipecat 1.1 auto-adds
+        # both by default and logs "RTVIProcessor and RTVIObserver found,
+        # skipping default ones" when it finds ours. Disabling the
+        # auto-add silences the warning without changing behavior.
         enable_rtvi=False,
         # Observers see every frame at the pipeline level without
         # being a transformation node.
         observers=[
             EchoGuardObserver(_ECHO_STATE),
             turn_tracer,
-            # RTVI observer emits structured client messages (bot-llm-*,
-            # bot-tts-*, user-*, function-call-*). Client consumption
-            # will land with the React frontend migration.
-            rtvi.create_rtvi_observer(params=RTVIObserverParams()),
-            # Phase 5: SSE bus observer — mirrors state transitions to
-            # /api/events so the frontend works in native audio mode.
-            SseBusObserver(),
+            # SseBusObserver subclasses RTVIObserver — pipecat handles
+            # frame → RTVI-message dispatch, the subclass redirects the
+            # egress to the SSE bus on /api/events. One observer covers
+            # what used to be two.
+            SseBusObserver(rtvi),
             *_native_observers,
         ],
     )
