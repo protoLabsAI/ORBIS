@@ -19,23 +19,23 @@ is the comprehensive guide for the Apple-Silicon-only direction and
 the 4-phase migration plan that supersedes the dual-transport
 architecture.
 
-## 2026-04-28 update — direction change
+## 2026-04-28 update — direction change + Phase 1 complete
 
 **ORBIS is now Apple-Silicon-only on the desktop, with iOS / iPad as
 the planned secondary target. Web / PWA / browser is dropped as a
-supported runtime.** This carves out roughly 600+ LoC across
-`voice/multi_input_mixer.py`, `voice/transport_factory.py`,
-`/api/offer`, `media_permission_patch.m`, the WebRTC client deps in
-`web/package.json`, and the `audioTransport === 'webrtc'` branches
-throughout the React app. See DECISIONS.md amendment of the same
-date and `docs/native-audio-direction.md` for the comprehensive guide.
+supported runtime.** See DECISIONS.md amendment of the same date and
+`docs/native-audio-direction.md` for the comprehensive guide.
 
-Today's debug session (Pipecat 1.0 → 1.1 broke `SseBusObserver`'s
-`TaskObserver` protocol; voice loop dead in the morning, working by
-afternoon) produced a half-dozen Phase-1-tier fixes that are
-band-aids — they make the loop functional today; the proper fix is
-the migration plan. STATUS.md § "Today's working-tree changes"
-inventories what's uncommitted.
+**Phase 1 is done.** All 11 ROI-ranked items shipped today across 11
+focused commits, except items 2 (`webrtc-audio-processing`) and 7
+(rubato `FftFixedIn` outside callback) which are deliberately
+deferred — Phase 2's AVAudioEngine adoption supersedes both. Net
+**−1,391 LoC**, **−442 kB JS bundle**, the `unsafe impl Send for
+AudioEngine {}` shim is gone, and the day-long voice loop debugging
+that started the morning is captured as load-bearing band-aids in
+the tree (VAD thresholds, software mic gain, STT hallucination
+filters) — these get removed when Phase 2 brings real AEC + AGC.
+STATUS.md § "Phase 1 — what shipped" has the per-commit table.
 
 ## Context at a glance
 
@@ -239,23 +239,11 @@ The structure follows the 4-phase plan in `docs/native-audio-direction.md`.
 Items in the "Other in-flight" buckets are non-Phase-1 work that's still
 worth doing in parallel where it doesn't conflict with the carve.
 
-### Phase 1 — strip web (this week, in progress)
+### Phase 1 — DONE 2026-04-28
 
-Ranked by ROI per the 2026-04-28 research synthesis:
+All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deferred — Phase 2's AVAudioEngine adoption supersedes them, integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands. See STATUS.md § "Phase 1 — what shipped" for the per-commit table.
 
-1. **Replace `~/Library/WebKit/<bid>` shell-rm with `Webview::clear_all_browsing_data()`** (Tauri 2.0 Rust API). Half-day. Eliminates the entire "Load failed after rebuild" class of bug.
-2. **Drop `aec.rs` (187 LoC) → adopt `webrtc-audio-processing 2.0.4`.** Weekend, net **−70 LoC**. Real AEC + AGC + NS + VAD; eliminates today's 8× software-mic-gain hack and `STT_MIN_RMS` gates. **This is interim** — Phase 2 supersedes with AVAudioEngine.
-3. **Bump `cpal 0.15.3 → 0.17.3`.** Weekend, ~50 LoC. Drops `unsafe impl Send for AudioEngine`; exposes `ErrorKind::DeviceChanged` for AirPods hot-swap.
-4. **Ad-hoc sign every dev build with stable `--identifier studio.protolabs.orbis`.** 1 day. Add `codesign --force --deep --sign - --identifier studio.protolabs.orbis ...` to `beforeBundleCommand`. Kills the two-bundle-ID drift AND stabilizes TCC across rebuilds.
-5. **Adopt `tauri-plugin-log 2.8.0`.** 1–2 days. Tee `CommandEvent::Stdout/Stderr` via `log::info!(target:"sidecar", ...)`. Unify Rust + frontend + sidecar stdio into one rotating log file.
-6. **`SseBusObserver` → subclass `RTVIObserver`.** Half-day. Stops forking the RTVI event vocabulary; future `pipecat-client-react` adoption becomes drop-in.
-7. **Move `rubato::resample_linear` out of audio callback → `FftFixedIn`** built once outside (mirrors `cjpais/Handy`). Half-day, ~30 LoC.
-8. **`selfDestroying: true` on `vite-plugin-pwa`** (transition release), then remove the plugin entirely.
-9. **`enable_rtvi=False` on `PipelineTask`.** 1 line. Silences the boot warning since we already construct both manually.
-10. **CASTER 20-channel broadcast bug fix** (output callback writes mono to all 20 channels). <1 hour, 5 LoC. Becomes irrelevant after Phase 2 if output also moves to AVAudioEngine.
-11. **Delete `voice/multi_input_mixer.py`** (170 LoC) — only existed for CPAL+WebRTC arbitration.
-12. **Delete WebRTC client deps from `web/package.json`** + WebRTC branches in `OrbStage.tsx`/`VoiceStateBridge.tsx`.
-13. **Delete `/api/offer`, `media_permission_patch.m`, `voice/transport_factory.py` factory branching, `MicTest.tsx`, `recordWav.ts`.**
+Total Phase-1 delta: **−1,391 net LoC** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB), and the `unsafe impl Send for AudioEngine {}` shim is gone from `engine.rs`.
 
 ### Phase 2 — Apple-native audio (1–2 weeks after Phase 1 lands)
 

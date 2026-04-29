@@ -15,44 +15,54 @@ The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is
 
 The migration is staged in four phases:
 
-1. **Strip web** (this week, in progress) — delete WebRTC client deps, PWA service worker, `getUserMedia` paths, multi-input mixer, transport factory branching, `/api/offer`, `media_permission_patch.m`. ~600+ LoC out, several MB off the JS bundle.
-2. **Apple-native audio** (1–2 weeks). Replace CPAL input + custom `aec.rs` with `AVAudioEngine` voice-processing IO. Apple ships AEC + AGC + NS tuned per Mac model. Today's 8× software-mic-gain hack and STT_MIN_RMS gates dissolve.
+1. **Strip web** — **DONE 2026-04-28.** Deleted WebRTC client deps, PWA service worker, `getUserMedia` paths, multi-input mixer, transport factory, `/api/offer`, `media_permission_patch.m`, plus 7 ROI-ranked Phase-1 sub-items below. **−1,391 LoC net** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB).
+2. **Apple-native audio** (1–2 weeks). Replace CPAL input + custom `aec.rs` with `AVAudioEngine` voice-processing IO via `objc2-avf-audio` (already a transitive dep via cpal 0.17). Apple ships AEC + AGC + NS tuned per Mac model. Today's 8× software-mic-gain hack and STT_MIN_RMS gates dissolve.
 3. **protoApp consolidation** (Q2). Adopt `protolabs-voice-core` from `protoLabsAI/protoApp` as the shared Rust audio + inference substrate. ORBIS becomes a Python sidecar speaking the `orbis-sidecar` WebSocket contract.
 4. **iOS** (Q3+). Full migration to in-process Rust (`whisper-rs`, `kokoros`, `llama-cpp-2`). Python sidecar becomes desktop-only optional.
 
 ---
 
-## Voice loop status
+## Phase 1 — what shipped (2026-04-28)
 
-**Working end-to-end on Mac desktop build, with caveats.**
+All 11 Phase-1 ROI-ranked items from `docs/native-audio-direction.md`, except items 2 (`webrtc-audio-processing 2.0.4`) and 7 (rubato `FftFixedIn` outside the audio callback) which are deferred — both get superseded by Phase 2's AVAudioEngine voice-processing IO so the work would be thrown away.
 
-The 2026-04-28 morning incident (Pipecat 1.0 → 1.1 broke `SseBusObserver`'s `TaskObserver` protocol with a missing `on_process_frame` method) is **resolved** — observer protocol stubs are in `app.py:793-832`. The day-long debug session that followed exposed a half-dozen Phase-1-and-2 issues and they're all band-aided. Live test at 16:18 captured `'Hello, can you hear me finally?'` cleanly.
+| # | Action | Commit |
+|---|---|---|
+| 9 | `enable_rtvi=False` on `PipelineTask` (silences boot warning) | `23bd14e` |
+| 10 | CASTER 20-channel broadcast bug fix (mono → frame[0] only) | `c0a62b8` |
+| 11–13, 8 | Strip web/PWA target — Python side / frontend side / Tauri media-permission shim / PWA selfDestroying | `91b77f0` `…` `04500e2` |
+| 6 | `SseBusObserver` → subclass `RTVIObserver` (stop forking RTVI vocab) | `1060f1e` |
+| 1 | `Webview::clear_all_browsing_data()` IPC + Diagnostics settings panel button | `6407a63` |
+| 3 | `cpal 0.15.3 → 0.17.3`; drop `unsafe impl Send for AudioEngine` | `83a7a92` |
+| 4 | Ad-hoc codesign with stable `--identifier studio.protolabs.orbis` (TCC stability) | `e6676af` |
+| 5 | `tauri-plugin-log 2.x` — unify Rust + sidecar + frontend log streams | `96e5442` |
 
-### Today's working-tree changes (uncommitted)
+### Today's voice-loop band-aids (still in the tree, deliberately)
 
-All of these are temporary fixes that get superseded in Phases 1–2 of the new direction. They make the loop functional today; the right fix is the migration plan.
+These get superseded in Phase 2 (AVAudioEngine gives us real AEC + AGC). They're not bugs to fix — they're load-bearing today and the comments in code reference Phase 2 as the proper supersession.
 
-- VAD: `confidence=0.85→0.7`, `min_volume=0.75→0.2` (defaults are 0.7 / 0.6; we're slightly looser than default to compensate for the M1-mic gain problem)
+- VAD: `confidence=0.85→0.7`, `min_volume=0.75→0.2` (compensates for M1 mic delivering ~0.013 RMS raw)
 - STT-side hallucination filters: phrase blocklist, `STT_MIN_RMS=0.07`, `STT_MIN_TEXT_LEN=10`, `STT_STRONG_RMS=0.15` in `voice/stt.py`
-- Filler/backchannel router fixed: was hardcoded to env `LLM_URL` defaulting to `localhost:8100/v1`, now follows persona LLM via `_resolve_skill_llm` (`app.py:430-446`). Root cause of the spam-retry connection-error stream that plagued earlier sessions
-- `cancel_on_idle_timeout=False` on `PipelineTask` in native mode — was killing the persistent native pipeline 5 minutes into the wizard (`app.py:1233`)
-- 8× software mic gain in `voice/local_transport.py` — M1 internal mic delivers ~0.013 RMS raw for normal speech; 8× lifts to typical-speech range
-- Python echo guard active at 800ms in native mode — was disabled on the (incorrect) assumption "Rust handles AEC" (`app.py:879`)
-- Backchannel + MicroAck **default off** in native mode — were false-triggering on bot's own TTS bleeding back into the mic (`app.py:947-957`)
-- `voice/local_transport.py` adds `_apply_gain_i16(audio, gain)` — vectorized numpy gain on incoming mic frames
+- 8× software mic gain in `voice/local_transport.py` (`_apply_gain_i16`)
+- Python echo guard at 800ms (was disabled on the incorrect "Rust handles AEC" assumption)
+- Backchannel + MicroAck default-off (false-trigger on bot's TTS bleed without real AEC)
+- `cancel_on_idle_timeout=False` on `PipelineTask` (Pipecat's 5-min default was tearing down the persistent pipeline mid-wizard)
+- Filler/backchannel routes to persona LLM (was hardcoded to `LLM_URL` env defaulting to `localhost:8100/v1`)
 
-### Tooling shipped today
+### Tooling
 
-- `scripts/nuke-and-rebuild.sh` (~70-80s end-to-end full clean rebuild + launch). Wipes web/dist, dist-sdist, src-tauri bundle, sidecar binary, `~/Library/Application Support/pyapp/orbis`, sidecar.log, `/tmp/pyapp-build-fix`, all `/tmp/orbis-audio-*.sock`, AND WebKit + HTTPStorages dirs for both `studio.protolabs.orbis` AND `orbis-tauri` bundle IDs (the latter discovered today as the source of "Load failed" mysteries when running `orbis-tauri` directly from terminal vs `open ORBIS.app`). Then bun build → sdist → pyapp → stage → tauri build → final pyapp wipe → launch with stderr captured.
-- `CLAUDE.md` — agent operating notes incl. nuke-and-rebuild workflow, the "logs split between `/tmp/orbis-tauri.stderr` and `~/Library/Logs/.../sidecar.log`" pattern, diagnosis checklist for "voice doesn't work".
+- `scripts/nuke-and-rebuild.sh` (~70-80s end-to-end full clean rebuild + launch). Wipes web/dist, dist-sdist, src-tauri bundle, sidecar binary, `~/Library/Application Support/pyapp/orbis`, sidecar.log, `/tmp/pyapp-build-fix`, all `/tmp/orbis-audio-*.sock`, AND WebKit + HTTPStorages dirs for both `studio.protolabs.orbis` AND `orbis-tauri` bundle IDs. Ad-hoc codesigns the bundle with `--identifier studio.protolabs.orbis` so TCC stays stable across rebuilds.
+- `.claude/skills/orbis-rebuild-install/SKILL.md` — the script as a project-level Claude skill.
+- Settings panel → Diagnostics → "Clear browsing data" button calls `Webview::clear_all_browsing_data()` IPC (in-process equivalent of the script's WebKit wipe; doesn't require a rebuild).
+- `CLAUDE.md` — agent operating notes incl. nuke-and-rebuild workflow, the (now-unified) log file at `~/Library/Logs/studio.protolabs.orbis/orbis.log`, diagnosis checklist for "voice doesn't work".
 
-### Lessons memorialized today
+### Lessons memorialized
 
-- **PWA service worker + WKWebView state outlive builds** → "Load failed" on `/api/orb/select_starter` after rebuild. Cleared by wiping `~/Library/WebKit/<bid>/` and `~/Library/HTTPStorages/<bid>*/` for both bundle IDs. **Phase 1 replaces this with `Webview::clear_all_browsing_data()`.**
-- **M1 internal mic without AGC is too quiet for default VAD.** RMS ~0.013 raw; software gain is mandatory until Phase 2 swaps to AVAudioEngine voice-processing.
-- **Filler controllers had their own LLM_URL env var** independent of persona config — split-brain. Today's fix routes them to the persona LLM. Phase 3 deletes the entire `FillerGenerator` `llm_url`/`api_key`/`model` per-controller config in favor of a session-scoped LLM.
-- **Idle-timeout default kills the persistent-pipeline pattern.** Pipecat's 5-min default was tearing down the pipeline mid-wizard. Today's fix sets `cancel_on_idle_timeout=False` for native mode.
-- **The Tauri-spawned binary has TWO bundle IDs** depending on launch path (`open ORBIS.app` → `studio.protolabs.orbis`; running `orbis-tauri` directly → `orbis-tauri`). Phase 1 fixes this with stable ad-hoc signing using `--identifier studio.protolabs.orbis` in `beforeBundleCommand`.
+- **PWA service worker + WKWebView state outlive builds.** Phase 1 replaces this with `Webview::clear_all_browsing_data()`; the script's offline rm -rf stays as the rebuild-path fallback.
+- **M1 internal mic without AGC is too quiet for default VAD.** RMS ~0.013 raw. Software gain is the band-aid until Phase 2 swaps to AVAudioEngine voice-processing.
+- **Filler controllers had their own LLM_URL env var** independent of persona config — split-brain. Routes to persona LLM now.
+- **Idle-timeout default kills the persistent-pipeline pattern.** `cancel_on_idle_timeout=False` is mandatory for the always-on CPAL path.
+- **The Tauri-spawned binary used to have TWO bundle IDs** depending on launch path (`open ORBIS.app` → `studio.protolabs.orbis`; running `orbis-tauri` directly → `orbis-tauri`). Phase 1 ad-hoc signing with stable `--identifier` collapsed this to one TCC identity.
 
 ---
 
@@ -146,29 +156,17 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 
 ## Pending follow-ups (mapped to phases)
 
-### Phase 1 (this week)
+### Phase 1 — DONE 2026-04-28
 
-1. Replace `~/Library/WebKit/<bid>` shell-rm with `Webview::clear_all_browsing_data()` (Tauri 2.0 API)
-2. Drop `aec.rs` (187 LoC), adopt `webrtc-audio-processing 2.0.4` (interim AEC + AGC; superseded by AVAudioEngine in Phase 2)
-3. Bump `cpal 0.15.3 → 0.17.3`; drop `unsafe impl Send for AudioEngine`
-4. Ad-hoc sign every dev build with stable `--identifier studio.protolabs.orbis` in `beforeBundleCommand`
-5. Adopt `tauri-plugin-log 2.8.0` with rotating `LogDir` target — unify Rust + sidecar + frontend stdio
-6. `SseBusObserver` → subclass `RTVIObserver` (stop forking RTVI event vocabulary)
-7. Move `rubato::resample_linear` out of audio callback → `FftFixedIn` built once
-8. `selfDestroying: true` on `vite-plugin-pwa` (transition release), then remove plugin
-9. `enable_rtvi=False` on `PipelineTask` (silences boot warning we already construct both manually)
-10. CASTER 20-channel broadcast bug fix (output callback writes mono to all 20 channels)
-11. Delete `voice/multi_input_mixer.py` (170 LoC) — only existed for CPAL+WebRTC arbitration
-12. Delete WebRTC client deps from `web/package.json` + WebRTC branches in `OrbStage.tsx`/`VoiceStateBridge.tsx`
-13. Delete `/api/offer`, `media_permission_patch.m`, `voice/transport_factory.py` factory branching, `MicTest.tsx`, `recordWav.ts`
+All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deliberately deferred — Phase 2's AVAudioEngine adoption supersedes them, and integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands.
 
-### Phase 2 (1–2 weeks after Phase 1 lands)
+### Phase 2 (next, 1–2 weeks)
 
-- Migrate input from CPAL → `AVAudioEngine` voice-processing IO via `objc2-avf-audio`
-- Delete `aec.rs` entirely (Apple does it now)
-- Delete the `MIC_GAIN`, `STT_MIN_RMS`, `STT_STRONG_RMS`, `STT_MIN_TEXT_LEN` knobs
-- Re-enable backchannel + microack now that real AEC is in place
-- VAD back to defaults (`confidence=0.7, min_volume=0.6`)
+- Migrate input from CPAL → `AVAudioEngine` voice-processing IO via `objc2-avf-audio` (already a transitive dep via cpal 0.17 — pulled in for free).
+- Delete `aec.rs` entirely (Apple ships AEC + AGC + NS tuned per Mac model; WWDC23-10235).
+- Delete the `MIC_GAIN`, `STT_MIN_RMS`, `STT_STRONG_RMS`, `STT_MIN_TEXT_LEN` knobs.
+- Re-enable backchannel + microack now that real AEC is in place.
+- VAD back to defaults (`confidence=0.7, min_volume=0.6`).
 
 ### Phase 3 (Q2, weeks)
 
