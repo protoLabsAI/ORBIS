@@ -245,13 +245,17 @@ All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubat
 
 Total Phase-1 delta: **−1,391 net LoC** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB), and the `unsafe impl Send for AudioEngine {}` shim is gone from `engine.rs`.
 
-### Phase 2 — Apple-native audio (1–2 weeks after Phase 1 lands)
+### Phase 2 — Apple-native audio
 
-- **Migrate input from CPAL → `AVAudioEngine` voice-processing IO** via `objc2-avf-audio` (per WWDC23-10235). Apple ships AEC + NS + AGC tuned per Mac model.
-- **Delete `aec.rs` entirely.** Apple does it now.
-- **Delete the `MIC_GAIN`, `STT_MIN_RMS`, `STT_STRONG_RMS`, `STT_MIN_TEXT_LEN` knobs.** Today's band-aids dissolve.
-- **Re-enable backchannel + microack** in native mode (currently `default off`). Real AEC means no false-trigger on bot tail.
-- **VAD back to defaults** (`confidence=0.7, min_volume=0.6`).
+**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input shipped in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature (off by default). Build with `./scripts/nuke-and-rebuild.sh --voice-processing --launch --tail`. STATUS.md has the four-step validation playbook.
+
+**Phase 2b — pending live validation.** Once 2a passes the validation playbook live, the cleanup commit makes `voice-processing` the default and deletes:
+- `src-tauri/src/audio/aec.rs` (Apple AEC supersedes)
+- The CPAL `build_input_stream` + `preferred_input_config` paths
+- `voice/local_transport.py` `MIC_GAIN` + `_apply_gain_i16` (Apple AGC supersedes)
+- `voice/stt.py` `STT_MIN_RMS` / `STT_STRONG_RMS` / `STT_MIN_TEXT_LEN` gates
+- `app.py` default-off-ing of backchannel + microack
+- VAD knob overrides (back to pipecat defaults)
 
 ### Phase 3 — protoApp consolidation (Q2)
 

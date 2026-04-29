@@ -55,9 +55,10 @@ End-to-end ~70–80s on M1.
 
 ```bash
 cd /Users/kj/dev/ORBIS
-./scripts/nuke-and-rebuild.sh                    # rebuild only
-./scripts/nuke-and-rebuild.sh --launch           # rebuild + launch
-./scripts/nuke-and-rebuild.sh --launch --tail    # rebuild + launch + tail sidecar.log
+./scripts/nuke-and-rebuild.sh                                # rebuild only
+./scripts/nuke-and-rebuild.sh --launch                       # rebuild + launch
+./scripts/nuke-and-rebuild.sh --launch --tail                # rebuild + launch + tail orbis.log
+./scripts/nuke-and-rebuild.sh --voice-processing --launch    # Phase 2a: AVAudioEngine input
 ```
 
 Stops on first error (`set -euo pipefail`).

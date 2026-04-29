@@ -40,16 +40,26 @@ ROOT="$(pwd)"
 
 LAUNCH=0
 TAIL=0
+VOICE_PROCESSING=0
 for arg in "$@"; do
   case "$arg" in
     --launch) LAUNCH=1 ;;
     --tail)   TAIL=1 ;;
+    --voice-processing|--vp)
+      # Phase 2a — replace CPAL input with AVAudioEngine
+      # voice-processing IO (Apple AEC + AGC + NS).
+      VOICE_PROCESSING=1 ;;
     -h|--help)
       sed -n '1,40p' "$0" | grep -E '^#' | sed 's/^# *//'
       exit 0 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
+
+CARGO_FEATURES="native-audio"
+if [ "${VOICE_PROCESSING}" = "1" ]; then
+  CARGO_FEATURES="native-audio,voice-processing"
+fi
 
 ts() { date "+%H:%M:%S"; }
 log() { printf '\033[1;36m[%s]\033[0m %s\n' "$(ts)" "$*"; }
@@ -180,8 +190,8 @@ ok "sidecar staged: src-tauri/binaries/orbis-${TARGET} ($(du -h "${ROOT}/src-tau
 # ---------------------------------------------------------------------------
 # 6. Tauri bundle
 # ---------------------------------------------------------------------------
-log "building Tauri app bundle (--features native-audio)…"
-cargo tauri build --features native-audio --bundles app
+log "building Tauri app bundle (--features ${CARGO_FEATURES})…"
+cargo tauri build --features "${CARGO_FEATURES}" --bundles app
 APP="${ROOT}/src-tauri/target/release/bundle/macos/ORBIS.app"
 [ -d "${APP}" ] || { echo "expected ${APP}" >&2; exit 3; }
 ok "bundle: ${APP}"

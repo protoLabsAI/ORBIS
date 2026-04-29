@@ -160,13 +160,33 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 
 All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deliberately deferred — Phase 2's AVAudioEngine adoption supersedes them, and integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands.
 
-### Phase 2 (next, 1–2 weeks)
+### Phase 2
 
-- Migrate input from CPAL → `AVAudioEngine` voice-processing IO via `objc2-avf-audio` (already a transitive dep via cpal 0.17 — pulled in for free).
-- Delete `aec.rs` entirely (Apple ships AEC + AGC + NS tuned per Mac model; WWDC23-10235).
-- Delete the `MIC_GAIN`, `STT_MIN_RMS`, `STT_STRONG_RMS`, `STT_MIN_TEXT_LEN` knobs.
-- Re-enable backchannel + microack now that real AEC is in place.
-- VAD back to defaults (`confidence=0.7, min_volume=0.6`).
+**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input lands in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature (off by default). Both feature combinations (`native-audio` alone and `native-audio,voice-processing`) compile clean and Tauri builds successfully on Apple Silicon. Phase 1 band-aids stay in place until live validation.
+
+**Phase 2b — pending live validation.** Build with the feature flag, run, verify, then ship the cleanup commit:
+
+```bash
+./scripts/nuke-and-rebuild.sh --voice-processing --launch --tail
+# or
+cargo tauri build --features native-audio,voice-processing --bundles app
+```
+
+Live validation playbook (test in this order, each gates the next):
+
+1. **Boot succeeds.** Look for `[voice-processing] engine started — AEC + AGC + NS active` in `~/Library/Logs/studio.protolabs.orbis/orbis.log`. If `setVoiceProcessingEnabled(true)` fails, the engine refuses to start — fall back to the CPAL build for now and dig in from there.
+2. **Mic levels are AGC-normalized.** Speak normally — the level meter in Settings → Mic should fill comfortably (not the today's-1-bar problem). Whisper transcripts should show `rms=0.05–0.15` range in the sidecar log, not the raw 0.013.
+3. **Echo bleed no longer false-triggers VAD.** When the bot finishes speaking, no automatic `[backchannel] 'mm'` or `[micro-ack]` should fire on its own tail.
+4. **Sustained turn-taking works.** Multi-turn conversation — verify the loop stays clean.
+
+If all four pass, Phase 2b is the cleanup commit:
+- Make `voice-processing` the default for `native-audio` builds.
+- Delete `src-tauri/src/audio/aec.rs` (187 LoC; Apple supersedes).
+- Delete the CPAL `build_input_stream` + `preferred_input_config` paths.
+- Delete `voice/local_transport.py` `MIC_GAIN` + `_apply_gain_i16` (Apple AGC supersedes).
+- Delete `voice/stt.py` `STT_MIN_RMS` / `STT_STRONG_RMS` / `STT_MIN_TEXT_LEN` gates (Apple NS + Whisper handle silence properly without).
+- In `app.py`, drop the `if AUDIO_TRANSPORT == "native": bc_cfg["enabled"] = False` block — backchannel + microack come back online.
+- VAD back to pipecat defaults (`confidence=0.7, min_volume=0.6`).
 
 ### Phase 3 (Q2, weeks)
 
