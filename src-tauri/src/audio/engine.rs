@@ -303,15 +303,26 @@ fn build_output_stream(
                     pcm_16
                 };
 
-                // Convert i16 → f32, expand to channel count.
+                // Convert i16 → f32, write mono signal to channel 0
+                // and zero the rest. Multi-channel devices (Rodecaster /
+                // CASTER-class USB interfaces, virtual aggregates, pro
+                // interfaces with monitor + USB returns) expose 8/16/20+
+                // output channels — broadcasting the same signal to all
+                // of them routes audio to channel strips the user isn't
+                // listening through and bleeds into auxiliary buses.
+                // Mono-to-channel-0 is the conventional CPAL pattern;
+                // user can route channel 0 from their device's mixer.
                 for (frame_idx, frame) in data.chunks_mut(channels).enumerate() {
                     let s = resampled
                         .get(frame_idx)
                         .copied()
                         .unwrap_or(0);
                     let f = s as f32 / i16::MAX as f32;
-                    for ch in frame.iter_mut() {
-                        *ch = f;
+                    if let Some((first, rest)) = frame.split_first_mut() {
+                        *first = f;
+                        for ch in rest.iter_mut() {
+                            *ch = 0.0;
+                        }
                     }
                 }
             },
