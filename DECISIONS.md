@@ -398,6 +398,51 @@ AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
 
 ---
 
+## Amendment — 2026-04-28: Apple Silicon (+ iOS planned) only; drop web/PWA
+
+**Supersedes:** "Dual-transport audio architecture" (2026-04-27 amendment above) and the "WebRTC remains the first-class browser/PWA path" framing carried from the original architecture section.
+
+**What changed:** Web / PWA / browser is dropped entirely as a supported runtime. ORBIS targets **Apple Silicon Mac** as the only first-class platform today. **iOS / iPad** is the planned secondary target. The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport, and it is native CPAL today, AVAudioEngine voice-processing IO in Phase 2, `protolabs-voice-core` (vendored from `protoLabsAI/protoApp`) in Phase 3, and the same on iOS in Phase 4.
+
+**Why (research-validated 2026-04-28, three parallel streams):**
+- The cross-platform reach the WebRTC path provided is currently zero benefit. Linux/Windows desktop is already deprioritized (Docker self-host); a browser path adds maintenance cost and zero strategic value.
+- Apple Silicon's `AVAudioEngine` voice-processing IO ships AEC + AGC + NS tuned per-Mac-model (WWDC23-10235). Today's debug session spent the entire day band-aiding the absence of those — software mic gain, custom AEC, hand-tuned VAD thresholds, hallucination filters. Apple solves all of it.
+- `protoLabsAI/protoApp` already ships the in-process Rust voice substrate (`whisper-rs` + `kokoros` + `llama-cpp-2` behind feature flags) and the WebSocket sidecar contract (`orbis-sidecar`). Migrating ORBIS to that pattern eliminates ~1,432 lines of bespoke audio plumbing, and is a prerequisite for the iOS port (no Python on iOS).
+- The only public Tauri+Pipecat reference (`kstonekuan/tambourine-voice`) and Daily/Pipecat's own desktop demo (`kwindla/macos-local-voice-agents`) both ship audio over WebRTC-to-localhost. We made the opposite call for latency / direct CoreAudio access. With this amendment, we double down on that decision and replace the browser-WebRTC fallback with a clean iOS path.
+
+**Decision (4-phase plan; full detail in [`docs/native-audio-direction.md`](./docs/native-audio-direction.md)):**
+
+1. **Phase 1 — Strip web** (this week). Delete WebRTC client deps, PWA service worker, `getUserMedia` paths, `voice/multi_input_mixer.py`, `voice/transport_factory.py` factory branching, `/api/offer`, `media_permission_patch.m`, the `audioTransport === 'webrtc'` branches in the React app. Roughly 600+ LoC out + several MB off the JS bundle.
+2. **Phase 2 — Apple-native audio** (1–2 weeks). Replace CPAL input + custom `aec.rs` with `AVAudioEngine` voice-processing IO via `objc2-avf-audio`. Re-enable backchannel + microack now that real AEC is in place. Delete the 8× software-mic-gain hack and the `STT_MIN_RMS` / `STT_STRONG_RMS` gates we added today.
+3. **Phase 3 — protoApp consolidation** (Q2). Adopt `protolabs-voice-core` from `protoLabsAI/protoApp` as the shared Rust audio + inference substrate. Migrate the Python sidecar to speak `orbis-sidecar`'s WebSocket contract instead of our 8-byte-header binary Unix socket.
+4. **Phase 4 — iOS** (Q3+). Full migration to in-process Rust per protoApp's already-shipping pattern. Tauri Mobile target. Python sidecar becomes desktop-only optional.
+
+**Trade-offs explicitly accepted:**
+- No browser / PWA access. Users wanting ORBIS from a phone-not-on-tailnet browser are out of luck (mitigation: iOS app is on the roadmap; tailnet remains the multi-device answer for desktop).
+- No Linux/Windows desktop product (mitigation: Docker self-host stays documented).
+- Tighter coupling to Apple's audio stack (mitigation: AVAudioEngine has been stable since 10.10; voice-processing IO since 10.13).
+- Migration in three phases is non-trivial; we accept this in exchange for permanent simplification.
+
+**Modules deleted in Phase 1** (does not bind Phase 2+):
+- `voice/multi_input_mixer.py` — only existed to arbitrate CPAL + WebRTC mics
+- `voice/transport_factory.py` — factory always returned `LocalAudioTransport` after this
+- `/api/offer` endpoint — WebRTC signalling only
+- `src-tauri/src/media_permission_patch.m` — `getUserMedia` UIDelegate hack, dead without WebRTC
+- `web/src/shared/audio/MicTest.tsx`, `recordWav.ts` — `getUserMedia` paths
+- `vite-plugin-pwa` plugin (run with `selfDestroying: true` for one release first)
+- WebRTC dual-flush branch in `voice/native_bargein.py`
+- `AUDIO_TRANSPORT` env var (implicit `native`)
+
+**Modules deleted in Phase 3** (does bind Phase 2):
+- `voice/local_transport.py` (replaced by `orbis-sidecar` WS contract)
+- `src-tauri/src/audio/socket.rs` (replaced by WS framing)
+- `voice/sse_bus.py` (replaced by WS event stream)
+- `voice/native_bargein.py` (functionality moves to protoApp host)
+
+**See:** [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide — full file/feature delete inventory, ROI-ranked Phase 1 actions list (11 items synthesized from the three research streams), the protoApp migration target, and citations for every claim.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:
@@ -410,3 +455,5 @@ These were considered and rejected during the design conversation:
 - Multi-tenant roster with per-user `allowed_skills` (rejected — we're single-user)
 - Skills-as-personas catalog (rejected — one orb per install)
 - Fish TTS as default (rejected — broader hardware support via kokoro)
+- Web / PWA / browser as a supported runtime (rejected 2026-04-28 — see Apple-Silicon-only amendment above)
+- Linux / Windows desktop builds as a supported product (Docker self-host is the documented answer for non-Apple stacks)

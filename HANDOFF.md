@@ -1,8 +1,8 @@
 # HANDOFF — ORBIS
 
-*Updated 2026-04-24 (after the desktop-voice arc — PR #28 merged,
-PR #30 in flight). Apple Silicon Mac desktop build now ships voice
-end-to-end.*
+*Updated 2026-04-28 (after the architectural redirect: Apple-Silicon-only,
+drop web/PWA target). The 2026-04-24 desktop-voice arc still applies as
+the substrate; what changed is direction, not what's shipped.*
 
 This doc is for the next human to sit down with ORBIS — whether
 that's tomorrow-you, a teammate picking it up, or a handoff to a
@@ -14,6 +14,28 @@ questions, and ordered next steps.
 [DECISIONS.md](./DECISIONS.md) has the frozen architecture decisions
 — read that first if you haven't. [README.md](./README.md) has the
 developer-facing overview.
+[`docs/native-audio-direction.md`](./docs/native-audio-direction.md)
+is the comprehensive guide for the Apple-Silicon-only direction and
+the 4-phase migration plan that supersedes the dual-transport
+architecture.
+
+## 2026-04-28 update — direction change
+
+**ORBIS is now Apple-Silicon-only on the desktop, with iOS / iPad as
+the planned secondary target. Web / PWA / browser is dropped as a
+supported runtime.** This carves out roughly 600+ LoC across
+`voice/multi_input_mixer.py`, `voice/transport_factory.py`,
+`/api/offer`, `media_permission_patch.m`, the WebRTC client deps in
+`web/package.json`, and the `audioTransport === 'webrtc'` branches
+throughout the React app. See DECISIONS.md amendment of the same
+date and `docs/native-audio-direction.md` for the comprehensive guide.
+
+Today's debug session (Pipecat 1.0 → 1.1 broke `SseBusObserver`'s
+`TaskObserver` protocol; voice loop dead in the morning, working by
+afternoon) produced a half-dozen Phase-1-tier fixes that are
+band-aids — they make the loop functional today; the proper fix is
+the migration plan. STATUS.md § "Today's working-tree changes"
+inventories what's uncommitted.
 
 ## Context at a glance
 
@@ -213,54 +235,68 @@ before declaring a release.
 
 ## Recommended next steps (in priority order)
 
-### Immediate (this week — pre-ship)
+The structure follows the 4-phase plan in `docs/native-audio-direction.md`.
+Items in the "Other in-flight" buckets are non-Phase-1 work that's still
+worth doing in parallel where it doesn't conflict with the carve.
 
-1. **Merge PR #30** (voice + MLX + bench). Ready; needs review.
-2. **Tool-call translation in Ollama + MLX adapters.** Currently
-   warned + skipped — needed for `delegate_to` to reach gemma3+/
-   qwen3+ on local backends. ~half-day each.
-3. **Run the remaining QA checklist items below.** Budget ~2 hours.
-4. **Cut v0.1.11 and verify a fresh-install Mac user flow** — DMG
-   installs, mic prompt fires, voice round-trip works on a
-   first-time machine. This is the actual ship test.
+### Phase 1 — strip web (this week, in progress)
 
-### Short-term (next 1-2 weeks)
+Ranked by ROI per the 2026-04-28 research synthesis:
 
-4. **Per-variant mood wiring.** Pick Fractal (default) and wire
-   `useMood()` into its shader uniforms. Prove the mood → visual
-   feedback loop works, then replicate for the other three.
-5. **`_active_skill()` rename pass.** Cosmetic but reduces
-   confusion. Budget 1 hour.
-6. **Frontend CI.** Add `.github/workflows/frontend-check.yml` that
-   runs `bun install + bun run build` on every PR.
-7. **Retire `session_store.py` text summaries.** Remove the
-   `save_summary` / `load_last_summary` calls from app.py; keep
-   orphan-delivery functions. One commit.
-8. **Task #68 — Docker hostname warning** in the LLM wizard step
-   when a bare hostname is entered. Inline caveat + docs note.
+1. **Replace `~/Library/WebKit/<bid>` shell-rm with `Webview::clear_all_browsing_data()`** (Tauri 2.0 Rust API). Half-day. Eliminates the entire "Load failed after rebuild" class of bug.
+2. **Drop `aec.rs` (187 LoC) → adopt `webrtc-audio-processing 2.0.4`.** Weekend, net **−70 LoC**. Real AEC + AGC + NS + VAD; eliminates today's 8× software-mic-gain hack and `STT_MIN_RMS` gates. **This is interim** — Phase 2 supersedes with AVAudioEngine.
+3. **Bump `cpal 0.15.3 → 0.17.3`.** Weekend, ~50 LoC. Drops `unsafe impl Send for AudioEngine`; exposes `ErrorKind::DeviceChanged` for AirPods hot-swap.
+4. **Ad-hoc sign every dev build with stable `--identifier studio.protolabs.orbis`.** 1 day. Add `codesign --force --deep --sign - --identifier studio.protolabs.orbis ...` to `beforeBundleCommand`. Kills the two-bundle-ID drift AND stabilizes TCC across rebuilds.
+5. **Adopt `tauri-plugin-log 2.8.0`.** 1–2 days. Tee `CommandEvent::Stdout/Stderr` via `log::info!(target:"sidecar", ...)`. Unify Rust + frontend + sidecar stdio into one rotating log file.
+6. **`SseBusObserver` → subclass `RTVIObserver`.** Half-day. Stops forking the RTVI event vocabulary; future `pipecat-client-react` adoption becomes drop-in.
+7. **Move `rubato::resample_linear` out of audio callback → `FftFixedIn`** built once outside (mirrors `cjpais/Handy`). Half-day, ~30 LoC.
+8. **`selfDestroying: true` on `vite-plugin-pwa`** (transition release), then remove the plugin entirely.
+9. **`enable_rtvi=False` on `PipelineTask`.** 1 line. Silences the boot warning since we already construct both manually.
+10. **CASTER 20-channel broadcast bug fix** (output callback writes mono to all 20 channels). <1 hour, 5 LoC. Becomes irrelevant after Phase 2 if output also moves to AVAudioEngine.
+11. **Delete `voice/multi_input_mixer.py`** (170 LoC) — only existed for CPAL+WebRTC arbitration.
+12. **Delete WebRTC client deps from `web/package.json`** + WebRTC branches in `OrbStage.tsx`/`VoiceStateBridge.tsx`.
+13. **Delete `/api/offer`, `media_permission_patch.m`, `voice/transport_factory.py` factory branching, `MicTest.tsx`, `recordWav.ts`.**
 
-### Medium-term (next month)
+### Phase 2 — Apple-native audio (1–2 weeks after Phase 1 lands)
 
-9. **State/mood authoring editor.** The big UI task — drag a
-   slider, see the orb react, save the delta to the preset. This
-   is what unlocks user-generated orbs at scale.
-10. **Docs site.** Author a handful of guides: setup, persona
-    config, delegate config, state/mood editor, paid unlock flow.
-11. **Live Stripe integration test.** Use Stripe test mode
-    end-to-end — real Checkout Session, real webhook, real grant.
-12. **Multi-device UX.** Tailnet implies phone + laptop at
-    different times. Confirm session handoff is clean.
+- **Migrate input from CPAL → `AVAudioEngine` voice-processing IO** via `objc2-avf-audio` (per WWDC23-10235). Apple ships AEC + NS + AGC tuned per Mac model.
+- **Delete `aec.rs` entirely.** Apple does it now.
+- **Delete the `MIC_GAIN`, `STT_MIN_RMS`, `STT_STRONG_RMS`, `STT_MIN_TEXT_LEN` knobs.** Today's band-aids dissolve.
+- **Re-enable backchannel + microack** in native mode (currently `default off`). Real AEC means no false-trigger on bot tail.
+- **VAD back to defaults** (`confidence=0.7, min_volume=0.6`).
+
+### Phase 3 — protoApp consolidation (Q2)
+
+- **Vendor `protolabs-voice-core`** from `protoLabsAI/protoApp` as a Cargo dep.
+- **Migrate Python sidecar to speak `orbis-sidecar`'s WebSocket contract** (`{type, text}` JSON, `ORBIS_READY ws://...` readiness line). See `protoApp/docs/how-to/integrate-orbis-sidecar.md`.
+- **Delete `voice/local_transport.py`, `src-tauri/src/audio/socket.rs`, `voice/native_bargein.py`, `voice/sse_bus.py`.**
+- **PyApp content-hash cache problem disappears** (sidecar is now `python -m orbis` over WS).
+
+### Phase 4 — iOS (Q3+)
+
+- **Tauri Mobile target** (iOS in alpha as of 2.10.x).
+- **Full Rust in-process LLM/STT/TTS** per protoApp's already-shipping pattern: `whisper-rs 0.16`, `kokoros`, `llama-cpp-2` with Metal feature.
+- **Python sidecar becomes desktop-only optional** — power-user delegate runtime for agents that need Python deps.
+
+### Other in-flight (do in parallel where it doesn't conflict with the carve)
+
+These were "next steps" in the prior version of HANDOFF.md and remain relevant:
+
+- **Tool-call translation in Ollama + MLX adapters.** Currently warned + skipped — needed for `delegate_to` to reach gemma3+/qwen3+ on local backends. Half-day each.
+- **Per-variant mood wiring.** Pick Fractal (default) and wire `useMood()` into its shader uniforms.
+- **`_active_skill()` rename pass.** Cosmetic but reduces confusion. 1 hour.
+- **Frontend CI.** Add `.github/workflows/frontend-check.yml` that runs `bun install + bun run build` on every PR.
+- **Retire `session_store.py` text summaries.** Orphan-delivery stash stays; summary file is now dead code.
+- **Task #68 — Docker hostname warning** in the LLM wizard step.
+- **State/mood authoring editor.** Big UI task; paid customization unlock surface per DECISIONS.md.
+- **Live Stripe integration test** — use Stripe test mode end-to-end.
 
 ### Longer-term
 
-- **Collectible / shop orbs** (per DECISIONS.md: deferred). Time-
-  limited starter additions, themed drops.
-- **Fact extraction background agent.** SQLite facts table is
-  ready; extractor module just needs writing.
-- **Observability — Langfuse + Prometheus `/metrics`.** Stubs
-  exist from the seed; wire to the deployment env.
-- **Multi-tenant hosting** (if product direction shifts). Auth
-  primitive could re-expand; skills catalog would need a revival.
+- **Collectible / shop orbs** (per DECISIONS.md: deferred). Time-limited starter additions, themed drops.
+- **Fact extraction background agent.** SQLite facts table is ready; extractor module just needs writing.
+- **Observability — Langfuse + Prometheus `/metrics`.** Stubs exist from the seed; wire to the deployment env.
+- **Docs site rebuild.** README + DECISIONS + STATUS + HANDOFF + `docs/native-audio-direction.md` carry the load today; if/when there's a real user-facing audience, build a proper docs site (mkdocs / VitePress).
 
 ## Useful commands
 
