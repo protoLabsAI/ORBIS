@@ -430,13 +430,19 @@ def _recall_block(user_id: str) -> str:
 def _filler_gen_for(user_id: str) -> FillerGenerator:
     """Lazy per-user FillerGenerator. Each user owns their own LLM client
     + recency history; the settings are the per-user FillerSettings
-    stored on UserState."""
+    stored on UserState.
+
+    Routes to the same LLM as the active persona — without this, the
+    filler defaulted to env LLM_URL (localhost:8100/v1, vLLM) and
+    spammed connection errors when only a remote gateway is configured.
+    """
     state = user_state_for(user_id)
     if state.filler_generator is None:
+        llm_cfg = _resolve_skill_llm(_active_skill(user_id))
         state.filler_generator = FillerGenerator(
-            llm_url=LLM_URL,
-            model=LLM_SERVED_NAME,
-            api_key=LLM_API_KEY,
+            llm_url=llm_cfg["url"],
+            model=llm_cfg["model"],
+            api_key=llm_cfg["api_key"],
             settings=state.filler_settings,
         )
     return state.filler_generator
