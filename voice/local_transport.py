@@ -56,7 +56,7 @@ MIC_SAMPLE_RATE = 16_000
 # below VAD's typical min_volume threshold. Boosting here lifts both
 # VAD and STT into a usable range without touching Rust. Override via
 # MIC_GAIN env var if a different mic profile needs less/more.
-_MIC_GAIN = float(os.environ.get("MIC_GAIN", "12.0"))
+_MIC_GAIN = float(os.environ.get("MIC_GAIN", "16.0"))
 
 
 def _apply_gain_i16(audio: bytes, gain: float) -> bytes:
