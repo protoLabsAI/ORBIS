@@ -48,5 +48,8 @@ dist/
 dist-sdist/
 
 # Claude Code agent state — per-machine scratch (scheduled task locks,
-# subagent metadata). Should never be versioned.
-.claude/
+# subagent metadata, settings.local.json). Should never be versioned.
+# .claude/skills/ is the documented exception: project-level skills
+# describe how to operate on this codebase and ship with the repo.
+.claude/*
+!.claude/skills/
