@@ -231,8 +231,17 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     system_prompt = _resolve_prompt(persona_block, config_dir)
 
     # Env-win over config for TTS selection so the same YAML file works
-    # across deployments with different TTS setups.
-    tts_backend = os.environ.get("TTS_BACKEND") or voice_block.get("tts_backend")
+    # across deployments with different TTS setups. Normalize whitespace
+    # + case so downstream consumers (MicroAckInjector ack pool selector,
+    # filler backend-style picker, voice/tts factory) can string-match on
+    # lowercase backend names. Hand-edited YAML otherwise sneaks past the
+    # config_store validator (which normalizes on the API write path).
+    _raw_tts = os.environ.get("TTS_BACKEND") or voice_block.get("tts_backend")
+    tts_backend = (
+        _raw_tts.strip().lower()
+        if isinstance(_raw_tts, str) and _raw_tts.strip()
+        else None
+    )
     voice = os.environ.get("KOKORO_VOICE") or voice_block.get("voice")
 
     try:

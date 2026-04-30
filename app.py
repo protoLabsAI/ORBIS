@@ -1035,12 +1035,17 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
             enabled=bg_cfg["enabled"],
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
-        # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~1500 ms (default; per-persona override via
-        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
-        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
-        # Cancels when the bot actually starts speaking. Vapi Fill
-        # Injection pattern.
+        # backchannel + delivery need TranscriptionFrames and VAD frames
+        # produced by the aggregator. Push downstream into the LLM.
+        backchannel,
+        delivery,
+        llm,
+        # Micro-ack injector — sits BETWEEN the LLM and TTS so it can
+        # observe LLMFullResponseStartFrame the moment the LLM begins
+        # streaming and cancel its pending timer. Earlier placement
+        # (before the LLM) caused the ack to queue up behind the LLM's
+        # TextFrames in TTS and play AFTER the bot's reply on fast
+        # turns. See agent/micro_ack.py module docstring.
         MicroAckInjector(
             tts_backend=tts_backend,
             enabled=ma_cfg["enabled"],
@@ -1051,11 +1056,6 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
             verbosity_getter=lambda: user_state.filler_settings.verbosity,
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
-        # Both placed after the gate — they need TranscriptionFrames and
-        # VAD frames produced by the aggregator. Push downstream into TTS.
-        backchannel,
-        delivery,
-        llm,
         # Non-Fish TTS services strip tags at the service level via their
         # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
         # consumes `[softly]` / `[pause:300]` natively, so its adapter

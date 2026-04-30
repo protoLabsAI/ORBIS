@@ -91,6 +91,29 @@ def test_env_override_for_tts_backend_wins(tmp_path: Path, monkeypatch: pytest.M
     assert p.tts_backend == "elevenlabs"
 
 
+def test_tts_backend_case_normalized_from_yaml(tmp_path: Path):
+    # Hand-edited YAML can use any case; downstream consumers
+    # (MicroAckInjector ack pool, filler backend-style) string-match on
+    # lowercase, so the loader must normalize. Regression: capital-K
+    # "Kokoro" in YAML used to leak through and the ack pool fell
+    # through to _PLAIN_ACKS instead of _KOKORO_ACKS.
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: "  Kokoro  "
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "kokoro"
+
+
+def test_tts_backend_case_normalized_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    yaml_path = _write(tmp_path / "orbis.yaml", "")
+    monkeypatch.setenv("TTS_BACKEND", "ElevenLabs")
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "elevenlabs"
+
+
 def test_malformed_yaml_falls_back_to_defaults(tmp_path: Path):
     yaml_path = tmp_path / "orbis.yaml"
     yaml_path.write_text("this is not: valid: yaml: : :")
