@@ -36,7 +36,13 @@ _ALLOWED_PERSONA_KEYS = {
     "slug", "name", "user_name", "system_prompt", "system_prompt_file",
     "temperature", "max_tokens", "filler_verbosity",
 }
-_ALLOWED_VOICE_KEYS = {"tts_backend", "voice"}
+_ALLOWED_VOICE_KEYS = {
+    "tts_backend", "voice",
+    # OpenAI-compatible endpoint overrides for users running TTS through
+    # a custom gateway (protoLabs, LocalAI, vllm-omni, etc.). Lift from
+    # env so the UI can drive them without edit-and-restart.
+    "tts_url", "tts_model", "tts_api_key",
+}
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
 _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
 _ALLOWED_VERBOSITIES = {"silent", "brief", "narrated", "chatty"}
@@ -114,6 +120,15 @@ def _validate_voice(block: Any) -> dict:
             out[k] = val
         elif k == "voice":
             out[k] = str(v) if v is not None else None
+        elif k in ("tts_url", "tts_model", "tts_api_key"):
+            # String passthrough with whitespace trim. Empty string
+            # means the user cleared the field — store None so the
+            # loader treats it as "fall back to env default".
+            if v is None:
+                out[k] = None
+            else:
+                trimmed = str(v).strip()
+                out[k] = trimmed if trimmed else None
     return out
 
 

@@ -835,6 +835,20 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
                 tts_kwargs["lang"] = lang
         elif tts_backend == "fish":
             tts_kwargs["reference_id"] = skill.voice
+        elif tts_backend == "openai":
+            tts_kwargs["voice"] = skill.voice
+    # OpenAI-compatible endpoint overrides — wired from the persona
+    # config so a user editing the Voice drawer can repoint TTS at a
+    # custom gateway (protoLabs, LocalAI, vllm-omni) without env edits.
+    # voice/tts/openai.make() falls back to TTS_OPENAI_* env vars when
+    # any of these are None.
+    if tts_backend == "openai":
+        if getattr(skill, "tts_url", None):
+            tts_kwargs["url"] = skill.tts_url
+        if getattr(skill, "tts_model", None):
+            tts_kwargs["model"] = skill.tts_model
+        if getattr(skill, "tts_api_key", None):
+            tts_kwargs["api_key"] = skill.tts_api_key
     tts = make_tts(**tts_kwargs)
 
     # Delivery controller — observes VAD + transcripts, drains push deliveries.

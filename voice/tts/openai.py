@@ -36,22 +36,37 @@ OPENAI_TTS_VOICES: tuple[str, ...] = (
 )
 
 
-def make(*, voice: str | None = None, **_unused) -> OpenAITTSService:
-    """Build an OpenAITTSService against the configured endpoint."""
+def make(
+    *,
+    voice: str | None = None,
+    url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    **_unused,
+) -> OpenAITTSService:
+    """Build an OpenAITTSService against the configured endpoint.
+
+    Each kwarg overrides the corresponding ``TTS_OPENAI_*`` env default.
+    Persona-config plumbing in app.py forwards user-edited values from
+    the settings panel, so the panel can swap gateways (protoLabs gateway,
+    LocalAI, vllm-omni, etc.) without an edit-and-restart cycle."""
     chosen_voice = voice or OPENAI_TTS_VOICE
+    chosen_url = url or OPENAI_TTS_URL
+    chosen_model = model or OPENAI_TTS_MODEL
+    chosen_api_key = api_key or OPENAI_TTS_API_KEY
     logger.info(
-        f"TTS backend: openai @ {OPENAI_TTS_URL} model={OPENAI_TTS_MODEL} "
+        f"TTS backend: openai @ {chosen_url} model={chosen_model} "
         f"voice={chosen_voice}"
     )
     # OpenAI TTS takes plain text — filter out any Fish-style prosody
     # tags the LLM emitted so they aren't spoken as brackets.
     from agent.prosody import ProsodyTextFilter
     return OpenAITTSService(
-        api_key=OPENAI_TTS_API_KEY,
-        base_url=OPENAI_TTS_URL,
+        api_key=chosen_api_key,
+        base_url=chosen_url,
         sample_rate=OPENAI_TTS_SAMPLE_RATE,
         settings=TTSSettings(
-            model=OPENAI_TTS_MODEL,
+            model=chosen_model,
             voice=chosen_voice,
             language=None,
         ),

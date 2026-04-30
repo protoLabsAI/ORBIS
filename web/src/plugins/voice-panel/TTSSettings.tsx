@@ -73,8 +73,9 @@ const HAS_VOICE_LIST: Record<TTSBackend, boolean> = {
 
 /**
  * TTS backend + voice selection. Writes persona.voice in config/orbis.yaml
- * via POST /api/config. Actual TTS-provider credentials (OpenAI key,
- * ElevenLabs key, Fish URL) stay env-only — surface them in docs not UI.
+ * via POST /api/config. For the openai backend the URL/Model/API-key
+ * are also editable here so a user with a custom gateway (the protoLabs
+ * gateway, LocalAI, etc.) doesn't have to drop into .env to repoint TTS.
  */
 export function TTSSettings() {
   const [loading, setLoading] = useState(true);
@@ -85,6 +86,12 @@ export function TTSSettings() {
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
   const [download, setDownload] = useState<DownloadState>({ kind: 'idle' });
+  // OpenAI-compat endpoint overrides. ttsApiKey isn't preloaded — show
+  // a placeholder hint instead so a saved key isn't echoed in the DOM.
+  const [ttsUrl, setTtsUrl] = useState('');
+  const [ttsModel, setTtsModel] = useState('');
+  const [ttsApiKey, setTtsApiKey] = useState('');
+  const [ttsKeyIsSet, setTtsKeyIsSet] = useState(false);
 
   // Tracks the "saved" → "idle" reset timer so it can be cancelled on
   // unmount (and before a new save re-arms it).
@@ -106,6 +113,13 @@ export function TTSSettings() {
         // to the user via a coerced cast.
         if (isValidBackend(v.tts_backend)) setBackend(v.tts_backend);
         if (v.voice) setVoice(v.voice);
+        if (v.tts_url) setTtsUrl(v.tts_url);
+        if (v.tts_model) setTtsModel(v.tts_model);
+        // Don't preload the key into the input — show a "key is set"
+        // hint instead so a saved key isn't echoed back into the DOM.
+        const hasKey = typeof v.tts_api_key === 'string' && v.tts_api_key.length > 0;
+        setTtsKeyIsSet(hasKey);
+        setTtsApiKey('');
       })
       .catch((e) => {
         if (!cancelled) setLoadError(String((e as Error).message ?? e));
@@ -145,8 +159,23 @@ export function TTSSettings() {
     try {
       const v: VoicePayload = { tts_backend: backend };
       if (voice.trim()) v.voice = voice.trim();
+      // OpenAI-compat endpoint overrides — only included when the
+      // openai backend is selected. Empty fields submit through as
+      // "" → the server normalizes to null → loader falls back to env.
+      if (backend === 'openai') {
+        v.tts_url = ttsUrl.trim();
+        v.tts_model = ttsModel.trim();
+        // Only include the key when the user typed something — empty
+        // string would clear it, which they likely don't want when a
+        // key is already saved.
+        if (ttsApiKey.trim()) v.tts_api_key = ttsApiKey.trim();
+      }
       await api.putConfig({ voice: v });
       setSave({ kind: 'saved' });
+      if (ttsApiKey.trim()) {
+        setTtsKeyIsSet(true);
+        setTtsApiKey('');
+      }
       if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
       saveResetTimerRef.current = setTimeout(
         () => setSave({ kind: 'idle' }),
@@ -307,6 +336,63 @@ export function TTSSettings() {
             </div>
           )}
         </div>
+
+        {/* OpenAI-compat endpoint overrides — surface URL/Model/Key
+            inline so a user with a custom gateway (the protoLabs gateway,
+            LocalAI, vllm-omni) can drive TTS without an env edit and
+            sidecar restart. Empty fields fall back to TTS_OPENAI_* env
+            defaults at the server. */}
+        {backend === 'openai' && (
+          <div className="space-y-3 pt-1">
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+                URL
+              </label>
+              <input
+                value={ttsUrl}
+                onChange={(e) => setTtsUrl(e.target.value)}
+                placeholder="https://api.openai.com/v1"
+                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+                Model
+              </label>
+              <input
+                value={ttsModel}
+                onChange={(e) => setTtsModel(e.target.value)}
+                placeholder="tts-1"
+                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                spellCheck={false}
+              />
+            </div>
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+                API key
+              </label>
+              <input
+                type="password"
+                value={ttsApiKey}
+                onChange={(e) => setTtsApiKey(e.target.value)}
+                placeholder={
+                  ttsKeyIsSet
+                    ? 'key is already set — leave blank to keep'
+                    : 'sk-...'
+                }
+                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="text-[10px] text-zinc-600 mt-1">
+                {ttsKeyIsSet
+                  ? 'A key is saved in config/orbis.yaml. Leave blank to keep it.'
+                  : 'Stored in config/orbis.yaml on your machine.'}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 pt-1">
           <Button size="sm" onClick={onSave} disabled={save.kind === 'saving'}>

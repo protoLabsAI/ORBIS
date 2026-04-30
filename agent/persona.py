@@ -129,6 +129,14 @@ class Persona:
     # Voice + TTS provider overrides.
     tts_backend: str | None = None
     voice: str | None = None
+    # Openai-compatible TTS endpoint overrides — empty/None means fall
+    # back to the TTS_OPENAI_* env defaults baked into voice/tts/openai.py.
+    # Surfaced in the UI so users with custom gateways (the protoLabs
+    # gateway, LocalAI, vLLM-omni, etc.) can switch endpoints without
+    # editing .env.
+    tts_url: str | None = None
+    tts_model: str | None = None
+    tts_api_key: str | None = None
     # Starter orb visual state — (variant, palette, params).
     orb_variant: str | None = None
     orb_palette: str | None = None
@@ -244,6 +252,19 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     )
     voice = os.environ.get("KOKORO_VOICE") or voice_block.get("voice")
 
+    # Openai-compatible TTS overrides — accept empty string as "unset"
+    # so the UI can clear a previously-saved gateway URL by submitting
+    # a blank field. Trim whitespace; pass through case (URLs are case-
+    # sensitive after the host).
+    def _str_or_none(v: object) -> str | None:
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        return s or None
+    tts_url = _str_or_none(voice_block.get("tts_url"))
+    tts_model = _str_or_none(voice_block.get("tts_model"))
+    tts_api_key = _str_or_none(voice_block.get("tts_api_key"))
+
     try:
         temperature = float(
             persona_block.get("temperature", 0.7)
@@ -307,6 +328,9 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         filler_verbosity=filler_verbosity,
         tts_backend=tts_backend,
         voice=voice,
+        tts_url=tts_url,
+        tts_model=tts_model,
+        tts_api_key=tts_api_key,
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,

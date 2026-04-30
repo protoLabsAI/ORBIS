@@ -41,6 +41,13 @@ export type OrbisConfig = {
   voice?: {
     tts_backend?: 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
     voice?: string;
+    // OpenAI-compat endpoint overrides — surface here so the UI can
+    // edit a custom gateway (protoLabs, LocalAI, vLLM-omni) without
+    // requiring an env edit + restart. Empty / undefined means fall
+    // back to TTS_OPENAI_* env defaults at the server.
+    tts_url?: string;
+    tts_model?: string;
+    tts_api_key?: string;
   };
   llm?: {
     url?: string;

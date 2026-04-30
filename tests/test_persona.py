@@ -114,6 +114,40 @@ def test_tts_backend_case_normalized_from_env(
     assert p.tts_backend == "elevenlabs"
 
 
+def test_openai_tts_endpoint_overrides_load(tmp_path: Path):
+    """voice.tts_{url,model,api_key} flow into Persona so the panel can
+    drive a custom OpenAI-compat gateway without env edits."""
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: openai
+          voice: protolabs/fish
+          tts_url: https://api.proto-labs.ai/v1
+          tts_model: tts-1
+          tts_api_key: sk-gateway-test
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "openai"
+    assert p.voice == "protolabs/fish"
+    assert p.tts_url == "https://api.proto-labs.ai/v1"
+    assert p.tts_model == "tts-1"
+    assert p.tts_api_key == "sk-gateway-test"
+
+
+def test_openai_tts_endpoint_overrides_blank_treated_as_unset(tmp_path: Path):
+    """Empty strings + whitespace should round-trip as None so the
+    loader falls back to env defaults rather than passing "" downstream."""
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: openai
+          tts_url: ""
+          tts_model: "   "
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_url is None
+    assert p.tts_model is None
+    assert p.tts_api_key is None
+
+
 def test_malformed_yaml_falls_back_to_defaults(tmp_path: Path):
     yaml_path = tmp_path / "orbis.yaml"
     yaml_path.write_text("this is not: valid: yaml: : :")
