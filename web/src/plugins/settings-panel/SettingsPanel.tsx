@@ -1,4 +1,5 @@
 import { Panel } from '@/components/ui/panel';
+import { ApiKeyField } from './ApiKeyField';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { TTSSettings } from './TTSSettings';
@@ -23,6 +24,9 @@ export function SettingsPanel() {
           <code className="mx-1">STT_API_KEY</code>. See
           <code className="mx-1">.env.example</code>. UI pending.
         </p>
+      </Panel>
+      <Panel title="Access">
+        <ApiKeyField />
       </Panel>
     </div>
   );

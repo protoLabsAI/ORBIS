@@ -34,3 +34,8 @@ dist-sdist/
 # Claude Code agent state — per-machine scratch (scheduled task locks,
 # subagent metadata). Should never be versioned.
 .claude/
+
+# protolabs studio agent state — captured workflow skills, sprint
+# contracts, repo-map cache, session notes. Per-machine scratch, not
+# part of the codebase.
+.proto/
