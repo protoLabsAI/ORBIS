@@ -26,6 +26,15 @@ OPENAI_TTS_VOICE = os.environ.get("TTS_OPENAI_VOICE", "alloy")
 OPENAI_TTS_API_KEY = os.environ.get("TTS_OPENAI_API_KEY", "not-needed")
 OPENAI_TTS_SAMPLE_RATE = int(os.environ.get("TTS_OPENAI_SAMPLE_RATE", "24000"))
 
+# OpenAI's `tts-1` / `tts-1-hd` ship a fixed set of voices. LocalAI and
+# other OpenAI-compatible servers may expose more or different voices,
+# but they don't standardize a list endpoint, so we surface the OpenAI
+# canonical set in the picker and keep the field free-typeable for the
+# long tail.
+OPENAI_TTS_VOICES: tuple[str, ...] = (
+    "alloy", "echo", "fable", "onyx", "nova", "shimmer",
+)
+
 
 def make(*, voice: str | None = None, **_unused) -> OpenAITTSService:
     """Build an OpenAITTSService against the configured endpoint."""

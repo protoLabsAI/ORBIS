@@ -18,6 +18,63 @@ KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
 KOKORO_SR = 24000
 
+# Static catalogue of Kokoro 82M voices. The full set lives at
+# `hexgrad/Kokoro-82M:voices/*.pt` on HuggingFace; KPipeline downloads
+# each ``.pt`` lazily on first use, so a freshly-installed kokoro has
+# *zero* voices on disk until you call ``pipe(text, voice=<id>)``.
+# We hard-code the catalogue rather than network-list because the kokoro
+# package itself doesn't expose a list endpoint and we don't want a
+# settings-panel "what voices exist?" call to depend on HF being
+# reachable. See ``list_voices`` for the cached-on-disk subset.
+#
+# Naming convention: <lang_gender>_<name>
+#   af_/am_ → US english (a)        bf_/bm_ → British english (b)
+#   ef_/em_ → Spanish    (e)        ff_     → French           (f)
+#   hf_/hm_ → Hindi      (h)        if_/im_ → Italian          (i)
+#   jf_/jm_ → Japanese   (j)        pf_/pm_ → Portuguese       (p)
+#   zf_/zm_ → Mandarin   (z)
+KOKORO_VOICES: tuple[str, ...] = (
+    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica",
+    "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
+    "am_onyx", "am_puck", "am_santa",
+    "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
+    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+    "ef_dora", "em_alex", "em_santa",
+    "ff_siwis",
+    "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+    "if_sara", "im_nicola",
+    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
+    "pf_dora", "pm_alex", "pm_santa",
+    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+    "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+)
+
+
+def list_voices() -> list[dict]:
+    """Return all Kokoro voices with a per-voice ``cached`` flag indicating
+    whether the ``.pt`` weights have already been downloaded into the HF
+    cache. UI uses this to mark "downloads on first use" voices. Failure
+    to read the cache (corrupt symlinks, wrong permissions) degrades
+    cleanly to ``cached=False`` for everything rather than 500'ing the
+    settings panel."""
+    cached: set[str] = set()
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        for voice in KOKORO_VOICES:
+            path = try_to_load_from_cache(
+                "hexgrad/Kokoro-82M",
+                f"voices/{voice}.pt",
+            )
+            if path:
+                cached.add(voice)
+    except Exception as e:
+        logger.warning(f"[kokoro] could not probe HF cache: {e}")
+    return [
+        {"id": v, "label": v, "cached": v in cached}
+        for v in KOKORO_VOICES
+    ]
+
 _pipe = None
 
 

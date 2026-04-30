@@ -1897,6 +1897,44 @@ async def llm_detect_local():
     return await detect_local()
 
 
+@app.get("/api/tts/voices")
+async def tts_voices(backend: str = "kokoro"):
+    """Enumerate voices/references for a given TTS backend.
+
+    Settings-panel uses this to render a Select instead of asking the user
+    to know voice IDs. Each entry is ``{id, label, ...}``; backends that
+    cache voices on disk (kokoro) include a ``cached`` flag so the UI can
+    distinguish "ready" from "downloads on first use".
+
+    Empty ``voices`` for a remote-managed backend (fish, elevenlabs) means
+    the server is unreachable or has no references registered — surface
+    a friendly "is the sidecar running?" hint in the UI rather than
+    failing the panel."""
+    backend = (backend or "").strip().lower()
+    if backend == "kokoro":
+        from voice.tts.kokoro import list_voices as _list_kokoro
+        return {"backend": "kokoro", "voices": _list_kokoro()}
+    if backend == "fish":
+        from voice.tts.fish import FISH_URL, list_references
+        ids = list_references()
+        return {
+            "backend": "fish",
+            "voices": [{"id": i, "label": i} for i in ids],
+            "fish_url": FISH_URL,
+        }
+    if backend == "openai":
+        from voice.tts.openai import OPENAI_TTS_VOICES
+        return {
+            "backend": "openai",
+            "voices": [{"id": v, "label": v} for v in OPENAI_TTS_VOICES],
+        }
+    if backend == "elevenlabs":
+        # Per-account voices — would need the user's ElevenLabs API key
+        # to enumerate. Keep the field free-typeable for now.
+        return {"backend": "elevenlabs", "voices": []}
+    return {"backend": backend, "voices": [], "error": f"unknown backend: {backend!r}"}
+
+
 @app.get("/api/starter_orbs")
 async def get_starter_orbs():
     """Return the curated starter-orb pool. The setup wizard calls this

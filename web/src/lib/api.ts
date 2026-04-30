@@ -156,4 +156,17 @@ export const api = {
     get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
       '/api/llm/detect_local',
     ),
+
+  // TTS voice/reference enumeration. Settings panel uses this on
+  // backend-change to populate a Select instead of asking the user to
+  // know voice IDs by string. Empty `voices` for fish/elevenlabs means
+  // the sidecar is unreachable or has no references — UI degrades to
+  // free-text input.
+  ttsVoices: (backend: string) =>
+    get<{
+      backend: string;
+      voices: Array<{ id: string; label: string; cached?: boolean }>;
+      fish_url?: string;
+      error?: string;
+    }>(`/api/tts/voices?backend=${encodeURIComponent(backend)}`),
 };
