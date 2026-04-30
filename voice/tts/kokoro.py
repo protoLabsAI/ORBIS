@@ -54,10 +54,10 @@ KOKORO_VOICES: tuple[str, ...] = (
 def list_voices() -> list[dict]:
     """Return all Kokoro voices with a per-voice ``cached`` flag indicating
     whether the ``.pt`` weights have already been downloaded into the HF
-    cache. UI uses this to mark "downloads on first use" voices. Failure
-    to read the cache (corrupt symlinks, wrong permissions) degrades
-    cleanly to ``cached=False`` for everything rather than 500'ing the
-    settings panel."""
+    cache. UI uses this to surface a download button for uncached voices.
+    Failure to read the cache (corrupt symlinks, wrong permissions)
+    degrades cleanly to ``cached=False`` for everything rather than
+    500'ing the settings panel."""
     cached: set[str] = set()
     try:
         from huggingface_hub import try_to_load_from_cache
@@ -74,6 +74,25 @@ def list_voices() -> list[dict]:
         {"id": v, "label": v, "cached": v in cached}
         for v in KOKORO_VOICES
     ]
+
+
+def download_voice(voice_id: str) -> dict:
+    """Eagerly fetch a Kokoro voice tensor into the HF cache so the next
+    synthesis doesn't pay the per-voice download cost on a live turn.
+    Returns ``{ok, path?, error?}``. Idempotent: re-downloading an
+    already-cached voice is a no-op (HF returns the cached path)."""
+    if voice_id not in KOKORO_VOICES:
+        return {"ok": False, "error": f"unknown voice: {voice_id!r}"}
+    try:
+        from huggingface_hub import hf_hub_download
+        path = hf_hub_download(
+            "hexgrad/Kokoro-82M",
+            f"voices/{voice_id}.pt",
+        )
+        return {"ok": True, "path": str(path)}
+    except Exception as e:
+        logger.warning(f"[kokoro] download_voice({voice_id!r}) failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 _pipe = None
 

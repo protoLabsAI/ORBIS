@@ -27,6 +27,11 @@ type SaveState =
   | { kind: 'saved' }
   | { kind: 'error'; message: string };
 
+type DownloadState =
+  | { kind: 'idle' }
+  | { kind: 'downloading' }
+  | { kind: 'error'; message: string };
+
 const BACKEND_BLURB: Record<TTSBackend, string> = {
   kokoro: 'Local, CPU-friendly. No GPU required.',
   openai: 'Any OpenAI-compatible /v1/audio/speech endpoint.',
@@ -64,6 +69,7 @@ export function TTSSettings() {
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
+  const [download, setDownload] = useState<DownloadState>({ kind: 'idle' });
 
   // Tracks the "saved" → "idle" reset timer so it can be cancelled on
   // unmount (and before a new save re-arms it).
@@ -136,6 +142,37 @@ export function TTSSettings() {
     }
   };
 
+  const onDownload = async () => {
+    if (!voice.trim()) return;
+    setDownload({ kind: 'downloading' });
+    try {
+      const r = await api.ttsDownloadVoice({ backend, voice: voice.trim() });
+      if (!r.ok) {
+        setDownload({ kind: 'error', message: r.error ?? 'download failed' });
+        return;
+      }
+      setDownload({ kind: 'idle' });
+      // Refresh the voice catalogue so the UI reflects the new cached
+      // state and the download button disappears.
+      try {
+        const list = await api.ttsVoices(backend);
+        setVoices(list.voices ?? []);
+      } catch {
+        /* non-fatal — next backend change will refetch */
+      }
+    } catch (e) {
+      setDownload({ kind: 'error', message: String((e as Error).message ?? e) });
+    }
+  };
+
+  // Voice currently selected (or first in list when no explicit choice).
+  const selectedVoice = voices.find((v) => v.id === (voice || voices[0]?.id));
+  // Only Kokoro supports an eager download — fish references are
+  // server-managed, OpenAI/ElevenLabs are hosted.
+  const canDownload =
+    backend === 'kokoro' && selectedVoice?.cached === false &&
+    download.kind !== 'downloading';
+
   if (loading) {
     return (
       <Panel title="TTS">
@@ -177,23 +214,32 @@ export function TTSSettings() {
             {backend === 'fish' ? 'Reference ID' : 'Voice'}
           </label>
           {HAS_VOICE_LIST[backend] && voices.length > 0 ? (
-            <Select value={voice || voices[0]?.id} onValueChange={setVoice}>
-              <SelectTrigger className="h-9 text-xs font-mono">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                {voices.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    <span className="font-mono">{v.label}</span>
-                    {v.cached === false && (
-                      <span className="text-[10px] text-zinc-500 ml-2">
-                        (downloads on use)
-                      </span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <Select value={voice || voices[0]?.id} onValueChange={setVoice}>
+                  <SelectTrigger className="h-9 text-xs font-mono">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {voices.map((v) => (
+                      <SelectItem key={v.id} value={v.id} className="font-mono">
+                        {v.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {canDownload && (
+                <Button size="sm" variant="secondary" onClick={onDownload}>
+                  Download
+                </Button>
+              )}
+              {download.kind === 'downloading' && (
+                <Button size="sm" variant="secondary" disabled>
+                  Downloading…
+                </Button>
+              )}
+            </div>
           ) : (
             <input
               value={voice}
@@ -202,6 +248,23 @@ export function TTSSettings() {
               className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
               spellCheck={false}
             />
+          )}
+          {/* Helper text outside the dropdown — describes the selected
+              voice's local cache state, fallback errors, etc. Kept
+              compact so the panel doesn't grow vertically per voice. */}
+          {HAS_VOICE_LIST[backend] && voices.length > 0 && download.kind === 'idle' && (
+            <div className="text-[10px] text-zinc-500 mt-1">
+              {selectedVoice?.cached === false
+                ? 'Not yet downloaded — first synthesis will fetch it.'
+                : selectedVoice?.cached === true
+                  ? 'Cached locally.'
+                  : null}
+            </div>
+          )}
+          {download.kind === 'error' && (
+            <div className="text-[10px] text-red-400 mt-1">
+              Download failed: {download.message}
+            </div>
           )}
           {HAS_VOICE_LIST[backend] && voices.length === 0 && !voicesLoading && (
             <div className="text-[10px] text-amber-500/80 mt-1">

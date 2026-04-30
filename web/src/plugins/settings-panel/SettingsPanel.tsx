@@ -1,18 +1,16 @@
 import { Panel } from '@/components/ui/panel';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
-import { TTSSettings } from './TTSSettings';
 
 /**
- * Runtime settings — swap provider / voice without re-running the setup
- * wizard. Saves land in config/orbis.yaml and reload the persona
- * server-side, so the next voice turn picks up the change.
+ * Runtime infrastructure settings — LLM endpoint, mic device, STT.
+ * Voice/TTS lives in the Voice drawer alongside personality + verbosity
+ * since it's about how the orb sounds, not which provider it routes to.
  */
 export function SettingsPanel() {
   return (
     <div className="space-y-5">
       <LLMSettings />
-      <TTSSettings />
       <MicSettings />
       <Panel title="STT">
         <p className="text-xs text-zinc-500">

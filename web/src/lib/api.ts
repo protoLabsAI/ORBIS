@@ -169,4 +169,8 @@ export const api = {
       fish_url?: string;
       error?: string;
     }>(`/api/tts/voices?backend=${encodeURIComponent(backend)}`),
+  ttsDownloadVoice: (body: { backend: string; voice: string }) =>
+    postJSON<{ ok: boolean; path?: string; error?: string }>(
+      '/api/tts/voices/download', body,
+    ),
 };

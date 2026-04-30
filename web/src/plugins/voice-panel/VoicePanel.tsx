@@ -1,5 +1,6 @@
 import { Panel } from '@/components/ui/panel';
 import { PersonalityPanel } from './PersonalityPanel';
+import { TTSSettings } from './TTSSettings';
 import { VerbositySelector } from './VerbositySelector';
 
 export function VoicePanel() {
@@ -9,6 +10,7 @@ export function VoicePanel() {
         <VerbositySelector />
       </Panel>
       <PersonalityPanel />
+      <TTSSettings />
     </div>
   );
 }

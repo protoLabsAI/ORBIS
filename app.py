@@ -1935,6 +1935,26 @@ async def tts_voices(backend: str = "kokoro"):
     return {"backend": backend, "voices": [], "error": f"unknown backend: {backend!r}"}
 
 
+@app.post("/api/tts/voices/download")
+async def tts_download_voice(payload: dict):
+    """Eagerly download a Kokoro voice tensor so the user doesn't pay
+    the latency on the first synthesis turn after switching voices.
+
+    Body: ``{"backend": "kokoro", "voice": "<id>"}``. Returns
+    ``{ok, path?, error?}``. Idempotent — re-downloading an already-
+    cached voice no-ops via HF cache hit. Other backends (fish/openai/
+    elevenlabs) don't have a "download" concept and respond with a
+    descriptive error."""
+    backend = (payload.get("backend") or "").strip().lower()
+    voice = (payload.get("voice") or "").strip()
+    if not voice:
+        return {"ok": False, "error": "voice is required"}
+    if backend == "kokoro":
+        from voice.tts.kokoro import download_voice
+        return download_voice(voice)
+    return {"ok": False, "error": f"{backend!r} backend has no downloadable voices"}
+
+
 @app.get("/api/starter_orbs")
 async def get_starter_orbs():
     """Return the curated starter-orb pool. The setup wizard calls this
