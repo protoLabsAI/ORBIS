@@ -56,6 +56,17 @@ export type OrbisConfig = {
     api_key_env?: string;
     extra_body?: Record<string, unknown> | null;
   };
+  stt?: {
+    backend?: 'local' | 'openai' | 'sensevoice';
+    // HF model id used by the local Whisper backend. Honoured at boot
+    // only — runtime changes log a warning and no-op until next start.
+    whisper_model?: string;
+    // OpenAI-compatible endpoint overrides — same lift pattern as the
+    // TTS panel. Empty strings round-trip as None on the server.
+    url?: string;
+    model?: string;
+    api_key?: string;
+  };
   orb?: {
     variant?: string;
     palette?: string;

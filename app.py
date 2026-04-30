@@ -783,7 +783,10 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
         ),
     )
 
-    stt = make_stt()
+    # STT — persona.stt (when set) overrides STT_* env defaults. Lets
+    # users swap the OpenAI-compat STT endpoint or whisper-model from
+    # the settings panel without a sidecar restart.
+    stt = make_stt(**(skill.stt or {}))
 
     # LLM routing — resolved by _resolve_skill_llm so the voice path and
     # the A2A inbound text path share a single source of truth. Per-field

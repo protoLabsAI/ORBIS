@@ -156,6 +156,13 @@ class Persona:
     # run_bot falls back to env defaults. Set from the setup wizard's
     # LLM-provider step, writable via /api/config.
     llm: dict | None = None
+    # stt: dict with shape {backend, whisper_model, url, model, api_key}.
+    # Unset → make_stt falls back to STT_* env defaults. Surfaced in the
+    # settings panel so users can repoint the OpenAI-compat STT endpoint
+    # (proto-labs gateway, LocalAI, etc.) without a .env edit. The
+    # whisper_model override is honoured at server-boot only due to the
+    # module-level pipe cache; runtime changes log a no-op warning.
+    stt: dict | None = None
     tools: list = field(default_factory=list)
 
     @property
@@ -232,6 +239,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     voice_block = data.get("voice") or {}
     orb_block = data.get("orb") or {}
     llm_block = data.get("llm") or {}
+    stt_block = data.get("stt") or {}
 
     slug = (persona_block.get("slug") or "orbis").strip()
     name = (persona_block.get("name") or "ORBIS").strip()
@@ -318,6 +326,24 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
             if v is not None:
                 llm[k] = v
 
+    # STT overrides — same shape as LLM. make_stt() reads
+    # {backend, whisper_model, url, model, api_key} and falls back to
+    # STT_* env defaults per-field. Empty strings round-trip as None
+    # (UI clear → fall back to env).
+    stt: dict | None = None
+    if isinstance(stt_block, dict) and stt_block:
+        stt = {}
+        for k in ("backend", "whisper_model", "url", "model", "api_key"):
+            v = stt_block.get(k)
+            if isinstance(v, str):
+                trimmed = v.strip()
+                if trimmed:
+                    stt[k] = trimmed.lower() if k == "backend" else trimmed
+            elif v is not None:
+                stt[k] = v
+        if not stt:
+            stt = None
+
     persona = Persona(
         slug=slug,
         name=name,
@@ -331,6 +357,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         tts_url=tts_url,
         tts_model=tts_model,
         tts_api_key=tts_api_key,
+        stt=stt,
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,

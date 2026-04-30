@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { devModeStore, useDevMode } from '@/shared/devMode';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
+import { STTSettings } from './STTSettings';
 
 /**
  * Runtime infrastructure settings — LLM endpoint, mic device, STT.
@@ -15,16 +16,7 @@ export function SettingsPanel() {
     <div className="space-y-5">
       <LLMSettings />
       <MicSettings />
-      <Panel title="STT">
-        <p className="text-xs text-zinc-500">
-          Speech-to-text is configured via environment variables today —
-          <code className="mx-1">STT_BACKEND</code>,
-          <code className="mx-1">WHISPER_MODEL</code>,
-          <code className="mx-1">STT_URL</code>,
-          <code className="mx-1">STT_API_KEY</code>. See
-          <code className="mx-1">.env.example</code>. UI pending.
-        </p>
-      </Panel>
+      <STTSettings />
       <Panel title="Developer">
         <div className="flex items-center justify-between">
           <div>

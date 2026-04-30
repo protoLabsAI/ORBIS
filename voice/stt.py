@@ -180,23 +180,53 @@ class LocalWhisperSTT(SegmentedSTTService):
 # Public factory + helpers
 # ---------------------------------------------------------------------------
 
-def make_stt() -> SegmentedSTTService:
-    """Return the configured STT service for the pipeline."""
-    if STT_BACKEND == "openai":
-        logger.info(f"STT backend: openai @ {STT_URL} model={STT_MODEL}")
-        return OpenAISTTService(
-            api_key=STT_API_KEY,
-            base_url=STT_URL,
-            settings=STTSettings(model=STT_MODEL, language=None),
+def make_stt(
+    *,
+    backend: str | None = None,
+    whisper_model: str | None = None,
+    url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    **_unused,
+) -> SegmentedSTTService:
+    """Return the configured STT service for the pipeline.
+
+    Each kwarg overrides the corresponding ``STT_*`` env default. Persona
+    plumbing in app.py forwards user-edited values from the settings
+    panel so the panel can switch backends or repoint custom OpenAI-
+    compat STT gateways without an env-edit + restart.
+
+    Note: ``whisper_model`` only affects boot-time model selection on the
+    local backend — the ``_local_pipe`` cache is module-level. A
+    runtime persona override that differs from boot logs a warning so
+    the no-op is visible."""
+    chosen_backend = (backend or STT_BACKEND or "local").strip().lower()
+    if chosen_backend == "openai":
+        chosen_url = url or STT_URL
+        chosen_model = model or STT_MODEL
+        chosen_key = api_key or STT_API_KEY
+        logger.info(
+            f"STT backend: openai @ {chosen_url} model={chosen_model}"
         )
-    if STT_BACKEND == "sensevoice":
+        return OpenAISTTService(
+            api_key=chosen_key,
+            base_url=chosen_url,
+            settings=STTSettings(model=chosen_model, language=None),
+        )
+    if chosen_backend == "sensevoice":
         # Lazy import keeps funasr in the [sensevoice] optional extra —
         # local + openai backends still work without it installed.
         from voice.stt_sensevoice import SenseVoiceSTT
         logger.info("STT backend: sensevoice (FunAudioLLM/SenseVoiceSmall)")
         return SenseVoiceSTT()
-    if STT_BACKEND != "local":
-        logger.warning(f"Unknown STT_BACKEND={STT_BACKEND!r}; falling back to local")
+    if chosen_backend != "local":
+        logger.warning(f"Unknown STT backend {chosen_backend!r}; falling back to local")
+    if whisper_model and whisper_model != WHISPER_MODEL:
+        logger.warning(
+            f"[stt.local] persona override whisper_model={whisper_model!r} "
+            f"differs from boot-time WHISPER_MODEL={WHISPER_MODEL!r}; restart "
+            f"the server to pick up the new model."
+        )
     return LocalWhisperSTT()
 
 

@@ -148,6 +148,35 @@ def test_openai_tts_endpoint_overrides_blank_treated_as_unset(tmp_path: Path):
     assert p.tts_api_key is None
 
 
+def test_stt_block_loads(tmp_path: Path):
+    """persona.stt flows through to Persona.stt as a dict that make_stt
+    can splat as kwargs. Backend gets case-normalized; empty strings
+    are dropped so they don't override env with empty."""
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        stt:
+          backend: OPENAI
+          url: https://api.proto-labs.ai/v1
+          model: whisper-1
+          api_key: sk-stt-test
+          whisper_model: ""
+    """)
+    p = load_persona(yaml_path)
+    assert p.stt is not None
+    assert p.stt["backend"] == "openai"
+    assert p.stt["url"] == "https://api.proto-labs.ai/v1"
+    assert p.stt["model"] == "whisper-1"
+    assert p.stt["api_key"] == "sk-stt-test"
+    assert "whisper_model" not in p.stt  # blanked → omitted entirely
+
+
+def test_stt_block_absent_persona_stt_is_none(tmp_path: Path):
+    """A bare config without an stt block leaves Persona.stt as None
+    so make_stt's env defaults kick in unchanged."""
+    yaml_path = _write(tmp_path / "orbis.yaml", "persona:\n  name: ORBIS\n")
+    p = load_persona(yaml_path)
+    assert p.stt is None
+
+
 def test_malformed_yaml_falls_back_to_defaults(tmp_path: Path):
     yaml_path = tmp_path / "orbis.yaml"
     yaml_path.write_text("this is not: valid: yaml: : :")
