@@ -46,9 +46,24 @@ const VOICE_PLACEHOLDER: Record<TTSBackend, string> = {
   fish: 'reference id',
 };
 
-// Backends where we ship a known catalogue and want to surface a
-// Select instead of free text. ElevenLabs voices are per-account so
-// we keep that backend free-typeable.
+// How the voice field renders per backend:
+//   select   — strict dropdown; backend has a finite known catalogue
+//              the user can't extend (kokoro voices are baked into the
+//              model, fish refs live on the sidecar).
+//   datalist — input with autocomplete suggestions from the catalogue;
+//              user can also type a custom voice. Used for openai-
+//              compatible because gateways like the protoLabs gateway
+//              expose their own voices on top of /v1/audio/speech and
+//              we can't enumerate them from this side.
+//   input    — plain text only; no known list (elevenlabs is per-
+//              account and we don't ship the user's key).
+type VoiceUI = 'select' | 'datalist' | 'input';
+const VOICE_UI: Record<TTSBackend, VoiceUI> = {
+  kokoro: 'select',
+  openai: 'datalist',
+  fish: 'select',
+  elevenlabs: 'input',
+};
 const HAS_VOICE_LIST: Record<TTSBackend, boolean> = {
   kokoro: true,
   openai: true,
@@ -213,7 +228,7 @@ export function TTSSettings() {
           <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
             {backend === 'fish' ? 'Reference ID' : 'Voice'}
           </label>
-          {HAS_VOICE_LIST[backend] && voices.length > 0 ? (
+          {VOICE_UI[backend] === 'select' && voices.length > 0 ? (
             <div className="flex items-center gap-2">
               <div className="flex-1 min-w-0">
                 <Select value={voice || voices[0]?.id} onValueChange={setVoice}>
@@ -241,18 +256,30 @@ export function TTSSettings() {
               )}
             </div>
           ) : (
-            <input
-              value={voice}
-              onChange={(e) => setVoice(e.target.value)}
-              placeholder={VOICE_PLACEHOLDER[backend]}
-              className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
-              spellCheck={false}
-            />
+            <>
+              <input
+                list={
+                  VOICE_UI[backend] === 'datalist' && voices.length > 0
+                    ? `tts-voices-${backend}`
+                    : undefined
+                }
+                value={voice}
+                onChange={(e) => setVoice(e.target.value)}
+                placeholder={VOICE_PLACEHOLDER[backend]}
+                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                spellCheck={false}
+              />
+              {VOICE_UI[backend] === 'datalist' && voices.length > 0 && (
+                <datalist id={`tts-voices-${backend}`}>
+                  {voices.map((v) => <option key={v.id} value={v.id} />)}
+                </datalist>
+              )}
+            </>
           )}
           {/* Helper text outside the dropdown — describes the selected
               voice's local cache state, fallback errors, etc. Kept
               compact so the panel doesn't grow vertically per voice. */}
-          {HAS_VOICE_LIST[backend] && voices.length > 0 && download.kind === 'idle' && (
+          {VOICE_UI[backend] === 'select' && voices.length > 0 && download.kind === 'idle' && (
             <div className="text-[10px] text-zinc-500 mt-1">
               {selectedVoice?.cached === false
                 ? 'Not yet downloaded — first synthesis will fetch it.'
@@ -261,12 +288,18 @@ export function TTSSettings() {
                   : null}
             </div>
           )}
+          {VOICE_UI[backend] === 'datalist' && (
+            <div className="text-[10px] text-zinc-500 mt-1">
+              Suggestions are OpenAI's canonical 6 — type any voice your
+              gateway accepts (e.g. <code>protolabs/fish</code>).
+            </div>
+          )}
           {download.kind === 'error' && (
             <div className="text-[10px] text-red-400 mt-1">
               Download failed: {download.message}
             </div>
           )}
-          {HAS_VOICE_LIST[backend] && voices.length === 0 && !voicesLoading && (
+          {VOICE_UI[backend] === 'select' && voices.length === 0 && !voicesLoading && (
             <div className="text-[10px] text-amber-500/80 mt-1">
               {backend === 'fish'
                 ? 'No Fish references found — is the sidecar running on the configured URL?'
