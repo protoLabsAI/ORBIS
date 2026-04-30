@@ -11,8 +11,7 @@ export type UISlotName =
   | 'drawer-voice' // drawer tab: voice controls (skill, verbosity, TTS)
   | 'drawer-orb' // drawer tab: orb controls (palette, sliders)
   | 'drawer-settings' // drawer tab: runtime settings (LLM, mic, STT)
-  | 'drawer-dev' // drawer tab: developer flags (visible when devMode on)
-  | 'drawer-logs'; // drawer tab: live event log (visible when devMode on)
+  | 'drawer-dev'; // drawer tab: feature flags + collapsible event log (visible when devMode on)
 
 export interface Plugin {
   id: string;

@@ -16,8 +16,8 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'voice' | 'orb' | 'settings' | 'dev' | 'logs';
-const ALL_TABS: readonly TabName[] = ['voice', 'orb', 'settings', 'dev', 'logs'] as const;
+type TabName = 'voice' | 'orb' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['voice', 'orb', 'settings', 'dev'] as const;
 const isTabName = (s: string): s is TabName =>
   (ALL_TABS as readonly string[]).includes(s);
 
@@ -33,10 +33,10 @@ export function Drawer() {
     return 'voice';
   });
 
-  // If devMode flips off while the user is on Dev or Logs, fall back to
+  // If devMode flips off while the user is on Dev, fall back to
   // Settings so the drawer doesn't render an unmounted tab.
   useEffect(() => {
-    if (!devMode && (tab === 'dev' || tab === 'logs')) {
+    if (!devMode && tab === 'dev') {
       setTab('settings');
     }
   }, [devMode, tab]);
@@ -103,16 +103,12 @@ export function Drawer() {
           )}
         >
           <TabsList
-            className={cn(
-              'w-full grid',
-              devMode ? 'grid-cols-5 text-[10px]' : 'grid-cols-3',
-            )}
+            className={cn('w-full grid', devMode ? 'grid-cols-4' : 'grid-cols-3')}
           >
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="orb">Orb</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
-            {devMode && <TabsTrigger value="logs">Logs</TabsTrigger>}
           </TabsList>
           <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-voice" />
@@ -126,11 +122,6 @@ export function Drawer() {
           {devMode && (
             <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
               <Slot name="drawer-dev" />
-            </TabsContent>
-          )}
-          {devMode && (
-            <TabsContent value="logs" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-              <Slot name="drawer-logs" />
             </TabsContent>
           )}
         </Tabs>
