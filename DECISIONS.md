@@ -335,6 +335,10 @@ path that's already documented.**
 
 ## Amendment — 2026-04-24: Tauri shell + WebContent media capture
 
+> **Superseded by 2026-04-29 — Tauri shell removed in commit 9b52d97.
+> See the next amendment below for the WebRTC-PWA path that replaced
+> it.**
+
 The Tauri 2 desktop shell now ships with three runtime patches that
 make the WKWebView's WebContent subprocess actually usable for
 real-time voice on a Developer-ID-signed Mac build:
@@ -357,6 +361,75 @@ These patches are Mac-specific (no-op on other platforms via cfg).
 They're considered part of the supported architecture, not
 workarounds — wry's media-capture default isn't going to change
 upstream anytime soon, and the Apple-side requirements are stable.
+
+
+## Amendment — 2026-04-29: drop the Tauri shell — distribute as a WebRTC PWA backed by the Python sidecar
+
+Reverses the prior Tauri amendment. The desktop shell sat between us
+and shipping for two weeks: WKWebView's IPC custom-protocol POST bug
+broke fetch handshakes, the wry UIDelegate patch needed re-application
+heartbeats, the pyapp sidecar cache had to be manually cleared on
+every rebuild, and the signed/notarized DMG path added a release-
+pipeline tax. None of those costs paid for themselves on a single-
+user product where the *server* already knows how to host itself.
+
+Going forward:
+
+- **No Tauri, no wry, no Rust shell.** The webapp is a PWA served by
+  the Python sidecar at `/`. Same FastAPI app that handles `/api/*`
+  also serves the built `web/dist/`. Ships as one process.
+- **Distribution path:** `pipx install orbis` / `uv tool install orbis`
+  → `orbis serve --open` opens the browser at 127.0.0.1:7866. Phase
+  pending in #49 (cut 0.2.0 release).
+- **Mic permission** is the browser's problem, not ours. Browsers ship
+  the TCC dialog through the platform's media-capture flow without
+  any wry-style intermediaries.
+- **All `src-tauri/`, `Dockerfile.fish`-adjacent shell code, and the
+  `desktop-build.yml` CI workflow are deleted** in commit 9b52d97.
+  History is searchable but the artifacts are gone.
+- **Voice-lifecycle docs** (`docs/voice-lifecycle.md`) had a
+  Tauri-shell + sidecar-spawn section; scrubbed.
+
+This is in service of a broader principle:
+
+### Sub-amendment — 2026-04-29: thin sidecar, offload to client + microservices
+
+Where we can offload work from the Python sidecar to either the
+browser or an external microservice, we do. The server's job is LLM
+routing + persona logic + memory; everything else is a candidate for
+removal. Concrete:
+
+- **Whisper STT moved to the `[whisper]` pip extra** (commit 6569aad).
+  Default install no longer pays the ~500MB transformers/accelerate
+  footprint. Default `STT_BACKEND` is now smart — `local` if the
+  extra is installed, else `openai` (compat endpoint).
+- **Web Speech client-side STT** (T61, pending) — browser does the
+  STT, server receives transcripts via custom RTVI message. Whisper
+  becomes truly opt-in for offline / privacy-sensitive deployments.
+- **Deepgram + AssemblyAI / Cartesia / Soniox streaming** (T63,
+  pending) — server-driven streaming as the alternative to in-process
+  Whisper. Same UI elevation pattern as STT/TTS lifts.
+- **kokoro extra + speechSynthesis** (T62, future) — same treatment
+  for the TTS half once the STT path is settled. Eventually a
+  torch-free default install.
+
+### Sub-amendment — 2026-04-29: elevate config to the UI as default
+
+Env-only knobs that affect user-facing behaviour belong in the
+settings UI, not in `.env`. ORBIS is meant to be a self-installable
+consumer product; anything that requires editing a dotfile breaks
+that promise. Already-lifted knobs:
+
+- LLM provider URL/Model/API key (commit 53e9b78 + earlier)
+- OpenAI-compat TTS URL/Model/API key (commit bc1c57c)
+- STT backend + Whisper model + URL/Model/API key (commit efedf05)
+- Owner API key (relocated 53e9b78, then dropped d302d9e since
+  single-owner installs don't need a UI to enter X-API-Key)
+
+When introducing or touching a knob currently env-only that the user
+might reasonably want to change, surface it in the panel by default;
+don't ask "should we?". Secrets get the LLM-panel treatment ("leave
+blank to keep" placeholder; never echo the saved value back).
 
 ## Explicitly out of scope
 

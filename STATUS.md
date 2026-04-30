@@ -1,6 +1,7 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-24 (PR #28 + #30 voice / desktop arc). Branch: `main` + `feat/desktop-voice-followup` (PR #30 open).*
+*Last updated 2026-04-29. Branch: `clean-2e8d4ac` (the new way forward
+after the Tauri rip; see DECISIONS.md amendments 2026-04-29).*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -12,33 +13,38 @@ time, remembers you across sessions, and delegates heavy reasoning to
 your configured agents. Single-owner, tailnet-hostable, SQLite-backed
 memory + personality, pipecat voice pipeline with kokoro default TTS.
 
-**Desktop voice loop functional end-to-end on Apple Silicon.** Mic
-permission lands via TCC (Developer-ID signed builds + a runtime
-WKUIDelegate patch + an AVCaptureDevice TCC shim), audio reaches
-Pipecat, Whisper transcribes (~250ms), MLX-LM in-process generates
-the reply (~350ms TTFB, 42 tok/s decode on M1 Pro 32GB), Kokoro speaks
-back (0.16× realtime). First-audio-out per turn ~1.0-1.2s on M1
-base; scales ~2× per Apple-Silicon generation.
+**Distribution model:** WebRTC PWA backed by a Python sidecar. The
+FastAPI sidecar serves both the React/Vite SPA at `/` and the
+`/api/*` routes; one process, no Tauri shell. Planned `pipx install
+orbis` / `uv tool install orbis` ships the wheel with `web/dist/`
+baked in.
 
-Repo is **runnable + tested live** — setup wizard ships end-to-end
-on Mac desktop build, voice session connects + responds with the
-full STT → LLM → TTS chain producing audio. 131 passing unit tests.
+**Voice loop functional end-to-end on Apple Silicon.** Mic permission
+flows through the browser; audio over WebRTC reaches Pipecat; Whisper
+transcribes (~250ms, optional via `[whisper]` extra); MLX-LM in-process
+generates the reply (~350ms TTFB, 42 tok/s decode on M1 Pro 32GB);
+Kokoro speaks back (0.16× realtime). First-audio-out per turn
+~1.0-1.2s on M1 base; scales ~2× per Apple-Silicon generation.
+
+Repo is **runnable + tested live** — setup wizard ships end-to-end,
+voice session connects + responds with the full STT → LLM → TTS chain
+producing audio. 470+ passing unit tests.
 
 ## Where we are
 
 ### Codebase
 
 - **Repo:** [github.com/protoLabsAI/ORBIS](https://github.com/protoLabsAI/ORBIS)
-- **Branch:** `main` (no release tag cut yet)
-- **Tests:** 131 passing (`pytest`), zero failures
-- **Build:** frontend bundles cleanly; Dockerfile restored + runnable
+- **Branch:** `clean-2e8d4ac` (post-Tauri-rip working branch).
+  Old `main` preserved as diverged-and-stale.
+- **Tests:** 470+ passing (`pytest`), zero failures
+- **Build:** frontend bundles cleanly via `bun run build`; Python
+  sidecar serves the dist at `/` plus `/api/*` JSON routes
 - **Live verified:** setup wizard + hatch animation + voice session
-  round-trip confirmed working on first-user test box, AND in the
-  Mac desktop build (Tauri shell + signed/notarized .dmg)
-- **Release pipeline:** `.github/workflows/` retargeted to
-  `protoLabsAI/ORBIS`; v0.1.10 tagged. Desktop-build workflow now
-  produces signed + notarized .dmg via App Store Connect API key
-  (PR #28 wired secrets through Infisical → GitHub Actions sync)
+  round-trip confirmed working in browser against the running sidecar
+- **Release pipeline:** desktop-build CI deleted alongside the Tauri
+  shell. Next release path is a PyPI / GH-release wheel with
+  `web/dist/` baked in (T49 — cut 0.2.0)
 
 ### What's shipped
 
@@ -62,19 +68,18 @@ full STT → LLM → TTS chain producing audio. 131 passing unit tests.
 - LLM-endpoint probing (test, model list, local auto-detect, MLX
   HF-id validation) — see below
 
-**Desktop shell (Tauri 2 + Mac signing)**
-- Tauri shell with PyApp-bundled Python sidecar. Apple Silicon arm64
-  is the supported desktop target; Linux/Windows builds remain in CI
-  for completeness but are deprioritized (Docker self-host is the
-  cross-platform answer per README).
-- WKWebView WebContent media-capture works via two Obj-C shims:
-  `mic_permission.m` (TCC registration via `AVCaptureDevice`) and
-  `media_permission_patch.m` (runtime swap of wry's UIDelegate from
-  Grant → Prompt so TCC actually gates the WebContent process).
-- Hardened-runtime entitlements: `device.audio-input`,
-  `device.camera`, network, JIT, `disable-library-validation`.
-- CI builds Developer-ID-signed + notarized .dmg via App Store
-  Connect API key. Secrets pulled from Infisical → GitHub Actions.
+**Distribution (post-Tauri-rip)**
+- **WebRTC PWA + FastAPI sidecar.** The Python app serves both the
+  built `web/dist/` (vite-plugin-pwa) at `/` and the `/api/*` REST
+  surface — one process, no native shell. The browser's media-capture
+  flow handles mic permission through the platform; we don't ship
+  Obj-C shims.
+- **Planned shipping path:** `pipx install orbis` / `uv tool install
+  orbis` (T49 — cut 0.2.0). Wheel includes `web/dist/` via
+  `[tool.hatch.build.targets.wheel.force-include]` so a fresh install
+  comes with the SPA baked in.
+- **Tauri shell deleted in commit 9b52d97.** See DECISIONS.md
+  amendment 2026-04-29.
 
 **Voice loop benchmarks** — Apple M1 Pro 10-core 32GB (MacBookPro18,1),
 macOS 26.2, current defaults, 10-turn run:
@@ -101,6 +106,8 @@ macOS 26.2, current defaults, 10-turn run:
 | `llm/test` | POST | — | Real chat.completions round-trip + latency |
 | `llm/models` | POST | — | `GET /models` with Ollama fallback |
 | `llm/detect_local` | GET | — | Parallel probe Ollama + LM Studio |
+| `tts/voices` | GET | — | List voices for a backend (kokoro static, fish via list_references, openai canonical 6, elevenlabs free-text) |
+| `tts/voices/download` | POST | — | Eagerly download a Kokoro voice tensor into the HF cache (idempotent) |
 | `entitlement` | GET | ✓ | Paid-tier state |
 | `entitlement/checkout` | POST | ✓ | Stripe Checkout session |
 | `stripe/webhook` | POST | sig | Grant/revoke entitlement |
@@ -111,18 +118,29 @@ macOS 26.2, current defaults, 10-turn run:
 **Frontend (React + Vite + shadcn)**
 - First-run setup wizard (welcome → names → llm → pick → done → hatch)
   - Names: `persona.user_name` + `persona.name` collection
-  - LLM: 15 provider presets (OpenAI / Anthropic / Groq / DeepSeek /
-    OpenRouter / Together / Mistral / Fireworks / Moonshot / xAI /
-    Ollama / LM Studio / vLLM / LiteLLM / Custom) + live model-list
-    fetch + "Test connection" real round-trip + local-detect banner
-    (emerald callout when Ollama or LM Studio is running on localhost)
+  - LLM: 16 provider presets — featured: Built-in (MLX) / Ollama /
+    **protoLabs** (api.proto-labs.ai/v1) / OpenAI / Anthropic /
+    Custom; plus a "Show all" expander for the long tail (LM Studio,
+    vLLM, Groq, DeepSeek, OpenRouter, Together, Mistral, Fireworks,
+    Moonshot, xAI, LiteLLM). Live model-list fetch + "Test connection"
+    real round-trip + local-detect banner (emerald callout when Ollama
+    or LM Studio is running on localhost).
   - Pick: 8 starter orbs, each with a palette-derived gradient swatch
     and a fullscreen preview modal (live shader, drag-to-rotate)
   - Hatch: 3.6s CSS reveal (seed → flare → fade)
-- Drawer with Voice + Orb tabs
-  - Voice tab: Agent (verbosity) / Profile (mood + axes + sessions
-    + recent drift) / Access (owner API key)
-  - Orb tab: variant / palette / param editing (gated by entitlement)
+- Drawer (post-2026-04-29 reshuffle): **Orb / Settings** tabs by
+  default, **+ Dev** when `orbis.devMode` is on.
+  - **Orb tab:** variant / palette / param editing (gated by
+    entitlement)
+  - **Settings tab** (single drawer for everything that's not orb-viz):
+    Mic (input device) → STT (backend + Whisper-model + URL/Model/
+    API-key for openai-compat) → LLM (URL/Model/API-key + Test +
+    Fetch list) → Voice (TTS backend + voice picker with Kokoro
+    download button + URL/Model/API-key for openai-compat) → Agent
+    (verbosity) → Personality (mood + axes display) → Developer
+    (devMode toggle).
+  - **Dev tab** (when devMode on): feature-flag panel scaffold +
+    collapsible Event log tailing RTVI / WebRTC / fetch events live.
 - Mood polling plugin — subscribable via `useMood()`
 - Orb plugin system (Fractal / Nebula / Crystal / Particles)
 
@@ -135,27 +153,54 @@ macOS 26.2, current defaults, 10-turn run:
 - `config/delegates.yaml` — A2A + OpenAI-compat targets
 - `.env.example` — env vars (LLM, TTS, Stripe, tracing, etc.)
 
+## Recent cleanup track (2026-04-27 → 2026-04-29)
+
+Two-day refactor sprint after pulling out of the Tauri infra fight.
+Changes on `clean-2e8d4ac`:
+
+```
+6569aad feat(deps): Phase A — strip Whisper from default install
+e79e690 chore(ui): merge Logs into Dev tab as collapsible
+efedf05 feat(ui): lift STT env vars (backend/whisper-model/url/...) into settings panel
+bc1c57c feat(ui): lift OpenAI TTS URL/Model/API key from env into the UI
+ee11909 feat(ui): free-type voice for openai-compatible backend
+2c44b27 feat(ui): dev mode toggle + Dev/Logs drawer tabs
+d94fa75 feat(ui): TTS panel polish + move to voice drawer
+8d70275 feat(ui): TTS voice picker driven by /api/tts/voices
+d302d9e chore(ui): drop Owner API key field from settings drawer
+53e9b78 chore(ui): relocate Owner API key + protoLabs preset
+5e9bb5a fix(voice): MicroAckInjector pipeline placement, tts_backend
+                    case, voice-first persona
+9b52d97 chore: remove Tauri/PyApp desktop shell
+```
+
+Theme: settings UI is the source of truth, env vars are escape
+hatches. Whisper opt-in via `[whisper]` extra. Tauri gone. See
+DECISIONS.md amendments 2026-04-29 for the architectural commitments.
+
 ## Pending follow-ups (not blocking)
 
+- **Phase B — Web Speech client-side STT** (T61). Browser does the
+  STT, server receives transcripts via custom RTVI message; whisper
+  becomes truly opt-in for offline / privacy-sensitive deployments.
+- **Phase C — kokoro extra + speechSynthesis** (T62). Same treatment
+  for TTS half once STT path is settled. Eventually torch-free
+  default install.
+- **Deepgram + AssemblyAI / Cartesia / Soniox streaming STT** (T63).
+  Server-driven streaming alternative to Whisper segmented.
+- **Cut 0.2.0 release** (T49). PyPI / GH-release wheel; pipx install
+  → orbis serve.
 - **Per-variant mood visual mapping** — `moodStore` polls, but no
   variant subscribes yet. Each orb shader needs its own mood → uniform
-  translation. Biggest remaining gap between designed and implemented.
+  translation.
 - **State + mood authoring editor** — drag-a-slider-see-the-orb-react
   surface for users to author their own state/mood mappings. Paid-tier
   feature per DECISIONS.md amendment.
 - **`_active_skill()` naming rename** — compat shim returning Persona;
   cosmetic but worth a rename pass.
-- **Docker hostname resolution UX** (task #68) — wizard accepts bare
-  hostnames like `ava` that don't resolve inside containers. Inline
-  warning + docs note.
 - **ACP / MCP / CLI subprocess delegates** — scoped out; users who
-  want CLI-tool delegation wrap their CLI in A2A themselves
-  (protoAgent is the reference). ORBIS stays voice-companion, not
-  agent-framework.
+  want CLI-tool delegation wrap their CLI in A2A themselves.
 - **Frontend CI** — no `bun run build` in the release pipeline yet.
-- **Docs site rebuild** — VitePress was purged in the demolition;
-  only `docs/orb-visualizer.md` survives. README + DECISIONS + STATUS
-  + HANDOFF carry most of the load.
 
 See [HANDOFF.md](./HANDOFF.md) for the full QA checklist + open design
 questions + ordered next steps.
@@ -189,24 +234,31 @@ memory/                        SQLite memory backend (sessions/facts/personality
 voice/                         STT + TTS pipecat adapters (kokoro/openai/elevenlabs/fish)
 
 web/src/
-  App.tsx                      side-effect imports; top-level PipecatClient
+  App.tsx                      side-effect imports; top-level PipecatClient + LogsCollector
   voice/                       pipecat client + state bridge
-  components/Drawer.tsx        Sheet + Voice/Orb tabs
+  shared/
+    devMode.ts                 localStorage-backed devMode store + useDevMode hook
+    logBus.ts                  in-memory ring buffer + useLogBus hook
+  components/Drawer.tsx        Sheet + Orb/Settings/Dev tabs (Dev gated by devMode)
   plugins/
     orb/                       R3F orb + variants + store + broadcast bus
     orb-settings/              params editor (drawer Orb tab)
-    voice-panel/               Agent + Profile + Access panels
+    settings-panel/            single Settings drawer — Mic, STT, LLM, Voice
+                                (TTS), Agent (verbosity), Personality, Developer
+                                — see SettingsPanel.tsx
+    dev-panel/                 Dev tab — feature flags + collapsible event log
+    logs-panel/                LogsCollector (App-mounted) + LogsPanel
+                                (rendered inside DevPanel's collapsible)
     status-pill/               connection status indicator
     setup-wizard/              first-run flow + hatch animation
-                                 - SetupWizard.tsx   (5-step flow)
-                                 - OrbPreviewModal.tsx
-                                 - paletteColors.ts
     mood/                      polling store + useMood() hook
   auth/                        apiKey store + useApiKey hook
   lib/api.ts                   typed /api/* fetch wrappers
 
 config/                        user-editable YAML
-tests/                         pytest: 131 cases
+  persona.md                   voice-first system prompt (referenced
+                               via persona.system_prompt_file)
+tests/                         pytest: 470+ cases
   test_users.py                auth primitive
   test_memory.py               SQLite DALs
   test_persona.py              persona loader
@@ -231,15 +283,17 @@ cp config/orbis.example.yaml config/orbis.yaml   # optional; wizard writes it
 cp config/users.example.yaml config/users.yaml   # tailnet only
 
 # Run dev
+python app.py                                    # :7866 (sidecar serves SPA at /)
+# Or with hot-reload during frontend dev:
 cd web && bun install && bun run dev             # :5173
-python app.py                                    # :7866
 
 # First-run: the wizard appears. To re-run it:
 # in browser console: localStorage.removeItem('orbis.setupComplete'); location.reload()
 
 # Tests
-python -m pytest                                  # 131 passing
+python -m pytest                                  # 470+ passing
 python -m pip install -e '.[test]'                # respx for LLM-probe tests
+python -m pip install -e '.[whisper]'             # opt-in to in-process Whisper
 ```
 
 ## Known tripwires (don't change lightly)
