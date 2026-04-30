@@ -12,21 +12,34 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slot } from '@/plugins/PluginHost';
 import { OrbPreview } from '@/plugins/orb/OrbPreview';
 import { useIsMobile } from '@/lib/useMediaQuery';
+import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'voice' | 'orb' | 'settings';
+type TabName = 'voice' | 'orb' | 'settings' | 'dev' | 'logs';
+const ALL_TABS: readonly TabName[] = ['voice', 'orb', 'settings', 'dev', 'logs'] as const;
+const isTabName = (s: string): s is TabName =>
+  (ALL_TABS as readonly string[]).includes(s);
 
 export function Drawer() {
   const isMobile = useIsMobile();
+  const devMode = useDevMode();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabName>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_TAB);
-      if (saved === 'voice' || saved === 'orb' || saved === 'settings') return saved;
+      if (saved && isTabName(saved)) return saved;
     } catch {}
     return 'voice';
   });
+
+  // If devMode flips off while the user is on Dev or Logs, fall back to
+  // Settings so the drawer doesn't render an unmounted tab.
+  useEffect(() => {
+    if (!devMode && (tab === 'dev' || tab === 'logs')) {
+      setTab('settings');
+    }
+  }, [devMode, tab]);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_TAB, tab); } catch {}
@@ -89,10 +102,17 @@ export function Drawer() {
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className="grid grid-cols-3 w-full">
+          <TabsList
+            className={cn(
+              'w-full grid',
+              devMode ? 'grid-cols-5 text-[10px]' : 'grid-cols-3',
+            )}
+          >
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="orb">Orb</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
+            {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
+            {devMode && <TabsTrigger value="logs">Logs</TabsTrigger>}
           </TabsList>
           <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-voice" />
@@ -103,6 +123,16 @@ export function Drawer() {
           <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-settings" />
           </TabsContent>
+          {devMode && (
+            <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+              <Slot name="drawer-dev" />
+            </TabsContent>
+          )}
+          {devMode && (
+            <TabsContent value="logs" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+              <Slot name="drawer-logs" />
+            </TabsContent>
+          )}
         </Tabs>
       </SheetContent>
     </Sheet>

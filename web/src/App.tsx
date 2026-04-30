@@ -8,6 +8,7 @@ import { Drawer } from '@/components/Drawer';
 import { buildClient } from './voice/client';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
+import { LogsCollector } from './plugins/logs-panel';
 // Side-effect imports — each plugin registers at module load.
 import './plugins/orb';
 import './plugins/status-pill';
@@ -16,6 +17,8 @@ import './plugins/voice-panel';
 import './plugins/settings-panel';
 import './plugins/setup-wizard';
 import './plugins/mood';
+import './plugins/dev-panel';
+import './plugins/logs-panel';
 
 function App() {
   const clientRef = useRef<PipecatClient | null>(null);
@@ -24,6 +27,10 @@ function App() {
   return (
     <PipecatClientProvider client={clientRef.current}>
       <VoiceStateBridge />
+      {/* Mounted unconditionally — the log buffer captures events even
+          when the Dev mode is off so flipping it on shows recent
+          history. Cheap (event subscriptions only). */}
+      <LogsCollector />
       <div className="fixed inset-0 overflow-hidden bg-[#0a0a0a]">
         <Slot name="stage" />
         <Slot name="overlay-top" />
