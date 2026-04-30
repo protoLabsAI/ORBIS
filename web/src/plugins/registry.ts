@@ -8,9 +8,8 @@ export type UISlotName =
   | 'stage' // primary visual area (orb)
   | 'overlay-top' // floating top, e.g. status chip, trace chip
   | 'overlay-bottom' // floating bottom, e.g. status pill, transcript strip
-  | 'drawer-voice' // drawer tab: voice controls (skill, verbosity, TTS)
   | 'drawer-orb' // drawer tab: orb controls (palette, sliders)
-  | 'drawer-settings' // drawer tab: runtime settings (LLM, mic, STT)
+  | 'drawer-settings' // drawer tab: all runtime config — mic, STT, LLM, voice/TTS, agent, personality, developer
   | 'drawer-dev'; // drawer tab: feature flags + collapsible event log (visible when devMode on)
 
 export interface Plugin {

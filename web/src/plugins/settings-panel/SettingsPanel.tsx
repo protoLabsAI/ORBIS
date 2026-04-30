@@ -3,26 +3,35 @@ import { Button } from '@/components/ui/button';
 import { devModeStore, useDevMode } from '@/shared/devMode';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
+import { PersonalityPanel } from './PersonalityPanel';
 import { STTSettings } from './STTSettings';
+import { TTSSettings } from './TTSSettings';
+import { VerbositySelector } from './VerbositySelector';
 
 /**
- * Runtime infrastructure settings — LLM endpoint, mic device, STT.
- * Voice/TTS lives in the Voice drawer alongside personality + verbosity
- * since it's about how the orb sounds, not which provider it routes to.
+ * The single settings drawer — provider config, voice + behaviour
+ * knobs, observability, and the dev-mode toggle. Sections are ordered
+ * roughly along the audio path (mic → STT → LLM → voice/TTS), then
+ * agent behaviour, then observability, then dev.
  */
 export function SettingsPanel() {
   const devMode = useDevMode();
   return (
     <div className="space-y-5">
-      <LLMSettings />
       <MicSettings />
       <STTSettings />
+      <LLMSettings />
+      <TTSSettings />
+      <Panel title="Agent">
+        <VerbositySelector />
+      </Panel>
+      <PersonalityPanel />
       <Panel title="Developer">
         <div className="flex items-center justify-between">
           <div>
             <div className="text-xs text-zinc-300">Developer mode</div>
             <div className="text-[10px] text-zinc-500 mt-0.5">
-              Reveals the Dev + Logs drawer tabs.
+              Reveals the Dev drawer tab (feature flags + event log).
             </div>
           </div>
           <Button

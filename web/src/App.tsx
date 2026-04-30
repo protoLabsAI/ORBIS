@@ -13,11 +13,13 @@ import { LogsCollector } from './plugins/logs-panel';
 import './plugins/orb';
 import './plugins/status-pill';
 import './plugins/orb-settings';
-import './plugins/voice-panel';
 import './plugins/settings-panel';
 import './plugins/setup-wizard';
 import './plugins/mood';
 import './plugins/dev-panel';
+// logs-panel doesn't register a slot — it's imported for the
+// LogsCollector side-effect mount and the LogsPanel re-export used
+// by DevPanel.
 import './plugins/logs-panel';
 
 function App() {

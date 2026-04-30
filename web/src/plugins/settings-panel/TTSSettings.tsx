@@ -219,14 +219,14 @@ export function TTSSettings() {
 
   if (loading) {
     return (
-      <Panel title="TTS">
+      <Panel title="Voice">
         <div className="text-xs text-zinc-500">Loading…</div>
       </Panel>
     );
   }
 
   return (
-    <Panel title="TTS">
+    <Panel title="Voice">
       <div className="space-y-3">
         <p className="text-xs text-zinc-500 -mt-1">
           How the orb speaks. Provider credentials stay env-only —
