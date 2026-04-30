@@ -26,24 +26,8 @@ config/users.yaml
 # Per-project Automaker UI state — local config, should not be versioned.
 .automaker/
 
-# Tauri shell build + runtime artifacts.
-# - binaries/ is populated at build time by desktop-build.yml with
-#   the PyApp sidecar + by dev scripts with stub sidecars.
-# - icons/ is generated at build time via `cargo tauri icon` from
-#   web/public/pwa-512.png.
-# - target/ is the Rust compile cache.
-# - gen/ holds Tauri-generated schema and capability types.
-src-tauri/binaries/
-# Only the single source icon is committed; platform-specific variants
-# (.icns / .ico / sized PNGs) are generated at bundle time.
-src-tauri/icons/*
-!src-tauri/icons/icon.png
-src-tauri/target/
-src-tauri/gen/
-
-# PyApp local build output — `dist/` is the wheel/.tar.gz output
-# from `python -m build`; `dist-sdist/` is what scripts/build-desktop
-# uses to stage the sidecar source tarball before the PyApp wrap.
+# Build output — `dist/` is the wheel/.tar.gz output from `python -m
+# build`; `dist-sdist/` is the staged sidecar source tarball.
 dist/
 dist-sdist/
 
