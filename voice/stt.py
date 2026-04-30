@@ -1,9 +1,12 @@
 """STT backends — `local` (HuggingFace Whisper) or `openai` (any
 OpenAI-compatible /v1/audio/transcriptions endpoint).
 
-Selected via `STT_BACKEND={local|openai}`. Default `local`.
+Selected via `STT_BACKEND={local|openai|sensevoice}`. Default is `local`
+when the [whisper] extra is installed (transformers + accelerate), else
+`openai` — the sidecar can ship without the heavy HF deps as long as
+the user points STT at a remote transcription endpoint.
 
-Local backend keeps Whisper large-v3-turbo on the GPU. OpenAI backend
+Local backend keeps Whisper large-v3-turbo on MPS / CUDA. OpenAI backend
 points at OpenAI itself, LocalAI, OpenRouter, vLLM-omni, or anything
 that exposes the same wire format — useful for hosts without a GPU or
 when you want STT to live on the same box as your LLM gateway.
@@ -29,54 +32,39 @@ import soundfile as sf
 import soxr
 
 from agent import tracing
-import torch
 from openai import AsyncOpenAI
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601
-from transformers import pipeline as hf_pipeline
+
+# torch + transformers are loaded lazily inside `_get_local_pipe()` —
+# they live in the [whisper] optional extra so installs without it can
+# still import this module and run `STT_BACKEND=openai` without paying
+# the ~500MB transformers footprint.
 
 logger = logging.getLogger(__name__)
 
-STT_BACKEND = os.environ.get("STT_BACKEND", "local").lower()
+
+def _whisper_available() -> bool:
+    """Cheap probe for the [whisper] extra so the smart STT_BACKEND
+    default knows whether `local` is even an option. Used at module
+    import; result is intentionally not cached so the smart default
+    re-evaluates each fresh process."""
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+_DEFAULT_STT_BACKEND = "local" if _whisper_available() else "openai"
+STT_BACKEND = os.environ.get("STT_BACKEND", _DEFAULT_STT_BACKEND).lower()
 
 # Local backend
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
-
-
-def _detect_torch_device() -> str:
-    """Pick the best available device for the HF Whisper pipeline.
-    Mirrors ``agent.hardware.detect_device``'s preference order
-    (cuda > mps > cpu) but never raises — STT also runs in tests / CI
-    where CPU fallback is correct, while ``detect_device`` is the
-    desktop-bundle gate that hard-fails when no accelerator is found.
-
-    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
-    ``agent.hardware.detect_device``: pytest and the Docker CPU profile
-    set it to force CPU even when MPS / CUDA appear available
-    (CI macOS MPS reports `is_available()` but has too small a memory
-    budget for production-shaped workloads)."""
-    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
-
-
-DEVICE = _detect_torch_device()
-# Half-precision on accelerators (CUDA + Apple MPS). Locally benchmarked
-# Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s audio (1.0x rtf)
-# vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x speedup with correct
-# output. CPU stays float32 since fp16 on CPU is slower.
-_WHISPER_DTYPE = torch.float16 if DEVICE in ("cuda", "mps") else torch.float32
-# `sdpa` attention is CUDA-only in transformers; MPS uses the eager path.
-_WHISPER_MODEL_KWARGS = (
-    {"attn_implementation": "sdpa"} if DEVICE == "cuda" else {}
-)
 
 # OpenAI-compatible backend (also used by LocalAI / OpenRouter / etc.)
 STT_URL = os.environ.get("STT_URL", "https://api.openai.com/v1")
@@ -91,18 +79,62 @@ STT_API_KEY = os.environ.get("STT_API_KEY", "not-needed")
 _local_pipe = None
 
 
+_WHISPER_INSTALL_HINT = (
+    "Local Whisper STT requires the [whisper] extra (transformers + "
+    "accelerate). Install with:\n"
+    "  pip install -e '.[whisper]'\n"
+    "Or set STT_BACKEND=openai (config/orbis.yaml or env) and configure "
+    "STT_URL / STT_MODEL / STT_API_KEY for an OpenAI-compatible "
+    "transcription endpoint."
+)
+
+
+def _detect_torch_device(torch) -> str:
+    """Pick the best available device for the HF Whisper pipeline.
+    Mirrors ``agent.hardware.detect_device``'s preference order
+    (cuda > mps > cpu) but never raises — STT also runs in tests / CI
+    where CPU fallback is correct, while ``detect_device`` is the
+    desktop-bundle gate that hard-fails when no accelerator is found.
+
+    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
+    ``agent.hardware.detect_device``: pytest and the Docker CPU profile
+    set it to force CPU even when MPS / CUDA appear available."""
+    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def _get_local_pipe():
     global _local_pipe
     if _local_pipe is not None:
         return _local_pipe
-    logger.info(f"Loading {WHISPER_MODEL} on {DEVICE}")
+    try:
+        import torch
+        from transformers import pipeline as hf_pipeline
+    except ImportError as e:
+        raise RuntimeError(_WHISPER_INSTALL_HINT) from e
+
+    device = _detect_torch_device(torch)
+    # Half-precision on accelerators (CUDA + Apple MPS). Locally
+    # benchmarked Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s
+    # audio (1.0x rtf) vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x
+    # speedup with correct output. CPU stays float32.
+    dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
+    # `sdpa` attention is CUDA-only in transformers; MPS uses eager.
+    model_kwargs = {"attn_implementation": "sdpa"} if device == "cuda" else {}
+
+    logger.info(f"Loading {WHISPER_MODEL} on {device}")
     t0 = time.time()
     _local_pipe = hf_pipeline(
         "automatic-speech-recognition",
         model=WHISPER_MODEL,
-        torch_dtype=_WHISPER_DTYPE,
-        device=DEVICE,
-        model_kwargs=_WHISPER_MODEL_KWARGS,
+        torch_dtype=dtype,
+        device=device,
+        model_kwargs=model_kwargs,
     )
     _local_pipe({"raw": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
     logger.info(f"Whisper ready in {time.time() - t0:.1f}s")

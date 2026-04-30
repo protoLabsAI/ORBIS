@@ -6,12 +6,12 @@ requires-python = ">=3.11"
 dependencies = [
     # Pipecat + transports
     "pipecat-ai[webrtc,silero,openai]>=1.0",
-    # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
-    # but baseline; users who only want cloud STT/TTS can skip by
-    # installing a slim variant (future work).
+    # torch stays in base because kokoro needs it transitively. Whisper-
+    # specific deps (transformers + accelerate) live in the [whisper]
+    # extra below — installs without [whisper] default to STT_BACKEND=
+    # openai and need an OpenAI-compatible transcription endpoint
+    # configured via /api/config or env. See voice/stt.py.
     "torch>=2.5",
-    "transformers>=4.46",
-    "accelerate",
     "kokoro>=0.9",
     # Web + I/O
     "fastapi",
@@ -36,6 +36,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Local Whisper STT — HuggingFace transformers Whisper-large-v3-turbo
+# pipeline. Install when you want STT to run in-process on the sidecar
+# instead of pointing at an OpenAI-compatible endpoint. Without this,
+# STT_BACKEND defaults to openai and voice/stt.LocalWhisperSTT raises a
+# pointed ImportError if you set STT_BACKEND=local without it.
+whisper = ["transformers>=4.46", "accelerate"]
 # Heavy / opt-in audio quality extras. Install only when the matching
 # env (NOISE_FILTER, SMART_TURN) is enabled.
 rnnoise = ["pipecat-ai[rnnoise]"]

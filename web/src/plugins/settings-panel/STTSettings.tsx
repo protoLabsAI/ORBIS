@@ -18,8 +18,8 @@ const isValidBackend = (v: unknown): v is STTBackend =>
   typeof v === 'string' && (VALID_BACKENDS as readonly string[]).includes(v);
 
 const BACKEND_BLURB: Record<STTBackend, string> = {
-  local: 'In-process Whisper on Apple Silicon (MPS) — segmented per VAD turn, no streaming.',
-  openai: 'OpenAI-compatible /v1/audio/transcriptions — point at OpenAI proper, the protoLabs gateway, LocalAI, etc.',
+  local: 'In-process Whisper on Apple Silicon (MPS). Segmented per VAD turn, no streaming. Requires the [whisper] pip extra.',
+  openai: 'OpenAI-compatible /v1/audio/transcriptions — point at OpenAI proper, the protoLabs gateway, LocalAI, etc. Default when [whisper] is not installed.',
   sensevoice: 'FunAudioLLM SenseVoice (opt-in via [sensevoice] extra). Transcription + emotion + audio events in one pass.',
 };
 
@@ -151,7 +151,7 @@ export function STTSettings() {
             />
             <div className="text-[10px] text-amber-500/70 mt-1">
               Model loads at server boot — restart the sidecar after
-              changing.
+              changing. Requires <code>pip install -e ".[whisper]"</code>.
             </div>
           </div>
         )}
