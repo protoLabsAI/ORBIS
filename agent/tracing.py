@@ -35,9 +35,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_ENABLED = all(
-    os.environ.get(k, "").strip()
-    for k in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+# Accept either LANGFUSE_HOST or LANGFUSE_BASE_URL — the SDK docs use
+# HOST; some deployments (and older .env files) set BASE_URL instead.
+_LANGFUSE_HOST: str = (
+    os.environ.get("LANGFUSE_HOST", "").strip()
+    or os.environ.get("LANGFUSE_BASE_URL", "").strip()
+)
+_ENABLED = bool(
+    _LANGFUSE_HOST
+    and os.environ.get("LANGFUSE_PUBLIC_KEY", "").strip()
+    and os.environ.get("LANGFUSE_SECRET_KEY", "").strip()
 )
 _CLIENT: Any = None
 
@@ -59,9 +66,9 @@ def _lazy_client() -> Any:
         _CLIENT = Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.environ["LANGFUSE_HOST"],
+            host=_LANGFUSE_HOST,
         )
-        logger.info(f"[tracing] langfuse client ready → {os.environ['LANGFUSE_HOST']}")
+        logger.info(f"[tracing] langfuse client ready → {_LANGFUSE_HOST}")
         return _CLIENT
     except Exception as e:
         logger.warning(f"[tracing] langfuse init failed, disabling: {e}")
