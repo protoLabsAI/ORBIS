@@ -23,6 +23,39 @@ const BACKEND_BLURB: Record<STTBackend, string> = {
   sensevoice: 'FunAudioLLM SenseVoice (opt-in via [sensevoice] extra). Transcription + emotion + audio events in one pass.',
 };
 
+interface STTEndpointPreset {
+  id: string;
+  label: string;
+  url: string;
+  model: string;
+  blurb: string;
+}
+
+const STT_OPENAI_PRESETS: STTEndpointPreset[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    url: 'https://api.openai.com/v1',
+    model: 'whisper-1',
+    blurb: 'OpenAI Whisper endpoint.',
+  },
+  {
+    id: 'protolabs',
+    label: 'protoLabs',
+    url: 'https://api.proto-labs.ai/v1',
+    model: 'whisper-1',
+    blurb: 'faster-whisper on the protoLabs gateway. Same key as LLM.',
+  },
+];
+
+function matchSttPreset(url: string): string {
+  if (!url) return 'openai';
+  const u = url.toLowerCase();
+  if (u.includes('proto-labs.ai')) return 'protolabs';
+  if (u.includes('openai.com')) return 'openai';
+  return 'custom';
+}
+
 type SaveState =
   | { kind: 'idle' }
   | { kind: 'saving' }
@@ -44,6 +77,7 @@ export function STTSettings() {
   const [sttModel, setSttModel] = useState('');
   const [sttApiKey, setSttApiKey] = useState('');
   const [keyIsSet, setKeyIsSet] = useState(false);
+  const [sttPreset, setSttPreset] = useState<string>('openai');
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
 
   const saveResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,7 +95,7 @@ export function STTSettings() {
         const s = r.config?.stt ?? {};
         if (isValidBackend(s.backend)) setBackend(s.backend);
         if (s.whisper_model) setWhisperModel(s.whisper_model);
-        if (s.url) setSttUrl(s.url);
+        if (s.url) { setSttUrl(s.url); setSttPreset(matchSttPreset(s.url)); }
         if (s.model) setSttModel(s.model);
         const hasKey = typeof s.api_key === 'string' && s.api_key.length > 0;
         setKeyIsSet(hasKey);
@@ -74,6 +108,12 @@ export function STTSettings() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  const pickSttPreset = (id: string) => {
+    setSttPreset(id);
+    const p = STT_OPENAI_PRESETS.find((x) => x.id === id);
+    if (p) { setSttUrl(p.url); setSttModel(p.model); }
+  };
 
   const onSave = async () => {
     setSave({ kind: 'saving' });
@@ -158,13 +198,31 @@ export function STTSettings() {
 
         {backend === 'openai' && (
           <>
+            <div className="grid grid-cols-2 gap-2">
+              {STT_OPENAI_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => pickSttPreset(p.id)}
+                  className={
+                    'p-2 text-left rounded-md border transition-colors ' +
+                    (sttPreset === p.id
+                      ? 'border-amber-500/60 bg-amber-500/5'
+                      : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                  }
+                >
+                  <div className="text-xs text-zinc-200">{p.label}</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                </button>
+              ))}
+            </div>
             <div>
               <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
                 URL
               </label>
               <input
                 value={sttUrl}
-                onChange={(e) => setSttUrl(e.target.value)}
+                onChange={(e) => { setSttUrl(e.target.value); setSttPreset(matchSttPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
                 className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
                 spellCheck={false}

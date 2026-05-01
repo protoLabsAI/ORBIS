@@ -10,6 +10,42 @@ import {
 } from '@/components/ui/select';
 import { api, type OrbisConfig } from '@/lib/api';
 
+interface TTSEndpointPreset {
+  id: string;
+  label: string;
+  url: string;
+  model: string;
+  voice: string;
+  blurb: string;
+}
+
+const TTS_OPENAI_PRESETS: TTSEndpointPreset[] = [
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    url: 'https://api.openai.com/v1',
+    model: 'tts-1',
+    voice: 'alloy',
+    blurb: 'OpenAI TTS.',
+  },
+  {
+    id: 'protolabs',
+    label: 'protoLabs (Fish)',
+    url: 'https://api.proto-labs.ai/v1',
+    model: 'fish-s2-pro',
+    voice: 'protolabs/fish',
+    blurb: 'Fish S2-Pro via protoLabs gateway. Same key as LLM.',
+  },
+];
+
+function matchTtsPreset(url: string): string {
+  if (!url) return 'openai';
+  const u = url.toLowerCase();
+  if (u.includes('proto-labs.ai')) return 'protolabs';
+  if (u.includes('openai.com')) return 'openai';
+  return 'custom';
+}
+
 type TTSBackend = 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
 type VoicePayload = NonNullable<OrbisConfig['voice']>;
 type Voice = { id: string; label: string; cached?: boolean };
@@ -92,6 +128,7 @@ export function TTSSettings() {
   const [ttsModel, setTtsModel] = useState('');
   const [ttsApiKey, setTtsApiKey] = useState('');
   const [ttsKeyIsSet, setTtsKeyIsSet] = useState(false);
+  const [ttsPreset, setTtsPreset] = useState<string>('openai');
 
   // Tracks the "saved" → "idle" reset timer so it can be cancelled on
   // unmount (and before a new save re-arms it).
@@ -113,7 +150,7 @@ export function TTSSettings() {
         // to the user via a coerced cast.
         if (isValidBackend(v.tts_backend)) setBackend(v.tts_backend);
         if (v.voice) setVoice(v.voice);
-        if (v.tts_url) setTtsUrl(v.tts_url);
+        if (v.tts_url) { setTtsUrl(v.tts_url); setTtsPreset(matchTtsPreset(v.tts_url)); }
         if (v.tts_model) setTtsModel(v.tts_model);
         // Don't preload the key into the input — show a "key is set"
         // hint instead so a saved key isn't echoed back into the DOM.
@@ -153,6 +190,12 @@ export function TTSSettings() {
       });
     return () => { cancelled = true; };
   }, [backend]);
+
+  const pickTtsPreset = (id: string) => {
+    setTtsPreset(id);
+    const p = TTS_OPENAI_PRESETS.find((x) => x.id === id);
+    if (p) { setTtsUrl(p.url); setTtsModel(p.model); setVoice(p.voice); }
+  };
 
   const onSave = async () => {
     setSave({ kind: 'saving' });
@@ -344,13 +387,31 @@ export function TTSSettings() {
             defaults at the server. */}
         {backend === 'openai' && (
           <div className="space-y-3 pt-1">
+            <div className="grid grid-cols-2 gap-2">
+              {TTS_OPENAI_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => pickTtsPreset(p.id)}
+                  className={
+                    'p-2 text-left rounded-md border transition-colors ' +
+                    (ttsPreset === p.id
+                      ? 'border-amber-500/60 bg-amber-500/5'
+                      : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                  }
+                >
+                  <div className="text-xs text-zinc-200">{p.label}</div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                </button>
+              ))}
+            </div>
             <div>
               <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
                 URL
               </label>
               <input
                 value={ttsUrl}
-                onChange={(e) => setTtsUrl(e.target.value)}
+                onChange={(e) => { setTtsUrl(e.target.value); setTtsPreset(matchTtsPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
                 className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
                 spellCheck={false}
