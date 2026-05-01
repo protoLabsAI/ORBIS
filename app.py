@@ -1096,6 +1096,9 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     turn_tracer = _tracing.make_turn_tracer(
         session_id=_uuid.uuid4().hex,
         user_id=None,  # multi-tenant work assigns per-client ids later
+        llm_model=llm_model,
+        stt_backend=STT_BACKEND,
+        tts_backend=tts_backend,
     )
 
     task = PipelineTask(

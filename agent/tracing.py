@@ -248,14 +248,23 @@ class TurnTracer:
     off.
 
     Turn model:
-      - User stops speaking (UserStoppedSpeakingFrame) → open a new trace.
-      - LLM response end (LLMFullResponseEndFrame) + bot speaking ends
-        (BotStoppedSpeakingFrame) → close the trace.
-      - Spans are added by other code via `get_current_trace()` — this
-        observer only bounds them.
+      - User stops speaking (UserStoppedSpeakingFrame) → open trace + stt span.
+      - TranscriptionFrame → close stt span (STT latency captured).
+      - LLMFullResponseStartFrame → open llm.response generation span.
+      - LLMTextFrame (first) → mark TTFT on llm span + open tts.synthesis span.
+      - BotStartedSpeakingFrame → close tts.synthesis span + record total latency.
+      - LLMFullResponseEndFrame + BotStoppedSpeakingFrame → close trace.
     """
 
-    def __init__(self, session_id: str, user_id: str | None = None) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        user_id: str | None = None,
+        *,
+        llm_model: str | None = None,
+        stt_backend: str | None = None,
+        tts_backend: str | None = None,
+    ) -> None:
         # Forward into BaseObserver's __init__ when composed as
         # _ActiveTracer(TurnTracer, BaseObserver). Without this the mixin
         # base never initializes (notably `_name`), and pipecat crashes
@@ -263,41 +272,74 @@ class TurnTracer:
         super().__init__()
         self.session_id = session_id
         self.user_id = user_id
+        self._llm_model = llm_model
+        self._stt_backend = stt_backend
+        self._tts_backend = tts_backend
         self._current_trace: Any = None
         self._last_transcript: str | None = None
         self._llm_response_closed = False
         self._bot_stopped = False
         # Span handles — keyed so we can close them on matching frames.
+        self._stt_span: Any = None
         self._llm_span: Any = None
+        self._tts_span: Any = None
         self._tool_spans: dict[str, Any] = {}  # tool_call_id → span
         # Streaming-visibility markers (first text / first audio of this
         # turn). Populated once per turn; cleared on close.
         self._llm_first_text_seen: bool = False
+        self._tts_first_text_seen: bool = False
         self._bot_first_audio_seen: bool = False
+        # Wall-clock turn start — used to compute end-to-end latency.
+        self._turn_start: Any = None  # datetime | None
 
     def get_current_trace(self) -> Any:
         """Other code pulls this to add spans under the active turn."""
         return self._current_trace or _NULL
 
     async def on_push_frame(self, data: Any) -> None:
+        from datetime import datetime, timezone
         F = _frame_types()
         frame = data.frame
 
-        # Capture the latest transcript so the trace's input field carries
-        # the user's actual message, not a placeholder.
-        if isinstance(frame, F["TranscriptionFrame"]) and getattr(frame, "text", None):
-            self._last_transcript = frame.text
-
         if isinstance(frame, F["UserStoppedSpeakingFrame"]):
             if self._current_trace is None:
+                self._turn_start = datetime.now(timezone.utc)
                 self._current_trace = start_turn_trace(
                     session_id=self.session_id,
                     user_id=self.user_id,
                     input=self._last_transcript,
-                    metadata={"trigger": "user_stopped_speaking"},
+                    metadata={
+                        "trigger": "user_stopped_speaking",
+                        "llm_model": self._llm_model,
+                        "stt_backend": self._stt_backend,
+                        "tts_backend": self._tts_backend,
+                    },
                 )
                 self._llm_response_closed = False
                 self._bot_stopped = False
+                # STT span — measures from VAD stop to transcript available.
+                try:
+                    self._stt_span = self._current_trace.start_observation(
+                        name="stt",
+                        as_type="span",
+                        metadata={"backend": self._stt_backend},
+                    )
+                except Exception as e:
+                    logger.warning(f"[tracing] stt span open failed: {e}")
+
+        elif isinstance(frame, F["TranscriptionFrame"]):
+            # Capture transcript for the LLM span + trace input.
+            text = getattr(frame, "text", None)
+            if text:
+                self._last_transcript = text
+            # Close the STT span — duration = STT latency.
+            if self._stt_span is not None:
+                try:
+                    self._stt_span.update(output={"transcript": text or ""})
+                    self._stt_span.end()
+                except Exception as e:
+                    logger.warning(f"[tracing] stt span end failed: {e}")
+                self._stt_span = None
 
         elif isinstance(frame, F["LLMFullResponseStartFrame"]):
             if self._current_trace is not None and self._llm_span is None:
@@ -306,43 +348,65 @@ class TurnTracer:
                         name="llm.response",
                         as_type="generation",
                         input=self._last_transcript,
+                        metadata={"model": self._llm_model},
                     )
                     self._llm_first_text_seen = False
+                    self._tts_first_text_seen = False
                 except Exception as e:
                     logger.warning(f"[tracing] llm span open failed: {e}")
 
         elif isinstance(frame, F["LLMTextFrame"]):
-            # First streamed token of this turn — stamp completion_start_time
-            # on the generation span so the trace shows time-to-first-token.
-            # This makes "is the LLM streaming?" visible at a glance: the gap
-            # between span start and completion_start_time is TTFT; the gap
-            # from there to span end is the streaming tail.
-            if (
-                self._llm_span is not None
-                and not self._llm_first_text_seen
-                and getattr(frame, "text", "")
-            ):
-                self._llm_first_text_seen = True
-                try:
-                    from datetime import datetime, timezone
-                    self._llm_span.update(completion_start_time=datetime.now(timezone.utc))
-                except Exception as e:
-                    logger.warning(f"[tracing] llm first-token mark failed: {e}")
+            text = getattr(frame, "text", "")
+            if text:
+                # First token → stamp TTFT on the generation span.
+                if self._llm_span is not None and not self._llm_first_text_seen:
+                    self._llm_first_text_seen = True
+                    try:
+                        self._llm_span.update(
+                            completion_start_time=datetime.now(timezone.utc)
+                        )
+                    except Exception as e:
+                        logger.warning(f"[tracing] llm first-token mark failed: {e}")
+                # First token also opens the TTS span — measures from first
+                # text available to first audio out. The sentence splitter
+                # and TTS synthesis both fall inside this window.
+                if self._current_trace is not None and not self._tts_first_text_seen:
+                    self._tts_first_text_seen = True
+                    try:
+                        self._tts_span = self._current_trace.start_observation(
+                            name="tts.synthesis",
+                            as_type="span",
+                            input={"first_token": text[:80]},
+                            metadata={"backend": self._tts_backend},
+                        )
+                    except Exception as e:
+                        logger.warning(f"[tracing] tts span open failed: {e}")
 
         elif isinstance(frame, F["BotStartedSpeakingFrame"]):
-            # First audio of this turn — mark on the trace so we can tell
-            # at a glance whether TTS started streaming during the LLM
-            # window (healthy) or waited for LLM to finish (problem).
-            if (
-                self._current_trace is not None
-                and not self._bot_first_audio_seen
-            ):
+            if self._current_trace is not None and not self._bot_first_audio_seen:
                 self._bot_first_audio_seen = True
+                now = datetime.now(timezone.utc)
+                # Close TTS span — duration = first-text-to-first-audio latency.
+                if self._tts_span is not None:
+                    try:
+                        self._tts_span.end()
+                    except Exception as e:
+                        logger.warning(f"[tracing] tts span end failed: {e}")
+                    self._tts_span = None
+                # Record total end-to-end latency on the trace as an event
+                # so it's visible at a glance without opening the span tree.
+                total_ms = (
+                    int((now - self._turn_start).total_seconds() * 1000)
+                    if self._turn_start is not None
+                    else None
+                )
                 try:
-                    from datetime import datetime, timezone
                     self._current_trace.create_event(
                         name="tts.first_audio",
-                        metadata={"at": datetime.now(timezone.utc).isoformat()},
+                        metadata={
+                            "at": now.isoformat(),
+                            "total_turn_latency_ms": total_ms,
+                        },
                     )
                 except Exception as e:
                     logger.warning(f"[tracing] bot first-audio mark failed: {e}")
@@ -406,17 +470,26 @@ class TurnTracer:
             self._current_trace.end()
         except Exception as e:
             logger.warning(f"[tracing] trace.end() failed: {e}")
-        # Clear any leftover tool spans — tool handler forgot to close.
+        # Safety-net close for any spans that didn't close via their normal
+        # frame path (e.g. barge-in, error, or out-of-order frames).
+        for sp in [self._stt_span, self._tts_span, self._llm_span]:
+            if sp is not None:
+                try: sp.end()
+                except Exception: pass
         for sp in self._tool_spans.values():
             try: sp.end()
             except Exception: pass
         self._tool_spans.clear()
         self._current_trace = None
+        self._stt_span = None
         self._llm_span = None
+        self._tts_span = None
         self._llm_response_closed = False
         self._bot_stopped = False
         self._llm_first_text_seen = False
+        self._tts_first_text_seen = False
         self._bot_first_audio_seen = False
+        self._turn_start = None
 
 
 def _preview(value: Any, max_len: int = 500) -> Any:
@@ -430,14 +503,19 @@ def _preview(value: Any, max_len: int = 500) -> Any:
     return s if len(s) <= max_len else s[:max_len] + "…"
 
 
-def make_turn_tracer(session_id: str, user_id: str | None = None) -> Any:
+def make_turn_tracer(
+    session_id: str,
+    user_id: str | None = None,
+    *,
+    llm_model: str | None = None,
+    stt_backend: str | None = None,
+    tts_backend: str | None = None,
+) -> Any:
     """Create a TurnTracer that's either a real pipecat BaseObserver (when
     tracing is on) or a no-op shim. Return type is duck-typed `BaseObserver`
     in both cases — app.py can pass it to `PipelineTask(observers=[…])`
     unconditionally."""
     if not enabled():
-        # Minimal no-op observer: inherit from BaseObserver so the
-        # PipelineTask accepts it, but do nothing.
         from pipecat.observers.base_observer import BaseObserver
         class _NoopTracer(BaseObserver):
             def get_current_trace(self):
@@ -446,10 +524,15 @@ def make_turn_tracer(session_id: str, user_id: str | None = None) -> Any:
                 return
         return _NoopTracer()
     from pipecat.observers.base_observer import BaseObserver
-    # Dynamically compose so TurnTracer gets the Observer mixin.
     class _ActiveTracer(TurnTracer, BaseObserver):
         pass
-    return _ActiveTracer(session_id=session_id, user_id=user_id)
+    return _ActiveTracer(
+        session_id=session_id,
+        user_id=user_id,
+        llm_model=llm_model,
+        stt_backend=stt_backend,
+        tts_backend=tts_backend,
+    )
 
 
 # ---------------------------------------------------------------------------
