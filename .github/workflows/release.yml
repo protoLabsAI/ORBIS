@@ -138,35 +138,31 @@ jobs:
             --title "${{ steps.version.outputs.tag }}" \
             --notes "${{ steps.notes.outputs.notes }}"
 
-      # ── Claude-rewritten notes + Discord announcement ─────────────────────────
+      # ── Polished release notes via the shared release-tools action ──────────
 
-      - name: Polish release notes + post to Discord
-        # Best-effort: if ANTHROPIC_API_KEY or a webhook isn't set, or the
-        # Claude call fails, the release itself still shipped above — we
-        # just skip the polished announcement.
-        continue-on-error: true
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
-          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+      - name: Compute previous tag
+        id: prev_tag
         run: |
-          if [ -z "${ANTHROPIC_API_KEY}" ]; then
-            echo "ANTHROPIC_API_KEY not set — skipping Claude rewrite."
-            exit 0
-          fi
           VERSION="${{ steps.version.outputs.tag }}"
           PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
+          echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
           if [ -z "${PREV_TAG}" ]; then
-            echo "No previous tag found — this is the first release; skipping polished notes."
-            exit 0
+            echo "No previous tag found — first release; will skip polished notes."
           fi
-          # Post to the release channel (user-facing) and the dev channel
-          # (engineering visibility). Either webhook can be unset; the
-          # script logs + skips individually.
-          node scripts/rewrite-release-notes.mjs \
-            "${VERSION}" "${PREV_TAG}" \
-            --post-discord-release \
-            --post-discord-dev
+
+      - name: Polish release notes + post to Discord
+        # Best-effort: if GATEWAY_API_KEY or DISCORD_RELEASE_WEBHOOK isn't
+        # set, or the LLM call fails, the release itself still shipped above
+        # — we just skip the polished announcement.
+        if: steps.prev_tag.outputs.tag != ''
+        continue-on-error: true
+        uses: protoLabsAI/release-tools@v0.1.0
+        with:
+          version: ${{ steps.version.outputs.tag }}
+          previous-version: ${{ steps.prev_tag.outputs.tag }}
+        env:
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
 
       # ── Failure alert ─────────────────────────────────────────────────────────
 
