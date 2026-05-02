@@ -156,7 +156,7 @@ jobs:
         # — we just skip the polished announcement.
         if: steps.prev_tag.outputs.tag != ''
         continue-on-error: true
-        uses: protoLabsAI/release-tools@v0.1.0
+        uses: protoLabsAI/release-tools@v0.1.1
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.prev_tag.outputs.tag }}
