@@ -8,7 +8,12 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+dist/*
+# Keep the dir itself so `pip install -e .` works from a fresh clone —
+# pyproject force-includes web/dist into the wheel, and hatchling
+# requires the path to exist before it'll prepare metadata. The
+# Dockerfile and release flow run `bun run build` to populate it.
+!dist/.gitkeep
 dist-ssr
 dev-dist
 *.local
