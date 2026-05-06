@@ -26,9 +26,12 @@ config/users.yaml
 # Per-project Automaker UI state — local config, should not be versioned.
 .automaker/
 
-# Build output — `dist/` is the wheel/.tar.gz output from `python -m
-# build`; `dist-sdist/` is the staged sidecar source tarball.
-dist/
+# Build output — root `/dist/` is the wheel/.tar.gz output from
+# `python -m build`; `dist-sdist/` is the staged sidecar source
+# tarball. Scoped to root so `web/dist/` is governed by web/.gitignore
+# (which also exempts a .gitkeep marker so `pip install -e .` works
+# from a fresh clone).
+/dist/
 dist-sdist/
 
 # Claude Code agent state — per-machine scratch (scheduled task locks,
