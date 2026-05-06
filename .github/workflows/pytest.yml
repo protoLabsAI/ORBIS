@@ -1,0 +1,49 @@
+name: 'Pytest'
+
+# Runs the backend test suite on every PR + push to main. The 459-test
+# suite covers memory, persona, personality, neglect, audio_tags,
+# micro_ack, speaker_gate, ECAPA, llm_probe, config_store, entitlement,
+# tracing, summary persistence, voiceprint, sensevoice tag parsing, etc.
+#
+# Tests that need optional extras (speechbrain, funasr) skip cleanly
+# when the extra isn't installed — only the [test] extra is required.
+# Pinned to Python 3.11 to match pyproject's `requires-python = ">=3.11"`
+# and the lint workflow.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install package + test extra
+        run: |
+          python -m pip install --upgrade pip
+          # Install with [test] for pytest + respx. mlx-lm is gated on
+          # darwin/arm64 in pyproject so it's a no-op here. Whisper /
+          # speechbrain / funasr stay opt-in — their tests skip cleanly.
+          pip install -e ".[test]"
+
+      - name: Run pytest
+        run: pytest -q
