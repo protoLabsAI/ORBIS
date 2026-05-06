@@ -19,7 +19,7 @@ as "the ack plays AFTER the bot's reply finished":
 
   1. User stops talking.
   2. LLM starts streaming TextFrames downstream toward TTS.
-  3. 1500 ms later the timer fires and pushes ``TTSSpeakFrame``
+  3. 2500 ms later the timer fires and pushes ``TTSSpeakFrame``
      downstream.
   4. The TTSSpeakFrame arrives at TTS *behind* the LLM's TextFrames in
      pipeline order. Pipecat's TTS service plays them in arrival
@@ -34,10 +34,11 @@ This mirrors Pipecat's own ``UserIdleController`` design: a timer that
 arms on a known event and cancels on every signal that "the system is
 no longer idle" (BotStartedSpeaking, FunctionCallsStarted, LLM start).
 
-The threshold defaults to 1500 ms — slow enough that a fast local LLM
-(e.g. gemma3n:e2b on M1, ~1 s end-to-end) cancels the timer before it
-fires, but fast enough to bridge the silence on tool calls, large
-prompts, or cold-starts. The
+The threshold defaults to 2500 ms — comfortably above the typical
+end-to-end first-audio latency (~1 s p50, ~1.5 s p95 on M1 with the
+MLX preset) so the filler doesn't fire on normal turns. It only kicks
+in when something is genuinely slow: tool calls, cold-start, oversize
+prompts, or a remote LLM behind a slow link. The
 ``persona.behavior.micro_ack.first_ms`` config key (read by app.py
 when constructing ``FillerSettings``) overrides the default per
 persona.
@@ -117,15 +118,19 @@ class MicroAckInjector(FrameProcessor):
         self,
         *,
         tts_backend: str,
-        # 1500ms gives a fast local LLM (e.g. gemma3n:e2b on M1, ~1s
-        # round-trip) the chance to start speaking before a filler
-        # fires. The original 500ms default was tuned for the slow-LLM
-        # era; with the Ollama-native adapter + small models, the
-        # filler always won that race and surfaced as "the bot says
-        # 'mm' before every reply", which felt twitchy. The persona-
-        # config `behavior.micro_ack.first_ms` still overrides this
-        # default per-skill if a particular agent wants snappier acks.
-        trigger_ms: int = 1500,
+        # 2500ms keeps the filler off normal turns. Measured first-
+        # audio latency on M1 + MLX is ~1s p50 / ~1.5s p95, so a 1500ms
+        # threshold (the prior default) still loses the race on slow
+        # turns and the filler fires after the bot has already started
+        # speaking — "the bot says 'mm' AFTER every reply", per
+        # HANDOFF.md. Lifting to 2500ms gives the cancel signal
+        # (LLMTextFrame, see process_frame) clear headroom on every
+        # normal turn; the filler now only fires when something is
+        # actually slow (tool calls, cold-start, oversize prompts,
+        # remote LLM over a slow link). The persona-config
+        # `behavior.micro_ack.first_ms` still overrides per-skill if
+        # an agent wants snappier acks.
+        trigger_ms: int = 2500,
         min_interval_secs: float = 4.0,
         enabled: bool = True,
         # Callable returning the live verbosity. When SILENT, suppress
