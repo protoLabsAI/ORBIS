@@ -147,10 +147,12 @@ before declaring a release.
 - **gemma3n on mlx-lm 0.31.x** has an upstream `sanitize()` bug
   (`KeyError: 'model'`) that breaks loading. Default MLX preset is
   Qwen3.5-4B as a workaround; flip back when the upstream fix lands.
-- **MicroAckInjector still fires on every turn.** Trigger lifted
-  500ms → 1500ms (PR #30) but with the LLM at ~1s round-trip the
-  filler still wins the race. UX call: lift further, drop volume,
-  or make conditional on conversation length.
+- **MicroAckInjector trigger.** Default lifted 500ms → 1500ms (PR #30)
+  → 2500ms. With first-audio latency ~1s p50 / ~1.5s p95 on M1+MLX,
+  2500ms keeps the filler off normal turns. Watch real sessions; if
+  the filler is still firing too eagerly on slow turns, follow-ups:
+  drop volume, scope to tool-call windows only, or expose in the
+  Settings UI.
 - **Pipecat `STTService._ttfb_timeout_handler` warning** — pipecat
   asyncio bug, cosmetic.
 - **`_active_skill()` naming shim.** `app.py` + `a2a/server.py`
