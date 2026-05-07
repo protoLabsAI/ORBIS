@@ -164,6 +164,29 @@ export type DelegateTestResult = {
   status?: number;
 };
 
+// /healthz delegate health snapshot — surfaced to the SPA so the
+// drawer banner can flag delegates that have failed N consecutive
+// background probes. `ok` is null until the first probe lands.
+//
+// `last_error` is intentionally omitted from /healthz responses (the
+// route is unauth and the field can carry internal hostnames / URLs
+// from probe failures). The auth-gated /api/delegates surface includes
+// it for the Settings panel — that's a separate type.
+export interface HealthDelegate {
+  name: string;
+  type: 'a2a' | 'openai';
+  ok: boolean | null;
+  latency_ms: number | null;
+  last_checked: number | null;
+  consecutive_failures: number;
+}
+
+export interface HealthResponse {
+  status: string;
+  delegates?: HealthDelegate[];
+}
+
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: authHeaders() });
   if (r.status === 401) throw new UnauthorizedError(path);
@@ -217,6 +240,9 @@ export class ApiError extends Error {
 }
 
 export const api = {
+  // /healthz is unauth on the server; we send the auth header anyway —
+  // harmless for that route and saves a separate fetch helper.
+  healthz: () => get<HealthResponse>('/healthz'),
   whoami: () => get<Whoami>('/api/whoami'),
   verbosity: () => get<VerbosityResponse>('/api/verbosity'),
   setVerbosity: (level: Verbosity) =>

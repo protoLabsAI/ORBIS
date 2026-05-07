@@ -7,6 +7,7 @@ import {
 import { Drawer } from '@/components/Drawer';
 import { buildClient } from './voice/client';
 import { ConnectionBanner } from './voice/ConnectionBanner';
+import { DelegateHealthBanner } from './voice/DelegateHealthBanner';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -43,6 +44,11 @@ function App() {
             user otherwise sees as silent stalls. Mounted after the
             drawer so it sits above other overlays in z-stack. */}
         <ConnectionBanner />
+        {/* Lower-priority sibling — flags configured delegates whose
+            background probes have failed repeatedly so the user
+            knows before they try to delegate. Sits below the
+            connection banner in z-stack. */}
+        <DelegateHealthBanner />
       </div>
       <PipecatClientAudio />
     </PipecatClientProvider>

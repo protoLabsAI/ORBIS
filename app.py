@@ -1382,10 +1382,21 @@ async def lifespan(app: FastAPI):
         _entitlement_refresh_loop(), name="orbis-entitlement"
     )
 
+    # Delegate health prober — periodic GET /.well-known/agent-card.json
+    # (a2a) or /chat/completions ping (openai) against every configured
+    # delegate. Cache populates DelegateRegistry._health which /healthz
+    # and /api/delegates expose. First probe deferred a few seconds after
+    # boot so the model loads + RTVI handshake aren't fighting the loop
+    # for I/O on a cold start.
+    from agent.delegates import health_loop as _delegate_health_loop
+    delegate_health_task = asyncio.create_task(
+        _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",
+    )
+
     try:
         yield
     finally:
-        for t in (curator_task, entitlement_task):
+        for t in (curator_task, entitlement_task, delegate_health_task):
             t.cancel()
             try:
                 await t
@@ -1420,6 +1431,34 @@ async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
     return {"status": "success"}
 
 
+def _delegate_health_payload(delegate, *, public: bool = False) -> dict:
+    """Serialize a Delegate + its cached health.
+
+    ``public=True`` is the /healthz shape — redacts ``last_error``
+    because that field can carry internal hostnames, URLs, or
+    auth-state details from probe failures, and /healthz is
+    intentionally unauthenticated. ``public=False`` is the
+    /api/delegates shape (auth-gated) and includes the raw error
+    so the Settings panel can show it inline.
+
+    Health fields are ``None`` until the first probe lands; the SPA
+    distinguishes "not yet checked" from "checked, ok" by inspecting
+    whether ``ok`` is None vs True.
+    """
+    h = _DELEGATES.health(delegate.name)
+    payload: dict = {
+        "name": delegate.name,
+        "type": delegate.type,
+        "ok": h.ok if h else None,
+        "latency_ms": h.latency_ms if h else None,
+        "last_checked": h.last_checked if h else None,
+        "consecutive_failures": h.consecutive_failures if h else 0,
+    }
+    if not public:
+        payload["last_error"] = h.last_error if h else None
+    return payload
+
+
 @app.get("/healthz")
 async def health():
     """Public — no auth. Reports process-wide shape, not per-user state."""
@@ -1431,7 +1470,7 @@ async def health():
         "owner_configured": not user_registry.single_user_mode(),
         "active_sessions": len(active_user_states()),
         "delegates": [
-            {"name": d.name, "type": d.type} for d in _DELEGATES.all()
+            _delegate_health_payload(d, public=True) for d in _DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
         "audio": {
@@ -1663,12 +1702,29 @@ async def list_delegates_endpoint(user: User = Depends(require_user)):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     parsed_names = set(_DELEGATES.names())
-    return {
-        "delegates": [
-            {**entry, "configured": entry.get("name") in parsed_names}
-            for entry in entries
-        ],
-    }
+    parsed_by_name = {d.name: d for d in _DELEGATES.all()}
+
+    def _decorate(entry: dict) -> dict:
+        name = entry.get("name") or ""
+        d = parsed_by_name.get(name)
+        h = _DELEGATES.health(name) if d else None
+        return {
+            **entry,
+            "configured": name in parsed_names,
+            # Health fields are duplicated here (also on /healthz) so the
+            # Settings panel can render reachability inline next to each
+            # row without a second round-trip. None until the prober has
+            # run at least once on this delegate.
+            "health": {
+                "ok": h.ok if h else None,
+                "latency_ms": h.latency_ms if h else None,
+                "last_checked": h.last_checked if h else None,
+                "last_error": h.last_error if h else None,
+                "consecutive_failures": h.consecutive_failures if h else 0,
+            } if d else None,
+        }
+
+    return {"delegates": [_decorate(e) for e in entries]}
 
 
 @app.post("/api/delegates")
@@ -1764,68 +1820,31 @@ async def test_delegate_endpoint(body: dict, user: User = Depends(require_user))
 
 
 async def _probe_delegate(entry: dict) -> dict:
-    """Type-dispatch reachability probe. Resolves env-substituted URLs +
-    credential env vars the same way the runtime registry does, so a
-    test passes iff the actual dispatch path would too.
+    """Validate a raw delegate config + run the same reachability probe
+    the background loop uses. Centralizing the probe in
+    ``agent.delegates.probe`` means the test endpoint and the loop see
+    identical results — a delegate that tests green will probe green.
+
+    Returns ``{ok, latency_ms?, error?, status?}``. Schema errors come
+    back as ``{ok: False, error: ...}`` to match the /api/llm/test
+    contract (rather than HTTP 400), so the UI can render them inline.
     """
-    import time as _time
     from agent.delegate_config_store import (
         DelegateValidationError,
         validate_entry,
     )
-    from agent.delegates import _expand_env
+    from agent.delegates import _parse_entry, probe
     try:
         normalized = validate_entry(entry)
     except DelegateValidationError as e:
         return {"ok": False, "error": str(e)}
-
-    url = _expand_env(normalized["url"])
-    if normalized["type"] == "a2a":
-        # The delegate URL is the JSON-RPC endpoint (typically /a2a);
-        # the agent card lives next to it at /.well-known/agent-card.json.
-        # Derive the origin and probe there.
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        if not parsed.scheme or not parsed.netloc:
-            return {"ok": False, "error": f"malformed url: {url!r}"}
-        card_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
-        headers: dict[str, str] = {}
-        cred_env = (normalized.get("auth") or {}).get("credentialsEnv")
-        scheme = (normalized.get("auth") or {}).get("scheme")
-        cred = os.environ.get(cred_env) if cred_env else None
-        if cred and scheme == "apiKey":
-            headers["X-API-Key"] = cred
-        elif cred and scheme == "bearer":
-            headers["Authorization"] = f"Bearer {cred}"
-        t0 = _time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                r = await client.get(card_url, headers=headers)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
-            return {"ok": False, "error": f"unreachable: {e}"}
-        except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        latency_ms = int((_time.monotonic() - t0) * 1000)
-        if r.status_code == 401 or r.status_code == 403:
-            return {"ok": False, "error": "auth rejected", "status": r.status_code}
-        if r.status_code != 200:
-            return {
-                "ok": False, "error": f"agent card HTTP {r.status_code}",
-                "status": r.status_code,
-            }
-        return {"ok": True, "latency_ms": latency_ms}
-
-    # type=openai — reuse the same probe surface /api/llm/test exposes
-    # so the wire format / error shapes line up. Resolve the api_key_env
-    # to a value before delegating.
-    from agent.llm_probe import ping_endpoint
-    api_key_env = normalized.get("api_key_env")
-    api_key = os.environ.get(api_key_env) if api_key_env else None
-    return await ping_endpoint(
-        url=url,
-        model=str(normalized.get("model") or ""),
-        api_key=api_key or "",
-    )
+    delegate = _parse_entry(normalized)
+    if delegate is None:
+        # Should be unreachable now that validate_entry is strict, but
+        # the runtime parser is the authoritative source-of-truth so we
+        # surface its rejection rather than guess.
+        return {"ok": False, "error": "registry rejected normalized entry"}
+    return await probe(delegate)
 
 
 @app.post("/api/persona/reload")
