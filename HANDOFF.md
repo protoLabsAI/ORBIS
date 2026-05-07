@@ -137,13 +137,13 @@ before declaring a release.
 
 ## Known issues / rough edges
 
-- **Tool-call translation gap in Ollama + MLX adapters.** Both new
-  adapters log a one-time warning and proceed content-only when the
-  pipecat context has tool calls — meaning `delegate_to` and the
-  orb-control tools won't reach gemma3+/qwen3+ on Ollama or any
-  model on MLX yet. OpenAI-compat path still has full tool support;
-  cloud users unaffected. See `voice/llm/ollama.py` + `mlx.py`
-  header comments.
+- **Tool-call translation in MLX adapter (Ollama: shipped).** Ollama
+  now translates `message.tool_calls` ↔ OpenAI-shaped delta chunks
+  (synthetic ids, JSON-stringified args, finish_reason flips to
+  tool_calls) — `delegate_to` works on Ollama. MLX adapter still
+  emits a one-time warning and proceeds content-only; needs tag-
+  parsing support for Qwen3-style `<tool_call>{...}</tool_call>` in
+  the streamed token output. See `voice/llm/mlx.py` header comment.
 - **gemma3n on mlx-lm 0.31.x** has an upstream `sanitize()` bug
   (`KeyError: 'model'`) that breaks loading. Default MLX preset is
   Qwen3.5-4B as a workaround; flip back when the upstream fix lands.
