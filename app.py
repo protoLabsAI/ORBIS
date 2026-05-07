@@ -1121,6 +1121,12 @@ async def run_bot(webrtc_connection, user_id: str = "default") -> None:
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
     backchannel.set_emitter(task.queue_frame)
+    # Mid-flight delegation narration is mirrored to the SPA over the
+    # RTVI data channel so the "Asking ava…" pill can render the
+    # progress subtitle the bot is speaking aloud. RTVIProcessor is
+    # already in the pipeline above this point, so send_server_message
+    # is safe to call from any coroutine context.
+    delivery.set_message_emitter(rtvi.send_server_message)
 
     # --- Duplex speak-while-thinking ---
     # Pre-tool acknowledgement ("hmm, let me check") is now emitted INLINE

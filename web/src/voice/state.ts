@@ -32,6 +32,18 @@ export interface VoiceSnapshot {
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
+  // Latest progress narration emitted by an in-flight delegation. The
+  // backend's DeliveryController.speak_now also pushes this verbally;
+  // surfacing it here lets a UI render it for the deaf path + people
+  // glancing at the screen instead of listening. Cleared when
+  // activeToolCall clears.
+  delegationProgress: string | null;
+  // Set when a tool call resolves so the orb / mood driver can react.
+  // 'success' covers a clean return; 'error' covers an exception or a
+  // delegate_to result whose body matches the unreachable-error
+  // pattern surfaced by agent/tools.py:252-256. Resets to null on the
+  // next tool start so each delegation gets a fresh outcome cycle.
+  delegationOutcome: 'success' | 'error' | null;
   sessionId: string | null;
   // Latest device-level error from pipecat (mic permission denied, no
   // mic detected, etc.). Persists until the user dismisses the banner
@@ -54,6 +66,8 @@ const INITIAL: VoiceSnapshot = {
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,
+  delegationProgress: null,
+  delegationOutcome: null,
   sessionId: null,
   deviceError: null,
   connectionError: false,

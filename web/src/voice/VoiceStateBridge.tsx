@@ -84,16 +84,89 @@ export function VoiceStateBridge() {
     if (data?.text) voiceStore.update({ lastBotText: data.text });
   });
 
+  // Started fires first (function_name only), InProgress fires when
+  // arguments arrive. We populate from Started so the pill flashes up
+  // immediately, then upgrade with the args (target name) as soon as
+  // InProgress lands. Some pipecat builds skip Started and only fire
+  // InProgress; populating from both keeps us covered.
   useRTVIClientEvent(RTVIEvent.LLMFunctionCallStarted, (d: unknown) => {
-    const data = d as { function_name?: string; args?: unknown } | undefined;
-    if (data?.function_name) {
-      voiceStore.update({ activeToolCall: { name: data.function_name, args: data.args } });
-    }
+    const data = d as { function_name?: string } | undefined;
+    if (!data?.function_name) return;
+    voiceStore.update({
+      activeToolCall: { name: data.function_name, args: undefined },
+      delegationProgress: null,
+      delegationOutcome: null,
+    });
   });
 
-  useRTVIClientEvent(RTVIEvent.LLMFunctionCallStopped, () => {
-    voiceStore.update({ activeToolCall: null });
+  useRTVIClientEvent(RTVIEvent.LLMFunctionCallInProgress, (d: unknown) => {
+    const data = d as { function_name?: string; arguments?: unknown } | undefined;
+    if (!data?.function_name) return;
+    voiceStore.update({
+      activeToolCall: { name: data.function_name, args: data.arguments },
+      // Don't clear delegationProgress here — InProgress can fire AFTER
+      // Started + a progress message has already arrived, and we don't
+      // want to wipe a freshly-rendered subtitle.
+      delegationOutcome: null,
+    });
+  });
+
+  // Stopped carries `cancelled` and `result`. We classify the outcome
+  // for the orb / mood driver: cancelled → error (user or system aborted),
+  // result starts with the documented unreachable-error pattern from
+  // agent/tools.py:252-256 → error, anything else → success. Mood signal
+  // resets on the NEXT call's Started event.
+  useRTVIClientEvent(RTVIEvent.LLMFunctionCallStopped, (d: unknown) => {
+    const data = d as { cancelled?: boolean; result?: unknown } | undefined;
+    voiceStore.update({
+      activeToolCall: null,
+      delegationProgress: null,
+      delegationOutcome: classifyOutcome(data),
+    });
+  });
+
+  // Delivery progress mirror — backend's DeliveryController.speak_now
+  // emits a typed `delegation-progress` server message alongside the
+  // verbal narration so the "Asking ava…" pill can render the same
+  // text under the headline. Verbal channel is the source of truth;
+  // this is best-effort and silently no-ops if the message is malformed.
+  useRTVIClientEvent(RTVIEvent.ServerMessage, (msg: unknown) => {
+    const m = msg as { type?: string; source?: string; text?: string } | undefined;
+    if (!m || m.type !== 'delegation-progress') return;
+    if (typeof m.text !== 'string') return;
+    voiceStore.update({ delegationProgress: m.text });
   });
 
   return null;
+}
+
+/**
+ * Classify a function-call outcome for the visual / mood reaction
+ * channel. Errors win over successes because the spoken result
+ * (e.g. "Couldn't reach ava") is the user-facing signal we want to
+ * mirror visually — a clean "result" body is the silent happy path.
+ *
+ * Patterns matched (from agent/tools.py:248-256):
+ *   - "I need both a target and a question to delegate."
+ *   - "I don't know a delegate named '{x}'. Available: …"
+ *   - "Couldn't reach {target}: …"
+ *   - "Delegation to {target} errored: …"
+ */
+function classifyOutcome(
+  data: { cancelled?: boolean; result?: unknown } | undefined,
+): 'success' | 'error' {
+  if (!data) return 'success';
+  if (data.cancelled) return 'error';
+  const result = data.result;
+  if (typeof result === 'string') {
+    const errorMarkers = [
+      "couldn't reach",
+      'errored:',
+      "i don't know a delegate",
+      'i need both a target',
+    ];
+    const low = result.toLowerCase();
+    if (errorMarkers.some((m) => low.includes(m))) return 'error';
+  }
+  return 'success';
 }
