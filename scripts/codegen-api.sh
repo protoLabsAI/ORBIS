@@ -19,12 +19,14 @@ cd "$ROOT"
 
 # Pin to the project venv — running with the system python misses
 # pipecat / fastapi / langfuse and import fails. The release flow does
-# the same dance.
+# the same dance. CI sets PYTHON=python (the workflow's setup-python
+# already has app.py importable from the system pip install -e), so
+# accept either an absolute path *or* a command on PATH.
 PYTHON="${PYTHON:-${ROOT}/.venv/bin/python}"
-if [ ! -x "$PYTHON" ]; then
-  echo "error: ${PYTHON} not found. Activate the venv or set PYTHON=…" >&2
-  exit 1
-fi
+case "$PYTHON" in
+  */*) [ -x "$PYTHON" ] || { echo "error: $PYTHON not found. Activate the venv or set PYTHON=…" >&2; exit 1; } ;;
+  *)   command -v "$PYTHON" >/dev/null || { echo "error: $PYTHON not on PATH. Activate the venv or set PYTHON=…" >&2; exit 1; } ;;
+esac
 
 echo "→ dumping openapi.json from app.py"
 "$PYTHON" scripts/dump_openapi.py
