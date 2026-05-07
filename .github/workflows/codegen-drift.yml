@@ -1,0 +1,62 @@
+name: 'Codegen drift'
+
+# Detects drift between the FastAPI app and the typed-frontend artefacts
+# committed under web/. Re-runs scripts/codegen-api.sh and fails on a
+# non-empty git diff so a forgotten ``bun run codegen:api`` can't slip
+# into main. Same posture as lint.yml / pytest.yml — cheap, fast, gates
+# the merge.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: codegen-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Install backend (for app.openapi())
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Install web deps
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Regenerate openapi.json + api-types.ts
+        env:
+          # codegen-api.sh defaults to .venv/bin/python; on CI we use the
+          # workflow's system python that already has app.py importable.
+          PYTHON: python
+        run: ./scripts/codegen-api.sh
+
+      - name: Fail on drift
+        run: |
+          if ! git diff --quiet -- web/openapi.json web/src/lib/api-types.ts; then
+            echo "::error::OpenAPI / api-types drift detected. Run 'bun run codegen:api' and commit the changes."
+            git diff -- web/openapi.json web/src/lib/api-types.ts
+            exit 1
+          fi
+          echo "✓ no drift"

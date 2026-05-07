@@ -1,0 +1,2361 @@
+{
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IceCandidate": {
+        "description": "The remote ice candidate object received from the peer connection.\n\nParameters:\n    candidate: The ice candidate patch SDP string (Session Description Protocol).\n    sdp_mid: The SDP mid for the candidate patch.\n    sdp_mline_index: The SDP mline index for the candidate patch.",
+        "properties": {
+          "candidate": {
+            "title": "Candidate",
+            "type": "string"
+          },
+          "sdp_mid": {
+            "title": "Sdp Mid",
+            "type": "string"
+          },
+          "sdp_mline_index": {
+            "title": "Sdp Mline Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "candidate",
+          "sdp_mid",
+          "sdp_mline_index"
+        ],
+        "title": "IceCandidate",
+        "type": "object"
+      },
+      "SmallWebRTCPatchRequest": {
+        "description": "Small WebRTC transport session arguments for the runner.\n\nParameters:\n    pc_id: Identifier for the peer connection.\n    candidates: A list of ICE candidate patches.",
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/IceCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "pc_id": {
+            "title": "Pc Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pc_id",
+          "candidates"
+        ],
+        "title": "SmallWebRTCPatchRequest",
+        "type": "object"
+      },
+      "SmallWebRTCRequest": {
+        "description": "Small WebRTC transport session arguments for the runner.\n\nParameters:\n    sdp: The SDP string (Session Description Protocol).\n    type: The type of the SDP, either \"offer\" or \"answer\".\n    pc_id: Optional identifier for the peer connection.\n    restart_pc: Optional whether to restart the peer connection.\n    request_data: Optional custom data sent by the customer.",
+        "properties": {
+          "pc_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Id"
+          },
+          "request_data": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Data"
+          },
+          "restart_pc": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Pc"
+          },
+          "sdp": {
+            "title": "Sdp",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sdp",
+          "type"
+        ],
+        "title": "SmallWebRTCRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "ORBIS",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "index__get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Index"
+      }
+    },
+    "/a2a": {
+      "post": {
+        "operationId": "_a2a_a2a_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": " A2A"
+      }
+    },
+    "/a2a/callback": {
+      "post": {
+        "description": "Receive push-notification results from agents we dispatched to.\n\nExpected shape matches what our own outbound client would receive \u2014\na JSON body with either a `result.artifacts[].parts[].text` or a\ntop-level `text`. We're permissive so this works across fleets.",
+        "operationId": "_a2a_callback_a2a_callback_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": " A2A Callback"
+      }
+    },
+    "/a2a/push": {
+      "post": {
+        "description": "A2A spec-conformant push-notification endpoint.\n\nAccepts a StreamResponse-shaped JSON body (task / message /\ntask-status-update / task-artifact-update per\nhttps://a2a-protocol.org/latest/topics/streaming-and-async/).\n\nAuth: we expect the sender to echo back the `token` we included\nin our outbound `pushNotificationConfig`. If A2A_PUSH_TOKEN is\nset in env, it must match either:\n  - `Authorization: Bearer <token>` header, OR\n  - `token` field in the request body.\n\nPriority routing:\n  status-update                 \u2192 active\n  artifact-update / terminal    \u2192 time_sensitive\n  input-required / auth-required \u2192 critical",
+        "operationId": "_a2a_push_a2a_push_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": " A2A Push"
+      }
+    },
+    "/api/config": {
+      "get": {
+        "description": "Return the current config/orbis.yaml as a dict. Drawer UI\nconsumes this to populate the settings form.",
+        "operationId": "get_config_api_config_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Config"
+      },
+      "post": {
+        "description": "Apply a shallow-merge patch to config/orbis.yaml. Returns the\nnormalized post-write config. Reloads the in-memory persona so\nthe next voice session uses the new values.\n\nBody shape is a partial config::\n\n    {\"persona\": {\"name\": \"Atlas\"}}              # rename\n    {\"voice\": {\"tts_backend\": \"elevenlabs\"}}    # swap provider\n    {\"orb\": {\"variant\": \"nebula\", \"palette\": \"Helios\"}}   # paid\n\n``persona`` + ``voice`` blocks are always editable. The ``orb``\nblock requires the paid customization unlock \u2014 requests with an\n``orb`` block while the caller lacks the entitlement return 403.\nStarter-orb selection happens via /api/orb/select_starter and is\nalways allowed (restricted to the curated pool).\n\nDrops unknown keys with a warning. Raises 400 on typed failures\n(invalid tts_backend, non-numeric temperature, etc.).",
+        "operationId": "put_config_api_config_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Patch",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Config"
+      }
+    },
+    "/api/delegates": {
+      "get": {
+        "description": "Return the raw delegate entries from disk + each one's runtime\nparse state. The UI uses ``configured`` (registry-side) to flag\nentries that fail parse (e.g. missing required fields, bad type)\nso they can show inline.",
+        "operationId": "list_delegates_endpoint_api_delegates_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Delegates Endpoint"
+      },
+      "post": {
+        "description": "Add a new delegate. 409 if the name already exists \u2014 the UI's\nedit flow goes through PUT instead. Triggers a registry reload on\nsuccess so the new delegate is dispatchable immediately.",
+        "operationId": "create_delegate_endpoint_api_delegates_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Delegate Endpoint"
+      }
+    },
+    "/api/delegates/reload": {
+      "post": {
+        "description": "Re-read config/delegates.yaml from disk.\n\nSafe mid-session \u2014 delegate lookup happens per `delegate_to()` call,\nso in-flight sessions see the new registry on their next dispatch.",
+        "operationId": "reload_delegates_endpoint_api_delegates_reload_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reload Delegates Endpoint"
+      }
+    },
+    "/api/delegates/test": {
+      "post": {
+        "description": "Reachability probe for a delegate config \u2014 used by the Settings\npanel's \"Test\" button so users can verify before saving.\n\nAccepts the same body shape as POST/PUT. For ``a2a`` the probe is\na GET against ``/.well-known/agent-card.json``; for ``openai`` it's\na single-shot ``/chat/completions`` ping (mirrors /api/llm/test).\nReturns ``{ok, latency_ms?, error?}``. Auth-gated like other /api\nroutes.",
+        "operationId": "test_delegate_endpoint_api_delegates_test_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Test Delegate Endpoint"
+      }
+    },
+    "/api/delegates/{name}": {
+      "delete": {
+        "description": "Remove a delegate by name. 404 if the name doesn't exist.",
+        "operationId": "delete_delegate_endpoint_api_delegates__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Delegate Endpoint"
+      },
+      "put": {
+        "description": "Replace an existing delegate. 404 if the name doesn't exist.\nBody's ``name`` field must match the path param \u2014 guards against\na careless rename via the wrong verb (use DELETE+POST for renames\nso the registry sees both lifecycle events).",
+        "operationId": "update_delegate_endpoint_api_delegates__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Delegate Endpoint"
+      }
+    },
+    "/api/entitlement": {
+      "get": {
+        "description": "Return the owner's current entitlement state \u2014 used by the UI\nto gate paid-tier features (customization editor, variant picker).",
+        "operationId": "get_entitlement_api_entitlement_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Entitlement"
+      }
+    },
+    "/api/entitlement/checkout": {
+      "post": {
+        "description": "Create a Stripe Checkout Session for the customization unlock.\nReturns ``{\"url\": \"<stripe-hosted checkout page>\"}``. Client\nredirects the user there; success/cancel URLs come back via\nSTRIPE_SUCCESS_URL / STRIPE_CANCEL_URL.",
+        "operationId": "create_checkout_api_entitlement_checkout_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Checkout"
+      }
+    },
+    "/api/llm/detect_local": {
+      "get": {
+        "description": "Parallel probe Ollama (:11434) + LM Studio (:1234) on localhost.\nReturns only the providers that responded \u2014 voice-first homelab\nusers get a \"we noticed your local Ollama\" callout in the wizard.\n\nUnauth \u2014 localhost detection before auth is set is the whole point.",
+        "operationId": "llm_detect_local_api_llm_detect_local_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Llm Detect Local"
+      }
+    },
+    "/api/llm/mlx/pull": {
+      "post": {
+        "description": "Stream an MLX model download (via huggingface_hub) as SSE.\n\nFrontend equivalent of ``/api/llm/pull`` but for the MLX path \u2014\nwhen the wizard's user picks the Built-in (MLX) preset, this\nendpoint downloads the chosen ``mlx-community/...`` repo into\nthe HF cache directly so the first voice session doesn't pay\nthe multi-GB download cost. Emits ``data: {status, completed,\ntotal}`` progress events while the download runs, then a final\n``event: done``.\n\nBody: ``{\"model\": \"mlx-community/gemma-3n-E2B-it-4bit\"}``\n\nUnauth \u2014 same rationale as ``/api/llm/detect_local``.",
+        "operationId": "llm_mlx_pull_api_llm_mlx_pull_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Llm Mlx Pull"
+      }
+    },
+    "/api/llm/models": {
+      "post": {
+        "description": "GET /models against a configured URL + API key. Returns\n``{ok, models[], error?}``. Populates the wizard's model combobox.\n\nUnauth, same rationale as /api/llm/test.",
+        "operationId": "llm_models_api_llm_models_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Llm Models"
+      }
+    },
+    "/api/llm/pull": {
+      "post": {
+        "description": "Stream an Ollama pull as Server-Sent Events.\n\nThe wizard calls this when a user picks Ollama and the\nrecommended model isn't installed yet \u2014 instead of asking them\nto drop into a terminal and run ``ollama pull <name>``, we\nproxy Ollama's native ``/api/pull`` and forward each NDJSON\nprogress chunk as an SSE message. The frontend renders a\nprogress bar from the ``completed`` / ``total`` fields.\n\nBody::\n\n    {\"name\": \"gemma3n:e2b\", \"url\": \"http://127.0.0.1:11434\"}\n\nThe ``url`` defaults to the local Ollama instance; we trim any\ntrailing ``/v1`` so the same value used as ``llm.url`` for the\nOpenAI-compat endpoint also works here.\n\nUnauth \u2014 same rationale as ``/api/llm/detect_local``: this runs\nbefore the wizard has set up an API key. URL is constrained by\n``_ollama_url_is_safe`` so the route can't be turned into an\nSSRF gadget.",
+        "operationId": "llm_pull_api_llm_pull_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Llm Pull"
+      }
+    },
+    "/api/llm/test": {
+      "post": {
+        "description": "Real round-trip ping against a configured LLM endpoint.\n\nBody: ``{url, model, api_key?}``. Returns ``{ok, latency_ms?,\nerror?, status?}``. Unauth on purpose \u2014 the setup wizard may run\nbefore the owner API key is set, and the user's LLM credentials\nare what's really being validated here, not their ORBIS auth.",
+        "operationId": "llm_test_api_llm_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Llm Test"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "operationId": "metrics_api_metrics_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Metrics"
+      }
+    },
+    "/api/offer": {
+      "patch": {
+        "operationId": "ice_api_offer_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmallWebRTCPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ice"
+      },
+      "post": {
+        "operationId": "offer_api_offer_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmallWebRTCRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Offer"
+      }
+    },
+    "/api/orb/select_starter": {
+      "post": {
+        "description": "Commit a starter-orb pick to config/orbis.yaml. Called by the\nsetup wizard after the user picks. Validates the slug against\nthe pool, writes the orb block, reloads persona.\n\nBody: ``{\"slug\": \"<starter_slug>\"}``.",
+        "operationId": "select_starter_api_orb_select_starter_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Starter"
+      }
+    },
+    "/api/persona/reload": {
+      "post": {
+        "description": "Re-read config/orbis.yaml from disk.\n\nApplied on the next voice session (persona is snapshotted at\nconnect time). Returns the loaded persona's slug + name.",
+        "operationId": "reload_persona_endpoint_api_persona_reload_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reload Persona Endpoint"
+      }
+    },
+    "/api/personality": {
+      "get": {
+        "description": "Return current personality state: axes + mood + recent drift\nevents + session stats. Drives the drawer's Profile panel so the\nuser can see why the orb feels a certain way.",
+        "operationId": "get_personality_api_personality_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Personality"
+      }
+    },
+    "/api/starter_orbs": {
+      "get": {
+        "description": "Return the curated starter-orb pool. The setup wizard calls this\nat first boot so the user can pick one; no auth required so the\nwizard can run before the user has their API key.\n\nResponse shape::\n    {\"starters\": [{slug, name, description, variant, palette, params}, ...]}",
+        "operationId": "get_starter_orbs_api_starter_orbs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Starter Orbs"
+      }
+    },
+    "/api/stripe/webhook": {
+      "post": {
+        "description": "Stripe webhook endpoint. Verified via signature header. NOT auth-\ngated \u2014 Stripe's webhook call doesn't carry our API key; the\nsignature check is the authentication. Configure this URL in the\nStripe dashboard + set STRIPE_WEBHOOK_SECRET in .env.",
+        "operationId": "stripe_webhook_api_stripe_webhook_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Stripe Webhook"
+      }
+    },
+    "/api/tts/voices": {
+      "get": {
+        "description": "Enumerate voices/references for a given TTS backend.\n\nSettings-panel uses this to render a Select instead of asking the user\nto know voice IDs. Each entry is ``{id, label, ...}``; backends that\ncache voices on disk (kokoro) include a ``cached`` flag so the UI can\ndistinguish \"ready\" from \"downloads on first use\".\n\nEmpty ``voices`` for a remote-managed backend (fish, elevenlabs) means\nthe server is unreachable or has no references registered \u2014 surface\na friendly \"is the sidecar running?\" hint in the UI rather than\nfailing the panel.",
+        "operationId": "tts_voices_api_tts_voices_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "backend",
+            "required": false,
+            "schema": {
+              "default": "kokoro",
+              "title": "Backend",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tts Voices"
+      }
+    },
+    "/api/tts/voices/download": {
+      "post": {
+        "description": "Eagerly download a Kokoro voice tensor so the user doesn't pay\nthe latency on the first synthesis turn after switching voices.\n\nBody: ``{\"backend\": \"kokoro\", \"voice\": \"<id>\"}``. Returns\n``{ok, path?, error?}``. Idempotent \u2014 re-downloading an already-\ncached voice no-ops via HF cache hit. Other backends (fish/openai/\nelevenlabs) don't have a \"download\" concept and respond with a\ndescriptive error.",
+        "operationId": "tts_download_voice_api_tts_voices_download_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tts Download Voice"
+      }
+    },
+    "/api/users/reload": {
+      "post": {
+        "description": "Re-fetch the user roster from Infisical (if configured) or the\nYAML file. Safe to call mid-session \u2014 active clients keep their\nauthenticated state until they reconnect; new connections use the\nrefreshed registry.",
+        "operationId": "reload_users_endpoint_api_users_reload_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reload Users Endpoint"
+      }
+    },
+    "/api/verbosity": {
+      "get": {
+        "operationId": "get_verbosity_api_verbosity_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Verbosity"
+      },
+      "post": {
+        "operationId": "set_verbosity_api_verbosity_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Verbosity"
+      }
+    },
+    "/api/voiceprint": {
+      "delete": {
+        "description": "Remove the cached voiceprint \u2014 gate falls back to owner-trust on\nthe next session. Use to start a fresh enrollment from the drawer\nUI or via curl when the audio sample needs to be replaced.",
+        "operationId": "voiceprint_delete_api_voiceprint_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voiceprint Delete"
+      }
+    },
+    "/api/voiceprint/enroll": {
+      "post": {
+        "description": "Encode + save an enrollment recording. Body is raw WAV bytes.\n\nReturns 200 with metadata on success, 4xx on validation, 501 if\nspeechbrain isn't installed (bundled deployments can opt-in via\n``pip install -e \".[speaker-id]\"``).",
+        "operationId": "voiceprint_enroll_api_voiceprint_enroll_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voiceprint Enroll"
+      }
+    },
+    "/api/voiceprint/status": {
+      "get": {
+        "description": "Tells the wizard whether enrollment is needed.",
+        "operationId": "voiceprint_status_api_voiceprint_status_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Voiceprint Status"
+      }
+    },
+    "/api/whoami": {
+      "get": {
+        "description": "Return the resolved owner. Clients call this at boot to confirm\ntheir API key is valid and get the display name for UI chrome.",
+        "operationId": "whoami_api_whoami_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whoami"
+      }
+    },
+    "/favicon.svg": {
+      "get": {
+        "operationId": "_serve_fixed_favicon_svg_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/favicon.svg",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "description": "Public \u2014 no auth. Reports process-wide shape, not per-user state.",
+        "operationId": "health_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/manifest.webmanifest": {
+      "get": {
+        "operationId": "_serve_fixed_manifest_webmanifest_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/manifest.webmanifest",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/pwa-192.png": {
+      "get": {
+        "operationId": "_serve_fixed_pwa_192_png_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/pwa-192.png",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/pwa-512.png": {
+      "get": {
+        "operationId": "_serve_fixed_pwa_512_png_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/pwa-512.png",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/pwa-maskable-512.png": {
+      "get": {
+        "operationId": "_serve_fixed_pwa_maskable_512_png_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/pwa-maskable-512.png",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/registerSW.js": {
+      "get": {
+        "operationId": "_serve_fixed_registerSW_js_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/registerSW.js",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/sw.js": {
+      "get": {
+        "operationId": "_serve_fixed_sw_js_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/sw.js",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/workbox-8c29f6e4.js": {
+      "get": {
+        "operationId": "_serve_fixed_workbox_8c29f6e4_js_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "/Users/kj/dev/ORBIS/web/dist/workbox-8c29f6e4.js",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Serve Fixed"
+      }
+    },
+    "/{path}": {
+      "get": {
+        "operationId": "spa_fallback__path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Spa Fallback"
+      }
+    }
+  }
+}
