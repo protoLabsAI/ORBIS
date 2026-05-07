@@ -7,16 +7,19 @@
 > Voice-first AI companion. An orb that talks to you, remembers you,
 > and routes the heavy lifting to your existing agents.
 
-ORBIS is a single-owner desktop / tailnet-hosted app. You talk to the
-orb; it talks back in real time; it remembers you across sessions;
-it hands off complex tasks to whatever agents you've configured (A2A
-fleet agents, OpenAI-compatible endpoints). The differentiator is the
-*companion* layer — persistent memory, slow personality drift, moods,
-and a visible expressive form — around a thin voice-routing agent.
+ORBIS is a single-owner WebRTC PWA backed by a Python sidecar
+(FastAPI + Pipecat). You talk to the orb; it talks back in real time;
+it remembers you across sessions; it hands off complex tasks to
+whatever agents you've configured (A2A fleet agents, OpenAI-compatible
+endpoints). The differentiator is the *companion* layer — persistent
+memory, slow personality drift, moods, and a visible expressive form
+— around a thin voice-routing agent.
 
 Status: **active development.** Architecture is locked; feature work
 is underway. See [DECISIONS.md](./DECISIONS.md) for the frozen
-architectural snapshot.
+architectural snapshot — including the 2026-04-29 amendments dropping
+the Tauri shell and starting the move toward a thin-sidecar
+distribution.
 
 ## What ORBIS is
 
@@ -45,34 +48,50 @@ architectural snapshot.
 ## Running it (development)
 
 Requirements: Python 3.11+, Bun or npm, and an LLM endpoint. The
-desktop app's recommended path is the new **Built-in (MLX)** preset
+recommended LLM path on Apple Silicon is the **Built-in (MLX)** preset
 which runs Qwen3.5-4B (or any `mlx-community/...` model) in-process
 via Apple's MLX framework — zero extra install, ~2.5GB first-run
-download. Other choices in the wizard: Ollama, LM Studio, vLLM, or
-any of the OpenAI/Anthropic/Groq/DeepSeek/OpenRouter/Together/
-Mistral/Fireworks/Moonshot/xAI cloud providers. Everything —
-including Whisper STT + Kokoro TTS — runs on CPU by default, so no
-GPU is required outside of the LLM. A CUDA GPU is strongly
-recommended for the *non-Mac* dev path; Apple Silicon Macs use the
-unified-memory GPU automatically via MLX + Metal-accelerated Whisper.
+download. Other choices in the wizard: Ollama, LM Studio, vLLM, the
+**protoLabs** gateway preset, or any of the OpenAI / Anthropic / Groq
+/ DeepSeek / OpenRouter / Together / Mistral / Fireworks / Moonshot /
+xAI cloud providers.
+
+**STT and TTS:**
+
+- **Kokoro TTS** runs locally on CPU and is the default — no GPU needed.
+- **Whisper STT is opt-in.** Install with `pip install -e ".[whisper]"`
+  if you want in-process transcription. Without that extra, the smart
+  default flips `STT_BACKEND` to `openai` and you can point STT at
+  any OpenAI-compatible `/v1/audio/transcriptions` endpoint (OpenAI,
+  the protoLabs gateway, LocalAI, vLLM-omni, etc.) via the Settings
+  drawer or `STT_URL`/`STT_API_KEY`/`STT_MODEL` env vars.
+- A CUDA GPU is strongly recommended for the *non-Mac* dev path with
+  the `[whisper]` extra; Apple Silicon Macs use the unified-memory GPU
+  automatically via MLX + Metal-accelerated Whisper.
+
 See [Docker — with / without GPU](#docker--with--without-gpu) below.
 
 ```bash
 # One-time
 cp .env.example .env       # optional — env vars for pro setups
 # config/orbis.yaml is auto-written by the first-run setup wizard
+pip install -e .                    # base install (no Whisper)
+# pip install -e ".[whisper]"        # opt in to in-process Whisper
 
-# Run (two processes)
-cd web && bun install && bun run dev   # frontend on :5173
-# in a second shell:
+# Run (single process — the FastAPI sidecar serves the SPA at /)
+python app.py                       # http://127.0.0.1:7866
+
+# Or with hot-reload during frontend dev:
+cd web && bun install && bun run dev   # Vite dev server on :5173
 python app.py                          # backend on :7866
 ```
 
-Open `http://localhost:5173` and the **setup wizard** walks you
-through: name yourself + name the orb, pick an LLM provider (15
-presets, with live "test connection" + model-list fetch + Ollama /
-LM Studio auto-detect if they're running), pick a starter orb, hatch.
-Ends in the main app ready to double-click-to-talk.
+Open `http://127.0.0.1:7866` (or `:5173` during dev) and the **setup
+wizard** walks you through: name yourself + name the orb, pick an LLM
+provider (16 presets including the protoLabs gateway, with live "test
+connection" + model-list fetch + Ollama / LM Studio auto-detect if
+they're running), pick a starter orb, hatch. Ends in the main app
+ready to double-click-to-talk.
 
 ### Docker — with / without GPU
 
@@ -106,11 +125,13 @@ profile — unrelated to this GPU switch, see `docker-compose.yml` for
 that service.
 
 Tailnet hosting: `sudo tailscale serve --bg --https=8443 http://127.0.0.1:7866`
-and point your phone / other devices at the tailnet URL. The Drawer
-→ Voice tab → Access panel accepts the owner API key for tailnet
-auth (generate with
+and point your phone / other devices at the tailnet URL. Owner API
+key for tailnet auth lives in `config/users.yaml` — there's no UI to
+enter it (single-owner installs don't need one); generate with
 `python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"`
-and write it into `config/users.yaml`).
+and write it into `config/users.yaml`. Browser side, the
+`apiKeyStore` LocalStorage key (`orbis.apiKey`) attaches the value as
+`X-API-Key` on every `/api/*` call and the WebRTC offer.
 
 ## Architecture at a glance
 
@@ -177,11 +198,16 @@ SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
 ## Configuration
 
 - `config/orbis.yaml` — persona (slug, name, system prompt, LLM
-  knobs, filler verbosity), voice (TTS provider + voice id), orb
-  (starter variant / palette / params). Copy from
-  `config/orbis.example.yaml`. Override `system_prompt` at the env
-  level with `SYSTEM_PROMPT`. Re-read via `POST /api/persona/reload`
+  knobs, filler verbosity), voice (TTS backend + voice id + optional
+  OpenAI-compat URL/Model/API key for custom gateways), stt (backend
+  + Whisper model + URL/Model/API key), llm (URL/Model/API key for
+  the router brain), orb (starter variant / palette / params). Copy
+  from `config/orbis.example.yaml`. Override `system_prompt` at the
+  env level with `SYSTEM_PROMPT`. Re-read via `POST /api/persona/reload`
   or `POST /api/config` (which the drawer UI calls).
+- `config/persona.md` — voice-first system prompt. Loaded when
+  `persona.system_prompt_file: persona.md` is set in the YAML. Edit
+  this file to retune the orb's voice without touching code.
 - `config/starter_orbs.yaml` — the curated pool the setup wizard
   presents at first boot. Ship 8 by default; edit to taste.
 - `config/users.yaml` — owner credential (single entry). Omitted =
@@ -189,6 +215,16 @@ SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
   hosting.
 - `config/delegates.yaml` — A2A / OpenAI-compat endpoints the
   `delegate_to` tool can reach.
+
+The Settings drawer mirrors the YAML for the per-section fields and
+writes via `POST /api/config`. Sections: **Mic** (input device), **STT**
+(backend + Whisper model + OpenAI-compat URL/Model/API key), **LLM**
+(provider URL/Model/API key — Test + Fetch list), **Voice** (TTS
+backend + voice picker with download for Kokoro voices + OpenAI-compat
+URL/Model/API key), **Agent** (filler verbosity), **Personality**
+(mood + axes display), **Developer** (devMode toggle). Toggling
+devMode reveals a fourth tab with feature flags + a collapsible event
+log tailing RTVI, fetch, and WebRTC events live.
 
 ## Paid unlock (optional)
 
@@ -213,7 +249,7 @@ dashboard webhook at `POST https://<your-host>/api/stripe/webhook`.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest        # full backend suite (100+ tests)
+.venv/bin/python -m pytest        # full backend suite (470+ tests)
 cd web && bun run build           # type-check + build frontend
 ```
 

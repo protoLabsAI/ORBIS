@@ -1,28 +1,11 @@
 /**
- * Typed fetch wrappers for ORBIS's /api/* endpoints.
- *
- * Routes through `@tauri-apps/plugin-http` — the Rust-backed fetch —
- * because native `window.fetch` POSTs silently drop their body / hang
- * forever in WKWebView on macOS arm64 production builds (open Tauri
- * issues #11854, #13166, #13878 — labeled `status: upstream`, the bug
- * is in WebKit's networking subprocess). Routing through Rust uses
- * reqwest under the hood and works reliably.
- *
- * The base URL is set to the document origin (the Python sidecar's
- * loopback HTTP origin after Tauri navigates to it) so existing
- * `/api/*` paths resolve the same way relative URLs would have.
- *
- * Auth: the owner API key (when configured) is attached as
- * ``X-API-Key``. Single-user fallback omits it.
+ * Typed fetch wrappers for ORBIS's /api/* endpoints. These hit the
+ * server through the same origin — Vite proxies in dev, real origin
+ * in the deployed SPA. All calls attach the owner API key (when set)
+ * as ``X-API-Key``.
  */
 
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { authHeaders } from '@/auth/apiKey';
-
-/** Resolve a relative API path against the document origin. */
-function url(path: string): string {
-  return new URL(path, window.location.href).toString();
-}
 
 export type Verbosity = 'silent' | 'brief' | 'narrated' | 'chatty';
 export type VerbosityResponse = { verbosity: Verbosity };
@@ -58,6 +41,13 @@ export type OrbisConfig = {
   voice?: {
     tts_backend?: 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
     voice?: string;
+    // OpenAI-compat endpoint overrides — surface here so the UI can
+    // edit a custom gateway (protoLabs, LocalAI, vLLM-omni) without
+    // requiring an env edit + restart. Empty / undefined means fall
+    // back to TTS_OPENAI_* env defaults at the server.
+    tts_url?: string;
+    tts_model?: string;
+    tts_api_key?: string;
   };
   llm?: {
     url?: string;
@@ -65,6 +55,17 @@ export type OrbisConfig = {
     api_key?: string;
     api_key_env?: string;
     extra_body?: Record<string, unknown> | null;
+  };
+  stt?: {
+    backend?: 'local' | 'openai' | 'sensevoice';
+    // HF model id used by the local Whisper backend. Honoured at boot
+    // only — runtime changes log a warning and no-op until next start.
+    whisper_model?: string;
+    // OpenAI-compatible endpoint overrides — same lift pattern as the
+    // TTS panel. Empty strings round-trip as None on the server.
+    url?: string;
+    model?: string;
+    api_key?: string;
   };
   orb?: {
     variant?: string;
@@ -126,14 +127,14 @@ export class UnauthorizedError extends Error {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const r = await tauriFetch(url(path), { headers: authHeaders() });
+  const r = await fetch(path, { headers: authHeaders() });
   if (r.status === 401) throw new UnauthorizedError(path);
   if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
   return r.json() as Promise<T>;
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
-  const r = await tauriFetch(url(path), {
+  const r = await fetch(path, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
@@ -172,5 +173,22 @@ export const api = {
   llmDetectLocal: () =>
     get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
       '/api/llm/detect_local',
+    ),
+
+  // TTS voice/reference enumeration. Settings panel uses this on
+  // backend-change to populate a Select instead of asking the user to
+  // know voice IDs by string. Empty `voices` for fish/elevenlabs means
+  // the sidecar is unreachable or has no references — UI degrades to
+  // free-text input.
+  ttsVoices: (backend: string) =>
+    get<{
+      backend: string;
+      voices: Array<{ id: string; label: string; cached?: boolean }>;
+      fish_url?: string;
+      error?: string;
+    }>(`/api/tts/voices?backend=${encodeURIComponent(backend)}`),
+  ttsDownloadVoice: (body: { backend: string; voice: string }) =>
+    postJSON<{ ok: boolean; path?: string; error?: string }>(
+      '/api/tts/voices/download', body,
     ),
 };

@@ -76,5 +76,3 @@ class ProsodyTagStripper(FrameProcessor):
             if cleaned != frame.text:
                 frame.text = cleaned
         await self.push_frame(frame, direction)
-
-

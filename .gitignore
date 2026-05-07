@@ -26,30 +26,19 @@ config/users.yaml
 # Per-project Automaker UI state — local config, should not be versioned.
 .automaker/
 
-# Tauri shell build + runtime artifacts.
-# - binaries/ is populated at build time by desktop-build.yml with
-#   the PyApp sidecar + by dev scripts with stub sidecars.
-# - icons/ is generated at build time via `cargo tauri icon` from
-#   web/public/pwa-512.png.
-# - target/ is the Rust compile cache.
-# - gen/ holds Tauri-generated schema and capability types.
-src-tauri/binaries/
-# Only the single source icon is committed; platform-specific variants
-# (.icns / .ico / sized PNGs) are generated at bundle time.
-src-tauri/icons/*
-!src-tauri/icons/icon.png
-src-tauri/target/
-src-tauri/gen/
-
-# PyApp local build output — `dist/` is the wheel/.tar.gz output
-# from `python -m build`; `dist-sdist/` is what scripts/build-desktop
-# uses to stage the sidecar source tarball before the PyApp wrap.
-dist/
+# Build output — root `/dist/` is the wheel/.tar.gz output from
+# `python -m build`; `dist-sdist/` is the staged sidecar source
+# tarball. Scoped to root so `web/dist/` is governed by web/.gitignore
+# (which also exempts a .gitkeep marker so `pip install -e .` works
+# from a fresh clone).
+/dist/
 dist-sdist/
 
 # Claude Code agent state — per-machine scratch (scheduled task locks,
-# subagent metadata, settings.local.json). Should never be versioned.
-# .claude/skills/ is the documented exception: project-level skills
-# describe how to operate on this codebase and ship with the repo.
-.claude/*
-!.claude/skills/
+# subagent metadata). Should never be versioned.
+.claude/
+
+# protolabs studio agent state — captured workflow skills, sprint
+# contracts, repo-map cache, session notes. Per-machine scratch, not
+# part of the codebase.
+.proto/

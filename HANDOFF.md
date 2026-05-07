@@ -1,8 +1,8 @@
 # HANDOFF — ORBIS
 
-*Updated 2026-04-28 (after the architectural redirect: Apple-Silicon-only,
-drop web/PWA target). The 2026-04-24 desktop-voice arc still applies as
-the substrate; what changed is direction, not what's shipped.*
+*Updated 2026-04-24 (after the desktop-voice arc — PR #28 merged,
+PR #30 in flight). Apple Silicon Mac desktop build now ships voice
+end-to-end.*
 
 This doc is for the next human to sit down with ORBIS — whether
 that's tomorrow-you, a teammate picking it up, or a handoff to a
@@ -14,28 +14,6 @@ questions, and ordered next steps.
 [DECISIONS.md](./DECISIONS.md) has the frozen architecture decisions
 — read that first if you haven't. [README.md](./README.md) has the
 developer-facing overview.
-[`docs/native-audio-direction.md`](./docs/native-audio-direction.md)
-is the comprehensive guide for the Apple-Silicon-only direction and
-the 4-phase migration plan that supersedes the dual-transport
-architecture.
-
-## 2026-04-28 update — direction change + Phase 1 complete
-
-**ORBIS is now Apple-Silicon-only on the desktop, with iOS / iPad as
-the planned secondary target. Web / PWA / browser is dropped as a
-supported runtime.** See DECISIONS.md amendment of the same date and
-`docs/native-audio-direction.md` for the comprehensive guide.
-
-**Phase 1 is done.** All 11 ROI-ranked items shipped today across 11
-focused commits, except items 2 (`webrtc-audio-processing`) and 7
-(rubato `FftFixedIn` outside callback) which are deliberately
-deferred — Phase 2's AVAudioEngine adoption supersedes both. Net
-**−1,391 LoC**, **−442 kB JS bundle**, the `unsafe impl Send for
-AudioEngine {}` shim is gone, and the day-long voice loop debugging
-that started the morning is captured as load-bearing band-aids in
-the tree (VAD thresholds, software mic gain, STT hallucination
-filters) — these get removed when Phase 2 brings real AEC + AGC.
-STATUS.md § "Phase 1 — what shipped" has the per-commit table.
 
 ## Context at a glance
 
@@ -159,20 +137,24 @@ before declaring a release.
 
 ## Known issues / rough edges
 
-- **Tool-call translation gap in Ollama + MLX adapters.** Both new
-  adapters log a one-time warning and proceed content-only when the
-  pipecat context has tool calls — meaning `delegate_to` and
-  `adjust_personality` won't reach gemma3+/qwen3+ on Ollama or any
-  model on MLX yet. OpenAI-compat path still has full tool support;
-  cloud users unaffected. See `voice/llm/ollama.py` + `mlx.py`
-  header comments.
+- **Tool-call translation: shipped on Ollama + MLX.** Ollama
+  translates `message.tool_calls` ↔ OpenAI-shaped delta chunks.
+  MLX renders the schema via the chat template's `tools=` kwarg
+  and a streaming parser (`voice/llm/_qwen_tool_parser.py`) extracts
+  Qwen-style `<tool_call>{...}</tool_call>` blocks from the token
+  stream. Both adapters flip `finish_reason="tool_calls"` and
+  synthesize `call_<uuid>` ids. Older / strict templates that don't
+  accept `tools=` log a warning and fall through (no calls fire,
+  matches the pre-tool era).
 - **gemma3n on mlx-lm 0.31.x** has an upstream `sanitize()` bug
   (`KeyError: 'model'`) that breaks loading. Default MLX preset is
   Qwen3.5-4B as a workaround; flip back when the upstream fix lands.
-- **MicroAckInjector still fires on every turn.** Trigger lifted
-  500ms → 1500ms (PR #30) but with the LLM at ~1s round-trip the
-  filler still wins the race. UX call: lift further, drop volume,
-  or make conditional on conversation length.
+- **MicroAckInjector trigger.** Default lifted 500ms → 1500ms (PR #30)
+  → 2500ms. With first-audio latency ~1s p50 / ~1.5s p95 on M1+MLX,
+  2500ms keeps the filler off normal turns. Watch real sessions; if
+  the filler is still firing too eagerly on slow turns, follow-ups:
+  drop volume, scope to tool-call windows only, or expose in the
+  Settings UI.
 - **Pipecat `STTService._ttfb_timeout_handler` warning** — pipecat
   asyncio bug, cosmetic.
 - **`_active_skill()` naming shim.** `app.py` + `a2a/server.py`
@@ -235,60 +217,54 @@ before declaring a release.
 
 ## Recommended next steps (in priority order)
 
-The structure follows the 4-phase plan in `docs/native-audio-direction.md`.
-Items in the "Other in-flight" buckets are non-Phase-1 work that's still
-worth doing in parallel where it doesn't conflict with the carve.
+### Immediate (this week — pre-ship)
 
-### Phase 1 — DONE 2026-04-28
+1. **Merge PR #30** (voice + MLX + bench). Ready; needs review.
+2. **Tool-call translation in Ollama + MLX adapters.** Currently
+   warned + skipped — needed for `delegate_to` to reach gemma3+/
+   qwen3+ on local backends. ~half-day each.
+3. **Run the remaining QA checklist items below.** Budget ~2 hours.
+4. **Cut v0.1.11 and verify a fresh-install Mac user flow** — DMG
+   installs, mic prompt fires, voice round-trip works on a
+   first-time machine. This is the actual ship test.
 
-All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deferred — Phase 2's AVAudioEngine adoption supersedes them, integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands. See STATUS.md § "Phase 1 — what shipped" for the per-commit table.
+### Short-term (next 1-2 weeks)
 
-Total Phase-1 delta: **−1,391 net LoC** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB), and the `unsafe impl Send for AudioEngine {}` shim is gone from `engine.rs`.
+4. **Per-variant mood wiring.** Pick Fractal (default) and wire
+   `useMood()` into its shader uniforms. Prove the mood → visual
+   feedback loop works, then replicate for the other three.
+5. **`_active_skill()` rename pass.** Cosmetic but reduces
+   confusion. Budget 1 hour.
+6. **Frontend CI.** Add `.github/workflows/frontend-check.yml` that
+   runs `bun install + bun run build` on every PR.
+7. **Retire `session_store.py` text summaries.** Remove the
+   `save_summary` / `load_last_summary` calls from app.py; keep
+   orphan-delivery functions. One commit.
+8. **Task #68 — Docker hostname warning** in the LLM wizard step
+   when a bare hostname is entered. Inline caveat + docs note.
 
-### Phase 2 — Apple-native audio
+### Medium-term (next month)
 
-**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input shipped in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature (off by default). Build with `./scripts/nuke-and-rebuild.sh --voice-processing --launch --tail`. STATUS.md has the four-step validation playbook.
-
-**Phase 2b — pending live validation.** Once 2a passes the validation playbook live, the cleanup commit makes `voice-processing` the default and deletes:
-- `src-tauri/src/audio/aec.rs` (Apple AEC supersedes)
-- The CPAL `build_input_stream` + `preferred_input_config` paths
-- `voice/local_transport.py` `MIC_GAIN` + `_apply_gain_i16` (Apple AGC supersedes)
-- `voice/stt.py` `STT_MIN_RMS` / `STT_STRONG_RMS` / `STT_MIN_TEXT_LEN` gates
-- `app.py` default-off-ing of backchannel + microack
-- VAD knob overrides (back to pipecat defaults)
-
-### Phase 3 — protoApp consolidation (Q2)
-
-- **Vendor `protolabs-voice-core`** from `protoLabsAI/protoApp` as a Cargo dep.
-- **Migrate Python sidecar to speak `orbis-sidecar`'s WebSocket contract** (`{type, text}` JSON, `ORBIS_READY ws://...` readiness line). See `protoApp/docs/how-to/integrate-orbis-sidecar.md`.
-- **Delete `voice/local_transport.py`, `src-tauri/src/audio/socket.rs`, `voice/native_bargein.py`, `voice/sse_bus.py`.**
-- **PyApp content-hash cache problem disappears** (sidecar is now `python -m orbis` over WS).
-
-### Phase 4 — iOS (Q3+)
-
-- **Tauri Mobile target** (iOS in alpha as of 2.10.x).
-- **Full Rust in-process LLM/STT/TTS** per protoApp's already-shipping pattern: `whisper-rs 0.16`, `kokoros`, `llama-cpp-2` with Metal feature.
-- **Python sidecar becomes desktop-only optional** — power-user delegate runtime for agents that need Python deps.
-
-### Other in-flight (do in parallel where it doesn't conflict with the carve)
-
-These were "next steps" in the prior version of HANDOFF.md and remain relevant:
-
-- **Tool-call translation in Ollama + MLX adapters.** Currently warned + skipped — needed for `delegate_to` to reach gemma3+/qwen3+ on local backends. Half-day each.
-- **Per-variant mood wiring.** Pick Fractal (default) and wire `useMood()` into its shader uniforms.
-- **`_active_skill()` rename pass.** Cosmetic but reduces confusion. 1 hour.
-- **Frontend CI.** Add `.github/workflows/frontend-check.yml` that runs `bun install + bun run build` on every PR.
-- **Retire `session_store.py` text summaries.** Orphan-delivery stash stays; summary file is now dead code.
-- **Task #68 — Docker hostname warning** in the LLM wizard step.
-- **State/mood authoring editor.** Big UI task; paid customization unlock surface per DECISIONS.md.
-- **Live Stripe integration test** — use Stripe test mode end-to-end.
+9. **State/mood authoring editor.** The big UI task — drag a
+   slider, see the orb react, save the delta to the preset. This
+   is what unlocks user-generated orbs at scale.
+10. **Docs site.** Author a handful of guides: setup, persona
+    config, delegate config, state/mood editor, paid unlock flow.
+11. **Live Stripe integration test.** Use Stripe test mode
+    end-to-end — real Checkout Session, real webhook, real grant.
+12. **Multi-device UX.** Tailnet implies phone + laptop at
+    different times. Confirm session handoff is clean.
 
 ### Longer-term
 
-- **Collectible / shop orbs** (per DECISIONS.md: deferred). Time-limited starter additions, themed drops.
-- **Fact extraction background agent.** SQLite facts table is ready; extractor module just needs writing.
-- **Observability — Langfuse + Prometheus `/metrics`.** Stubs exist from the seed; wire to the deployment env.
-- **Docs site rebuild.** README + DECISIONS + STATUS + HANDOFF + `docs/native-audio-direction.md` carry the load today; if/when there's a real user-facing audience, build a proper docs site (mkdocs / VitePress).
+- **Collectible / shop orbs** (per DECISIONS.md: deferred). Time-
+  limited starter additions, themed drops.
+- **Fact extraction background agent.** SQLite facts table is
+  ready; extractor module just needs writing.
+- **Observability — Langfuse + Prometheus `/metrics`.** Stubs
+  exist from the seed; wire to the deployment env.
+- **Multi-tenant hosting** (if product direction shifts). Auth
+  primitive could re-expand; skills catalog would need a revival.
 
 ## Useful commands
 

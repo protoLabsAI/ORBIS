@@ -1,16 +1,99 @@
-import { useVoiceBridge } from './useVoiceBridge';
+import { RTVIEvent } from '@pipecat-ai/client-js';
+import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
+import { useEffect } from 'react';
+import { voiceStore, type DeviceErrorType } from './state';
 
 /**
- * Invisible component — drives the derived voiceStore from the SSE
- * event stream the Python sidecar publishes on /api/events.
+ * Invisible component — subscribes to RTVI events and drives the
+ * derived voiceStore. Mount once, inside PipecatClientProvider.
  *
- * Mount once at the app root.
- *
- * Pre-2026-04-28 this also bridged WebRTC RTVI events into the same
- * store. The web/PWA path was dropped (DECISIONS.md amendment of that
- * date), and SSE is now the only path.
+ * State-machine mapping:
+ *   UserStartedSpeaking        → listening
+ *   BotLlmStarted              → thinking
+ *   BotStartedSpeaking         → speaking
+ *   BotStoppedSpeaking + user-silent → idle (resolved by settle)
  */
 export function VoiceStateBridge() {
-  useVoiceBridge();
+  const transportState = usePipecatClientTransportState();
+
+  // Transport-level state flows into the snapshot.
+  useEffect(() => {
+    voiceStore.update({
+      transportState,
+      connected: transportState === 'ready' || transportState === 'connected',
+      // `error` is pipecat's signal that the transport itself failed
+      // (handshake error, data-channel drop). A clean user-initiated
+      // disconnect goes to `disconnected` without passing through
+      // `error`, so we don't show the banner in that case. Reaching
+      // `ready`/`connected` again clears the flag so re-connect after
+      // a network blip dismisses the banner without user action.
+      connectionError: transportState === 'error',
+    });
+    if (transportState === 'disconnected') {
+      voiceStore.update({ state: 'idle' });
+    }
+  }, [transportState]);
+
+  // Device-level errors — mic permission denied, no mic detected, mic
+  // already in use by another app, etc. Pipecat's DeviceError carries
+  // a typed discriminator we forward to the banner so it can render
+  // type-specific copy + recovery hints.
+  useRTVIClientEvent(RTVIEvent.DeviceError, (err: unknown) => {
+    const e = err as { type?: string; message?: string } | undefined;
+    if (!e) return;
+    voiceStore.update({
+      deviceError: {
+        type: (e.type as DeviceErrorType) || 'unknown',
+        message: e.message,
+      },
+    });
+  });
+
+  useRTVIClientEvent(RTVIEvent.BotReady, () => {
+    voiceStore.update({ state: 'idle' });
+  });
+
+  useRTVIClientEvent(RTVIEvent.UserStartedSpeaking, () => {
+    voiceStore.update({ state: 'listening' });
+  });
+
+  useRTVIClientEvent(RTVIEvent.UserStoppedSpeaking, () => {
+    // Do not flip to 'idle' immediately — the bot may start thinking/speaking
+    // within milliseconds. Leave the state where it is; the next event wins.
+  });
+
+  useRTVIClientEvent(RTVIEvent.UserTranscript, (d: unknown) => {
+    const data = d as { text?: string; final?: boolean } | undefined;
+    if (data?.text && data.final) voiceStore.update({ lastUserTranscript: data.text });
+  });
+
+  useRTVIClientEvent(RTVIEvent.BotLlmStarted, () => {
+    voiceStore.update({ state: 'thinking' });
+  });
+
+  useRTVIClientEvent(RTVIEvent.BotStartedSpeaking, () => {
+    voiceStore.update({ state: 'speaking' });
+  });
+
+  useRTVIClientEvent(RTVIEvent.BotStoppedSpeaking, () => {
+    voiceStore.update({ state: 'idle' });
+  });
+
+  useRTVIClientEvent(RTVIEvent.BotTranscript, (d: unknown) => {
+    const data = d as { text?: string } | undefined;
+    if (data?.text) voiceStore.update({ lastBotText: data.text });
+  });
+
+  useRTVIClientEvent(RTVIEvent.LLMFunctionCallStarted, (d: unknown) => {
+    const data = d as { function_name?: string; args?: unknown } | undefined;
+    if (data?.function_name) {
+      voiceStore.update({ activeToolCall: { name: data.function_name, args: data.args } });
+    }
+  });
+
+  useRTVIClientEvent(RTVIEvent.LLMFunctionCallStopped, () => {
+    voiceStore.update({ activeToolCall: null });
+  });
+
   return null;
 }

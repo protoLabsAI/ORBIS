@@ -1,6 +1,11 @@
 import { useMemo, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
+import {
+  usePipecatClient,
+  usePipecatClientMediaTrack,
+  usePipecatClientTransportState,
+} from '@pipecat-ai/client-react';
 import { useActiveVariant } from './useOrbState';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
@@ -12,26 +17,58 @@ import './variants';
 
 /**
  * Primary orb canvas. Hosts a Canvas + whichever variant is active.
- *
- * Pre-2026-04-28 this also owned double-click-to-connect for the
- * WebRTC path and read MediaStreams from PipecatClient for the
- * audio-reactive shaders. The web/PWA path was dropped (DECISIONS.md
- * amendment of that date), audio runs entirely in the Rust CPAL
- * engine, and the orb no longer has access to live waveform data.
- * Audio reactivity will return in a later phase via a sidecar-pushed
- * envelope feed.
+ * Also owns double-click-to-connect: on mouse, dblclick triggers
+ * client.connect(); on touch, a single tap does.
  */
 export function OrbStage() {
   const variant = useActiveVariant();
   const voiceState = useVoiceStateSelector((s) => s.state);
+  const botTrack = usePipecatClientMediaTrack('audio', 'bot');
+  const localTrack = usePipecatClientMediaTrack('audio', 'local');
+  const client = usePipecatClient();
+  const transport = usePipecatClientTransportState();
 
-  const botStream = useMemo<MediaStream | null>(() => null, []);
-  const localStream = useMemo<MediaStream | null>(() => null, []);
+  const botStream = useMemo(
+    () => (botTrack ? new MediaStream([botTrack]) : null),
+    [botTrack],
+  );
+  const localStream = useMemo(
+    () => (localTrack ? new MediaStream([localTrack]) : null),
+    [localTrack],
+  );
 
-  // Double-click / double-tap shows a transient "listening…" hint —
-  // the pipeline is always live, so there's nothing to "connect".
+  // Double-click / double-tap toggles the voice session on both mouse
+  // and touch. Single-tap stays free for drag-spin / click-pulse so
+  // users can play with the orb without accidentally (dis)connecting.
   const onDoubleClick = () => {
-    pushStatusTransient('listening…', 1500);
+    if (!client) return;
+    const disconnected =
+      transport === 'disconnected' ||
+      transport === 'initialized' ||
+      transport === 'error';
+    const active =
+      transport === 'ready' ||
+      transport === 'connected' ||
+      transport === 'connecting' ||
+      transport === 'authenticating';
+    if (disconnected) {
+      client.connect().catch((err) => {
+        console.error('[orb] connect error:', err);
+        // R10: surface in the status pill so the user knows the
+        // double-click did something. Common causes: backend
+        // unreachable, API key wrong, SDP timeout. 4s matches the
+        // duration used by RTVI Error events for UX consistency
+        // across error sources.
+        const detail = err instanceof Error ? err.message : String(err);
+        pushStatusTransient(`couldn't connect: ${detail}`, 4000);
+      });
+    } else if (active) {
+      client.disconnect().catch((err) => {
+        console.error('[orb] disconnect error:', err);
+        const detail = err instanceof Error ? err.message : String(err);
+        pushStatusTransient(`disconnect failed: ${detail}`, 4000);
+      });
+    }
   };
 
   if (!variant) {

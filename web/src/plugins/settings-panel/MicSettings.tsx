@@ -1,73 +1,80 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { Panel } from '@/components/ui/panel';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { MicTest } from '@/shared/audio/MicTest';
 import {
   getPreferredAudioDeviceId,
   setPreferredAudioDeviceId,
+  subscribePreferredAudioDeviceId,
 } from '@/shared/audio/preferredDevice';
-import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 
 /**
- * Microphone selector + live level meter.
- *
- * Pre-2026-04-28 this had two paths — a getUserMedia / WebRTC mic
- * picker and a native CPAL one. The web/PWA path was dropped
- * (DECISIONS.md amendment of that date), so only the native path
- * remains.
+ * Mic tab for the settings drawer — re-runs the same `getUserMedia`
+ * gate the wizard does so the user can verify input levels any time.
+ * Device enumeration is gated on already-granted permission (browsers
+ * only expose labeled `audioinput` devices after a successful grant),
+ * so we hide the device picker until the user has tested once.
  */
 export function MicSettings() {
-  const [devices, setDevices] = useState<string[]>([]);
-  const [device, setDevice] = useState<string>('');
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceIdState] = useState<string>(() =>
+    getPreferredAudioDeviceId(),
+  );
+
+  const refreshDevices = async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      setDevices(all.filter((d) => d.kind === 'audioinput'));
+    } catch {
+      // Permission not yet granted — the MicTest inside handles that
+      // path; we just won't have a useful device list until after.
+    }
+  };
 
   useEffect(() => {
-    invoke<string[]>('list_audio_inputs')
-      .then((devs) => {
-        setDevices(devs);
-        const saved = getPreferredAudioDeviceId();
-        setDevice(devs.includes(saved) ? saved : devs[0] ?? '');
-      })
-      .catch(() => {});
+    void refreshDevices();
+    // Stay in sync if the wizard's mic step writes a different id while
+    // the settings panel is open.
+    return subscribePreferredAudioDeviceId(setDeviceIdState);
   }, []);
 
-  const onChange = (name: string) => {
-    setDevice(name);
-    setPreferredAudioDeviceId(name);
+  const onChangeDevice = (id: string) => {
+    setDeviceIdState(id);
+    setPreferredAudioDeviceId(id);
   };
 
   return (
     <Panel title="Microphone">
       <div className="space-y-3">
         {devices.length > 0 && (
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-wider text-zinc-500">
+          <label className="block">
+            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
               Input device
-            </p>
-            <Select value={device} onValueChange={onChange}>
-              <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
-                <SelectValue placeholder="System default" />
-              </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800">
-                {devices.map((name) => (
-                  <SelectItem key={name} value={name}>
-                    {name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+            </div>
+            <select
+              value={deviceId}
+              onChange={(e) => onChangeDevice(e.target.value)}
+              className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
+            >
+              <option value="">System default</option>
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>
+                  {d.label || `Device ${d.deviceId.slice(0, 6)}`}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
-
-        <NativeLevelMeter deviceName={device} />
-
+        <MicTest
+          key={deviceId /* rebuild stream when device changes */}
+          deviceId={deviceId || undefined}
+          onPermissionGranted={refreshDevices}
+          onVerified={refreshDevices}
+        />
         <p className="text-[11px] text-zinc-600 leading-relaxed">
-          Device selection is passed to the native audio engine. Changes take effect on the next voice session.
+          The selection persists across reloads and is plumbed into
+          Pipecat's voice client, so the next voice session uses this
+          input. "System default" means whatever macOS picks at the
+          time of the session.
         </p>
       </div>
     </Panel>

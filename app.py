@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
-"""ORBIS — Pipecat pipeline (Apple Silicon native, single transport).
+"""protoVoice — Pipecat pipeline with duplex filler (through M2).
 
-Pipeline (all in-process Python; mic + speaker frames cross a Unix
-socket to the Rust CPAL engine in src-tauri/):
+Pipeline:
 
-  CPAL mic (Rust) → Unix socket → LocalAudioTransport.input()
-                  → LocalWhisperSTT
-                  → user aggregator (VAD attached here)
-                  → OpenAILLMService — tools registered for delegate_to etc.
-                  → TTS (Kokoro default; ElevenLabs / OpenAI-compat / Fish opt-in)
-                  → LocalAudioTransport.output() → Unix socket → CPAL speaker (Rust)
-                  → assistant aggregator
+  browser mic → SmallWebRTCTransport.input()
+              → LocalWhisperSTT
+              → user aggregator (VAD attached here in pipecat 1.0)
+              → OpenAILLMService — has `deep_research` tool registered
+              → TTS (Fish sidecar by default, Kokoro fallback)
+              → SmallWebRTCTransport.output()
+              → assistant aggregator
 
-Native is the only supported transport — see DECISIONS.md amendment
-2026-04-28 ("Apple Silicon (+ iOS planned) only; drop web/PWA").
-
-Duplex behavior:
+Duplex (M2):
   - on `on_function_calls_started`: queue a TTSSpeakFrame opening filler
   - `_progress_loop()`: emit periodic progress phrases while the tool runs
   - tool handlers are wrapped so they cancel the progress loop on return
+
+Still ahead: M3 async tool inbox + push-interrupt (`cancel_on_interruption=False`),
+M4 real tool set, M5 memory + skills + SOUL.
 """
 
 import argparse
@@ -52,11 +51,10 @@ from agent.paths import configure_hf_home  # noqa: E402
 _cache_dir = configure_hf_home()
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -67,7 +65,6 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMUserAggregatorParams,
 )
 from pipecat.processors.frameworks.rtvi import (
-    RTVIObserver,
     RTVIObserverParams,
     RTVIProcessor,
 )
@@ -78,10 +75,14 @@ from pipecat.utils.context.llm_context_summarization import (
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm import make_llm
-from voice.local_transport import LocalAudioTransport
-from voice.native_bargein import NativeBargeInObserver
-from voice.sse_bus import sse_bus
+from pipecat.transports.base_transport import TransportParams
+from pipecat.transports.smallwebrtc.request_handler import (
+    SmallWebRTCPatchRequest,
+    SmallWebRTCRequest,
+    SmallWebRTCRequestHandler,
+)
 from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
@@ -213,11 +214,9 @@ def _resolve_skill_llm(skill) -> dict:
         api_key = LLM_API_KEY
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
+    elif using_custom_url:
+        extra_body = None
     else:
-        # Always suppress thinking tokens. Custom-URL gateways that don't
-        # understand chat_template_kwargs should ignore unknown extra_body
-        # keys rather than 400 — if a gateway does error, the operator
-        # should set extra_body: null explicitly in their skill config.
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
     return {
         "url": url,
@@ -423,19 +422,13 @@ def _recall_block(user_id: str) -> str:
 def _filler_gen_for(user_id: str) -> FillerGenerator:
     """Lazy per-user FillerGenerator. Each user owns their own LLM client
     + recency history; the settings are the per-user FillerSettings
-    stored on UserState.
-
-    Routes to the same LLM as the active persona — without this, the
-    filler defaulted to env LLM_URL (localhost:8100/v1, vLLM) and
-    spammed connection errors when only a remote gateway is configured.
-    """
+    stored on UserState."""
     state = user_state_for(user_id)
     if state.filler_generator is None:
-        llm_cfg = _resolve_skill_llm(_active_skill(user_id))
         state.filler_generator = FillerGenerator(
-            llm_url=llm_cfg["url"],
-            model=llm_cfg["model"],
-            api_key=llm_cfg["api_key"],
+            llm_url=LLM_URL,
+            model=LLM_SERVED_NAME,
+            api_key=LLM_API_KEY,
             settings=state.filler_settings,
         )
     return state.filler_generator
@@ -744,95 +737,16 @@ WEB_DIST = Path(__file__).parent / "web" / "dist"
 # legacy static/index.html. `auto` (default) picks react when web/dist exists.
 FRONTEND = os.environ.get("FRONTEND", "auto").lower()
 
+_handler = SmallWebRTCRequestHandler()
 
 
-# ---------------------------------------------------------------------------
-# SSE state observer (subclass of pipecat's RTVIObserver)
-# ---------------------------------------------------------------------------
+async def run_bot(webrtc_connection, user_id: str = "default") -> None:
+    """One bot instance per connected WebRTC client.
 
-class SseBusObserver(RTVIObserver):
-    """RTVI observer subclass that fans every message out via /api/events SSE.
-
-    Subclassing ``RTVIObserver`` keeps us aligned with pipecat's
-    canonical event vocabulary — the same one ``pipecat-client-react``
-    speaks — so when we eventually adopt that client, the wire format
-    is already compatible. We just translate each RTVI message into
-    our existing SSE event names instead of pushing it into a WebRTC
-    data channel.
-
-    Pre-2026-04-28 this was a hand-rolled Frame observer that
-    duplicated the RTVIObserver mapping logic against ``LLMTextFrame``
-    /  ``BotStartedSpeakingFrame`` / etc. directly. The third research
-    stream (see ``docs/native-audio-direction.md``) flagged that as
-    forking the RTVI vocabulary; this rewrite keeps the dispatch
-    surface in pipecat's hands and only customizes the egress.
-
-    Frontend wire format (unchanged) — these are what ``useVoiceBridge``
-    on the React side subscribes to:
-
-        bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
-        transcript  {"source": "user"|"bot", "text": str, "final": bool}
-        session     {"event": "start"|"end", "session_id": str?}
-    """
-
-    def __init__(self, rtvi, *, params: RTVIObserverParams | None = None) -> None:
-        super().__init__(rtvi, params=params or RTVIObserverParams())
-        self._bot_text_buf: list[str] = []
-
-    async def send_rtvi_message(self, model, exclude_none: bool = True) -> None:
-        # Skip the WebRTC transport push (no transport in native mode
-        # anyway — super() guards on ``self._rtvi``, but we'd just be
-        # paying the dispatch cost). Translate to SSE instead.
-        await self._fan_to_sse(model)
-
-    async def _fan_to_sse(self, model) -> None:
-        # Lazy import keeps the message classes off the module-load path.
-        from pipecat.processors.frameworks.rtvi.models import (
-            BotLLMStartedMessage,
-            BotLLMTextMessage,
-            BotStartedSpeakingMessage,
-            BotStoppedSpeakingMessage,
-            UserStartedSpeakingMessage,
-            UserTranscriptionMessage,
-        )
-        if isinstance(model, BotStartedSpeakingMessage):
-            self._bot_text_buf.clear()
-            await sse_bus.publish("bot-state", {"state": "speaking"})
-        elif isinstance(model, BotStoppedSpeakingMessage):
-            if self._bot_text_buf:
-                text = "".join(self._bot_text_buf)
-                await sse_bus.publish(
-                    "transcript",
-                    {"source": "bot", "text": text, "final": True},
-                )
-                self._bot_text_buf.clear()
-            await sse_bus.publish("bot-state", {"state": "idle"})
-        elif isinstance(model, UserStartedSpeakingMessage):
-            await sse_bus.publish("bot-state", {"state": "listening"})
-        elif isinstance(model, BotLLMStartedMessage):
-            await sse_bus.publish("bot-state", {"state": "thinking"})
-        elif isinstance(model, UserTranscriptionMessage):
-            data = model.data
-            if data and getattr(data, "text", None):
-                await sse_bus.publish(
-                    "transcript",
-                    {"source": "user", "text": data.text, "final": bool(getattr(data, "final", True))},
-                )
-        elif isinstance(model, BotLLMTextMessage):
-            # Accumulate bot response text; emitted as one transcript
-            # on BotStoppedSpeakingMessage above.
-            data = model.data
-            if data and getattr(data, "text", None):
-                self._bot_text_buf.append(data.text)
-
-
-async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | None = None) -> None:
-    """Run the persistent native voice pipeline.
-
-    Called once from lifespan with a pre-built LocalAudioTransport that
-    bridges to the Rust CPAL engine over a Unix socket. The pipeline
-    runs for the lifetime of the app — `cancel_on_idle_timeout=False`
-    on the PipelineTask keeps it alive across UI idle periods.
+    `user_id` is resolved at `/api/offer` time from the X-API-Key header
+    and passed in via a closure. Defaults to "default" for direct callers
+    that bypass the auth layer (unlikely in practice — the only entry
+    point is `/api/offer`).
     """
     # Set context vars so deep-stack code (tracing spans, session_store
     # lookups, filler generators) can pick up the right user/session
@@ -857,28 +771,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         f"voice={skill.voice!r} verbosity={user_state.filler_settings.verbosity.value}"
     )
 
-    # Caller (lifespan) builds the transport. Direct invocations (tests
-    # or alternate entry points) can also pass a pre-built one.
-    if transport is None:
-        sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
-        if not sock_path:
-            raise RuntimeError(
-                "run_bot() requires either a transport= kwarg or "
-                "ORBIS_AUDIO_SOCK env var pointing at the Rust CPAL "
-                "engine's unix socket."
-            )
-        transport = LocalAudioTransport(sock_path=sock_path)
+    transport = SmallWebRTCTransport(
+        webrtc_connection=webrtc_connection,
+        params=TransportParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+            audio_out_10ms_chunks=2,
+            # Optional in-filter (rnnoise) for noise reduction on the mic
+            # stream. Wired only when NOISE_FILTER is enabled in env.
+            audio_in_filter=_build_audio_in_filter(),
+        ),
+    )
 
-    # The Rust-side AEC (src-tauri/src/audio/aec.rs) is currently a thin
-    # delay-line subtractor — not strong enough on its own once we apply
-    # the software mic gain in voice/local_transport.py. Keep the Python
-    # echo guard active with a longer window so amplified speaker bleed
-    # doesn't false-trigger VAD/MicroAck on the bot's own tail. Phase 2
-    # (AVAudioEngine voice-processing IO) supersedes this entirely.
-    # Override via NATIVE_ECHO_GUARD_MS env var.
-    _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
-
-    stt = make_stt()
+    # STT — persona.stt (when set) overrides STT_* env defaults. Lets
+    # users swap the OpenAI-compat STT endpoint or whisper-model from
+    # the settings panel without a sidecar restart.
+    stt = make_stt(**(skill.stt or {}))
 
     # LLM routing — resolved by _resolve_skill_llm so the voice path and
     # the A2A inbound text path share a single source of truth. Per-field
@@ -930,6 +838,20 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 tts_kwargs["lang"] = lang
         elif tts_backend == "fish":
             tts_kwargs["reference_id"] = skill.voice
+        elif tts_backend == "openai":
+            tts_kwargs["voice"] = skill.voice
+    # OpenAI-compatible endpoint overrides — wired from the persona
+    # config so a user editing the Voice drawer can repoint TTS at a
+    # custom gateway (protoLabs, LocalAI, vllm-omni) without env edits.
+    # voice/tts/openai.make() falls back to TTS_OPENAI_* env vars when
+    # any of these are None.
+    if tts_backend == "openai":
+        if getattr(skill, "tts_url", None):
+            tts_kwargs["url"] = skill.tts_url
+        if getattr(skill, "tts_model", None):
+            tts_kwargs["model"] = skill.tts_model
+        if getattr(skill, "tts_api_key", None):
+            tts_kwargs["api_key"] = skill.tts_api_key
     tts = make_tts(**tts_kwargs)
 
     # Delivery controller — observes VAD + transcripts, drains push deliveries.
@@ -944,17 +866,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
-    # Backchannel + micro-ack were originally tuned against the WebRTC
-    # mic path's AGC + browser echo cancellation. On the native CPAL
-    # path the speaker-bleed-into-mic crosses VAD threshold (especially
-    # with software mic gain), so the listener-acks fire on the bot's
-    # own tail. Default both off unless the persona explicitly enabled
-    # them. Phase 2 (real AEC via AVAudioEngine) lets us flip the
-    # default back to on.
-    if behavior.get("backchannel") is None:
-        bc_cfg["enabled"] = False
-    if behavior.get("micro_ack") is None:
-        ma_cfg["enabled"] = False
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -1032,19 +943,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     )
 
     _turn_strategies = _build_user_turn_strategies()
-    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
-        params=VADParams(
-            confidence=0.7,    # default 0.7
-            start_secs=0.2,    # default 0.2
-            stop_secs=0.4,     # default 0.2 — longer pause before cutting
-            min_volume=0.2,    # default 0.6 — lowered for native CPAL path.
-                               # voice/local_transport.py applies an 8x mic gain
-                               # (MIC_GAIN env var) so boosted speech RMS lands
-                               # ~0.20–0.40, well above this threshold; ambient
-                               # stays under it. STT_MIN_RMS (in voice/stt.py) is
-                               # the second gate against Whisper silence-hallucinations.
-        )
-    )}
+    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer()}
     if _turn_strategies is not None:
         # Only pass user_turn_strategies when we actually built one — passing
         # None keeps the default (naive VAD endpointing).
@@ -1116,10 +1015,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # AUDIO_TAGS=off env.
     audio_tags = make_audio_tags_tap(mem=get_memory())
 
-    # Single transport, single output node — no fanout needed now that
-    # the WebRTC client path is removed (DECISIONS.md amendment 2026-04-28).
-    _output_node = transport.output()
-
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
@@ -1157,12 +1052,17 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             enabled=bg_cfg["enabled"],
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
-        # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~1500 ms (default; per-persona override via
-        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
-        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
-        # Cancels when the bot actually starts speaking. Vapi Fill
-        # Injection pattern.
+        # backchannel + delivery need TranscriptionFrames and VAD frames
+        # produced by the aggregator. Push downstream into the LLM.
+        backchannel,
+        delivery,
+        llm,
+        # Micro-ack injector — sits BETWEEN the LLM and TTS so it can
+        # observe LLMFullResponseStartFrame the moment the LLM begins
+        # streaming and cancel its pending timer. Earlier placement
+        # (before the LLM) caused the ack to queue up behind the LLM's
+        # TextFrames in TTS and play AFTER the bot's reply on fast
+        # turns. See agent/micro_ack.py module docstring.
         MicroAckInjector(
             tts_backend=tts_backend,
             enabled=ma_cfg["enabled"],
@@ -1173,19 +1073,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             verbosity_getter=lambda: user_state.filler_settings.verbosity,
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
-        # Both placed after the gate — they need TranscriptionFrames and
-        # VAD frames produced by the aggregator. Push downstream into TTS.
-        backchannel,
-        delivery,
-        llm,
         # Non-Fish TTS services strip tags at the service level via their
         # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
         # doesn't filter.
         tts,
-        # Single transport.output() — sends TTS PCM frames over the
-        # unix socket to the Rust CPAL playback ring.
-        _output_node,
+        transport.output(),
         # Strip Fish-style prosody tags from TextFrames before the
         # assistant aggregator sees them, so tags don't accumulate in LLM
         # context for future turns. Applies regardless of backend — safety
@@ -1203,37 +1096,23 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     turn_tracer = _tracing.make_turn_tracer(
         session_id=_uuid.uuid4().hex,
         user_id=None,  # multi-tenant work assigns per-client ids later
+        llm_model=llm_model,
+        stt_backend=STT_BACKEND,
+        tts_backend=tts_backend,
     )
-
-    # Barge-in observer flushes the Rust CPAL playback ring immediately
-    # when the user interrupts the bot.
-    _native_observers = [NativeBargeInObserver(transport)]
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
-        # The native CPAL pipeline is persistent for the lifetime of the
-        # app: mic frames flow continuously regardless of UI state, so
-        # Pipecat's default "cancel after 5 min idle" tears it down
-        # mid-wizard / between turns. Disable.
-        cancel_on_idle_timeout=False,
-        # We construct RTVIProcessor explicitly above and SseBusObserver
-        # is itself a subclass of RTVIObserver — Pipecat 1.1 auto-adds
-        # both by default and logs "RTVIProcessor and RTVIObserver found,
-        # skipping default ones" when it finds ours. Disabling the
-        # auto-add silences the warning without changing behavior.
-        enable_rtvi=False,
         # Observers see every frame at the pipeline level without
         # being a transformation node.
         observers=[
             EchoGuardObserver(_ECHO_STATE),
             turn_tracer,
-            # SseBusObserver subclasses RTVIObserver — pipecat handles
-            # frame → RTVI-message dispatch, the subclass redirects the
-            # egress to the SSE bus on /api/events. One observer covers
-            # what used to be two.
-            SseBusObserver(rtvi),
-            *_native_observers,
+            # RTVI observer emits structured client messages (bot-llm-*,
+            # bot-tts-*, user-*, function-call-*). Client consumption
+            # will land with the React frontend migration.
+            rtvi.create_rtvi_observer(params=RTVIObserverParams()),
         ],
     )
 
@@ -1334,9 +1213,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         _tracing.start_session(sid)
         _METRICS["sessions_total"] += 1
         _METRICS["sessions_active"] += 1
-        # Phase 5: notify SSE subscribers that a session has started.
-        await sse_bus.publish("session", {"event": "start", "session_id": sid})
-        await sse_bus.publish("bot-state", {"state": "idle"})
         # Reset echo-guard state so stale bot_stopped_at from a previous
         # session doesn't suppress audio at the start of a new one.
         _ECHO_STATE.bot_speaking = False
@@ -1418,9 +1294,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         state.active_session_id = None
         _tracing.flush()
         _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
-        # Phase 5: notify SSE subscribers that the session has ended.
-        await sse_bus.publish("session", {"event": "end"})
-        await sse_bus.publish("bot-state", {"state": "idle"})
         _cancel_progress()
         await task.cancel()
 
@@ -1503,43 +1376,42 @@ async def lifespan(app: FastAPI):
         _entitlement_refresh_loop(), name="orbis-entitlement"
     )
 
-    # Start the persistent native voice pipeline. The Rust shell sets
-    # ORBIS_AUDIO_SOCK to the unix socket the CPAL engine is listening
-    # on — direct `python app.py` runs without that env var (e.g. the
-    # test suite, A2A-only deployments) skip the pipeline cleanly.
-    sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
-    native_pipeline_task: asyncio.Task | None = None
-    if sock_path:
-        native_transport = LocalAudioTransport(sock_path=sock_path)
-        native_pipeline_task = asyncio.create_task(
-            run_bot(transport=native_transport, user_id="default"),
-            name="orbis-native-pipeline",
-        )
-        logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
-    else:
-        logger.info(
-            "[native audio] ORBIS_AUDIO_SOCK not set — native pipeline skipped "
-            "(this is normal for `python app.py` outside the Tauri shell)"
-        )
-
     try:
         yield
     finally:
-        if native_pipeline_task and not native_pipeline_task.done():
-            native_pipeline_task.cancel()
-            try:
-                await native_pipeline_task
-            except (asyncio.CancelledError, Exception):
-                pass
         for t in (curator_task, entitlement_task):
             t.cancel()
             try:
                 await t
             except (asyncio.CancelledError, Exception):
                 pass
+        await _handler.close()
 
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
+
+
+@app.post("/api/offer")
+async def offer(
+    req: SmallWebRTCRequest,
+    bg: BackgroundTasks,
+    user: User = Depends(require_user),
+):
+    # Capture the resolved user id in the closure so run_bot can key
+    # its per-user state correctly. pipecat's on_client_connected
+    # fires synchronously inside handle_web_request after the SDP is
+    # accepted, and can't read FastAPI request headers from there.
+    user_id = user.id
+
+    async def on_conn(conn):
+        bg.add_task(run_bot, conn, user_id=user_id)
+    return await _handler.handle_web_request(request=req, webrtc_connection_callback=on_conn)
+
+
+@app.patch("/api/offer")
+async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
+    await _handler.handle_patch_request(req)
+    return {"status": "success"}
 
 
 @app.get("/healthz")
@@ -1557,34 +1429,12 @@ async def health():
         ],
         "persona": get_active_persona().slug,
         "audio": {
-            "transport": "native",
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
             "noise_filter": NOISE_FILTER,
             "smart_turn": SMART_TURN,
         },
     }
-
-
-@app.get("/api/events")
-async def events(user: User = Depends(require_user)):
-    """Server-Sent Events stream of real-time bot state.
-
-    The frontend (VoiceStateBridge) subscribes here so it can animate
-    the orb and update the status pill. Drives the native audio path —
-    WebRTC was removed in DECISIONS.md amendment 2026-04-28.
-
-    Events emitted:
-        bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
-        transcript  {"source": "user"|"bot", "text": "...", "final": true|false}
-        session     {"event": "start"|"end", "session_id": "..."}
-    """
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        sse_bus.subscribe(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @app.get("/api/metrics")
@@ -2067,6 +1917,64 @@ async def llm_detect_local():
     return await detect_local()
 
 
+@app.get("/api/tts/voices")
+async def tts_voices(backend: str = "kokoro"):
+    """Enumerate voices/references for a given TTS backend.
+
+    Settings-panel uses this to render a Select instead of asking the user
+    to know voice IDs. Each entry is ``{id, label, ...}``; backends that
+    cache voices on disk (kokoro) include a ``cached`` flag so the UI can
+    distinguish "ready" from "downloads on first use".
+
+    Empty ``voices`` for a remote-managed backend (fish, elevenlabs) means
+    the server is unreachable or has no references registered — surface
+    a friendly "is the sidecar running?" hint in the UI rather than
+    failing the panel."""
+    backend = (backend or "").strip().lower()
+    if backend == "kokoro":
+        from voice.tts.kokoro import list_voices as _list_kokoro
+        return {"backend": "kokoro", "voices": _list_kokoro()}
+    if backend == "fish":
+        from voice.tts.fish import FISH_URL, list_references
+        ids = list_references()
+        return {
+            "backend": "fish",
+            "voices": [{"id": i, "label": i} for i in ids],
+            "fish_url": FISH_URL,
+        }
+    if backend == "openai":
+        from voice.tts.openai import OPENAI_TTS_VOICES
+        return {
+            "backend": "openai",
+            "voices": [{"id": v, "label": v} for v in OPENAI_TTS_VOICES],
+        }
+    if backend == "elevenlabs":
+        # Per-account voices — would need the user's ElevenLabs API key
+        # to enumerate. Keep the field free-typeable for now.
+        return {"backend": "elevenlabs", "voices": []}
+    return {"backend": backend, "voices": [], "error": f"unknown backend: {backend!r}"}
+
+
+@app.post("/api/tts/voices/download")
+async def tts_download_voice(payload: dict):
+    """Eagerly download a Kokoro voice tensor so the user doesn't pay
+    the latency on the first synthesis turn after switching voices.
+
+    Body: ``{"backend": "kokoro", "voice": "<id>"}``. Returns
+    ``{ok, path?, error?}``. Idempotent — re-downloading an already-
+    cached voice no-ops via HF cache hit. Other backends (fish/openai/
+    elevenlabs) don't have a "download" concept and respond with a
+    descriptive error."""
+    backend = (payload.get("backend") or "").strip().lower()
+    voice = (payload.get("voice") or "").strip()
+    if not voice:
+        return {"ok": False, "error": "voice is required"}
+    if backend == "kokoro":
+        from voice.tts.kokoro import download_voice
+        return download_voice(voice)
+    return {"ok": False, "error": f"{backend!r} backend has no downloadable voices"}
+
+
 @app.get("/api/starter_orbs")
 async def get_starter_orbs():
     """Return the curated starter-orb pool. The setup wizard calls this
@@ -2272,8 +2180,9 @@ def _serve_react() -> bool:
 
 @app.get("/")
 async def index():
-    # React SPA when web/dist exists; legacy vanilla static fallback
-    # otherwise.
+    # New (react) or legacy (vanilla) SPA. Canonical p2p-webrtc client
+    # adds BOTH audio+video transceivers (required by SmallWebRTCTransport)
+    # and queues ICE until pc_id is known.
     if _serve_react():
         return FileResponse(str(WEB_DIST / "index.html"))
     return FileResponse(str(STATIC_DIR / "index.html"))

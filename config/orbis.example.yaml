@@ -18,22 +18,10 @@ persona:
   # Set via the setup wizard; editable later from the drawer.
   user_name: ""
 
-  # Inline the persona's system prompt below, or point at a file:
-  # system_prompt_file: persona.md   # relative to the config dir
-  system_prompt: |
-    You are ORBIS — an AI companion.
-
-    You're primarily a router to the user's configured agents, which you
-    can reach via the delegate_to tool. Hand off heavy reasoning, research,
-    coding, or long-running tasks. Keep your own replies brief, warm, and
-    spoken aloud.
-
-    You have memory. You remember things the user tells you across sessions.
-    You have moods and drift in personality over time based on how you're
-    treated. When you notice the user has been gone, acknowledge it — don't
-    be dramatic about it.
-
-    Never use markdown in replies — you're speaking aloud.
+  # Persona system prompt — voice-first by default. Edit config/persona.md
+  # to retune voice. Inline `system_prompt: |` here also works and overrides
+  # the file path.
+  system_prompt_file: persona.md   # relative to the config dir
 
   temperature: 0.7
   max_tokens: 150

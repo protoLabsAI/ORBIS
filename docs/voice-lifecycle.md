@@ -63,12 +63,9 @@ pollute LLM history.
 
 ## Stage 1 — Mic acquisition
 
-- `<MicTest>` (`web/src/shared/audio/MicTest.tsx`) is a user-gesture gate — Safari/WKWebView only prompt for mic from a direct click handler.
+- `<MicTest>` (`web/src/shared/audio/MicTest.tsx`) is a user-gesture gate — browsers only prompt for mic from a direct click handler.
 - Constraints are minimal: `audio: deviceId ? { deviceId: { exact: deviceId } } : true` (`MicTest.tsx:93-95`). No explicit sample rate / AEC / noise-suppression hints — defaults from `SmallWebRTCTransport`.
-- `AnalyserNode` (fftSize 512) drives a level meter; thresholds: `VERIFIED_RMS=0.04` (real voice) and `SILENT_FLOOR_RMS=0.003` over 8s (TCC silent-deny detection).
-- Tauri TCC shims (macOS):
-  - `src-tauri/src/mic_permission.m:21-35` — `[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio]` at boot. Without it the app never appears in System Settings → Microphone.
-  - `src-tauri/src/media_permission_patch.m:36-147` — swaps wry's `WKUIDelegate`. wry hardcodes `WKPermissionDecision::Grant`, which is JS-layer approval that bypasses TCC and yields a silent stream. The patch returns `Prompt` to honor TCC.
+- `AnalyserNode` (fftSize 512) drives a level meter; thresholds: `VERIFIED_RMS=0.04` (real voice) and `SILENT_FLOOR_RMS=0.003` over 8s (silent-deny detection).
 
 ### Voiceprint enrollment (optional, #35 PR 1.3)
 
@@ -381,12 +378,6 @@ Server events emitted but NOT consumed: `BotTtsStarted` / `BotTtsStopped` / `Bot
 - R3F + three.js + postprocessing (`LumaChromaticAberrationEffect`).
 - Audio→shader bridge via `usePipecatClientMediaTrack('audio', 'bot' | 'local')` → `useAudioEnvelopes` analyzer. Bot envelope drives `density/scale/asymmetry` in shader uniforms; voice state crossfades between presets (idle/listening/thinking/speaking, `STATE_XFADE_MS=600`).
 - Orb visual state changes (variant, palette, params) originate outside the LLM — handled by other processes. The `/api/config` PATCH endpoint is the write path; client re-reads on next load or via direct `setVariant`/`applyPreset` calls.
-
-### Tauri shell + sidecar
-
-- Bundle: `externalBin: ["binaries/orbis"]`; capabilities pin to `binaries/orbis --host 127.0.0.1 --port 0`.
-- `entitlements.plist`: `audio-input`, `camera`, `network.client/server`, plus `cs.allow-jit` / `cs.allow-unsigned-executable-memory` / `cs.disable-library-validation` for WebContent's WebRTC media decode.
-- Sidecar spawn (`src-tauri/src/lib.rs`): pre-warm TCC dialog → install UIDelegate patch → resolve config path (`$ORBIS_CONFIG` else `<app_data_dir>/orbis.yaml`, no relative-path fallback) → seed example config if missing → spawn with `ORBIS_CONFIG=<path>` and `START_VLLM=<env or "0">` (default 0 — bundled python doesn't ship vLLM) → stream stdout for `ORBIS_READY http://...` line → navigate webview.
 
 ---
 

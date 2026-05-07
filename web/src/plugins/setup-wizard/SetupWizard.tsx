@@ -1,22 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { invoke } from '@tauri-apps/api/core';
-import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 import { api, type StarterOrb } from '@/lib/api';
+import { authHeaders } from '@/auth/apiKey';
 import { LLM_PRESETS } from '@/shared/llm/presets';
 import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
+import { MicTest } from '@/shared/audio/MicTest';
 import {
   getPreferredAudioDeviceId,
   setPreferredAudioDeviceId,
 } from '@/shared/audio/preferredDevice';
+import { startWavRecorder } from '@/shared/audio/recordWav';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
@@ -29,7 +23,7 @@ const DEFAULT_LLM_PRESET =
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
-type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'mic' | 'done' | 'hatching';
+type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'mic' | 'enroll' | 'done' | 'hatching';
 
 /**
  * First-run setup wizard. Detects "no setup done yet" via a
@@ -96,8 +90,14 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
           )}
           {step === 'mic' && (
             <MicStep
-              onNext={() => setStep('done')}
+              onNext={() => setStep('enroll')}
               onBack={() => setStep('pick')}
+            />
+          )}
+          {step === 'enroll' && (
+            <EnrollStep
+              onNext={() => setStep('done')}
+              onBack={() => setStep('mic')}
             />
           )}
           {step === 'done' && (
@@ -112,7 +112,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 // ── Indicator ──────────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: Step }) {
-  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'mic', 'done'];
+  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'mic', 'enroll', 'done'];
   const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
@@ -895,32 +895,247 @@ function StarterCard({
   );
 }
 
+// Length tuned per #35: 10 seconds is plenty for ECAPA-TDNN (3s would
+// work but 10 gives a sturdier embedding under noise). The phrase is
+// long enough to fill the window when read at normal pace, varies
+// phonemes (so the embedding generalizes), and is meta about what
+// the orb is doing — feels less like a test, more like the orb
+// learning.
+const ENROLL_DURATION_MS = 10_000;
+const ENROLL_PHRASE =
+  'This is my voice. Listen carefully — over the next few seconds, ' +
+  "I want you to learn how I sound, so when I come back later you can tell it's me.";
 
-function MicStep({
-  onNext,
-  onBack,
-}: {
-  onNext: () => void;
-  onBack: () => void;
-}) {
-  const [devices, setDevices] = useState<string[]>([]);
-  const [device, setDevice] = useState<string>('');
+type EnrollStatus =
+  | 'idle'
+  | 'recording'
+  | 'uploading'
+  | 'success'
+  | 'error'
+  | 'unsupported';
 
-  const onChangeDevice = (name: string) => {
-    setDevice(name);
-    setPreferredAudioDeviceId(name);
+function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [status, setStatus] = useState<EnrollStatus>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [level, setLevel] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(ENROLL_DURATION_MS / 1000);
+  const [alreadyEnrolled, setAlreadyEnrolled] = useState(false);
+  const deviceId = getPreferredAudioDeviceId();
+  const countdownRef = useRef<number | null>(null);
+
+  // On mount, ask the backend whether speechbrain is installed and
+  // whether a voiceprint already exists. Drives the UX shape — if no
+  // embedder is available we show an "install [speaker-id] to enroll"
+  // panel rather than letting the user record audio that can't be
+  // processed.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch('/api/voiceprint/status', {
+          headers: authHeaders(),
+        });
+        if (!r.ok || cancelled) return;
+        const body = (await r.json()) as {
+          enrolled: boolean;
+          embedder_available: boolean;
+        };
+        setAlreadyEnrolled(body.enrolled);
+        if (!body.embedder_available) setStatus('unsupported');
+        else if (body.enrolled) setStatus('success');
+      } catch {
+        // Ignore — we'll surface a real error if the user clicks Record.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const startRecord = async () => {
+    if (status === 'recording' || status === 'uploading') return;
+    setErrorMessage(null);
+    setStatus('recording');
+    setSecondsLeft(ENROLL_DURATION_MS / 1000);
+
+    try {
+      const recorder = await startWavRecorder({
+        deviceId: deviceId || undefined,
+        sampleRate: 16000,
+      });
+      recorder.onLevel = (rms) => setLevel(rms);
+
+      // Visible 1Hz countdown so the user knows how much longer to talk.
+      const startedAt = performance.now();
+      const tick = () => {
+        const elapsed = performance.now() - startedAt;
+        const left = Math.max(0, Math.ceil((ENROLL_DURATION_MS - elapsed) / 1000));
+        setSecondsLeft(left);
+        if (left > 0) {
+          countdownRef.current = window.setTimeout(tick, 250);
+        }
+      };
+      tick();
+
+      const wav = await recorder.stopAfter(ENROLL_DURATION_MS);
+      if (countdownRef.current != null) {
+        window.clearTimeout(countdownRef.current);
+        countdownRef.current = null;
+      }
+      setLevel(0);
+      setStatus('uploading');
+
+      const r = await fetch('/api/voiceprint/enroll', {
+        method: 'POST',
+        body: wav,
+        headers: { 'Content-Type': 'audio/wav', ...authHeaders() },
+      });
+      if (!r.ok) {
+        const detail = await r
+          .json()
+          .then((b) => b.detail || `HTTP ${r.status}`)
+          .catch(() => `HTTP ${r.status}`);
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      }
+      setStatus('success');
+      setAlreadyEnrolled(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setErrorMessage(msg);
+      setStatus('error');
+    }
+  };
+
+  // Cleanup on unmount — the recorder itself owns its stream lifetime,
+  // but the countdown timer needs explicit teardown.
+  useEffect(() => {
+    return () => {
+      if (countdownRef.current != null) {
+        window.clearTimeout(countdownRef.current);
+      }
+    };
+  }, []);
+
+  if (status === 'unsupported') {
+    return (
+      <div className="space-y-6">
+        <div className="text-center space-y-2">
+          <h2 className="text-lg text-zinc-200">Voice recognition</h2>
+          <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+            Optional: teach the orb to recognize your voice so it knows
+            when it's you talking versus someone else nearby.
+          </p>
+        </div>
+        <div className="rounded-md border border-zinc-800 bg-zinc-900/40 p-4 space-y-2">
+          <p className="text-sm text-zinc-300">Not available in this build.</p>
+          <p className="text-xs text-zinc-500">
+            Speaker recognition needs the optional{' '}
+            <code className="text-zinc-300">speaker-id</code> dependency.
+            Re-install with{' '}
+            <code className="text-zinc-300">{'pip install -e ".[speaker-id]"'}</code>{' '}
+            to enable, or skip this step — the orb still works fine in
+            owner-trust mode (everyone who reaches it is treated as you).
+          </p>
+        </div>
+        <div className="flex justify-between pt-2">
+          <Button variant="ghost" onClick={onBack}>Back</Button>
+          <Button onClick={onNext}>Continue</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center space-y-2">
+        <h2 className="text-lg text-zinc-200">Voice recognition</h2>
+        <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+          Read the phrase below for {ENROLL_DURATION_MS / 1000} seconds so
+          the orb learns your voice. It uses this to tell when it's you
+          talking versus someone else nearby.
+        </p>
+      </div>
+
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/40 p-4">
+        <p className="text-sm text-zinc-300 italic">"{ENROLL_PHRASE}"</p>
+      </div>
+
+      {/* Level meter — only animated while recording. */}
+      <div className="h-2 bg-zinc-900 rounded overflow-hidden">
+        <div
+          className="h-full bg-zinc-400 transition-[width] duration-75 ease-linear"
+          style={{ width: `${Math.min(100, Math.round(level * 400))}%` }}
+        />
+      </div>
+
+      <div className="text-center text-xs text-zinc-500 tabular-nums h-4">
+        {status === 'recording' && `${secondsLeft}s remaining`}
+        {status === 'uploading' && 'Saving voiceprint…'}
+        {status === 'success' && (
+          alreadyEnrolled
+            ? 'Enrolled. Re-record below to replace.'
+            : 'Voice saved.'
+        )}
+        {status === 'error' && (
+          <span className="text-rose-400">{errorMessage}</span>
+        )}
+      </div>
+
+      <div className="flex justify-between pt-2">
+        <Button variant="ghost" onClick={onBack}>Back</Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onNext}>
+            {status === 'success' ? 'Continue' : 'Skip for now'}
+          </Button>
+          <Button
+            onClick={startRecord}
+            disabled={status === 'recording' || status === 'uploading'}
+          >
+            {status === 'recording' && 'Recording…'}
+            {status === 'uploading' && 'Uploading…'}
+            {status === 'idle' && 'Start recording'}
+            {status === 'success' && 'Re-record'}
+            {status === 'error' && 'Try again'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function MicStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [verified, setVerified] = useState(false);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceIdState] = useState<string>(() =>
+    getPreferredAudioDeviceId(),
+  );
+
+  const onChangeDevice = (id: string) => {
+    // Reset verification when the user picks a different mic — the
+    // previous device's verified state shouldn't carry over to a fresh
+    // input that hasn't been tested. (CodeRabbit major #14 on PR #30
+    // and the duplicate finding on the second pass both flag this.)
+    setDeviceIdState(id);
+    setPreferredAudioDeviceId(id);
+    setVerified(false);
+  };
+
+  const refreshDevices = async () => {
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      // Browsers only expose labeled audioinput devices once permission
+      // has been granted, so the picker stays empty until after the
+      // first successful test — that's why MicTest's onVerified hook
+      // also calls back into this refresh.
+      setDevices(all.filter((d) => d.kind === 'audioinput'));
+    } catch {
+      // Permission not yet granted — picker stays hidden.
+    }
   };
 
   useEffect(() => {
-    invoke<string[]>('list_audio_inputs')
-      .then((devs) => {
-        setDevices(devs);
-        if (devs.length > 0) {
-          const saved = getPreferredAudioDeviceId();
-          setDevice(devs.includes(saved) ? saved : devs[0]);
-        }
-      })
-      .catch(() => {});
+    void refreshDevices();
   }, []);
 
   return (
@@ -928,35 +1143,47 @@ function MicStep({
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Microphone</h2>
         <p className="text-sm text-zinc-500 max-w-sm mx-auto">
-          ORBIS is voice-first. Select your input device and watch the level meter react to your voice.
+          ORBIS is voice-first. Grant mic access and watch the level meter
+          react to your voice before we hatch.
         </p>
       </div>
 
       {devices.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs uppercase tracking-wider text-zinc-500">
+        <label className="block">
+          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5">
             Input device
-          </p>
-          <Select value={device} onValueChange={onChangeDevice}>
-            <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
-              <SelectValue placeholder="System default" />
-            </SelectTrigger>
-            <SelectContent className="bg-zinc-900 border-zinc-800">
-              {devices.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+          </div>
+          <select
+            value={deviceId}
+            onChange={(e) => onChangeDevice(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm"
+          >
+            <option value="">System default</option>
+            {devices.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Device ${d.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
 
-      <NativeLevelMeter deviceName={device} />
+      <MicTest
+        key={deviceId /* rebuild stream when device changes */}
+        deviceId={deviceId || undefined}
+        onPermissionGranted={() => void refreshDevices()}
+        onVerified={() => {
+          setVerified(true);
+          void refreshDevices();
+        }}
+      />
 
       <div className="flex justify-between pt-2">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onNext}>Continue</Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={onNext}>Skip for now</Button>
+          <Button onClick={onNext} disabled={!verified}>Continue</Button>
+        </div>
       </div>
     </div>
   );

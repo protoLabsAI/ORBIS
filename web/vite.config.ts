@@ -1,17 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
 import glsl from 'vite-plugin-glsl';
 import path from 'node:path';
-
-// PWA support removed 2026-04-28: see DECISIONS.md amendment ("Apple
-// Silicon (+ iOS planned) only; drop web/PWA"). Even with
-// `selfDestroying: true` to clean up legacy SW registrations, the
-// transition SW *itself* intercepts /api/* fetches in WKWebView during
-// its activate/claim/destroy cycle and silently hangs them — the wizard
-// "Saving…" stuck-forever bug we hit while testing Phase 2a. The plugin
-// is gone entirely; if a future ORBIS-on-the-web revival happens, it
-// can be re-added with a build-time gate.
 
 const ORBIS_BACKEND = process.env.ORBIS_BACKEND_URL ?? 'http://localhost:7866';
 
@@ -22,6 +14,34 @@ export default defineConfig({
     // Import `.glsl` / `.vert` / `.frag` as strings with hot-reload.
     // Powers the R3F shader-material pipeline under plugins/orb/variants/.
     glsl({ minify: false, watch: true }),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.svg'],
+      manifest: {
+        name: 'ORBIS',
+        short_name: 'ORBIS',
+        description: 'Voice-first AI companion — an orb that talks back, remembers you, and routes to your agents.',
+        theme_color: '#0a0a0a',
+        background_color: '#0a0a0a',
+        display: 'standalone',
+        start_url: '/',
+        scope: '/',
+        icons: [
+          { src: '/pwa-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/pwa-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+      },
+      workbox: {
+        // Never intercept the voice pipeline's signalling / media routes.
+        // The service worker must stay out of /api/* and /.well-known/*.
+        navigateFallbackDenylist: [/^\/api\//, /^\/\.well-known\//, /^\/static\//],
+        // Precache the app shell. API responses are never cached.
+        globPatterns: ['**/*.{js,css,html,woff2,png,svg}'],
+        runtimeCaching: [],
+      },
+      devOptions: { enabled: true, type: 'module' },
+    }),
   ],
   resolve: {
     alias: {

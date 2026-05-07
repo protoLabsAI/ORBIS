@@ -11,11 +11,12 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
+    "@pipecat-ai/client-js": "^1.7.0",
+    "@pipecat-ai/client-react": "^1.2.1",
+    "@pipecat-ai/small-webrtc-transport": "^1.10.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.0",
     "@react-three/postprocessing": "^3.0.4",
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-http": "^2.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.8.0",
@@ -45,6 +46,7 @@
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.9",
     "vite-plugin-glsl": "^1.6.0",
+    "vite-plugin-pwa": "^1.2.0",
     "workbox-window": "^7.4.0"
   }
 }

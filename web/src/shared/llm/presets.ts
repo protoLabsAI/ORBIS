@@ -55,6 +55,12 @@ export const LLM_PRESETS: LLMPreset[] = [
   },
   // --- Hosted cloud ---
   {
+    id: 'protolabs', label: 'protoLabs',
+    url: 'https://api.proto-labs.ai/v1', model: 'protolabs/fast',
+    needsKey: true, keyPlaceholder: 'sk-...', featured: true,
+    blurb: 'protoLabs gateway. Fast voice-tuned routing for the orb.',
+  },
+  {
     id: 'openai', label: 'OpenAI',
     url: 'https://api.openai.com/v1', model: 'gpt-4o-mini',
     needsKey: true, keyPlaceholder: 'sk-...', featured: true,
@@ -124,7 +130,7 @@ export const LLM_PRESETS: LLMPreset[] = [
   // --- Custom ---
   {
     id: 'custom', label: 'Custom',
-    url: 'https://api.proto-labs.ai/v1', model: 'protolabs/fast',
+    url: '', model: '',
     needsKey: true, keyPlaceholder: 'api key (optional)', featured: true,
     blurb: 'Paste your own OpenAI-compatible URL — works for any gateway, proxy, or custom endpoint.',
   },

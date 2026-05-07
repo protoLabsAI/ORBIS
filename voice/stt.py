@@ -1,9 +1,12 @@
 """STT backends — `local` (HuggingFace Whisper) or `openai` (any
 OpenAI-compatible /v1/audio/transcriptions endpoint).
 
-Selected via `STT_BACKEND={local|openai}`. Default `local`.
+Selected via `STT_BACKEND={local|openai|sensevoice}`. Default is `local`
+when the [whisper] extra is installed (transformers + accelerate), else
+`openai` — the sidecar can ship without the heavy HF deps as long as
+the user points STT at a remote transcription endpoint.
 
-Local backend keeps Whisper large-v3-turbo on the GPU. OpenAI backend
+Local backend keeps Whisper large-v3-turbo on MPS / CUDA. OpenAI backend
 points at OpenAI itself, LocalAI, OpenRouter, vLLM-omni, or anything
 that exposes the same wire format — useful for hosts without a GPU or
 when you want STT to live on the same box as your LLM gateway.
@@ -29,54 +32,39 @@ import soundfile as sf
 import soxr
 
 from agent import tracing
-import torch
 from openai import AsyncOpenAI
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601
-from transformers import pipeline as hf_pipeline
+
+# torch + transformers are loaded lazily inside `_get_local_pipe()` —
+# they live in the [whisper] optional extra so installs without it can
+# still import this module and run `STT_BACKEND=openai` without paying
+# the ~500MB transformers footprint.
 
 logger = logging.getLogger(__name__)
 
-STT_BACKEND = os.environ.get("STT_BACKEND", "local").lower()
+
+def _whisper_available() -> bool:
+    """Cheap probe for the [whisper] extra so the smart STT_BACKEND
+    default knows whether `local` is even an option. Used at module
+    import; result is intentionally not cached so the smart default
+    re-evaluates each fresh process."""
+    try:
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+_DEFAULT_STT_BACKEND = "local" if _whisper_available() else "openai"
+STT_BACKEND = os.environ.get("STT_BACKEND", _DEFAULT_STT_BACKEND).lower()
 
 # Local backend
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3-turbo")
-
-
-def _detect_torch_device() -> str:
-    """Pick the best available device for the HF Whisper pipeline.
-    Mirrors ``agent.hardware.detect_device``'s preference order
-    (cuda > mps > cpu) but never raises — STT also runs in tests / CI
-    where CPU fallback is correct, while ``detect_device`` is the
-    desktop-bundle gate that hard-fails when no accelerator is found.
-
-    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
-    ``agent.hardware.detect_device``: pytest and the Docker CPU profile
-    set it to force CPU even when MPS / CUDA appear available
-    (CI macOS MPS reports `is_available()` but has too small a memory
-    budget for production-shaped workloads)."""
-    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
-        return "cpu"
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
-
-
-DEVICE = _detect_torch_device()
-# Half-precision on accelerators (CUDA + Apple MPS). Locally benchmarked
-# Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s audio (1.0x rtf)
-# vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x speedup with correct
-# output. CPU stays float32 since fp16 on CPU is slower.
-_WHISPER_DTYPE = torch.float16 if DEVICE in ("cuda", "mps") else torch.float32
-# `sdpa` attention is CUDA-only in transformers; MPS uses the eager path.
-_WHISPER_MODEL_KWARGS = (
-    {"attn_implementation": "sdpa"} if DEVICE == "cuda" else {}
-)
 
 # OpenAI-compatible backend (also used by LocalAI / OpenRouter / etc.)
 STT_URL = os.environ.get("STT_URL", "https://api.openai.com/v1")
@@ -88,67 +76,65 @@ STT_API_KEY = os.environ.get("STT_API_KEY", "not-needed")
 # Local Whisper — HF transformers pipeline
 # ---------------------------------------------------------------------------
 
-# Whisper hallucinates confidently on silence/noise. The gates below
-# are tuned for the native CPAL path on M1 internal mic (no AGC) — but
-# AFTER voice/local_transport.py applies the MIC_GAIN multiplier.
-# Override via env vars for a different mic profile.
-_STT_MIN_RMS = float(os.environ.get("STT_MIN_RMS", "0.025"))
+_local_pipe = None
 
-# Short outputs (< _STT_MIN_TEXT_LEN chars) from low-energy chunks
-# (RMS < _STT_STRONG_RMS) are dropped. Real utterances clear at least
-# one of these — a long sentence at any volume, or a short word at
-# clear-speech volume.
-_STT_MIN_TEXT_LEN = int(os.environ.get("STT_MIN_TEXT_LEN", "10"))
-_STT_STRONG_RMS = float(os.environ.get("STT_STRONG_RMS", "0.15"))
 
-# Common Whisper artifacts when the input is silence / breath / room tone.
-# Match after lowercase + punctuation/whitespace normalization. Keep this
-# list conservative — false positives steal real user input.
-_HALLUCINATION_PHRASES = frozenset(
-    s.strip().lower().rstrip(".!?,") for s in [
-        "thanks for watching",
-        "thank you for watching",
-        "thanks for watching!",
-        "thanks for watching.",
-        "thank you for watching.",
-        "thanks for listening",
-        "thank you for listening",
-        "thank you",
-        "thanks",
-        "you",
-        "yeah",
-        "bye",
-        "okay",
-        ".com",
-        "[music]",
-        "[silence]",
-        "♪",
-    ]
+_WHISPER_INSTALL_HINT = (
+    "Local Whisper STT requires the [whisper] extra (transformers + "
+    "accelerate). Install with:\n"
+    "  pip install -e '.[whisper]'\n"
+    "Or set STT_BACKEND=openai (config/orbis.yaml or env) and configure "
+    "STT_URL / STT_MODEL / STT_API_KEY for an OpenAI-compatible "
+    "transcription endpoint."
 )
 
 
-def _is_whisper_hallucination(text: str) -> bool:
-    if not text:
-        return False
-    norm = text.strip().lower().rstrip(".!?,")
-    return norm in _HALLUCINATION_PHRASES
+def _detect_torch_device(torch) -> str:
+    """Pick the best available device for the HF Whisper pipeline.
+    Mirrors ``agent.hardware.detect_device``'s preference order
+    (cuda > mps > cpu) but never raises — STT also runs in tests / CI
+    where CPU fallback is correct, while ``detect_device`` is the
+    desktop-bundle gate that hard-fails when no accelerator is found.
 
-
-_local_pipe = None
+    Honors the same ``ORBIS_ALLOW_CPU=1`` opt-in flag as
+    ``agent.hardware.detect_device``: pytest and the Docker CPU profile
+    set it to force CPU even when MPS / CUDA appear available."""
+    if os.environ.get("ORBIS_ALLOW_CPU") == "1":
+        return "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def _get_local_pipe():
     global _local_pipe
     if _local_pipe is not None:
         return _local_pipe
-    logger.info(f"Loading {WHISPER_MODEL} on {DEVICE}")
+    try:
+        import torch
+        from transformers import pipeline as hf_pipeline
+    except ImportError as e:
+        raise RuntimeError(_WHISPER_INSTALL_HINT) from e
+
+    device = _detect_torch_device(torch)
+    # Half-precision on accelerators (CUDA + Apple MPS). Locally
+    # benchmarked Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s
+    # audio (1.0x rtf) vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x
+    # speedup with correct output. CPU stays float32.
+    dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
+    # `sdpa` attention is CUDA-only in transformers; MPS uses eager.
+    model_kwargs = {"attn_implementation": "sdpa"} if device == "cuda" else {}
+
+    logger.info(f"Loading {WHISPER_MODEL} on {device}")
     t0 = time.time()
     _local_pipe = hf_pipeline(
         "automatic-speech-recognition",
         model=WHISPER_MODEL,
-        torch_dtype=_WHISPER_DTYPE,
-        device=DEVICE,
-        model_kwargs=_WHISPER_MODEL_KWARGS,
+        torch_dtype=dtype,
+        device=device,
+        model_kwargs=model_kwargs,
     )
     _local_pipe({"raw": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
     logger.info(f"Whisper ready in {time.time() - t0:.1f}s")
@@ -188,15 +174,6 @@ class LocalWhisperSTT(SegmentedSTTService):
             f"[stt.local] decoded sr_in={sr} samples={data.size} "
             f"duration={duration_s:.2f}s rms={rms:.4f}"
         )
-        # Whisper hallucinates confidently on near-silent audio
-        # ("Thanks for watching", "you", ".com", etc. — artifacts from
-        # YouTube training data). VAD with a relaxed min_volume can let
-        # quiet chunks through; this is the second gate. The threshold is
-        # below typical speech (RMS ~0.03–0.10 on the M1 internal mic
-        # without AGC) but above ambient/breath (~0.005–0.015).
-        if rms < _STT_MIN_RMS:
-            logger.info(f"[stt.local] skipped — rms {rms:.4f} below threshold {_STT_MIN_RMS}")
-            return
         with tracing.span(
             "stt.whisper",
             input={"sample_rate": 16000, "audio_seconds": round(duration_s, 2)},
@@ -206,24 +183,6 @@ class LocalWhisperSTT(SegmentedSTTService):
                 t0 = time.time()
                 result = _get_local_pipe()({"raw": data.flatten(), "sampling_rate": 16000})
                 text = (result.get("text") or "").strip()
-                if _is_whisper_hallucination(text):
-                    logger.info(f"[stt.local] dropped hallucination: {text!r}")
-                    text = ""
-                # Short outputs from sub-speech-energy chunks (sniffs,
-                # clicks, keyboard taps) tend to be junk that wasn't in
-                # our static blocklist. Require either a normal RMS OR
-                # enough characters to look like a real utterance.
-                elif text and len(text) < _STT_MIN_TEXT_LEN and rms < _STT_STRONG_RMS:
-                    logger.info(
-                        f"[stt.local] dropped short low-rms output: {text!r} "
-                        f"(rms={rms:.4f}, len={len(text)})"
-                    )
-                    text = ""
-                elif text:
-                    # Log the full transcript at INFO when something
-                    # passes the gates — useful for tuning the filters
-                    # without flipping the whole logger to DEBUG.
-                    logger.info(f"[stt.local] transcript: {text!r}")
                 # INFO log carries duration + length only — every voice
                 # utterance flows through here, so the full transcript
                 # at INFO would write the user's spoken content to
@@ -253,23 +212,53 @@ class LocalWhisperSTT(SegmentedSTTService):
 # Public factory + helpers
 # ---------------------------------------------------------------------------
 
-def make_stt() -> SegmentedSTTService:
-    """Return the configured STT service for the pipeline."""
-    if STT_BACKEND == "openai":
-        logger.info(f"STT backend: openai @ {STT_URL} model={STT_MODEL}")
-        return OpenAISTTService(
-            api_key=STT_API_KEY,
-            base_url=STT_URL,
-            settings=STTSettings(model=STT_MODEL, language=None),
+def make_stt(
+    *,
+    backend: str | None = None,
+    whisper_model: str | None = None,
+    url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    **_unused,
+) -> SegmentedSTTService:
+    """Return the configured STT service for the pipeline.
+
+    Each kwarg overrides the corresponding ``STT_*`` env default. Persona
+    plumbing in app.py forwards user-edited values from the settings
+    panel so the panel can switch backends or repoint custom OpenAI-
+    compat STT gateways without an env-edit + restart.
+
+    Note: ``whisper_model`` only affects boot-time model selection on the
+    local backend — the ``_local_pipe`` cache is module-level. A
+    runtime persona override that differs from boot logs a warning so
+    the no-op is visible."""
+    chosen_backend = (backend or STT_BACKEND or "local").strip().lower()
+    if chosen_backend == "openai":
+        chosen_url = url or STT_URL
+        chosen_model = model or STT_MODEL
+        chosen_key = api_key or STT_API_KEY
+        logger.info(
+            f"STT backend: openai @ {chosen_url} model={chosen_model}"
         )
-    if STT_BACKEND == "sensevoice":
+        return OpenAISTTService(
+            api_key=chosen_key,
+            base_url=chosen_url,
+            settings=STTSettings(model=chosen_model, language=None),
+        )
+    if chosen_backend == "sensevoice":
         # Lazy import keeps funasr in the [sensevoice] optional extra —
         # local + openai backends still work without it installed.
         from voice.stt_sensevoice import SenseVoiceSTT
         logger.info("STT backend: sensevoice (FunAudioLLM/SenseVoiceSmall)")
         return SenseVoiceSTT()
-    if STT_BACKEND != "local":
-        logger.warning(f"Unknown STT_BACKEND={STT_BACKEND!r}; falling back to local")
+    if chosen_backend != "local":
+        logger.warning(f"Unknown STT backend {chosen_backend!r}; falling back to local")
+    if whisper_model and whisper_model != WHISPER_MODEL:
+        logger.warning(
+            f"[stt.local] persona override whisper_model={whisper_model!r} "
+            f"differs from boot-time WHISPER_MODEL={WHISPER_MODEL!r}; restart "
+            f"the server to pick up the new model."
+        )
     return LocalWhisperSTT()
 
 

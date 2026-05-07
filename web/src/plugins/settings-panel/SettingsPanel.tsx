@@ -1,31 +1,48 @@
 import { Panel } from '@/components/ui/panel';
-import { Diagnostics } from './Diagnostics';
+import { Button } from '@/components/ui/button';
+import { devModeStore, useDevMode } from '@/shared/devMode';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
+import { PersonalityPanel } from './PersonalityPanel';
+import { STTSettings } from './STTSettings';
 import { TTSSettings } from './TTSSettings';
+import { VerbositySelector } from './VerbositySelector';
 
 /**
- * Runtime settings — swap provider / voice without re-running the setup
- * wizard. Saves land in config/orbis.yaml and reload the persona
- * server-side, so the next voice turn picks up the change.
+ * The single settings drawer — provider config, voice + behaviour
+ * knobs, observability, and the dev-mode toggle. Sections are ordered
+ * roughly along the audio path (mic → STT → LLM → voice/TTS), then
+ * agent behaviour, then observability, then dev.
  */
 export function SettingsPanel() {
+  const devMode = useDevMode();
   return (
     <div className="space-y-5">
+      <MicSettings />
+      <STTSettings />
       <LLMSettings />
       <TTSSettings />
-      <MicSettings />
-      <Panel title="STT">
-        <p className="text-xs text-zinc-500">
-          Speech-to-text is configured via environment variables today —
-          <code className="mx-1">STT_BACKEND</code>,
-          <code className="mx-1">WHISPER_MODEL</code>,
-          <code className="mx-1">STT_URL</code>,
-          <code className="mx-1">STT_API_KEY</code>. See
-          <code className="mx-1">.env.example</code>. UI pending.
-        </p>
+      <Panel title="Agent">
+        <VerbositySelector />
       </Panel>
-      <Diagnostics />
+      <PersonalityPanel />
+      <Panel title="Developer">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-xs text-zinc-300">Developer mode</div>
+            <div className="text-[10px] text-zinc-500 mt-0.5">
+              Reveals the Dev drawer tab (feature flags + event log).
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant={devMode ? 'default' : 'secondary'}
+            onClick={() => devModeStore.toggle()}
+          >
+            {devMode ? 'On' : 'Off'}
+          </Button>
+        </div>
+      </Panel>
     </div>
   );
 }
