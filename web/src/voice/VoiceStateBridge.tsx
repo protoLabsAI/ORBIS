@@ -1,7 +1,7 @@
 import { RTVIEvent } from '@pipecat-ai/client-js';
 import { useRTVIClientEvent, usePipecatClientTransportState } from '@pipecat-ai/client-react';
 import { useEffect } from 'react';
-import { voiceStore } from './state';
+import { voiceStore, type DeviceErrorType } from './state';
 
 /**
  * Invisible component — subscribes to RTVI events and drives the
@@ -21,11 +21,33 @@ export function VoiceStateBridge() {
     voiceStore.update({
       transportState,
       connected: transportState === 'ready' || transportState === 'connected',
+      // `error` is pipecat's signal that the transport itself failed
+      // (handshake error, data-channel drop). A clean user-initiated
+      // disconnect goes to `disconnected` without passing through
+      // `error`, so we don't show the banner in that case. Reaching
+      // `ready`/`connected` again clears the flag so re-connect after
+      // a network blip dismisses the banner without user action.
+      connectionError: transportState === 'error',
     });
     if (transportState === 'disconnected') {
       voiceStore.update({ state: 'idle' });
     }
   }, [transportState]);
+
+  // Device-level errors — mic permission denied, no mic detected, mic
+  // already in use by another app, etc. Pipecat's DeviceError carries
+  // a typed discriminator we forward to the banner so it can render
+  // type-specific copy + recovery hints.
+  useRTVIClientEvent(RTVIEvent.DeviceError, (err: unknown) => {
+    const e = err as { type?: string; message?: string } | undefined;
+    if (!e) return;
+    voiceStore.update({
+      deviceError: {
+        type: (e.type as DeviceErrorType) || 'unknown',
+        message: e.message,
+      },
+    });
+  });
 
   useRTVIClientEvent(RTVIEvent.BotReady, () => {
     voiceStore.update({ state: 'idle' });

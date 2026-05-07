@@ -6,6 +6,7 @@ import {
 } from '@pipecat-ai/client-react';
 import { Drawer } from '@/components/Drawer';
 import { buildClient } from './voice/client';
+import { ConnectionBanner } from './voice/ConnectionBanner';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -38,6 +39,10 @@ function App() {
         <Slot name="overlay-top" />
         <Slot name="overlay-bottom" />
         <Drawer />
+        {/* Surfaces mic-permission and connection-error states the
+            user otherwise sees as silent stalls. Mounted after the
+            drawer so it sits above other overlays in z-stack. */}
+        <ConnectionBanner />
       </div>
       <PipecatClientAudio />
     </PipecatClientProvider>
