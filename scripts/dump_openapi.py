@@ -9,6 +9,13 @@ artefacts that travel with the codebase.
 The drift gate in CI re-runs this script and fails if the output
 differs from what's committed; that catches the "I added an
 endpoint and forgot to regenerate" case.
+
+Filters routes the frontend doesn't consume — auto-registered PWA
+asset endpoints (/manifest.webmanifest, /pwa-*.png, /sw.js…) leak
+absolute paths from ``web/dist`` into the schema and would make the
+drift gate environment-dependent (``/Users/kj/...`` vs ``/home/runner/...``).
+A2A inbound endpoints similarly aren't called from api.ts. The kept
+surface is /api/* + /healthz + a few well-known fixtures.
 """
 
 from __future__ import annotations
@@ -30,12 +37,28 @@ from app import app  # noqa: E402
 
 OUTPUT = ROOT / "web" / "openapi.json"
 
+def _keep_path(path: str) -> bool:
+    """Frontend cares about /api/* and /healthz. Everything else
+    (PWA static assets, A2A inbound, /a2a/*, the SPA fallback) is
+    auto-registered and either leaks absolute paths into the schema
+    or isn't called from api.ts. Pruning keeps the schema stable
+    across environments so the drift gate is reliable."""
+    if path == "/healthz":
+        return True
+    return path.startswith("/api/")
+
+
+def _filter_schema(schema: dict) -> dict:
+    paths = schema.get("paths", {})
+    schema["paths"] = {p: v for p, v in paths.items() if _keep_path(p)}
+    return schema
+
 
 def main() -> int:
-    schema = app.openapi()
+    schema = _filter_schema(app.openapi())
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
-    print(f"wrote {OUTPUT.relative_to(Path.cwd())}")
+    print(f"wrote {OUTPUT.relative_to(Path.cwd())} ({len(schema['paths'])} paths)")
     return 0
 
 
