@@ -9,6 +9,22 @@
 
 export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
+// Mirrors pipecat's DeviceErrorType. Listed here as a string-literal
+// union so VoiceSnapshot stays import-free and the banner can render
+// type-specific copy without pulling the full pipecat error class.
+export type DeviceErrorType =
+  | 'permissions'
+  | 'not-found'
+  | 'in-use'
+  | 'constraints'
+  | 'undefined-mediadevices'
+  | 'unknown';
+
+export interface DeviceErrorInfo {
+  type: DeviceErrorType;
+  message?: string;
+}
+
 export interface VoiceSnapshot {
   state: VoiceState;
   connected: boolean;
@@ -17,6 +33,15 @@ export interface VoiceSnapshot {
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
   sessionId: string | null;
+  // Latest device-level error from pipecat (mic permission denied, no
+  // mic detected, etc.). Persists until the user dismisses the banner
+  // or the underlying condition is fixed and a fresh connect succeeds.
+  deviceError: DeviceErrorInfo | null;
+  // True when the transport is in pipecat's `error` state — typically
+  // the WebRTC handshake failed or the data channel dropped. Distinct
+  // from a clean user-initiated disconnect (which goes to
+  // `disconnected` without flipping this flag).
+  connectionError: boolean;
   // Rolling counters — handy for plugins to notice "something happened"
   // without holding full event lists.
   epoch: number;
@@ -30,6 +55,8 @@ const INITIAL: VoiceSnapshot = {
   lastBotText: null,
   activeToolCall: null,
   sessionId: null,
+  deviceError: null,
+  connectionError: false,
   epoch: 0,
 };
 
