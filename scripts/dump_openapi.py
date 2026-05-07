@@ -58,7 +58,13 @@ def main() -> int:
     schema = _filter_schema(app.openapi())
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n")
-    print(f"wrote {OUTPUT.relative_to(Path.cwd())} ({len(schema['paths'])} paths)")
+    # Don't depend on cwd for the success message — relative_to() raises
+    # ValueError when invoked from a directory outside the repo root.
+    try:
+        display = OUTPUT.relative_to(Path.cwd())
+    except ValueError:
+        display = OUTPUT
+    print(f"wrote {display} ({len(schema['paths'])} paths)")
     return 0
 
 

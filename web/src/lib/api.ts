@@ -20,7 +20,8 @@ import type { paths } from './api-types';
 // Endpoint paths from the OpenAPI schema, minus ones with templated
 // segments like ``/api/delegates/{name}``. Templated paths are built
 // via ``buildPath()`` so the call site still references a known
-// template literal.
+// template literal. The dump is filtered to /api/* + /healthz, so
+// ``keyof paths`` is already the RPC surface — no asset/SPA noise.
 type StaticPath = Exclude<keyof paths, `${string}{${string}}${string}`>;
 type TemplatedPath = Extract<keyof paths, `${string}{${string}}${string}`>;
 
@@ -32,13 +33,22 @@ type TemplatedPath = Extract<keyof paths, `${string}{${string}}${string}`>;
 type BuiltPath = string & { readonly __orbisBuiltPath: unique symbol };
 type EndpointPath = StaticPath | `${StaticPath}?${string}` | BuiltPath;
 
+// Recursively extract `{name}` placeholders from a templated path so
+// params are typed against the actual template — catches typos like
+// ``buildPath('/api/delegates/{name}', { nmae })`` at compile time.
+type PathParamNames<P extends string> =
+  P extends `${string}{${infer Param}}${infer Rest}`
+    ? Param | PathParamNames<Rest>
+    : never;
+type PathParams<P extends string> = { [K in PathParamNames<P>]: string };
+
 /** Substitute ``{name}`` style params in a known templated path. */
 function buildPath<P extends TemplatedPath>(
   template: P,
-  params: Record<string, string>,
+  params: PathParams<P>,
 ): BuiltPath {
   const filled = template.replace(/\{(\w+)\}/g, (_m, k) => {
-    const v = params[k];
+    const v = (params as Record<string, string>)[k];
     if (v === undefined) throw new Error(`buildPath: missing param "${k}" for ${template}`);
     return encodeURIComponent(v);
   });
