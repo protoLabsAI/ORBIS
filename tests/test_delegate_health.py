@@ -170,6 +170,77 @@ def test_all_health_snapshot_is_independent():
 
 
 # ---------------------------------------------------------------------------
+# Reload prunes stale health
+# ---------------------------------------------------------------------------
+
+
+def test_reload_drops_health_for_removed_delegate(tmp_path):
+    """Deleting a delegate from disk + reload() must drop its cached
+    health — otherwise /healthz would report stale entries the user
+    can't even see in the registry anymore."""
+    p = tmp_path / "delegates.yaml"
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: hi.\n    url: http://ava/a2a\n"
+        "  - name: opus\n    type: openai\n    description: hi.\n    url: http://gw/v1\n    model: m\n",
+    )
+    reg = DelegateRegistry(p)
+    reg.record_health("ava", ok=True, latency_ms=10)
+    reg.record_health("opus", ok=True, latency_ms=12)
+
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: hi.\n    url: http://ava/a2a\n",
+    )
+    reg.reload()
+    assert reg.health("ava") is not None  # unchanged → kept
+    assert reg.health("opus") is None     # removed → dropped
+
+
+def test_reload_drops_health_when_url_changes(tmp_path):
+    """Editing a delegate's URL invalidates its health cache — the
+    previous green probe doesn't tell us anything about the new
+    endpoint."""
+    p = tmp_path / "delegates.yaml"
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: hi.\n    url: http://old/a2a\n",
+    )
+    reg = DelegateRegistry(p)
+    reg.record_health("ava", ok=True, latency_ms=10)
+
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: hi.\n    url: http://new/a2a\n",
+    )
+    reg.reload()
+    # Force re-probe — url changed
+    assert reg.health("ava") is None
+
+
+def test_reload_keeps_health_when_only_description_changes(tmp_path):
+    """Description / system_prompt edits don't affect reachability,
+    so the cache should survive — otherwise the SPA banner would
+    flicker on every typo correction in the LLM-facing schema."""
+    p = tmp_path / "delegates.yaml"
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: original.\n    url: http://ava/a2a\n",
+    )
+    reg = DelegateRegistry(p)
+    reg.record_health("ava", ok=True, latency_ms=10)
+
+    p.write_text(
+        "delegates:\n"
+        "  - name: ava\n    type: a2a\n    description: revised.\n    url: http://ava/a2a\n",
+    )
+    reg.reload()
+    h = reg.health("ava")
+    assert h is not None
+    assert h.ok is True  # description-only change preserves cache
+
+
+# ---------------------------------------------------------------------------
 # health_loop — integration over the registry
 # ---------------------------------------------------------------------------
 

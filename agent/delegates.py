@@ -167,6 +167,28 @@ def _parse_entry(raw: dict) -> Delegate | None:
     )
 
 
+def _config_changed(a: "Delegate", b: "Delegate") -> bool:
+    """Did the dispatch-relevant config change between two registry
+    entries with the same name? Lightweight comparison — auth headers
+    are derived from credentialsEnv resolution at parse time, so
+    comparing the resolved values catches credential rotations too.
+
+    Description / system_prompt changes don't invalidate the health
+    cache because they don't affect reachability, only LLM picks.
+    """
+    if a.type != b.type or a.url != b.url:
+        return True
+    if a.type == "a2a":
+        return (
+            a.auth_scheme != b.auth_scheme
+            or a.a2a_credential != b.a2a_credential
+            or a.a2a_headers != b.a2a_headers
+        )
+    if a.type == "openai":
+        return a.model != b.model or a.openai_api_key != b.openai_api_key
+    return False
+
+
 @dataclass
 class DelegateHealth:
     """Cached reachability snapshot for a single delegate.
@@ -260,15 +282,48 @@ class DelegateRegistry:
         mid-session — delegate selection happens per-tool-call, so
         existing sessions pick up the new registry on their next
         delegate_to() invocation. No-op when this is a filtered copy
-        (no _path set)."""
+        (no _path set).
+
+        Reloads also drop any cached health for delegates whose config
+        changed (URL, auth, type) — a green cache from the *previous*
+        config would otherwise lie about the new endpoint until the
+        next background probe lands. Names that were removed get
+        pruned. Names that survive unchanged keep their cached health
+        so the SPA's banner doesn't flicker on every reload.
+        """
         if not self._path:
             return list(self._items.keys())
+        prev = self._items
         self._items = {}
         if self._path.exists():
             self._load()
         else:
             logger.warning(f"[delegates] reload: {self._path} missing, registry now empty")
+        self._prune_stale_health(prev)
         return list(self._items.keys())
+
+    def _prune_stale_health(self, prev: dict[str, Delegate]) -> None:
+        """Drop ``_health`` entries for delegates that were removed OR
+        whose dispatchable config changed. Called after each reload
+        so the cache reflects only what's currently configured.
+        """
+        if not self._health:
+            return
+        valid: dict[str, DelegateHealth] = {}
+        for name, h in self._health.items():
+            new = self._items.get(name)
+            old = prev.get(name)
+            if new is None:
+                continue  # delegate removed — drop its health
+            if old is None or _config_changed(old, new):
+                continue  # delegate added or reconfigured — force re-probe
+            valid[name] = h
+        if len(valid) != len(self._health):
+            logger.info(
+                f"[delegates] health cache pruned: "
+                f"{len(self._health)} → {len(valid)} entries after reload"
+            )
+        self._health = valid
 
     def filtered(self, allow: list[str] | None) -> "DelegateRegistry":
         """Return a shallow-copy registry limited to the given names.

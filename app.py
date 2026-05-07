@@ -1431,21 +1431,32 @@ async def ice(req: SmallWebRTCPatchRequest, user: User = Depends(require_user)):
     return {"status": "success"}
 
 
-def _delegate_health_payload(delegate) -> dict:
-    """Serialize a Delegate + its cached health for /healthz and
-    /api/delegates. Health fields are ``None`` until the first probe
-    lands; the SPA distinguishes "not yet checked" from "checked, ok"
-    by inspecting whether ``ok`` is None vs True."""
+def _delegate_health_payload(delegate, *, public: bool = False) -> dict:
+    """Serialize a Delegate + its cached health.
+
+    ``public=True`` is the /healthz shape — redacts ``last_error``
+    because that field can carry internal hostnames, URLs, or
+    auth-state details from probe failures, and /healthz is
+    intentionally unauthenticated. ``public=False`` is the
+    /api/delegates shape (auth-gated) and includes the raw error
+    so the Settings panel can show it inline.
+
+    Health fields are ``None`` until the first probe lands; the SPA
+    distinguishes "not yet checked" from "checked, ok" by inspecting
+    whether ``ok`` is None vs True.
+    """
     h = _DELEGATES.health(delegate.name)
-    return {
+    payload: dict = {
         "name": delegate.name,
         "type": delegate.type,
         "ok": h.ok if h else None,
         "latency_ms": h.latency_ms if h else None,
         "last_checked": h.last_checked if h else None,
-        "last_error": h.last_error if h else None,
         "consecutive_failures": h.consecutive_failures if h else 0,
     }
+    if not public:
+        payload["last_error"] = h.last_error if h else None
+    return payload
 
 
 @app.get("/healthz")
@@ -1459,7 +1470,7 @@ async def health():
         "owner_configured": not user_registry.single_user_mode(),
         "active_sessions": len(active_user_states()),
         "delegates": [
-            _delegate_health_payload(d) for d in _DELEGATES.all()
+            _delegate_health_payload(d, public=True) for d in _DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
         "audio": {

@@ -34,7 +34,17 @@ export function DelegateHealthBanner() {
         const failing = (r.delegates ?? []).filter(
           (d) => d.ok === false && d.consecutive_failures >= DEGRADED_THRESHOLD,
         );
-        setDegraded(failing);
+        setDegraded((prev) => {
+          // Recovery — every previously-degraded delegate is now ok.
+          // Drop the dismiss fingerprint so a *fresh* degradation later
+          // in the same session gets to surface; without this, the
+          // dismissed-once fingerprint persists and a later identical
+          // degradation stays silently suppressed.
+          if (prev.length > 0 && failing.length === 0) {
+            setDismissedFingerprint(null);
+          }
+          return failing;
+        });
       } catch {
         // /healthz unreachable — usually means the sidecar is down,
         // which the ConnectionBanner already covers. Don't double-warn.
@@ -52,7 +62,8 @@ export function DelegateHealthBanner() {
 
   // Fingerprint = sorted set of degraded names. A new degradation
   // (different set) re-shows the banner even if the user had
-  // dismissed an older one.
+  // dismissed an older one. The recovery branch above also clears
+  // the dismiss state so the same set re-failing later still surfaces.
   const fingerprint = degraded.map((d) => d.name).sort().join('|');
   if (dismissedFingerprint === fingerprint) return null;
 
@@ -70,7 +81,8 @@ export function DelegateHealthBanner() {
               : `${degraded.length} delegates are unreachable.`}
           </div>
           <div className="mt-0.5 text-amber-100/80">
-            {degradeSummary(degraded)} The orb may fail to delegate until they recover.
+            The orb may fail to delegate until they recover. Check the
+            Settings panel for details.
           </div>
         </div>
         <button
@@ -86,14 +98,3 @@ export function DelegateHealthBanner() {
   );
 }
 
-function degradeSummary(degraded: HealthDelegate[]): string {
-  // Names + last-error preview, joined for the dense banner copy.
-  // Keeps us from rendering a paragraph per delegate when several go
-  // down together (typically because the host they share went down).
-  return degraded
-    .map((d) => {
-      const e = d.last_error?.split('\n')[0]?.slice(0, 80);
-      return e ? `${d.name}: ${e}` : d.name;
-    })
-    .join('; ');
-}
