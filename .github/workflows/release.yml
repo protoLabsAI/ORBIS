@@ -144,10 +144,22 @@ jobs:
         id: prev_tag
         run: |
           VERSION="${{ steps.version.outputs.tag }}"
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
+          # Pick the tag IMMEDIATELY preceding VERSION in version-sort
+          # order — not the newest other tag in the repo. Manual reruns
+          # for an older release (`workflow_dispatch` with tag=v0.1.5
+          # while v0.2.x exists) would otherwise compare against a
+          # newer tag and ship inverted release notes. Filter to the
+          # vX.Y.Z release-tag pattern so dev / rc tags don't sneak in.
+          PREV_TAG=$(
+            git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+              awk -v current="${VERSION}" '
+                $0 == current { seen = 1; next }
+                seen { print; exit }
+              '
+          )
           echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
           if [ -z "${PREV_TAG}" ]; then
-            echo "No previous tag found — first release; will skip polished notes."
+            echo "No predecessor tag found — first release or oldest tag; will skip polished notes."
           fi
 
       - name: Polish release notes + post to Discord
@@ -156,7 +168,12 @@ jobs:
         # — we just skip the polished announcement.
         if: steps.prev_tag.outputs.tag != ''
         continue-on-error: true
-        uses: protoLabsAI/release-tools@v0.1.3
+        # SHA-pinned to defend against retag / upstream-compromise of
+        # protoLabsAI/release-tools — this step has access to
+        # GATEWAY_API_KEY and DISCORD_RELEASE_WEBHOOK, and the parent
+        # job has `contents: write`. Bump in lockstep with the package
+        # version when upgrading.
+        uses: protoLabsAI/release-tools@060f55eda935bb534073e6e35ea674063b854a53 # v0.1.3
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.prev_tag.outputs.tag }}
