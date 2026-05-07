@@ -8,6 +8,7 @@ import { Drawer } from '@/components/Drawer';
 import { buildClient } from './voice/client';
 import { ConnectionBanner } from './voice/ConnectionBanner';
 import { DelegateHealthBanner } from './voice/DelegateHealthBanner';
+import { PiPTrigger } from './voice/PiPTrigger';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -49,6 +50,10 @@ function App() {
             knows before they try to delegate. Sits below the
             connection banner in z-stack. */}
         <DelegateHealthBanner />
+        {/* Document Picture-in-Picture trigger. Self-gates on browser
+            support + connection state — Safari / Firefox / disconnected
+            sessions render nothing. */}
+        <PiPTrigger />
       </div>
       <PipecatClientAudio />
     </PipecatClientProvider>
