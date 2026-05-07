@@ -1,6 +1,7 @@
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { devModeStore, useDevMode } from '@/shared/devMode';
+import { DelegatesSettings } from './DelegatesSettings';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { PersonalityPanel } from './PersonalityPanel';
@@ -25,6 +26,7 @@ export function SettingsPanel() {
       <Panel title="Agent">
         <VerbositySelector />
       </Panel>
+      <DelegatesSettings />
       <PersonalityPanel />
       <Panel title="Developer">
         <div className="flex items-center justify-between">
