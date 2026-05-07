@@ -47,6 +47,14 @@ logger = logging.getLogger(__name__)
 # matter which asyncio context calls controller.deliver().
 FrameEmitter = Callable[[Frame], Awaitable[None]]
 
+# Signature: sends arbitrary structured data to the connected client over
+# the RTVI data channel. app.py wires `RTVIProcessor.send_server_message`
+# into this so progress narration the bot speaks aloud is mirrored to the
+# UI as a typed event the frontend can render (the "Asking ava…" pill
+# subtitle, or a deaf-path transcript). Optional — when unset the
+# controller skips the channel without erroring.
+MessageEmitter = Callable[[dict], Awaitable[None]]
+
 
 class DeliveryPolicy(str, Enum):
     NOW = "now"
@@ -170,21 +178,48 @@ class DeliveryController(FrameProcessor):
         # out-of-band emission (push_frame from another coroutine context
         # is unsafe).
         self._emitter: FrameEmitter | None = None
+        # Optional channel for sending structured client-side messages
+        # (delegation progress, debug events). When unset the controller
+        # silently skips it — the verbal channel is always primary.
+        self._message_emitter: MessageEmitter | None = None
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
+
+    def set_message_emitter(self, emitter: MessageEmitter) -> None:
+        self._message_emitter = emitter
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending
         queue. For in-flight progress narration during long delegated
         tasks — different semantic from `deliver()`, which implies a
-        FINAL result gated by a policy."""
+        FINAL result gated by a policy.
+
+        When a message emitter is wired (RTVI server-message channel)
+        we also broadcast a typed ``delegation-progress`` event so the
+        UI can render a visible subtitle alongside the audio. The
+        verbal path is the source of truth; the message channel is a
+        best-effort mirror — if it fails the spoken progress still
+        reaches the user.
+        """
         from agent import tracing
         with tracing.span(
             "delivery.speak_now",
             input={"source": source, "preview": phrase[:120]},
         ):
             await self._emit(_attribute(phrase, source))
+            if self._message_emitter is not None:
+                try:
+                    await self._message_emitter({
+                        "type": "delegation-progress",
+                        "source": source,
+                        "text": phrase,
+                    })
+                except Exception as e:  # noqa: BLE001 — best-effort mirror
+                    logger.debug(
+                        f"[delivery] message_emitter failed (verbal path "
+                        f"still landed): {e}"
+                    )
 
     # --- Cross-session persistence helpers --------------------------------
 
