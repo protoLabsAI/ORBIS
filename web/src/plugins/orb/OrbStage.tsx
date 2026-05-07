@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
 import {
@@ -8,6 +8,8 @@ import {
 } from '@pipecat-ai/client-react';
 import { useActiveVariant } from './useOrbState';
 import { useVoiceStateSelector } from '@/voice/hooks';
+import { useMicPermission } from '@/voice/useMicPermission';
+import { MicPermissionRationale } from '@/voice/MicPermissionRationale';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
 import { useOrbState } from './useOrbState';
 import { pushStatusTransient } from '../status-pill/store';
@@ -27,6 +29,13 @@ export function OrbStage() {
   const localTrack = usePipecatClientMediaTrack('audio', 'local');
   const client = usePipecatClient();
   const transport = usePipecatClientTransportState();
+  const micPermission = useMicPermission();
+  // Rationale modal state — only renders when the user has triggered
+  // a connect AND we know the next getUserMedia will fire the OS
+  // prompt. ``granted`` skips the modal entirely; ``denied`` skips
+  // it too because the prompt is suppressed and the user needs the
+  // ConnectionBanner's recovery copy instead.
+  const [pendingRationale, setPendingRationale] = useState(false);
 
   const botStream = useMemo(
     () => (botTrack ? new MediaStream([botTrack]) : null),
@@ -37,9 +46,34 @@ export function OrbStage() {
     [localTrack],
   );
 
+  // Actually fire the WebRTC connect — extracted so both the
+  // direct-from-double-click path (when the mic is already granted)
+  // and the post-rationale-Continue path can share the same error
+  // handling and toast surface.
+  const startConnect = () => {
+    if (!client) return;
+    client.connect().catch((err) => {
+      console.error('[orb] connect error:', err);
+      // R10: surface in the status pill so the user knows the
+      // double-click did something. Common causes: backend
+      // unreachable, API key wrong, SDP timeout. 4s matches the
+      // duration used by RTVI Error events for UX consistency
+      // across error sources.
+      const detail = err instanceof Error ? err.message : String(err);
+      pushStatusTransient(`couldn't connect: ${detail}`, 4000);
+    });
+  };
+
   // Double-click / double-tap toggles the voice session on both mouse
   // and touch. Single-tap stays free for drag-spin / click-pulse so
   // users can play with the orb without accidentally (dis)connecting.
+  //
+  // Permission gate: if the mic state is ``prompt`` (or unknown),
+  // show rationale BEFORE getUserMedia fires so the user understands
+  // what they're agreeing to. Already-granted users skip the modal
+  // and connect immediately; already-denied users get a transient
+  // pointing at ConnectionBanner's recovery copy because the OS
+  // prompt is suppressed and connecting would silently stall.
   const onDoubleClick = () => {
     if (!client) return;
     const disconnected =
@@ -52,16 +86,19 @@ export function OrbStage() {
       transport === 'connecting' ||
       transport === 'authenticating';
     if (disconnected) {
-      client.connect().catch((err) => {
-        console.error('[orb] connect error:', err);
-        // R10: surface in the status pill so the user knows the
-        // double-click did something. Common causes: backend
-        // unreachable, API key wrong, SDP timeout. 4s matches the
-        // duration used by RTVI Error events for UX consistency
-        // across error sources.
-        const detail = err instanceof Error ? err.message : String(err);
-        pushStatusTransient(`couldn't connect: ${detail}`, 4000);
-      });
+      if (micPermission === 'denied') {
+        pushStatusTransient(
+          "mic blocked — open browser site settings to allow",
+          4000,
+        );
+        return;
+      }
+      if (micPermission === 'prompt' || micPermission === 'unsupported') {
+        setPendingRationale(true);
+        return;
+      }
+      // 'granted' — straight through.
+      startConnect();
     } else if (active) {
       client.disconnect().catch((err) => {
         console.error('[orb] disconnect error:', err);
@@ -98,6 +135,15 @@ export function OrbStage() {
           <CADriver />
         </EffectComposer>
       </Canvas>
+      {pendingRationale && (
+        <MicPermissionRationale
+          onContinue={() => {
+            setPendingRationale(false);
+            startConnect();
+          }}
+          onCancel={() => setPendingRationale(false)}
+        />
+      )}
     </div>
   );
 }
