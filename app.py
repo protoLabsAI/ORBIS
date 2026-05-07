@@ -1635,6 +1635,199 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
     return {"ok": True, "delegates": names}
 
 
+# --- Delegates CRUD ---------------------------------------------------------
+#
+# Settings panel mutates config/delegates.yaml through these. The runtime
+# DelegateRegistry (_DELEGATES) is a parsed mirror of that file; we reload
+# after every mutation so in-flight sessions pick up the new registry on
+# their next delegate_to() invocation. No credentials ever cross the wire
+# — the schema only references env-var *names* (`credentialsEnv` /
+# `api_key_env`); the actual values are read from the process environment
+# at registry-parse time.
+
+
+@app.get("/api/delegates")
+async def list_delegates_endpoint(user: User = Depends(require_user)):
+    """Return the raw delegate entries from disk + each one's runtime
+    parse state. The UI uses ``configured`` (registry-side) to flag
+    entries that fail parse (e.g. missing required fields, bad type)
+    so they can show inline.
+    """
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+    )
+    try:
+        entries = read_delegates()
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    parsed_names = set(_DELEGATES.names())
+    return {
+        "delegates": [
+            {**entry, "configured": entry.get("name") in parsed_names}
+            for entry in entries
+        ],
+    }
+
+
+@app.post("/api/delegates")
+async def create_delegate_endpoint(
+    body: dict, user: User = Depends(require_user),
+):
+    """Add a new delegate. 409 if the name already exists — the UI's
+    edit flow goes through PUT instead. Triggers a registry reload on
+    success so the new delegate is dispatchable immediately."""
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+        upsert_delegate,
+    )
+    try:
+        name = (body or {}).get("name")
+        if isinstance(name, str) and any(e.get("name") == name for e in read_delegates()):
+            return JSONResponse(
+                status_code=409,
+                content={"error": f"delegate {name!r} already exists; use PUT to update"},
+            )
+        entries = upsert_delegate(body)
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.put("/api/delegates/{name}")
+async def update_delegate_endpoint(
+    name: str, body: dict, user: User = Depends(require_user),
+):
+    """Replace an existing delegate. 404 if the name doesn't exist.
+    Body's ``name`` field must match the path param — guards against
+    a careless rename via the wrong verb (use DELETE+POST for renames
+    so the registry sees both lifecycle events)."""
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+        upsert_delegate,
+    )
+    body = body or {}
+    body_name = body.get("name")
+    if body_name and body_name != name:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    f"path name {name!r} does not match body name {body_name!r}; "
+                    "DELETE then POST to rename"
+                ),
+            },
+        )
+    body["name"] = name
+    if not any(e.get("name") == name for e in read_delegates()):
+        return JSONResponse(
+            status_code=404, content={"error": f"delegate {name!r} not found"},
+        )
+    try:
+        entries = upsert_delegate(body)
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.delete("/api/delegates/{name}")
+async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)):
+    """Remove a delegate by name. 404 if the name doesn't exist."""
+    from agent.delegate_config_store import delete_delegate
+    try:
+        entries = delete_delegate(name)
+    except KeyError:
+        return JSONResponse(
+            status_code=404, content={"error": f"delegate {name!r} not found"},
+        )
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.post("/api/delegates/test")
+async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
+    """Reachability probe for a delegate config — used by the Settings
+    panel's "Test" button so users can verify before saving.
+
+    Accepts the same body shape as POST/PUT. For ``a2a`` the probe is
+    a GET against ``/.well-known/agent-card.json``; for ``openai`` it's
+    a single-shot ``/chat/completions`` ping (mirrors /api/llm/test).
+    Returns ``{ok, latency_ms?, error?}``. Auth-gated like other /api
+    routes.
+    """
+    return await _probe_delegate(body or {})
+
+
+async def _probe_delegate(entry: dict) -> dict:
+    """Type-dispatch reachability probe. Resolves env-substituted URLs +
+    credential env vars the same way the runtime registry does, so a
+    test passes iff the actual dispatch path would too.
+    """
+    import time as _time
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        validate_entry,
+    )
+    from agent.delegates import _expand_env
+    try:
+        normalized = validate_entry(entry)
+    except DelegateValidationError as e:
+        return {"ok": False, "error": str(e)}
+
+    url = _expand_env(normalized["url"])
+    if normalized["type"] == "a2a":
+        # The delegate URL is the JSON-RPC endpoint (typically /a2a);
+        # the agent card lives next to it at /.well-known/agent-card.json.
+        # Derive the origin and probe there.
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return {"ok": False, "error": f"malformed url: {url!r}"}
+        card_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
+        headers: dict[str, str] = {}
+        cred_env = (normalized.get("auth") or {}).get("credentialsEnv")
+        scheme = (normalized.get("auth") or {}).get("scheme")
+        cred = os.environ.get(cred_env) if cred_env else None
+        if cred and scheme == "apiKey":
+            headers["X-API-Key"] = cred
+        elif cred and scheme == "bearer":
+            headers["Authorization"] = f"Bearer {cred}"
+        t0 = _time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(card_url, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            return {"ok": False, "error": f"unreachable: {e}"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        latency_ms = int((_time.monotonic() - t0) * 1000)
+        if r.status_code == 401 or r.status_code == 403:
+            return {"ok": False, "error": "auth rejected", "status": r.status_code}
+        if r.status_code != 200:
+            return {
+                "ok": False, "error": f"agent card HTTP {r.status_code}",
+                "status": r.status_code,
+            }
+        return {"ok": True, "latency_ms": latency_ms}
+
+    # type=openai — reuse the same probe surface /api/llm/test exposes
+    # so the wire format / error shapes line up. Resolve the api_key_env
+    # to a value before delegating.
+    from agent.llm_probe import ping_endpoint
+    api_key_env = normalized.get("api_key_env")
+    api_key = os.environ.get(api_key_env) if api_key_env else None
+    return await ping_endpoint(
+        url=url,
+        model=str(normalized.get("model") or ""),
+        api_key=api_key or "",
+    )
+
+
 @app.post("/api/persona/reload")
 async def reload_persona_endpoint(user: User = Depends(require_user)):
     """Re-read config/orbis.yaml from disk.
