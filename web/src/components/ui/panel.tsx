@@ -13,8 +13,9 @@ import { cn } from '@/lib/utils';
  * surrounding context says so, the heading becomes a click-to-toggle
  * button and the content collapses underneath. Open/closed state is
  * persisted per panel title in localStorage so the user's layout
- * survives reload. Default-on so first-time users see everything;
- * they collapse what they don't need.
+ * survives reload. Default-collapsed so the long Settings list opens
+ * tidy — the user expands the section they're after instead of
+ * scrolling past everything.
  */
 export function Panel({
   title,
@@ -34,7 +35,7 @@ export function Panel({
     ? `${collapsibleCtx.storageKey}:${title}`
     : null;
 
-  const [open, setOpen] = useState<boolean>(() => readStored(storageKey, true));
+  const [open, setOpen] = useState<boolean>(() => readStored(storageKey, false));
 
   useEffect(() => {
     if (!storageKey) return;
