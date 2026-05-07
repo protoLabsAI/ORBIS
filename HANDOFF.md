@@ -137,13 +137,15 @@ before declaring a release.
 
 ## Known issues / rough edges
 
-- **Tool-call translation in MLX adapter (Ollama: shipped).** Ollama
-  now translates `message.tool_calls` ↔ OpenAI-shaped delta chunks
-  (synthetic ids, JSON-stringified args, finish_reason flips to
-  tool_calls) — `delegate_to` works on Ollama. MLX adapter still
-  emits a one-time warning and proceeds content-only; needs tag-
-  parsing support for Qwen3-style `<tool_call>{...}</tool_call>` in
-  the streamed token output. See `voice/llm/mlx.py` header comment.
+- **Tool-call translation: shipped on Ollama + MLX.** Ollama
+  translates `message.tool_calls` ↔ OpenAI-shaped delta chunks.
+  MLX renders the schema via the chat template's `tools=` kwarg
+  and a streaming parser (`voice/llm/_qwen_tool_parser.py`) extracts
+  Qwen-style `<tool_call>{...}</tool_call>` blocks from the token
+  stream. Both adapters flip `finish_reason="tool_calls"` and
+  synthesize `call_<uuid>` ids. Older / strict templates that don't
+  accept `tools=` log a warning and fall through (no calls fire,
+  matches the pre-tool era).
 - **gemma3n on mlx-lm 0.31.x** has an upstream `sanitize()` bug
   (`KeyError: 'model'`) that breaks loading. Default MLX preset is
   Qwen3.5-4B as a workaround; flip back when the upstream fix lands.
