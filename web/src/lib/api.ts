@@ -126,6 +126,44 @@ export class UnauthorizedError extends Error {
   constructor(path: string) { super(`${path} → 401 unauthorized`); }
 }
 
+// Delegate registry types — matches agent/delegate_config_store.validate_entry.
+// A2A and OpenAI delegates share the common fields; the type-specific
+// fields are union members so TS narrows correctly when `type` is checked.
+export interface DelegateA2A {
+  name: string;
+  type: 'a2a';
+  description: string;
+  url: string;
+  auth?: { scheme?: 'apiKey' | 'bearer'; credentialsEnv?: string };
+  headers?: Record<string, string>;
+}
+
+export interface DelegateOpenAI {
+  name: string;
+  type: 'openai';
+  description: string;
+  url: string;
+  model: string;
+  api_key_env?: string;
+  system_prompt?: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+export type Delegate = DelegateA2A | DelegateOpenAI;
+
+// GET response augments each entry with a runtime parse flag so the UI
+// can flag rows that were rejected by the registry (missing required
+// fields, etc.).
+export type DelegateWithStatus = Delegate & { configured: boolean };
+
+export type DelegateTestResult = {
+  ok: boolean;
+  latency_ms?: number;
+  error?: string;
+  status?: number;
+};
+
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(path, { headers: authHeaders() });
   if (r.status === 401) throw new UnauthorizedError(path);
@@ -134,14 +172,48 @@ async function get<T>(path: string): Promise<T> {
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(body),
-  });
+  return _send<T>('POST', path, body);
+}
+
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  return _send<T>('PUT', path, body);
+}
+
+async function del<T>(path: string): Promise<T> {
+  return _send<T>('DELETE', path);
+}
+
+async function _send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const init: RequestInit = {
+    method,
+    headers: body
+      ? authHeaders({ 'Content-Type': 'application/json' })
+      : authHeaders(),
+  };
+  if (body !== undefined) init.body = JSON.stringify(body);
+  const r = await fetch(path, init);
   if (r.status === 401) throw new UnauthorizedError(path);
-  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  // Non-2xx but with a JSON body — surface the server's error message
+  // so the UI can render it inline rather than the generic "HTTP 400".
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body?.error) detail = String(body.error);
+    } catch {
+      // body wasn't JSON; keep the generic detail
+    }
+    throw new ApiError(`${path} → ${detail}`, r.status);
+  }
   return r.json() as Promise<T>;
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
 }
 
 export const api = {
@@ -191,4 +263,25 @@ export const api = {
     postJSON<{ ok: boolean; path?: string; error?: string }>(
       '/api/tts/voices/download', body,
     ),
+
+  // Delegates CRUD + reachability probe. Used by the Settings panel
+  // to manage sub-agents the orb can route to via delegate_to without
+  // hand-editing config/delegates.yaml.
+  delegates: {
+    list: () => get<{ delegates: DelegateWithStatus[] }>('/api/delegates'),
+    create: (entry: Delegate) =>
+      postJSON<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        '/api/delegates', entry,
+      ),
+    update: (name: string, entry: Delegate) =>
+      putJSON<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        `/api/delegates/${encodeURIComponent(name)}`, entry,
+      ),
+    remove: (name: string) =>
+      del<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        `/api/delegates/${encodeURIComponent(name)}`,
+      ),
+    test: (entry: Delegate) =>
+      postJSON<DelegateTestResult>('/api/delegates/test', entry),
+  },
 };
