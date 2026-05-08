@@ -1368,6 +1368,15 @@ async def lifespan(app: FastAPI):
     # payment and extend the local cache. Runs once at boot, then
     # every REFRESH_INTERVAL_HOURS (default 24). Runs even when Stripe
     # is unconfigured — the function no-ops in that case.
+    from agent.entitlement import GATE_MODE, configured as _stripe_configured
+    if _stripe_configured():
+        logger.info("[entitlement] Stripe configured — gate honours active cache")
+    else:
+        logger.info(
+            f"[entitlement] Stripe unconfigured — ORBIS_GATE={GATE_MODE!r} "
+            f"({'unlocked' if GATE_MODE == 'open' else 'locked'} by policy)"
+        )
+
     async def _entitlement_refresh_loop() -> None:
         from agent.entitlement import REFRESH_INTERVAL_HOURS, configured, refresh_from_stripe
         while True:

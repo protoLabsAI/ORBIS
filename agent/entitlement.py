@@ -61,6 +61,27 @@ REFRESH_INTERVAL_HOURS = int(
     os.environ.get("ENTITLEMENT_REFRESH_INTERVAL_HOURS", "24")
 )
 
+# Default behaviour when Stripe isn't configured. Two modes:
+#
+#   "open"    — every install gets full customization (current default;
+#               keeps homelab + dev environments unblocked when commerce
+#               isn't wired up).
+#   "closed"  — nobody gets customization until Stripe is configured AND
+#               an active entitlement is verified. The right setting for
+#               a public distribution that intends to monetize the unlock
+#               but ships without Stripe credentials baked in.
+#
+# Anything else logs a warning and falls back to "open" (we'd rather a
+# typo'd value preserve current behaviour than silently lock the install).
+_GATE_ENV = os.environ.get("ORBIS_GATE", "open").strip().lower()
+if _GATE_ENV not in ("open", "closed"):
+    logger.warning(
+        f"[entitlement] unknown ORBIS_GATE={_GATE_ENV!r}; expected "
+        "'open' or 'closed'. Falling back to 'open'."
+    )
+    _GATE_ENV = "open"
+GATE_MODE = _GATE_ENV  # 'open' | 'closed'
+
 
 class EntitlementError(Exception):
     """Raised when an entitlement operation cannot complete."""
@@ -228,21 +249,28 @@ def entitlement_state(mem) -> dict:
 
     ``active`` mirrors ``has_customization`` so the UI sees the same gate
     the backend enforces — including the dev-open fallback when Stripe
-    isn't configured.
+    isn't configured. ``gate_mode`` exposes the ORBIS_GATE setting so
+    the UI can distinguish "Stripe missing, locked by policy" from
+    "Stripe missing, open for development."
     """
     return {
         "customization": {
             "active": has_customization(mem),
             "configured": configured(),
+            "gate_mode": GATE_MODE,
         },
     }
 
 
 def has_customization(mem) -> bool:
-    """Single-function gate for callers that just need the boolean."""
+    """Single-function gate for callers that just need the boolean.
+
+    Resolution order:
+      1. Stripe configured + active cache entry → unlocked
+      2. Stripe configured but no active entry → locked (paid path)
+      3. Stripe NOT configured + GATE_MODE=open → unlocked (dev fallback)
+      4. Stripe NOT configured + GATE_MODE=closed → locked (distribution)
+    """
     if not configured():
-        # When Stripe isn't configured at all, we're in dev mode — the
-        # customization unlock is open by default so local development
-        # doesn't require commerce infrastructure.
-        return True
+        return GATE_MODE == "open"
     return mem.entitlement.is_active("customization")

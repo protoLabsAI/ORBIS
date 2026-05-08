@@ -136,7 +136,15 @@ export type OrbisConfig = {
 };
 
 export type EntitlementState = {
-  customization: { active: boolean; configured: boolean };
+  customization: {
+    active: boolean;
+    configured: boolean;
+    /** ORBIS_GATE env mode — 'open' falls back to unlocked when Stripe
+     * isn't configured (homelab/dev default); 'closed' keeps the gate
+     * shut on unconfigured Stripe (paid distribution policy). The UI
+     * uses this to render "locked by policy" vs "unconfigured" copy. */
+    gate_mode: 'open' | 'closed';
+  };
 };
 
 export type PersonalityAxis = {
