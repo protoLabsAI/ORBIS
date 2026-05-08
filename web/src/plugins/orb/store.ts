@@ -14,7 +14,7 @@
 
 import { variantRegistry } from './variants/registry';
 import {
-  loadCustom,
+  loadCustomByVariant,
   loadPalette,
   loadParams,
   savePalette,
@@ -142,9 +142,12 @@ class OrbStore {
     saveParams(this.snap.params);
   }
 
-  /** Restore a saved custom preset (palette + params snapshot). */
+  /** Restore a saved custom preset (palette + params snapshot).
+   * Looks up by name within the *active variant's* saved presets —
+   * a name saved on Tetra won't be visible after switching to Nebula
+   * because their schemas don't share fields. */
   loadCustomPreset(name: string): void {
-    const customs = loadCustom();
+    const customs = loadCustomByVariant(this.snap.variantId);
     const payload = customs[name];
     if (!payload) return;
     const nextPalette = payload.palette || this.snap.palette;

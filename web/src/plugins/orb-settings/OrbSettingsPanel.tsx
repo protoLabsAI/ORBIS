@@ -25,8 +25,8 @@ import {
   type FieldSpec,
 } from '../orb/shared/field-types';
 import {
-  loadCustom,
-  saveCustom,
+  loadCustomByVariant,
+  saveCustomByVariant,
   type CustomPresetMap,
 } from '../orb/storage';
 import {
@@ -41,7 +41,11 @@ export function OrbSettingsPanel() {
   const variant = useActiveVariant();
   const { palette, params } = useOrbState();
   const { stateOverrides, moodOverrides } = useOrbOverrides();
-  const [customMap, setCustomMap] = useState<CustomPresetMap>(() => loadCustom());
+  // Saved presets live per-variant — switching variants reloads the
+  // map so the dropdown only ever shows entries that fit the active
+  // schema. Initialise with an empty map; the variant.id effect
+  // below populates it once the active variant resolves.
+  const [customMap, setCustomMap] = useState<CustomPresetMap>({});
   const [customName, setCustomName] = useState<string>('');
   const [copyLabel, setCopyLabel] = useState<string>('Copy config');
 
@@ -57,10 +61,15 @@ export function OrbSettingsPanel() {
     void flushSave();
   }, []);
 
-  // Refresh custom presets if storage changes in another tab / on mount.
+  // Reload the saved-preset map whenever the active variant changes
+  // (also triggers on mount once the variant resolves). Reset the
+  // selected name too — a "MyFavorite" on Tetra has no analogue in
+  // Nebula's space, so the dropdown should come up empty.
   useEffect(() => {
-    setCustomMap(loadCustom());
-  }, []);
+    if (!variant) return;
+    setCustomMap(loadCustomByVariant(variant.id));
+    setCustomName('');
+  }, [variant?.id]);
 
   // Debounced save timer — broadcast.applyParam already persists, so this
   // is just a ref holder for any future flush-on-unmount needs.
@@ -115,6 +124,7 @@ export function OrbSettingsPanel() {
   };
 
   const onSaveAs = () => {
+    if (!variant) return;
     const name = (window.prompt('Save preset as:') ?? '').trim();
     if (!name) return;
     const next: CustomPresetMap = {
@@ -122,7 +132,7 @@ export function OrbSettingsPanel() {
       [name]: { palette, params: { ...params } },
     };
     setCustomMap(next);
-    saveCustom(next);
+    saveCustomByVariant(variant.id, next);
     setCustomName(name);
   };
 
@@ -133,12 +143,12 @@ export function OrbSettingsPanel() {
   };
 
   const onDeleteCustom = () => {
-    if (!customName) return;
+    if (!variant || !customName) return;
     if (!window.confirm(`Delete preset "${customName}"?`)) return;
     const next = { ...customMap };
     delete next[customName];
     setCustomMap(next);
-    saveCustom(next);
+    saveCustomByVariant(variant.id, next);
     setCustomName('');
   };
 
