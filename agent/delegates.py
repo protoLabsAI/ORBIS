@@ -645,6 +645,8 @@ async def health_loop(
                     registry.record_health(
                         delegate.name, ok=False, error=str(e),
                     )
+                    from agent import metrics
+                    metrics.inc("delegate_probe_crashed")
                     h = registry.health(delegate.name)
                     consecutive = h.consecutive_failures if h else 1
                     next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)
@@ -656,6 +658,9 @@ async def health_loop(
                     latency_ms=result.get("latency_ms"),
                     error=result.get("error"),
                 )
+                if not ok:
+                    from agent import metrics
+                    metrics.inc("delegate_probe_failed")
                 h = registry.health(delegate.name)
                 consecutive = h.consecutive_failures if h else 0
                 next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)

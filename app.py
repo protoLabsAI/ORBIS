@@ -1494,9 +1494,17 @@ async def health():
 @app.get("/api/metrics")
 async def metrics(user: User = Depends(require_user)):
     uptime = time.time() - _METRICS["boot_at"]
+    # Merge in the cross-module counter snapshot (silent-failure paths
+    # in personality drift, ollama/mlx tool translation, delegate
+    # probes). Keys appear only after the first inc() so the response
+    # stays small on a quiet process.
+    from agent import metrics as metrics_mod
+    snap = metrics_mod.snapshot()
     return {
         **_METRICS,
         "uptime_secs": round(uptime, 1),
+        "counters": snap["counters"],
+        "gauges": snap["gauges"],
     }
 
 
