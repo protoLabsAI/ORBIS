@@ -262,6 +262,8 @@ async def _stream_as_openai_chunks(
             logger.warning(
                 f"[mlx-llm] non-JSON-serializable tool args: {arguments!r}"
             )
+            from agent import metrics
+            metrics.inc("mlx_tool_args_non_serializable")
             args_str = "{}"
         return SimpleNamespace(
             model=model_id,

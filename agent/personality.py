@@ -196,11 +196,15 @@ async def analyze_session_drift(
         )
     except Exception as e:
         logger.info(f"[personality] drift analysis call failed: {e}")
+        from agent import metrics
+        metrics.inc("drift_llm_call_failed")
         return []
 
     try:
         raw = resp.choices[0].message.content or ""
     except Exception:
+        from agent import metrics
+        metrics.inc("drift_llm_empty_response")
         return []
 
     # The model may wrap JSON in a fence; strip greedily.
@@ -216,6 +220,8 @@ async def analyze_session_drift(
         data: Any = json.loads(raw)
     except Exception as e:
         logger.info(f"[personality] drift JSON parse failed: {e}")
+        from agent import metrics
+        metrics.inc("drift_json_parse_failed")
         return []
 
     if not isinstance(data, dict):

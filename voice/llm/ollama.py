@@ -336,4 +336,6 @@ def _stringify_args(raw: Any) -> str:
         # pipeline. The handler will likely reject it, but a logged
         # failure beats a silent dropped call.
         logger.warning(f"[ollama-llm] non-JSON-serializable tool args: {raw!r}")
+        from agent import metrics
+        metrics.inc("ollama_tool_args_non_serializable")
         return "{}"
