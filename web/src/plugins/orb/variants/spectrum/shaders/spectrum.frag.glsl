@@ -110,10 +110,15 @@ void main() {
     float stepSize = 0.012 + sceneDist;
     t += stepSize;
 
-    // Soft containment — smooth fade from outer (0) to inner (1)
-    // radius so the orb blends into space instead of clipping at a
-    // hard sphere edge.
-    float radialFade = smoothstep(uFadeOuter, uFadeInner, distFromCenter);
+    // Soft containment — full contribution inside fadeInner, fading
+    // to zero at fadeOuter. Use canonical smoothstep (edge0 < edge1)
+    // and invert; the source's `smoothstep(uFadeOuter, uFadeInner, …)`
+    // had edge0 > edge1, which is undefined per the GLSL spec.
+    // Drivers that "did the right thing" let palettes with a wide
+    // band (Sunset/Tide/Halo) render fine, but Rainbow's 0.01-thin
+    // band (outer 2.56, inner 2.55) sat on the precision cliff and
+    // came back blank.
+    float radialFade = 1.0 - smoothstep(uFadeInner, uFadeOuter, distFromCenter);
 
     // Per-step rainbow palette. uColorPhases is the deployer's hue
     // shift; the depth-mod-by-z gives the rainbow gradient.
