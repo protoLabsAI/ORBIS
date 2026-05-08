@@ -111,14 +111,16 @@ void main() {
     t += stepSize;
 
     // Soft containment — full contribution inside fadeInner, fading
-    // to zero at fadeOuter. Use canonical smoothstep (edge0 < edge1)
-    // and invert; the source's `smoothstep(uFadeOuter, uFadeInner, …)`
-    // had edge0 > edge1, which is undefined per the GLSL spec.
-    // Drivers that "did the right thing" let palettes with a wide
-    // band (Sunset/Tide/Halo) render fine, but Rainbow's 0.01-thin
-    // band (outer 2.56, inner 2.55) sat on the precision cliff and
-    // came back blank.
-    float radialFade = 1.0 - smoothstep(uFadeInner, uFadeOuter, distFromCenter);
+    // to zero at fadeOuter. Defend against degenerate ranges where
+    // the slider step (0.05) snaps fadeOuter to ≤ fadeInner, or a
+    // user drags inner above outer — both make smoothstep undefined
+    // per the GLSL spec, and Rainbow's 2.56/2.55 defaults sit
+    // exactly on that quantization cliff. min/max keeps the window
+    // valid; the +1e-4 floor stops a zero-width band from collapsing
+    // the whole orb to alpha=0.
+    float lo = min(uFadeInner, uFadeOuter);
+    float hi = max(uFadeInner, uFadeOuter);
+    float radialFade = 1.0 - smoothstep(lo, max(hi, lo + 1e-4), distFromCenter);
 
     // Per-step rainbow palette. uColorPhases is the deployer's hue
     // shift; the depth-mod-by-z gives the rainbow gradient.
