@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import type { FieldSpec } from '../shared/field-types';
 import type { VoiceState } from '../../../voice/state';
+import type { MoodOverrides } from '../compose';
 
 /** Shared props every variant receives from the OrbStage / OrbPreview. */
 export interface VariantProps {
@@ -31,6 +32,14 @@ export interface VariantSpec {
   fields: FieldSpec[];
   /** Default palette to use when a user first picks this variant. */
   defaultPalette: string;
+  /**
+   * Per-dimension mood→uniform deltas baked into the variant. Fed
+   * through composeBase as the fallback when the user hasn't authored
+   * their own mood overrides via the Customize panel; user-authored
+   * deltas merge over these per-key (user wins). Optional — variants
+   * without this still react via the user-authored override path.
+   */
+  moodDefaults?: MoodOverrides;
 }
 
 type Listener = () => void;
