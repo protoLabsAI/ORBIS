@@ -333,3 +333,40 @@ async def test_loop_initial_delay_blocks_first_probe(respx_mock):
         await task
     except asyncio.CancelledError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Fast-retry / jitter scheduling — _next_probe_delay
+# ---------------------------------------------------------------------------
+
+
+def test_next_probe_delay_uses_retry_steps_on_consecutive_failures():
+    """Failing delegates skip the base interval for the first few retries
+    so a transient blip recovers fast instead of staying red for 5min."""
+    from agent.delegates import _RETRY_STEPS_SECS, _next_probe_delay
+
+    assert _next_probe_delay(1, base_interval=300.0) == _RETRY_STEPS_SECS[0]
+    assert _next_probe_delay(2, base_interval=300.0) == _RETRY_STEPS_SECS[1]
+    assert _next_probe_delay(3, base_interval=300.0) == _RETRY_STEPS_SECS[2]
+
+
+def test_next_probe_delay_falls_back_to_base_after_retry_budget():
+    """Beyond the fast-retry window, settle into the base interval — a
+    genuinely-down service shouldn't get hammered every 30 seconds."""
+    from agent.delegates import _RETRY_STEPS_SECS, _next_probe_delay
+
+    # consecutive_failures > len(retry_steps) → jittered base
+    delay = _next_probe_delay(len(_RETRY_STEPS_SECS) + 1, base_interval=300.0)
+    assert 270.0 <= delay <= 330.0  # 300 ± 10%
+
+
+def test_next_probe_delay_jitters_healthy_interval():
+    """Healthy delegates get the base interval ±10% to break up
+    same-instant probe stampedes against shared backends."""
+    from agent.delegates import _next_probe_delay
+
+    # consecutive_failures = 0 → jittered base
+    samples = [_next_probe_delay(0, base_interval=300.0) for _ in range(20)]
+    assert all(270.0 <= s <= 330.0 for s in samples)
+    # Samples should vary — if all identical, jitter isn't applied.
+    assert len(set(samples)) > 1
