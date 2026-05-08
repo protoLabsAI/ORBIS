@@ -39,7 +39,7 @@ export const SPECTRUM_PRESETS: Record<string, SpectrumPreset> = {
     primaryEnergy: '#a78bfa', secondaryEnergy: '#f472b6',
     density: 1.6, atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03,
     speed: 0.5, chromaticAberration: 0.018, asymmetry: 0.45, orbRotation: 0.50,
-    fractalScale: 1.0, fadeOuter: 2.56, fadeInner: 2.55, smoothing: 1.55, glow: 1.0,
+    fractalScale: 1.0, fadeOuter: 2.60, fadeInner: 2.45, smoothing: 1.55, glow: 1.0,
     colorPhaseR: 5.8, colorPhaseG: 4.1, colorPhaseB: 2.8, colorPhaseA: 0.2,
     dpr: 0.7,
   },
