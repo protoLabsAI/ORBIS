@@ -59,6 +59,30 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # ── SPA fast-fail ─────────────────────────────────────────────────────────
+      #
+      # The Dockerfile builds the SPA inside its `web` stage, but that
+      # only fires after the CUDA runtime base image pulls (~8 min on a
+      # cold runner). A broken `bun run build` would otherwise eat that
+      # cost before surfacing — and would shadow the real signal under
+      # a vague Docker failure. Running the SPA build here as a 30-sec
+      # fast-fail gate matches web-build.yml's posture; if this step
+      # breaks the release, the failure alert below fires immediately.
+      # The Dockerfile re-runs the build because the wheel/Docker image
+      # needs `web/dist/` populated; the cost of running it twice is a
+      # rounding error on the 5-min Docker step.
+
+      - name: Set up Bun (for SPA fast-fail)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Build SPA (fast-fail)
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       # ── Docker ────────────────────────────────────────────────────────────────
 
       - name: Set up Docker Buildx
