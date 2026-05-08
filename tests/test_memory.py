@@ -39,11 +39,16 @@ def test_schema_creates_tables(mem: Memory):
 
 
 def test_schema_records_version(mem: Memory):
+    """The recorded schema version tracks SCHEMA_VERSION in db.py.
+    Bumping the constant bumps this assertion in lockstep — the test
+    is here to catch a fresh-install schema mismatch, not to pin the
+    number itself."""
+    from memory.db import SCHEMA_VERSION
     row = mem.conn.execute(
         "SELECT value FROM _meta WHERE key = 'schema_version'"
     ).fetchone()
     assert row is not None
-    assert int(row["value"]) == 1
+    assert int(row["value"]) == SCHEMA_VERSION
 
 
 # --- sessions ---------------------------------------------------------------

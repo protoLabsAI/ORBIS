@@ -537,6 +537,7 @@ def _effective_prompt(
     plan = plan_block(verbosity)
     recall = _recall_block(user_id)
     neglect_nudge = ""
+    inbox_block = ""
     try:
         mem = get_memory()
         # Run the neglect computation BEFORE rendering the personality
@@ -544,6 +545,7 @@ def _effective_prompt(
         # mood. So the session's opening vibe reflects the gap.
         _days, neglect_nudge = apply_soft_neglect(mem)
         personality = render_personality_block(mem)
+        inbox_block = _render_inbox_pending_block(mem)
     except Exception as e:
         logger.warning(f"[personality] render failed: {e}")
         personality = ""
@@ -581,8 +583,56 @@ def _effective_prompt(
         + (("\n\n" + user_block) if user_block else "")
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
+        + (("\n\n" + inbox_block) if inbox_block else "")
         + (("\n\n" + recall) if recall else "")
     )
+
+
+def _render_inbox_pending_block(mem) -> str:
+    """Surface 'now'-priority unread inbox messages at session start.
+
+    Marks the surfaced messages delivered as a side effect — same
+    trade-off as the check_inbox tool: if the LLM never actually
+    receives the prompt (process crash before send), the messages got
+    marked delivered but never read. Acceptable; the alternative is
+    re-surfacing the same urgent message every session until the user
+    explicitly clears it, which is worse UX.
+
+    Lower-priority messages ('next', 'later') are intentionally NOT
+    surfaced here — the agent has to pull them via check_inbox so
+    routine notifications don't lead every conversation.
+    """
+    try:
+        msgs = mem.inbox.list_unread(priority_floor="now", limit=10)
+    except Exception:
+        return ""
+    if not msgs:
+        return ""
+
+    try:
+        mem.inbox.mark_delivered([m["id"] for m in msgs])
+    except Exception:
+        pass
+
+    lines: list[str] = [
+        "## PENDING NOTIFICATIONS",
+        "",
+        (
+            "External systems pushed these messages to your inbox while "
+            "you were offline. Surface them at a natural break — don't "
+            "lead with them unless they're urgent. The user can also "
+            "ask explicitly ('anything new?')."
+        ),
+        "",
+    ]
+    for m in msgs:
+        sender = m.get("sender") or "unknown"
+        subject = m.get("subject") or ""
+        body = m.get("body") or ""
+        snippet = body[:300] + ("…" if len(body) > 300 else "")
+        lines.append(f"- from {sender}: {subject}")
+        lines.append(f"  {snippet}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2274,6 +2324,149 @@ async def get_personality(user: User = Depends(require_user)):
             "last_ended_at": last_session_ended_at,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Inbox — external systems push messages in for the agent to pull
+# ---------------------------------------------------------------------------
+#
+# Auth model:
+#   - Read endpoints: owner API key only (require_user). The agent tool
+#     uses the in-process Memory directly so it doesn't need an HTTP key.
+#   - Write endpoint: owner API key OR `INBOX_INGEST_TOKEN` env value.
+#     The token is the "give this to your webhook" handle so a cron job
+#     or Slack-style integration doesn't need the full owner credential.
+
+INBOX_INGEST_TOKEN = os.environ.get("INBOX_INGEST_TOKEN", "")
+
+
+def _inbox_writer_ok(request: Request) -> bool:
+    """Owner key OR scoped ingest token. Owner key is checked through the
+    user registry (multi-tenant aware); the token is a simple equality
+    check, mirroring A2A_AUTH_TOKEN's posture."""
+    # Owner-key path — same flow as require_user, but inline so we can
+    # accept the alternative token without throwing on a missing key.
+    x_api_key = request.headers.get("X-API-Key", "") or ""
+    bearer = request.headers.get("Authorization", "") or ""
+    if bearer.lower().startswith("bearer "):
+        x_api_key = x_api_key or bearer[7:].strip()
+    if user_registry.single_user_mode():
+        # Local single-user mode: any call from localhost is the owner.
+        return True
+    if x_api_key and user_registry.resolve(x_api_key):
+        return True
+    # Ingest-token path — only when explicitly configured.
+    if INBOX_INGEST_TOKEN and x_api_key == INBOX_INGEST_TOKEN:
+        return True
+    return False
+
+
+@app.post("/api/inbox")
+async def post_inbox(body: dict, request: Request):
+    """Ingest a message into the agent's inbox.
+
+    Auth: owner X-API-Key OR ``INBOX_INGEST_TOKEN`` (env). Webhook /
+    cron ingestors should use the token so they don't need the full
+    owner key.
+
+    Body: ``{"sender": "...", "subject": "...", "body": "...",
+            "channel": "..." (optional),
+            "priority": "now|next|later" (default "next"),
+            "created_at": "..." (optional)}``.
+
+    Priority semantics:
+      - now   : surfaced at the next session start; agent reads automatically
+      - next  : default; surfaced when the agent calls check_inbox
+      - later : background; only surfaced when explicitly drained
+
+    Returns ``{"ok": true, "id": <int>}``.
+    """
+    if not _inbox_writer_ok(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    sender = (body.get("sender") or "").strip()
+    subject = (body.get("subject") or "").strip()
+    msg_body = body.get("body") or ""
+    if not sender or not subject:
+        raise HTTPException(
+            status_code=400, detail="sender and subject are required",
+        )
+    channel = body.get("channel")
+    created_at = body.get("created_at")
+    priority = (body.get("priority") or "next").strip().lower()
+    if priority not in ("now", "next", "later"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"priority must be one of now|next|later (got {priority!r})",
+        )
+    try:
+        msg_id = get_memory().inbox.add(
+            sender=sender,
+            subject=subject,
+            body=str(msg_body),
+            channel=str(channel) if channel else None,
+            priority=priority,  # type: ignore[arg-type]
+            created_at=str(created_at) if created_at else None,
+        )
+    except ValueError as exc:
+        # DAL raises on unknown priority; the check above catches it but
+        # surface cleanly if a future enum value lands here unhandled.
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "id": msg_id}
+
+
+@app.get("/api/inbox")
+async def get_inbox(
+    user: User = Depends(require_user),
+    unread_only: bool = False,
+    priority_floor: str = "later",
+    limit: int = 50,
+):
+    """List inbox messages, newest-first.
+
+    Query params:
+      - unread_only=1     — filter to undelivered
+      - priority_floor=X  — when unread_only, the priority floor: 'now'
+                            returns only urgent; 'next' returns urgent+
+                            normal; 'later' returns everything (default).
+      - limit=N           — page size (default 50, max 200)
+    """
+    n = max(1, min(int(limit), 200))
+    mem = get_memory()
+    if unread_only:
+        if priority_floor not in ("now", "next", "later"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"priority_floor must be now|next|later (got {priority_floor!r})",
+            )
+        msgs = mem.inbox.list_unread(
+            priority_floor=priority_floor,  # type: ignore[arg-type]
+            limit=n,
+        )
+    else:
+        msgs = mem.inbox.list_all(limit=n)
+    return {
+        "messages": msgs,
+        "unread_count": mem.inbox.count_unread(),
+    }
+
+
+@app.post("/api/inbox/deliver")
+async def post_inbox_deliver(body: dict, user: User = Depends(require_user)):
+    """Mark message ids as delivered. Body: ``{"ids": [1, 2, 3]}``.
+    Idempotent; already-delivered ids are no-ops."""
+    raw_ids = body.get("ids") or []
+    if not isinstance(raw_ids, list):
+        raise HTTPException(status_code=400, detail="ids must be a list")
+    ids: list[int] = []
+    for v in raw_ids:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400, detail=f"invalid id: {v!r}",
+            )
+    n = get_memory().inbox.mark_delivered(ids)
+    return {"ok": True, "delivered": n}
 
 
 @app.post("/api/orb/select_starter")

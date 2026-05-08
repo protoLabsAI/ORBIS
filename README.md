@@ -170,11 +170,16 @@ ORBIS's voice agent has a deliberately small set of tools:
   stream back through the delivery controller and narrate naturally.
 - **`adjust_personality(axis, delta)`** — shift a personality axis
   when you explicitly ask ("be more playful", "be less sarcastic").
+- **`check_inbox(priority_floor?)`** — pull messages pushed in by
+  external systems (webhooks, cron, sister agents) via
+  `POST /api/inbox`. `now`-priority items auto-surface at the next
+  session start; the agent calls this tool when you ask "anything
+  new?". See [docs/agent-inbox.md](./docs/agent-inbox.md).
 
 Orb visual control is handled outside the agent's tool surface.
 
-Nothing else ships. Calculator, search, datetime — all subsumed by
-whatever agent you delegate to.
+Calculator, search, datetime, fetch_url — all subsumed by whatever
+agent you delegate to.
 
 ## Memory
 
@@ -191,6 +196,8 @@ with `ORBIS_DB_PATH`). Tables:
 - `personality_events` — append-only drift log
 - `mood` — short-term (valence / arousal / guardedness)
 - `entitlement_cache` — local mirror of Stripe verification
+- `inbox` — messages pushed in by external systems for the agent
+  to pull on demand (priorities `now`/`next`/`later`)
 
 No graph DB. No Neo4j. No vector DB. The "poor-man's Graphiti on
 SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
@@ -270,6 +277,9 @@ All in-repo; read in this order on a cold pickup:
    engineering reference for the orb plugin system inherited from
    protoVoice (variant registry, shared signal bus, palette system,
    field types).
+5. **[docs/agent-inbox.md](./docs/agent-inbox.md)** — external
+   ingress for messages the agent pulls (webhooks, cron, sister
+   agents). Priority model + auth + tool integration.
 
 Seed provenance: this repo started as a squashed fork of
 [protoLabsAI/protoVoice](https://github.com/protoLabsAI/protoVoice)
