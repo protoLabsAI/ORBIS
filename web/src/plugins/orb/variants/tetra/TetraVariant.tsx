@@ -8,7 +8,6 @@ import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
 import { usePointerInteraction } from '../../shared/hooks/usePointerInteraction';
 import { useComposedBase } from '../../shared/hooks/useComposedBase';
-import { Atmosphere } from '../../shared/atmosphere/Atmosphere';
 import {
   BREATH_AMP,
   MAX_DELTA_S,
@@ -66,7 +65,11 @@ export function TetraVariant({ voiceState, botStream, localStream }: VariantProp
 
   const scratchCam = useMemo(() => new THREE.Vector3(), []);
   const scratchFold = useMemo(() => new THREE.Vector3(), []);
-  const geometry = useMemo(() => new THREE.SphereGeometry(2, 96, 96), []);
+  // Sphere is the marching bound, not a visible envelope — radius
+  // bigger than the tetrahedron (shapeSize ≤ 3) so the fractal
+  // silhouette never grazes the sphere edge. Lower poly count is
+  // fine since nothing shades on the sphere itself.
+  const geometry = useMemo(() => new THREE.SphereGeometry(3.5, 32, 32), []);
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   useFrame((_, rawDelta) => {
@@ -128,14 +131,6 @@ export function TetraVariant({ voiceState, botStream, localStream }: VariantProp
         depthWrite={false}
         blending={THREE.AdditiveBlending}
         attach="material"
-      />
-      <Atmosphere
-        geometry={geometry}
-        snapRef={snapRef}
-        dBotRef={dBotRef}
-        dUserRef={dUserRef}
-        clickDirRef={clickDirRef}
-        clickStrengthRef={clickStrengthRef}
       />
     </mesh>
   );

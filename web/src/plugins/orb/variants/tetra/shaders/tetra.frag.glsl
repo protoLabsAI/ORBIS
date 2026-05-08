@@ -26,8 +26,10 @@ uniform vec3 uClickDir;
 uniform float uClickStrength;
 
 varying vec3 vLocalPosition;
-varying vec3 vNormal;
-varying vec3 vViewPosition;
+// vNormal / vViewPosition come from the shared sphere vertex shader
+// but tetra has no sphere envelope — the fractal silhouette comes
+// from the SDF, not the rasterised mesh — so the rim shading uniforms
+// are unused here.
 
 // Per-march state. Set by sceneSDF, perturbed each step in the march
 // loop — same pattern as the source shader's `g_fractalTint`.
@@ -102,7 +104,10 @@ void main() {
   vec3 origin = uLocalCamPos;
   vec3 dir = normalize(vLocalPosition - uLocalCamPos);
 
-  vec2 limits = sphereBounds(origin, dir, 2.0);
+  // Bound radius matches the geometry sphere (3.5) so the march
+  // covers the full tetrahedron + fractal volume without any visible
+  // sphere envelope.
+  vec2 limits = sphereBounds(origin, dir, 3.5);
   // Camera inside the sphere → near intersection sits behind us; clamp
   // start to camera origin (0) so the ray marches forward, not backward.
   limits.x = max(limits.x, 0.0);
@@ -140,7 +145,22 @@ void main() {
       // emission colour.
       float mixT = clamp(length(g_tint) * 0.6, 0.0, 1.0);
       vec3 emission = mix(uSecondaryColor, uPrimaryColor, mixT);
-      accum += uGlowIntensity * g_tint * att * emission;
+
+      // Click reactivity — boost the glow at samples whose direction
+      // from origin aligns with the click direction. Because this
+      // happens inside the volume march, the *fractal itself* lights
+      // up on the clicked side rather than a flat cone painted on a
+      // (now invisible) sphere envelope. Tight smoothstep keeps the
+      // boost localised; the strength uniform decays after the click.
+      float plen = length(p);
+      vec3 pDir = (plen > 1e-4) ? p / plen : vec3(0.0);
+      float clickCone = smoothstep(0.55, 1.0, dot(pDir, uClickDir));
+      float clickBoost = uClickStrength * clickCone;
+
+      accum += uGlowIntensity * g_tint * att * emission * (1.0 + clickBoost * 2.0);
+      // Tint pull toward primary at the click site — reads as a touch
+      // rather than just a brighter spot of the existing colour.
+      accum += uPrimaryColor * att * clickBoost * 0.05;
     }
 
     if (sd < 0.0002) {
@@ -155,27 +175,15 @@ void main() {
     depth += sd * 0.8;
   }
 
-  // Edge AA via the sphere normal — same shape as fractal/nebula so
-  // the silhouette matches the rest of the orb family.
-  vec3 normal = normalize(vNormal);
-  vec3 viewDir = normalize(vViewPosition);
-  float facingRatio = max(dot(normal, viewDir), 0.0);
-  float edgeAA = smoothstep(0.0, 0.05, facingRatio);
-
-  // Contrast curve from the source shader. Squaring darkens the
-  // mid-tones so the bright fractal cores pop against the rim.
+  // No sphere edge fade — the fractal carries its own silhouette
+  // through the SDF march. Alpha is purely from the accumulated glow:
+  // pixels with no fractal density stay transparent, no spherical
+  // envelope shows.
   vec3 finalColor = accum * accum;
   finalColor = clamp(finalColor, 0.0, 1.0);
-  finalColor *= edgeAA;
 
   float maxLuma = max(finalColor.r, max(finalColor.g, finalColor.b));
-  float alpha = clamp(maxLuma * 1.5, 0.0, 1.0) * edgeAA;
-
-  // Click bloom — tight cone on uClickDir; same envelope as fractal.
-  vec3 localNormal = normalize(vLocalPosition);
-  float clickBoost = smoothstep(0.75, 1.0, dot(localNormal, uClickDir)) * uClickStrength;
-  finalColor += uPrimaryColor * clickBoost * 0.9;
-  alpha = clamp(alpha + clickBoost * 0.4, 0.0, 1.0);
+  float alpha = clamp(maxLuma * 1.5, 0.0, 1.0);
 
   gl_FragColor = vec4(finalColor, alpha);
 }
