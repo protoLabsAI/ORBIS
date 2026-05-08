@@ -7,3 +7,4 @@ import './fractal';
 import './nebula';
 import './crystal';
 import './particles';
+import './tetra';

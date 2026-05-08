@@ -1,0 +1,142 @@
+import { useEffect, useMemo, useRef } from 'react';
+import * as THREE from 'three';
+import { useFrame, useThree } from '@react-three/fiber';
+import { TetraMaterial } from './materials';
+import type { TetraPreset } from './presets';
+import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
+import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
+import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
+import { usePointerInteraction } from '../../shared/hooks/usePointerInteraction';
+import { useComposedBase } from '../../shared/hooks/useComposedBase';
+import { Atmosphere } from '../../shared/atmosphere/Atmosphere';
+import {
+  BREATH_AMP,
+  MAX_DELTA_S,
+  ROT_WRAP,
+  ROTATION_SCALE,
+  TIME_WRAP,
+} from '../../shared/constants';
+import type { VariantProps } from '../registry';
+
+/**
+ * Tetra variant — sphere-mounted port of a tetrahedron + spherical-
+ * inversion fractal raymarch. Distinct from the existing fractal
+ * variant: the tetrahedron bound gives a sharper silhouette than the
+ * fractal's all-organic shape, and the spherical inversion fold
+ * produces curling inner structures that read as "engine" rather
+ * than "cloud."
+ *
+ * Audio reactivity:
+ *   - dBot → glow intensity bump (orb glows brighter when speaking)
+ *   - dUser → fold-Y perturbation (the inner shape twitches on listen)
+ *   - state → primary/secondary crossfade through shared snapshot
+ *   - breath → mesh scale modulation
+ */
+export function TetraVariant({ voiceState, botStream, localStream }: VariantProps) {
+  const { camera, gl } = useThree();
+  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<InstanceType<typeof TetraMaterial>>(null);
+
+  const { base, effectiveState } = useComposedBase<TetraPreset>(voiceState);
+  const baseRef = useRef(base);
+  baseRef.current = base;
+
+  const { dBotRef, dUserRef } = useAudioEnvelopes({ botStream, localStream });
+  const { snapRef } = useStateCrossfade(effectiveState, base);
+  const { breathNormRef } = useIdleBreath();
+  const { clickDirRef, clickStrengthRef, dragVelRef } = usePointerInteraction(meshRef);
+
+  // Direct (non-state-driven) uniforms — applied on change.
+  useEffect(() => {
+    const m = matRef.current;
+    if (!m) return;
+    m.uniforms.uShapeSize.value    = base.shapeSize;
+    m.uniforms.uIterations.value   = base.iterations;
+    m.uniforms.uGlowBase.value     = base.glowBase;
+    m.uniforms.uInternalAnim.value = base.internalAnim;
+  }, [base.shapeSize, base.iterations, base.glowBase, base.internalAnim]);
+
+  useEffect(() => {
+    gl.setPixelRatio(base.dpr);
+  }, [base.dpr, gl]);
+
+  useEffect(() => {
+    camera.position.set(0, 0, 13);
+  }, [camera]);
+
+  const scratchCam = useMemo(() => new THREE.Vector3(), []);
+  const scratchFold = useMemo(() => new THREE.Vector3(), []);
+  const geometry = useMemo(() => new THREE.SphereGeometry(2, 96, 96), []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+
+  useFrame((_, rawDelta) => {
+    const delta = Math.min(rawDelta, MAX_DELTA_S);
+    const m = matRef.current;
+    const mesh = meshRef.current;
+    const snap = snapRef.current;
+    if (!m || !mesh || !snap) return;
+
+    const dBot = dBotRef.current;
+    const dUser = dUserRef.current;
+
+    // Glow intensity = base + state-density bump + bot-energy bump.
+    // Bot speaking is what makes the orb "light up", same shape as
+    // fractal/nebula so cross-variant behaviour is consistent.
+    m.uniforms.uGlowIntensity.value =
+      base.glowIntensity * (0.85 + snap.density * 0.25) + dBot * 0.04;
+
+    // Fold-Y perturbation on user voice — small twitches in the inner
+    // structure during listening. Capped low so the silhouette doesn't
+    // wobble visibly.
+    scratchFold.set(base.foldX, base.foldY + dUser * 0.15, base.foldZ);
+    m.uniforms.uFold.value.copy(scratchFold);
+
+    m.uniforms.uPrimaryColor.value.copy(snap.primary);
+    m.uniforms.uSecondaryColor.value.copy(snap.secondary);
+    m.uniforms.uClickDir.value.copy(clickDirRef.current);
+    m.uniforms.uClickStrength.value = clickStrengthRef.current;
+
+    // Scale: state × breath × gentle audio pump.
+    const scale = snap.scale * (1 + breathNormRef.current * BREATH_AMP) * (1 + dBot * 0.06);
+    mesh.scale.setScalar(scale);
+
+    // Time + rotation.
+    m.uniforms.uTime.value += delta * snap.speed;
+    mesh.rotation.y += delta * snap.rotation * ROTATION_SCALE + dragVelRef.current.y * delta;
+    mesh.rotation.x += delta * (snap.rotation * 0.5) * ROTATION_SCALE + dragVelRef.current.x * delta;
+
+    // Float32 wrap — see constants.ts TIME_WRAP / ROT_WRAP.
+    if (m.uniforms.uTime.value > TIME_WRAP) m.uniforms.uTime.value -= TIME_WRAP;
+    if (mesh.rotation.y > ROT_WRAP)  mesh.rotation.y -= ROT_WRAP;
+    if (mesh.rotation.y < -ROT_WRAP) mesh.rotation.y += ROT_WRAP;
+    if (mesh.rotation.x > ROT_WRAP)  mesh.rotation.x -= ROT_WRAP;
+    if (mesh.rotation.x < -ROT_WRAP) mesh.rotation.x += ROT_WRAP;
+
+    // Local camera position for the raymarch ray origin.
+    mesh.updateMatrixWorld();
+    scratchCam.copy(camera.position);
+    mesh.worldToLocal(scratchCam);
+    m.uniforms.uLocalCamPos.value.copy(scratchCam);
+  });
+
+  return (
+    <mesh ref={meshRef} geometry={geometry}>
+      <tetraMaterial
+        ref={matRef}
+        transparent
+        side={THREE.DoubleSide}
+        depthWrite={false}
+        blending={THREE.AdditiveBlending}
+        attach="material"
+      />
+      <Atmosphere
+        geometry={geometry}
+        snapRef={snapRef}
+        dBotRef={dBotRef}
+        dUserRef={dUserRef}
+        clickDirRef={clickDirRef}
+        clickStrengthRef={clickStrengthRef}
+      />
+    </mesh>
+  );
+}
