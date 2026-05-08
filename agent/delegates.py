@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -556,6 +557,38 @@ _HEALTH_INITIAL_DELAY_SECS = float(
     os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "30")
 )
 
+# Per-delegate fast-retry steps (seconds) for the first N consecutive
+# failures, before settling into the base interval. Picks up a recovery
+# inside ~30s instead of waiting the full 5-minute base cadence — the
+# audit's "marks degraded and stays there until next cycle" gap.
+# Tuple length defines how many fast retries before backing off to base.
+_RETRY_STEPS_SECS: tuple[float, ...] = (30.0, 60.0, 120.0)
+
+# Loop poll cadence — how often the outer loop wakes to check which
+# delegates are due. Must be ≤ the smallest retry step so a fast retry
+# fires on time. Cap at the base interval too — if a deployment sets
+# a tiny DELEGATE_HEALTH_INTERVAL, we'd prefer a tighter tick than
+# this hard 10s ceiling.
+_HEALTH_TICK_SECS = 10.0
+
+
+def _next_probe_delay(consecutive_failures: int, base_interval: float) -> float:
+    """How long to wait before re-probing this delegate.
+
+    Healthy delegates get the base interval with ±10% jitter (so a
+    fleet of delegates doesn't all probe at the same instant against
+    a shared backend). Failing delegates get a short fast-retry step
+    so transient blips don't park the UI banner red for 5 minutes.
+    Beyond ``_RETRY_STEPS_SECS`` consecutive failures, fall back to
+    the jittered base interval — the service is genuinely down and
+    hammering it on a fast retry buys nothing.
+    """
+    if consecutive_failures > 0:
+        idx = consecutive_failures - 1
+        if idx < len(_RETRY_STEPS_SECS):
+            return _RETRY_STEPS_SECS[idx]
+    return base_interval * random.uniform(0.9, 1.1)
+
 
 async def health_loop(
     registry: "DelegateRegistry",
@@ -571,6 +604,13 @@ async def health_loop(
     is the *expected* signal we're trying to capture, and an
     unexpected exception (e.g. from a bad delegate config) gets logged
     and swallowed so the loop stays alive for the other delegates.
+
+    Scheduling is per-delegate: each delegate carries a ``next_due``
+    timestamp. Healthy delegates are probed every ``interval_secs``
+    (with ±10% jitter to avoid stampedes); failing delegates use
+    ``_RETRY_STEPS_SECS`` for the first few consecutive failures so
+    a quick recovery is picked up inside ~30s. The outer loop wakes
+    on ``_HEALTH_TICK_SECS`` to check which delegates are due.
     """
     iv = interval_secs if interval_secs is not None else _HEALTH_INTERVAL_SECS
     delay = (
@@ -581,9 +621,21 @@ async def health_loop(
         await asyncio.sleep(delay)
     except asyncio.CancelledError:
         return
+
+    # Per-delegate next-probe deadlines (monotonic seconds). Missing key
+    # means "due now"; newly added delegates land here on their first
+    # registry.all() iteration and get probed immediately.
+    next_due: dict[str, float] = {}
+    # Outer poll cadence — capped by the base interval so tiny intervals
+    # in tests don't stretch beyond the test's expected tick.
+    tick = min(_HEALTH_TICK_SECS, iv)
+
     while True:
         try:
+            now = time.monotonic()
             for delegate in registry.all():
+                if next_due.get(delegate.name, 0.0) > now:
+                    continue  # not due yet — wait for the deadline
                 try:
                     result = await probe(delegate)
                 except Exception as e:  # noqa: BLE001 — defensive
@@ -593,26 +645,31 @@ async def health_loop(
                     registry.record_health(
                         delegate.name, ok=False, error=str(e),
                     )
+                    h = registry.health(delegate.name)
+                    consecutive = h.consecutive_failures if h else 1
+                    next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)
                     continue
+                ok = bool(result.get("ok"))
                 registry.record_health(
                     delegate.name,
-                    ok=bool(result.get("ok")),
+                    ok=ok,
                     latency_ms=result.get("latency_ms"),
                     error=result.get("error"),
                 )
-                if not result.get("ok"):
-                    h = registry.health(delegate.name)
-                    if h and h.consecutive_failures > 1:
-                        # Keep the noise gradient sensible: first failure
-                        # is INFO (might be transient), repeated is WARNING.
-                        logger.warning(
-                            f"[delegate-health] {delegate.name} degraded "
-                            f"({h.consecutive_failures} consecutive): "
-                            f"{result.get('error')}"
-                        )
+                h = registry.health(delegate.name)
+                consecutive = h.consecutive_failures if h else 0
+                next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)
+                if not ok and h and h.consecutive_failures > 1:
+                    # Keep the noise gradient sensible: first failure
+                    # is INFO (might be transient), repeated is WARNING.
+                    logger.warning(
+                        f"[delegate-health] {delegate.name} degraded "
+                        f"({h.consecutive_failures} consecutive): "
+                        f"{result.get('error')}"
+                    )
         except Exception as e:  # noqa: BLE001 — never let the loop die
             logger.exception(f"[delegate-health] loop iteration crashed: {e}")
         try:
-            await asyncio.sleep(iv)
+            await asyncio.sleep(tick)
         except asyncio.CancelledError:
             return
