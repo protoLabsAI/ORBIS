@@ -196,6 +196,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Inbox
+         * @description List inbox messages, newest-first.
+         *
+         *     Query params:
+         *       - unread_only=1     — filter to undelivered
+         *       - priority_floor=X  — when unread_only, the priority floor: 'now'
+         *                             returns only urgent; 'next' returns urgent+
+         *                             normal; 'later' returns everything (default).
+         *       - limit=N           — page size (default 50, max 200)
+         */
+        get: operations["get_inbox_api_inbox_get"];
+        put?: never;
+        /**
+         * Post Inbox
+         * @description Ingest a message into the agent's inbox.
+         *
+         *     Auth: owner X-API-Key OR ``INBOX_INGEST_TOKEN`` (env). Webhook /
+         *     cron ingestors should use the token so they don't need the full
+         *     owner key.
+         *
+         *     Body: ``{"sender": "...", "subject": "...", "body": "...",
+         *             "channel": "..." (optional),
+         *             "priority": "now|next|later" (default "next"),
+         *             "created_at": "..." (optional)}``.
+         *
+         *     Priority semantics:
+         *       - now   : surfaced at the next session start; agent reads automatically
+         *       - next  : default; surfaced when the agent calls check_inbox
+         *       - later : background; only surfaced when explicitly drained
+         *
+         *     Returns ``{"ok": true, "id": <int>}``.
+         */
+        post: operations["post_inbox_api_inbox_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/inbox/deliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Inbox Deliver
+         * @description Mark message ids as delivered. Body: ``{"ids": [1, 2, 3]}``.
+         *     Idempotent; already-delivered ids are no-ops.
+         */
+        post: operations["post_inbox_deliver_api_inbox_deliver_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/llm/detect_local": {
         parameters: {
             query?: never;
@@ -1109,6 +1177,115 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_inbox_api_inbox_get: {
+        parameters: {
+            query?: {
+                unread_only?: boolean;
+                priority_floor?: string;
+                limit?: number;
+            };
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_inbox_api_inbox_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_inbox_deliver_api_inbox_deliver_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

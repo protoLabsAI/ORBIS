@@ -828,6 +828,207 @@
         "summary": "Create Checkout"
       }
     },
+    "/api/inbox": {
+      "get": {
+        "description": "List inbox messages, newest-first.\n\nQuery params:\n  - unread_only=1     \u2014 filter to undelivered\n  - priority_floor=X  \u2014 when unread_only, the priority floor: 'now'\n                        returns only urgent; 'next' returns urgent+\n                        normal; 'later' returns everything (default).\n  - limit=N           \u2014 page size (default 50, max 200)",
+        "operationId": "get_inbox_api_inbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "priority_floor",
+            "required": false,
+            "schema": {
+              "default": "later",
+              "title": "Priority Floor",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Inbox"
+      },
+      "post": {
+        "description": "Ingest a message into the agent's inbox.\n\nAuth: owner X-API-Key OR ``INBOX_INGEST_TOKEN`` (env). Webhook /\ncron ingestors should use the token so they don't need the full\nowner key.\n\nBody: ``{\"sender\": \"...\", \"subject\": \"...\", \"body\": \"...\",\n        \"channel\": \"...\" (optional),\n        \"priority\": \"now|next|later\" (default \"next\"),\n        \"created_at\": \"...\" (optional)}``.\n\nPriority semantics:\n  - now   : surfaced at the next session start; agent reads automatically\n  - next  : default; surfaced when the agent calls check_inbox\n  - later : background; only surfaced when explicitly drained\n\nReturns ``{\"ok\": true, \"id\": <int>}``.",
+        "operationId": "post_inbox_api_inbox_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Inbox"
+      }
+    },
+    "/api/inbox/deliver": {
+      "post": {
+        "description": "Mark message ids as delivered. Body: ``{\"ids\": [1, 2, 3]}``.\nIdempotent; already-delivered ids are no-ops.",
+        "operationId": "post_inbox_deliver_api_inbox_deliver_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-API-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Inbox Deliver"
+      }
+    },
     "/api/llm/detect_local": {
       "get": {
         "description": "Parallel probe Ollama (:11434) + LM Studio (:1234) on localhost.\nReturns only the providers that responded \u2014 voice-first homelab\nusers get a \"we noticed your local Ollama\" callout in the wizard.\n\nUnauth \u2014 localhost detection before auth is set is the whole point.",
