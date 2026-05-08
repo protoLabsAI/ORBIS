@@ -83,8 +83,16 @@ void main() {
 
   vec3 accum = vec3(0.0);
 
+  // Per-pixel ray budget. The source ran from a camera at z=-4.5 with
+  // a 10-unit cap; ORBIS's camera sits at z=13 in object space and the
+  // bounding-sphere fast-forward jumps the ray from there to fadeOuter,
+  // which already eats ~10 units before the orb is reached. Raise the
+  // cap to comfortably cover camera distance + sphere diameter + a
+  // little slack.
+  const float T_MAX = 25.0;
+
   for (int step = 0; step < 90; step++) {
-    if (t > 10.0) break;
+    if (t > T_MAX) break;
     vec3 pos = ro + rd * t;
     float distFromCenter = length(pos);
 
