@@ -10,3 +10,4 @@ import './particles';
 import './tetra';
 import './lattice';
 import './spectrum';
+import './galaxy';
