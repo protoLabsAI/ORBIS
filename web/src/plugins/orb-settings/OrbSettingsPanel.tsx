@@ -43,12 +43,9 @@ export function OrbSettingsPanel() {
   const { stateOverrides, moodOverrides } = useOrbOverrides();
   // Saved presets live per-variant — switching variants reloads the
   // map so the dropdown only ever shows entries that fit the active
-  // schema. Lazy initialiser uses 'fractal' as the bootstrap key
-  // because the variant isn't resolved on the first render; the
-  // effect below replaces it once the variant is available.
-  const [customMap, setCustomMap] = useState<CustomPresetMap>(
-    () => loadCustomByVariant(variant?.id ?? 'fractal'),
-  );
+  // schema. Initialise with an empty map; the variant.id effect
+  // below populates it once the active variant resolves.
+  const [customMap, setCustomMap] = useState<CustomPresetMap>({});
   const [customName, setCustomName] = useState<string>('');
   const [copyLabel, setCopyLabel] = useState<string>('Copy config');
 
