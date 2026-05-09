@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { api, type StarterOrb } from '@/lib/api';
+import { apiUrl } from '@/lib/backend';
 import { authHeaders } from '@/auth/apiKey';
 import { LLM_PRESETS } from '@/shared/llm/presets';
 import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
@@ -932,7 +933,7 @@ function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
     let cancelled = false;
     void (async () => {
       try {
-        const r = await fetch('/api/voiceprint/status', {
+        const r = await fetch(apiUrl('/api/voiceprint/status'), {
           headers: authHeaders(),
         });
         if (!r.ok || cancelled) return;
@@ -985,7 +986,7 @@ function EnrollStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
       setLevel(0);
       setStatus('uploading');
 
-      const r = await fetch('/api/voiceprint/enroll', {
+      const r = await fetch(apiUrl('/api/voiceprint/enroll'), {
         method: 'POST',
         body: wav,
         headers: { 'Content-Type': 'audio/wav', ...authHeaders() },

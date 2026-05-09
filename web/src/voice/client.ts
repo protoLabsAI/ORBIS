@@ -1,6 +1,8 @@
 import { PipecatClient } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
 import { apiKeyStore } from '@/auth/apiKey';
+import { pairingStore } from '@/auth/pairing';
+import { apiUrl } from '@/lib/backend';
 import {
   getPreferredAudioDeviceId,
   subscribePreferredAudioDeviceId,
@@ -38,10 +40,19 @@ export function buildClient(): PipecatClient {
   const key = apiKeyStore.get();
   const headers = new Headers();
   if (key) headers.set('X-API-Key', key);
+  // Cross-origin pairing token (empty in same-origin installs) — the
+  // sidecar's middleware enforces it on /api/* including /api/offer
+  // when ORBIS_ALLOWED_ORIGINS is set.
+  const pair = pairingStore.get();
+  if (pair) headers.set('X-Orbis-Pair', pair);
 
   const transport = new SmallWebRTCTransport({
     webrtcRequestParams: {
-      endpoint: '/api/offer',
+      // apiUrl() resolves to '/api/offer' (same-origin, default) or
+      // '<backendBaseUrl>/api/offer' for the hosted-SPA + local-sidecar
+      // topology. Pipecat's transport treats the endpoint string as
+      // opaque, so an absolute URL works fine.
+      endpoint: apiUrl('/api/offer'),
       headers,
     },
     waitForICEGathering: true,
