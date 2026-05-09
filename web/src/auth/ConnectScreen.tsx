@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { backendBaseUrl, setBackendBaseUrl, apiUrl } from '@/lib/backend';
+import { backendBaseUrl, setBackendBaseUrl } from '@/lib/backend';
 import { pairingStore } from './pairing';
 
 export function shouldShowConnect(): boolean {
@@ -54,9 +54,6 @@ export function ConnectScreen({ onConnected }: { onConnected: () => void }) {
   }, []);
 
   const onConnect = async () => {
-    // Persist before probing so the apiUrl() helper uses the new value.
-    setBackendBaseUrl(url);
-    pairingStore.set(token);
     setStatus({ kind: 'probing' });
     await probe(url, token, setStatus, onConnected);
   };
@@ -130,18 +127,20 @@ async function probe(
   onConnected: () => void,
 ) {
   setStatus({ kind: 'probing' });
-  // Persist the candidate so apiUrl() routes to it during this probe.
-  setBackendBaseUrl(url);
-  pairingStore.set(token);
+  // Build URLs from the candidate directly rather than routing through
+  // apiUrl() — that would require persisting the candidate before
+  // probing, and a failed probe would clobber the user's last-known-
+  // good config in localStorage. We commit to storage only after both
+  // /healthz and /api/whoami succeed.
+  const base = url.replace(/\/+$/, '');
   try {
-    const probeUrl = apiUrl('/healthz');
-    const r = await fetch(probeUrl);
+    const r = await fetch(`${base}/healthz`);
     if (r.status === 200) {
       // Healthz is exempt from the pair check — that proves the sidecar
       // exists, but not that the token is valid. Make a second hit
       // against /api/whoami so we surface bad-token errors here rather
       // than at first feature use.
-      const r2 = await fetch(apiUrl('/api/whoami'), {
+      const r2 = await fetch(`${base}/api/whoami`, {
         headers: token ? { 'X-Orbis-Pair': token } : {},
       });
       if (r2.status === 401) {
@@ -158,6 +157,11 @@ async function probe(
         });
         return;
       }
+      // Success — commit to storage now. apiUrl() everywhere else in
+      // the SPA will pick this up on next read; the pairing token is
+      // attached by authHeaders() / voice/client.ts on every request.
+      setBackendBaseUrl(url);
+      pairingStore.set(token);
       setStatus({ kind: 'ok' });
       onConnected();
       return;
