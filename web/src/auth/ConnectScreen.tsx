@@ -132,7 +132,14 @@ async function probe(
   // probing, and a failed probe would clobber the user's last-known-
   // good config in localStorage. We commit to storage only after both
   // /healthz and /api/whoami succeed.
-  const base = url.replace(/\/+$/, '');
+  // Trim defensively — pasted-from-terminal values commonly carry
+  // trailing whitespace, which makes fetch() throw on the URL and
+  // breaks secrets.compare_digest on the token side. Storage already
+  // trims internally, but normalizing here keeps the probe and the
+  // saved values byte-identical.
+  const trimmedUrl = url.trim();
+  const trimmedToken = token.trim();
+  const base = trimmedUrl.replace(/\/+$/, '');
   try {
     const r = await fetch(`${base}/healthz`);
     if (r.status === 200) {
@@ -141,7 +148,7 @@ async function probe(
       // against /api/whoami so we surface bad-token errors here rather
       // than at first feature use.
       const r2 = await fetch(`${base}/api/whoami`, {
-        headers: token ? { 'X-Orbis-Pair': token } : {},
+        headers: trimmedToken ? { 'X-Orbis-Pair': trimmedToken } : {},
       });
       if (r2.status === 401) {
         setStatus({
@@ -160,8 +167,8 @@ async function probe(
       // Success — commit to storage now. apiUrl() everywhere else in
       // the SPA will pick this up on next read; the pairing token is
       // attached by authHeaders() / voice/client.ts on every request.
-      setBackendBaseUrl(url);
-      pairingStore.set(token);
+      setBackendBaseUrl(trimmedUrl);
+      pairingStore.set(trimmedToken);
       setStatus({ kind: 'ok' });
       onConnected();
       return;
