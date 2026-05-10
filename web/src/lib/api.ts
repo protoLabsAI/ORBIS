@@ -15,6 +15,7 @@
  */
 
 import { authHeaders } from '@/auth/apiKey';
+import { apiUrl } from './backend';
 import type { paths } from './api-types';
 
 // Endpoint paths from the OpenAPI schema, minus ones with templated
@@ -244,7 +245,7 @@ export interface HealthResponse {
 
 
 async function get<T>(path: EndpointPath): Promise<T> {
-  const r = await fetch(path, { headers: authHeaders() });
+  const r = await fetch(apiUrl(path), { headers: authHeaders() });
   if (r.status === 401) throw new UnauthorizedError(path);
   if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
   return r.json() as Promise<T>;
@@ -270,7 +271,7 @@ async function _send<T>(method: string, path: EndpointPath, body?: unknown): Pro
       : authHeaders(),
   };
   if (body !== undefined) init.body = JSON.stringify(body);
-  const r = await fetch(path, init);
+  const r = await fetch(apiUrl(path), init);
   if (r.status === 401) throw new UnauthorizedError(path);
   // Non-2xx but with a JSON body — surface the server's error message
   // so the UI can render it inline rather than the generic "HTTP 400".

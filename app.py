@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import logging
 import os
+import secrets
 import signal
 import sys
 import time
@@ -52,6 +53,7 @@ _cache_dir = configure_hf_home()
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -85,6 +87,7 @@ from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from a2a.server import register_a2a_routes
+from auth.pairing import get_pairing_token, is_pairing_enforced
 from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
@@ -1466,6 +1469,66 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
 
+# Cross-origin support for the "hosted SPA, local sidecar" deployment
+# topology. When unset, ORBIS keeps the historical same-origin posture
+# — the sidecar serves both /api/* and the SPA, so nothing needs CORS.
+# Set ORBIS_ALLOWED_ORIGINS to a comma-separated list (e.g.
+# "http://localhost:5173,https://orbis.app") to opt into split
+# deployment. allow_credentials=True so the pairing token header
+# (X-Orbis-Pair) and any auth headers ride through; we don't expose
+# any custom response headers by default so metadata stays in.
+_allowed_origins_raw = os.environ.get("ORBIS_ALLOWED_ORIGINS", "").strip()
+if _allowed_origins_raw:
+    _allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+        allow_headers=["*"],
+    )
+    logger.info(f"[boot] CORS allowed origins: {_allowed_origins}")
+
+
+# Pairing-token enforcement — same-origin installs short-circuit
+# (is_pairing_enforced() returns False when ORBIS_ALLOWED_ORIGINS is
+# empty), so this middleware is a no-op in the historical deployment.
+# When enforced, every /api/* request must carry X-Orbis-Pair: <token>.
+# Public exemptions:
+#   - OPTIONS preflight (CORS spec — browser refuses to attach custom
+#     headers until preflight succeeds, so we'd 401 our own handshake)
+#   - /healthz (the SPA's "is the sidecar up" probe runs before pairing)
+#   - SPA assets (/, /assets/*, /static/*, /icons/*, /sw.js, etc.) —
+#     those are unauth even in same-origin mode
+# A2A traffic on /a2a is exempt and uses its own A2A_AUTH_TOKEN; the
+# pairing token is for the SPA→sidecar channel only.
+@app.middleware("http")
+async def _enforce_pair_token(request: Request, call_next):
+    if not is_pairing_enforced():
+        return await call_next(request)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    # Allow /healthz so the SPA can probe before it has a token.
+    if path == "/healthz":
+        return await call_next(request)
+    # Only gate /api/*. SPA assets, /a2a, /static all bypass.
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    expected = get_pairing_token()
+    if expected is None:
+        # Pairing was enforced but token couldn't be resolved — fail
+        # closed rather than silently accept everything.
+        return JSONResponse(
+            {"error": "pairing token unavailable"}, status_code=503,
+        )
+    presented = request.headers.get("x-orbis-pair", "").strip()
+    if not secrets.compare_digest(presented, expected):
+        return JSONResponse(
+            {"error": "pairing token missing or invalid"}, status_code=401,
+        )
+    return await call_next(request)
+
 
 @app.post("/api/offer")
 async def offer(
@@ -2723,6 +2786,18 @@ def main():
     # prefix to learn where to connect. Keep it first on stdout; any
     # logger output is on stderr.
     print(f"ORBIS_READY http://{bound_host}:{bound_port}", flush=True)
+
+    # Pairing token banner — only emitted when CORS is enabled (split-
+    # deployment mode). The user pastes this into the hosted SPA's
+    # connect screen. Same-origin installs print nothing.
+    if is_pairing_enforced():
+        token = get_pairing_token()
+        if token:
+            print("", flush=True)
+            print("  [orbis] split-deployment pairing token:", flush=True)
+            print(f"      {token}", flush=True)
+            print("  Paste it into the hosted SPA's Connect screen.", flush=True)
+            print("", flush=True)
 
     config = uvicorn.Config(app, fd=sock.fileno())
     server = uvicorn.Server(config)

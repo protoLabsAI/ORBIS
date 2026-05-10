@@ -12,6 +12,8 @@
  * the wizard flow writes it here on first run.
  */
 
+import { pairingStore } from './pairing';
+
 const STORAGE_KEY = 'orbis.apiKey';
 
 type Listener = () => void;
@@ -44,10 +46,18 @@ export const apiKeyStore = {
   },
 };
 
-/** Build a Headers object with the api key attached (if set). */
+/** Build a Headers object with the owner API key attached (if set)
+ * and the cross-origin pairing token (if set — empty in the historical
+ * same-origin install, populated when the SPA is hosted separately
+ * from the sidecar). The two are independent: API key is server-side
+ * owner trust, pairing token is browser-tab anti-CSRF. */
 export function authHeaders(extra: HeadersInit = {}): Headers {
   const h = new Headers(extra);
   const key = apiKeyStore.get();
   if (key) h.set('X-API-Key', key);
+  // Imported lazily-via-static to avoid a circular dep — pairing.ts
+  // doesn't import this module, so a top-of-file import is fine.
+  const pair = pairingStore.get();
+  if (pair) h.set('X-Orbis-Pair', pair);
   return h;
 }

@@ -1,10 +1,11 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import type { PipecatClient } from '@pipecat-ai/client-js';
 import {
   PipecatClientProvider,
   PipecatClientAudio,
 } from '@pipecat-ai/client-react';
 import { Drawer } from '@/components/Drawer';
+import { ConnectScreen, shouldShowConnect } from './auth/ConnectScreen';
 import { buildClient } from './voice/client';
 import { ConnectionBanner } from './voice/ConnectionBanner';
 import { DelegateHealthBanner } from './voice/DelegateHealthBanner';
@@ -26,7 +27,21 @@ import './plugins/dev-panel';
 import './plugins/logs-panel';
 
 function App() {
+  // In split-deployment mode (hosted SPA + local sidecar), gate the
+  // pipecat client construction behind the connect handshake. The
+  // SmallWebRTCTransport latches the offer endpoint at construction
+  // time, so we MUST resolve the backend URL before instantiating it
+  // — otherwise a user who pastes a different URL into the connect
+  // screen would still hit the original endpoint. Same-origin installs
+  // skip the gate entirely (shouldShowConnect() is false) and the
+  // client builds immediately, identical to historical behavior.
+  const [connected, setConnected] = useState(() => !shouldShowConnect());
   const clientRef = useRef<PipecatClient | null>(null);
+
+  if (!connected) {
+    return <ConnectScreen onConnected={() => setConnected(true)} />;
+  }
+
   if (!clientRef.current) clientRef.current = buildClient();
 
   return (

@@ -133,6 +133,38 @@ and write it into `config/users.yaml`. Browser side, the
 `apiKeyStore` LocalStorage key (`orbis.apiKey`) attaches the value as
 `X-API-Key` on every `/api/*` call and the WebRTC offer.
 
+### Split deployment — hosted SPA, local sidecar
+
+The default install runs the SPA and the API as one process on
+loopback. ORBIS also supports the "hosted UI, local sidecar"
+topology: a static SPA on (e.g.) `https://orbis.app` that talks
+cross-origin to a sidecar the user runs locally with `orbis` (or
+`uvx orbis` / a future `npx orbis` wrapper). UI updates ship
+without re-releasing the sidecar; user data and credentials stay on
+their machine.
+
+Two env vars on the sidecar enable the split posture:
+
+| Var | Purpose |
+| --- | --- |
+| `ORBIS_ALLOWED_ORIGINS` | Comma-separated CORS allowlist (e.g. `https://orbis.app,http://localhost:5173`). When **unset**, the sidecar is in same-origin mode and the rest of this section is a no-op. |
+| `ORBIS_PAIR_TOKEN` | Optional explicit pairing token. Leave unset to let the sidecar mint one and persist it under `~/.orbis/pair_token` (mode 600). The token is printed at boot — paste it into the SPA's connect screen. |
+
+When `ORBIS_ALLOWED_ORIGINS` is set, an HTTP middleware enforces a
+`X-Orbis-Pair: <token>` header on every `/api/*` request. CORS
+preflights (`OPTIONS`), `/healthz`, and SPA assets are exempt; A2A
+traffic on `/a2a` keeps using its own `A2A_AUTH_TOKEN`. Loopback is
+**not** a trust boundary against malicious tabs — the pair token is
+what stops a random page in another window from talking to the user's
+sidecar.
+
+SPA side, set `VITE_ORBIS_BACKEND=https://your-sidecar-url` at build
+time to bake in a default backend URL (the SPA will mount the connect
+screen automatically), or leave it unset and let the user paste the
+URL into the connect screen at runtime — both states persist to the
+`orbis.backendUrl` localStorage key. Same-origin builds leave both
+unset and the connect screen never renders.
+
 ## Architecture at a glance
 
 ```
