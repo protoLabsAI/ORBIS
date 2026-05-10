@@ -96,6 +96,11 @@ export function OrbSettingsPanel() {
   const onRandomize = () => {
     if (!variant) return;
     for (const spec of variant.fields) {
+      // Skip resolution/dpr — it's a performance dial the user has
+      // tuned for their device, not a creative knob. Randomizing it
+      // would land them on a 0.1× pixelated mess or a 2.0× thermal
+      // hotbox without warning.
+      if (spec.key === 'dpr') continue;
       const v = spec.kind === 'color' ? randomHex() : randomSliderValue(spec);
       applyParam(spec.key, v);
     }
