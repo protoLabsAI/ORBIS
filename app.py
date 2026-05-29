@@ -217,11 +217,9 @@ def _resolve_skill_llm(skill) -> dict:
         api_key = LLM_API_KEY
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
+    elif using_custom_url:
+        extra_body = None
     else:
-        # Always suppress thinking tokens. Custom-URL gateways that don't
-        # understand chat_template_kwargs should ignore unknown extra_body
-        # keys rather than 400 — if a gateway does error, the operator
-        # should set extra_body: null explicitly in their skill config.
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
     return {
         "url": url,
