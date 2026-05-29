@@ -127,3 +127,26 @@ def test_upstream_orb_randomize_keeps_user_resolution():
     )
 
     assert "if (spec.key === 'dpr') continue;" in panel
+
+
+def test_upstream_orb_custom_presets_stay_per_variant():
+    """Saved orb presets must remain scoped to the active variant schema."""
+    storage = (WEB / "src/plugins/orb/storage.ts").read_text(encoding="utf-8")
+    store = (WEB / "src/plugins/orb/store.ts").read_text(encoding="utf-8")
+    panel = (WEB / "src/plugins/orb-settings/OrbSettingsPanel.tsx").read_text(
+        encoding="utf-8",
+    )
+
+    assert "STORAGE_CUSTOM_V2 = 'orbis.customPresets.v2'" in storage
+    assert "loadCustomByVariant(variantId: string)" in storage
+    assert "saveCustomByVariant(variantId: string" in storage
+    assert "orbis.customPresets'" not in storage
+
+    assert "loadCustomByVariant(this.snap.variantId)" in store
+    assert "loadCustom()" not in store
+
+    assert "setCustomMap(loadCustomByVariant(variant.id));" in panel
+    assert "saveCustomByVariant(variant.id, next);" in panel
+    assert "}, [variant?.id]);" in panel
+    assert "setCustomName('');" in panel
+    assert "saveCustom(next)" not in panel
