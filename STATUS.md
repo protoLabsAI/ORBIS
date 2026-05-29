@@ -16,13 +16,13 @@ The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is
 
 ## Native fork status — 2026-05-29
 
-Canonical native work now lives in
-[`protoLabsAI/orbis-native`](https://github.com/protoLabsAI/orbis-native).
-This repo is intentionally Tauri-first: upstream `protoLabsAI/ORBIS`
-remains useful as a source of product/backend changes, but its current
-PWA/WebRTC direction is not a merge target. Treat this as a greenfield
-native fork: bring forward only the upstream pieces that fit the native
-desktop product.
+Canonical native work is staged in
+[`protoLabsAI/orbis-native`](https://github.com/protoLabsAI/orbis-native)
+for a later force-overwrite of upstream `protoLabsAI/ORBIS`. This repo is
+intentionally Tauri-first: upstream remains useful as a source of
+product/backend changes, but its current PWA/WebRTC direction is not a merge
+target. Treat this as a greenfield native fork: bring forward only the
+upstream pieces that fit the native desktop product.
 
 Selective upstream work already brought forward into `orbis-native:main`:
 
@@ -48,6 +48,13 @@ Selective upstream work already brought forward into `orbis-native:main`:
   native desktop, protoVoice runtime defaults were removed, stale PWA/workbox
   dependencies are gone, and tests prevent PWA/WebRTC browser-client packages
   from being reintroduced.
+- Overwrite-readiness work carried forward: release workflow now uses the
+  upstream shared `protoLabsAI/release-tools` action plus SPA fast-fail gate,
+  package metadata is aligned to upstream `0.2.22`, frontend package management
+  is Bun-only (`web/package-lock.json` removed), `web/dist/.gitkeep` keeps the
+  packaging scaffold present on fresh clones, and tests guard the native
+  `@tauri-apps/plugin-http` API transport plus the native backend/Tauri
+  scaffold.
 
 Intentionally skipped from upstream unless redesigned for native:
 
@@ -58,8 +65,8 @@ Intentionally skipped from upstream unless redesigned for native:
   `voice/local_transport.py` / `voice/native_bargein.py` / `voice/sse_bus.py`.
 - OpenAPI generated client drift that assumes the hosted SPA path instead of
   the existing `@tauri-apps/plugin-http` wrapper.
-- Upstream deletes of native-only package-lock, desktop docs, rebuild scripts,
-  macOS release workflows, and native tests remain rejected.
+- Upstream deletes of desktop docs, rebuild scripts, macOS release workflows,
+  and native tests remain rejected.
 
 Current local validation on this fork:
 
@@ -71,7 +78,8 @@ Current local validation on this fork:
   lint debt in orb/settings/voice code.
 - `scripts/check-macos-release-config.py` passed after each native-safe slice.
 - Focused guardrail tests for A2A native identity, Infisical `/orbis` defaults,
-  and native frontend package scope passed.
+  native frontend package scope/API transport, and native backend/Tauri scope
+  passed.
 
 The migration is staged in four phases:
 

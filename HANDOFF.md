@@ -20,9 +20,10 @@ architecture.
 
 ## Current fork posture
 
-`protoLabsAI/orbis-native` is the canonical Tauri-first fork. Treat upstream
-`protoLabsAI/ORBIS` as a source of selective changes only. Do not merge
-upstream `main` wholesale: it carries hosted PWA/WebRTC work and deletes the
+`protoLabsAI/orbis-native` is the canonical Tauri-first staging fork for a
+later force-overwrite of upstream `protoLabsAI/ORBIS`. Treat upstream as a
+source of selective changes only until that overwrite: do not merge upstream
+`main` wholesale because it carries hosted PWA/WebRTC work and deletes the
 native shell, native audio transport, Mac release scripts, and native tests.
 This is now a greenfield native fork: port only product/backend changes that
 fit the Tauri desktop runtime.
@@ -47,6 +48,12 @@ What has been ported and pushed:
 - Native-fork identity/guardrails: A2A advertises ORBIS native desktop, runtime
   defaults no longer point at protoVoice, PWA/workbox deps are removed, and
   tests guard against reintroducing PWA/WebRTC browser-client packages.
+- Overwrite-readiness: package version is aligned to upstream `0.2.22`,
+  release workflow uses the upstream shared `protoLabsAI/release-tools` action
+  plus SPA fast-fail, frontend package management is Bun-only, fresh-clone
+  packaging keeps `web/dist/.gitkeep`, and tests guard both the native
+  `@tauri-apps/plugin-http` API transport and the native backend/Tauri
+  scaffold.
 
 What is intentionally not ported yet:
 
@@ -68,7 +75,7 @@ Validation already run on the native fork:
   `bun run lint` still fails on pre-existing repo-wide lint debt.
 - `scripts/check-macos-release-config.py` passed.
 - Focused tests now cover A2A native identity, Infisical `/orbis` defaults,
-  and native frontend package scope.
+  native frontend package/API transport scope, and native backend/Tauri scope.
 
 ## Next-team handoff — Mac native audio
 
