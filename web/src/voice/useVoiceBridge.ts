@@ -16,6 +16,8 @@
  *   bot-state  { state: 'idle'|'listening'|'thinking'|'speaking' }
  *   transcript { source: 'user'|'bot', text: string, final: boolean }
  *   session    { event: 'start'|'end', session_id?: string }
+ *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
+ *   delegation-progress { type, source, text }
  *
  * Pre-2026-04-28 this was named useNativeBridge and gated behind
  * voiceStore.audioTransport === 'native'. The web/PWA / WebRTC path
@@ -98,6 +100,39 @@ export function useVoiceBridge(): void {
       } catch { /* malformed — ignore */ }
     });
 
+    es.addEventListener('tool-call', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as {
+          event?: 'start' | 'end';
+          name?: string;
+          args?: unknown;
+          outcome?: 'success' | 'error';
+        };
+        if (data.event === 'start' && data.name) {
+          voiceStore.update({
+            activeToolCall: { name: data.name, args: parseArgs(data.args) },
+            delegationProgress: null,
+            delegationOutcome: null,
+          });
+        } else if (data.event === 'end') {
+          voiceStore.update({
+            activeToolCall: null,
+            delegationProgress: null,
+            delegationOutcome: data.outcome ?? 'success',
+          });
+        }
+      } catch { /* malformed — ignore */ }
+    });
+
+    es.addEventListener('delegation-progress', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as { text?: string };
+        if (typeof data.text === 'string') {
+          voiceStore.update({ delegationProgress: data.text });
+        }
+      } catch { /* malformed — ignore */ }
+    });
+
     es.addEventListener('error', () => {
       voiceStore.update({ connected: false, state: 'idle' });
       es.close();
@@ -116,4 +151,13 @@ export function useVoiceBridge(): void {
     open();
     return close;
   }, [open, close]);
+}
+
+function parseArgs(args: unknown): unknown {
+  if (typeof args !== 'string') return args;
+  try {
+    return JSON.parse(args);
+  } catch {
+    return args;
+  }
 }

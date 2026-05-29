@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # app.py wires `task.queue_frame` into this so deliveries fire reliably no
 # matter which asyncio context calls controller.deliver().
 FrameEmitter = Callable[[Frame], Awaitable[None]]
+MessageEmitter = Callable[[dict], Awaitable[None]]
 
 
 class DeliveryPolicy(str, Enum):
@@ -170,9 +171,13 @@ class DeliveryController(FrameProcessor):
         # out-of-band emission (push_frame from another coroutine context
         # is unsafe).
         self._emitter: FrameEmitter | None = None
+        self._message_emitter: MessageEmitter | None = None
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
+
+    def set_message_emitter(self, emitter: MessageEmitter) -> None:
+        self._message_emitter = emitter
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending
@@ -185,6 +190,15 @@ class DeliveryController(FrameProcessor):
             input={"source": source, "preview": phrase[:120]},
         ):
             await self._emit(_attribute(phrase, source))
+            if self._message_emitter is not None:
+                try:
+                    await self._message_emitter({
+                        "type": "delegation-progress",
+                        "source": source,
+                        "text": phrase,
+                    })
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"[delivery] message emitter failed: {e}")
 
     # --- Cross-session persistence helpers --------------------------------
 

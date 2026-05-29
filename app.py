@@ -1013,10 +1013,14 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     # `_cancel_progress` is defined below; register_tools captures it via
     # closure so each SYNC tool handler auto-stops the progress loop on return.
-    def _cancel_progress():
+    def _cancel_progress(*, publish_end: bool = True):
         while progress_tasks:
             t = progress_tasks.pop()
             t.cancel()
+        if publish_end:
+            asyncio.create_task(
+                sse_bus.publish("tool-call", {"event": "end", "outcome": "success"})
+            )
 
     # D17: attach pushNotificationConfig on outbound A2A so remote agents
     # can call us back via /a2a/push even if the SSE stream dropped.
@@ -1283,6 +1287,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # now that the task exists. queue_frame is the only safe way to inject
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
+    delivery.set_message_emitter(
+        lambda payload: sse_bus.publish("delegation-progress", payload)
+    )
     backchannel.set_emitter(task.queue_frame)
 
     # --- Duplex speak-while-thinking ---
@@ -1351,6 +1358,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         _METRICS["tool_calls_total"] += len(names)
         for n in names:
             _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
+        first = function_calls[0] if function_calls else None
+        args = getattr(first, "arguments", None) if first is not None else None
+        await sse_bus.publish(
+            "tool-call",
+            {"event": "start", "name": names[0] if names else "", "args": args},
+        )
 
         # Only SLOW sync tools get the progress narration loop. The opening
         # acknowledgement is handled inline by the LLM via the TOOL USE
@@ -1361,7 +1374,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     @llm.event_handler("on_function_calls_cancelled")
     async def _on_tool_cancel(_svc, _calls):
         logger.info("[filler] tool cancelled (barge-in)")
-        _cancel_progress()
+        _cancel_progress(publish_end=False)
+        await sse_bus.publish("tool-call", {"event": "end", "outcome": "error"})
 
     @transport.event_handler("on_client_connected")
     async def _on_connect(_t, _c):
@@ -1463,7 +1477,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # Phase 5: notify SSE subscribers that the session has ended.
         await sse_bus.publish("session", {"event": "end"})
         await sse_bus.publish("bot-state", {"state": "idle"})
-        _cancel_progress()
+        _cancel_progress(publish_end=False)
         await task.cancel()
 
     await PipelineRunner(handle_sigint=False).run(task)

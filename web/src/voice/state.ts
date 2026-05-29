@@ -16,6 +16,8 @@ export interface VoiceSnapshot {
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
+  delegationProgress: string | null;
+  delegationOutcome: 'success' | 'error' | null;
   sessionId: string | null;
   // Rolling counters — handy for plugins to notice "something happened"
   // without holding full event lists.
@@ -28,6 +30,8 @@ const INITIAL: VoiceSnapshot = {
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,
+  delegationProgress: null,
+  delegationOutcome: null,
   sessionId: null,
   epoch: 0,
 };

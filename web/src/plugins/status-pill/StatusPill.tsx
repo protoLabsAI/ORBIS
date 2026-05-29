@@ -13,10 +13,16 @@ import { statusPillStore } from './store';
  */
 export function StatusPill() {
   const connected = useVoiceStateSelector((s) => s.connected);
+  const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
+  const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
+  const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const externalTransient = useSyncExternalStore(
     statusPillStore.subscribe,
     statusPillStore.getSnapshot,
   );
+  const delegationText = activeToolCall
+    ? formatActiveToolCall(activeToolCall, delegationProgress)
+    : null;
 
   // Auto-expire the externally-pushed transient once its TTL hits.
   useEffect(() => {
@@ -30,15 +36,48 @@ export function StatusPill() {
     return () => window.clearTimeout(id);
   }, [externalTransient]);
 
+  useEffect(() => {
+    if (delegationOutcome !== 'error') return;
+    statusPillStore.push('delegation failed', 4000);
+  }, [delegationOutcome]);
+
   const text = externalTransient?.text
+    ?? delegationText
     ?? (connected ? 'just speak' : 'starting up…');
 
   return (
     <div
-      className="pointer-events-none fixed left-1/2 -translate-x-1/2 z-10 text-zinc-400 text-xs font-mono tracking-wide text-center px-4"
+      className={
+        'pointer-events-none fixed left-1/2 -translate-x-1/2 z-10 text-zinc-400 text-xs font-mono tracking-wide text-center px-4 ' +
+        (text === delegationText ? 'animate-pulse' : '')
+      }
       style={{ bottom: 'calc(2rem + env(safe-area-inset-bottom, 0px))' }}
     >
       {text}
     </div>
   );
+}
+
+function formatActiveToolCall(
+  call: { name: string; args: unknown },
+  progress: string | null,
+): string {
+  if (call.name === 'delegate_to') {
+    const target = readDelegateTarget(call.args);
+    const base = target ? `asking ${target}...` : 'delegating...';
+    return progress ? `${base} ${progress}` : base;
+  }
+  if (call.name === 'adjust_personality') {
+    return 'adjusting personality...';
+  }
+  if (call.name === 'check_inbox') {
+    return 'checking inbox...';
+  }
+  return `${call.name}...`;
+}
+
+function readDelegateTarget(args: unknown): string | null {
+  if (typeof args !== 'object' || args === null) return null;
+  const target = (args as { target?: unknown }).target;
+  return typeof target === 'string' && target.length > 0 ? target : null;
 }
