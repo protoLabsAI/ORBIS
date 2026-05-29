@@ -61,6 +61,26 @@ def check_tauri_config() -> None:
     require(macos["minimumSystemVersion"] == "13.0", "minimum macOS version must stay 13.0")
 
 
+def check_tauri_cargo_manifest() -> None:
+    cargo = TAURI / "Cargo.toml"
+    required = (
+        'tauri = { version = "2", features = [] }',
+        'tauri-plugin-shell = "2"',
+        'tauri-plugin-dialog = "2"',
+        'tauri-plugin-http = "2"',
+        'tauri-plugin-log = "2"',
+        'cpal   = { version = "0.17", optional = true }',
+        'rubato = { version = "0.15", optional = true }',
+        'tokio  = { version = "1",   optional = true, features = ["net", "io-util", "sync", "rt"] }',
+        '[target.\'cfg(target_os = "macos")\'.dependencies.objc2-avf-audio]',
+        'features = [\n  "AVAudioEngine",',
+        'native-audio = ["dep:cpal", "dep:rubato", "dep:tokio"]',
+        'voice-processing = [\n  "native-audio",\n  "dep:objc2",\n  "dep:objc2-foundation",\n  "dep:objc2-avf-audio",\n  "dep:block2",\n]',
+    )
+    for needle in required:
+        require_contains(cargo, needle, "src-tauri/Cargo.toml native desktop manifest contract")
+
+
 def check_tauri_capabilities() -> None:
     capability = json.loads(read(TAURI / "capabilities" / "default.json"))
     generated = json.loads(read(TAURI / "gen" / "schemas" / "capabilities.json"))
@@ -935,6 +955,7 @@ def check_docs() -> None:
 def main() -> int:
     checks = [
         check_tauri_config,
+        check_tauri_cargo_manifest,
         check_tauri_capabilities,
         check_plists,
         check_native_audio_sources,
