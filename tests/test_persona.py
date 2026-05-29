@@ -71,6 +71,12 @@ def test_system_prompt_file_preferred_when_inline_absent(tmp_path: Path):
     assert p.system_prompt == "You are ORBIS, drawn from a file."
 
 
+def test_checked_in_example_loads_bundled_persona_prompt():
+    p = load_persona("config/orbis.example.yaml")
+    assert "voice-only AI companion" in p.system_prompt
+    assert "Everything you say is spoken aloud through TTS" in p.system_prompt
+
+
 def test_env_override_for_system_prompt_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yaml_path = _write(tmp_path / "orbis.yaml", """
         persona:

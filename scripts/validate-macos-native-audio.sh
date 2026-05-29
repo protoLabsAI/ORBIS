@@ -209,7 +209,7 @@ validate_dmg_contents() {
       fail "DMG app sidecar missing or not executable: $dmg_sidecar"
     fi
     local resource
-    for resource in config/orbis.example.yaml config/starter_orbs.yaml; do
+    for resource in config/orbis.example.yaml config/persona.md config/starter_orbs.yaml; do
       if [ -f "$dmg_app/Contents/Resources/$resource" ]; then
         pass "DMG app resource exists: $resource"
       else
@@ -421,7 +421,7 @@ else
   fail "bundled PyApp sidecar missing or not executable: $SIDECAR"
 fi
 
-for resource in config/orbis.example.yaml config/starter_orbs.yaml; do
+for resource in config/orbis.example.yaml config/persona.md config/starter_orbs.yaml; do
   if [ -f "$APP/Contents/Resources/$resource" ]; then
     pass "bundled resource exists: $resource"
   else

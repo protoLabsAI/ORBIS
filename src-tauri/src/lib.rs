@@ -626,7 +626,7 @@ fn resolve_starter_orbs_path(app: &AppHandle) -> Option<PathBuf> {
 
 /// First-run seed: if `config_path` doesn't exist yet, copy the bundled
 /// `config/orbis.example.yaml` resource into it. The example file ships
-/// with a working baked-in persona, sane TTS / orb defaults, and an
+/// with a voice-first persona file, sane TTS / orb defaults, and an
 /// empty `user_name` + missing `llm` block so the wizard still triggers
 /// for the things that need a human decision.
 ///
@@ -664,6 +664,43 @@ fn seed_default_config(app: &AppHandle, config_path: &PathBuf) {
             "first-run seed: copy {} → {} failed: {e}",
             resource.display(),
             config_path.display()
+        ),
+    }
+
+    let persona_resource = match app
+        .path()
+        .resolve("config/persona.md", BaseDirectory::Resource)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("first-run seed: persona resource resolve failed: {e}");
+            return;
+        }
+    };
+    if !persona_resource.exists() {
+        log::warn!(
+            "first-run seed: persona resource not present at {}",
+            persona_resource.display()
+        );
+        return;
+    }
+    let persona_path = config_path
+        .parent()
+        .map(|dir| dir.join("persona.md"))
+        .unwrap_or_else(|| PathBuf::from("persona.md"));
+    if persona_path.exists() {
+        return;
+    }
+    match std::fs::copy(&persona_resource, &persona_path) {
+        Ok(_) => log::info!(
+            "first-run seed: copied {} → {}",
+            persona_resource.display(),
+            persona_path.display()
+        ),
+        Err(e) => log::warn!(
+            "first-run seed: copy {} → {} failed: {e}",
+            persona_resource.display(),
+            persona_path.display()
         ),
     }
 }

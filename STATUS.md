@@ -35,6 +35,10 @@ Selective upstream work already brought forward into `orbis-native:main`:
 - Observability carried forward/adapted: enriched Langfuse turn spans,
   web build CI, backend pytest CI, and a native event log drawer that tails
   Tauri API calls plus SSE-derived voice state.
+- Voice persona prompt carried forward/adapted: the default voice-first
+  prompt now lives in `config/persona.md`, and the Tauri first-run seed bundles
+  and copies it next to `orbis.yaml` so packaged installs resolve
+  `system_prompt_file` correctly.
 
 Intentionally skipped from upstream unless redesigned for native:
 

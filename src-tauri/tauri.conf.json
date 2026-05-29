@@ -36,6 +36,7 @@
     "externalBin": ["binaries/orbis"],
     "resources": {
       "../config/orbis.example.yaml": "config/orbis.example.yaml",
+      "../config/persona.md": "config/persona.md",
       "../config/starter_orbs.yaml": "config/starter_orbs.yaml"
     },
     "macOS": {

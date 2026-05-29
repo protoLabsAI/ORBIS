@@ -50,6 +50,7 @@ def check_tauri_config() -> None:
     require(
         bundle["resources"] == {
             "../config/orbis.example.yaml": "config/orbis.example.yaml",
+            "../config/persona.md": "config/persona.md",
             "../config/starter_orbs.yaml": "config/starter_orbs.yaml",
         },
         "first-run config resources must stay bundled",
@@ -159,6 +160,11 @@ def check_native_audio_sources() -> None:
         lib_rs,
         "ensure_microphone_permission()",
         "Rust startup must gate native audio on microphone permission",
+    )
+    require_contains(
+        lib_rs,
+        'resolve("config/persona.md", BaseDirectory::Resource)',
+        "Rust first-run seed must copy the bundled persona prompt next to orbis.yaml",
     )
     require_contains(
         lib_rs,
@@ -516,6 +522,11 @@ def check_workflow() -> None:
         workflow,
         'resources / "config" / "orbis.example.yaml"',
         "desktop workflow must verify bundled first-run example config",
+    )
+    require_contains(
+        workflow,
+        'resources / "config" / "persona.md"',
+        "desktop workflow must verify bundled first-run persona prompt",
     )
     require_contains(
         workflow,

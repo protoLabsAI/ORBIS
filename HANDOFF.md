@@ -36,6 +36,9 @@ What has been ported and pushed:
 - CI/observability: web build gate, backend pytest gate, enriched native turn
   spans, and a Dev drawer event log adapted for Tauri API calls plus SSE voice
   state.
+- Default persona prompt: `config/persona.md` is bundled with the Tauri app and
+  copied beside first-run `orbis.yaml`, preserving the upstream voice-first
+  prompt without breaking packaged native installs.
 
 What is intentionally not ported yet:
 

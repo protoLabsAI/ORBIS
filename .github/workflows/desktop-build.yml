@@ -382,6 +382,7 @@ jobs:
 
           resources = app / "Contents" / "Resources"
           assert (resources / "config" / "orbis.example.yaml").is_file()
+          assert (resources / "config" / "persona.md").is_file()
           assert (resources / "config" / "starter_orbs.yaml").is_file()
           PY
 
