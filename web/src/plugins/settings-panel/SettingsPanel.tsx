@@ -1,5 +1,6 @@
 import { Panel } from '@/components/ui/panel';
 import { Diagnostics } from './Diagnostics';
+import { DelegatesSettings } from './DelegatesSettings';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { TTSSettings } from './TTSSettings';
@@ -14,6 +15,7 @@ export function SettingsPanel() {
     <div className="space-y-5">
       <LLMSettings />
       <TTSSettings />
+      <DelegatesSettings />
       <MicSettings />
       <Panel title="STT">
         <p className="text-xs text-zinc-500">

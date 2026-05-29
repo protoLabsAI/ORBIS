@@ -87,7 +87,7 @@ export type OrbisConfig = {
 };
 
 export type EntitlementState = {
-  customization: { active: boolean; configured: boolean };
+  customization: { active: boolean; configured: boolean; gate_mode?: 'open' | 'closed' };
 };
 
 export type PersonalityAxis = {
@@ -120,9 +120,60 @@ export type PersonalityState = {
   };
 };
 
+export interface DelegateA2A {
+  name: string;
+  type: 'a2a';
+  description: string;
+  url: string;
+  auth?: { scheme?: 'apiKey' | 'bearer'; credentialsEnv?: string };
+  headers?: Record<string, string>;
+}
+
+export interface DelegateOpenAI {
+  name: string;
+  type: 'openai';
+  description: string;
+  url: string;
+  model: string;
+  api_key_env?: string;
+  system_prompt?: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+export type Delegate = DelegateA2A | DelegateOpenAI;
+
+export type DelegateHealth = {
+  ok: boolean | null;
+  latency_ms: number | null;
+  last_checked: number | null;
+  last_error?: string | null;
+  consecutive_failures: number;
+};
+
+export type DelegateWithStatus = Delegate & {
+  configured: boolean;
+  health?: DelegateHealth | null;
+};
+
+export type DelegateTestResult = {
+  ok: boolean;
+  latency_ms?: number;
+  error?: string;
+  status?: number;
+};
+
 /** Thrown when a response carries HTTP 401 — signals the key is wrong/missing. */
 export class UnauthorizedError extends Error {
   constructor(path: string) { super(`${path} → 401 unauthorized`); }
+}
+
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -133,13 +184,36 @@ async function get<T>(path: string): Promise<T> {
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  return sendJSON<T>('POST', path, body);
+}
+
+async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  return sendJSON<T>('PUT', path, body);
+}
+
+async function deleteJSON<T>(path: string): Promise<T> {
+  return sendJSON<T>('DELETE', path);
+}
+
+async function sendJSON<T>(method: string, path: string, body?: unknown): Promise<T> {
   const r = await tauriFetch(url(path), {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(body),
+    method,
+    headers: body === undefined
+      ? authHeaders()
+      : authHeaders({ 'Content-Type': 'application/json' }),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (r.status === 401) throw new UnauthorizedError(path);
-  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try {
+      const parsed = await r.json();
+      if (parsed?.error) detail = String(parsed.error);
+    } catch {
+      // Keep generic status detail.
+    }
+    throw new ApiError(`${path} → ${detail}`, r.status);
+  }
   return r.json() as Promise<T>;
 }
 
@@ -173,4 +247,21 @@ export const api = {
     get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
       '/api/llm/detect_local',
     ),
+  delegates: {
+    list: () => get<{ delegates: DelegateWithStatus[] }>('/api/delegates'),
+    create: (entry: Delegate) =>
+      postJSON<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        '/api/delegates', entry,
+      ),
+    update: (name: string, entry: Delegate) =>
+      putJSON<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        `/api/delegates/${encodeURIComponent(name)}`, entry,
+      ),
+    remove: (name: string) =>
+      deleteJSON<{ ok: boolean; delegates: DelegateWithStatus[] }>(
+        `/api/delegates/${encodeURIComponent(name)}`,
+      ),
+    test: (entry: Delegate) =>
+      postJSON<DelegateTestResult>('/api/delegates/test', entry),
+  },
 };
