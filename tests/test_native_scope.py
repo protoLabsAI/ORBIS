@@ -46,3 +46,28 @@ def test_backend_dependencies_stay_native_first():
     )
     for needle in forbidden:
         assert needle not in joined_dependencies
+
+
+def test_env_example_documents_native_runtime_scope():
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    required = (
+        "# ORBIS local secrets + config.",
+        "#AGENT_NAME=orbis",
+        "#AUDIO_TRANSPORT=native",
+        "#ORBIS_AUDIO_SOCK=/tmp/orbis-audio-{pid}.sock",
+        "#ORBIS_AUDIO_INPUT_MODE=voice_processing",
+        "Session = native voice session",
+    )
+    for needle in required:
+        assert needle in env_example
+
+    forbidden = (
+        "protoVoice local secrets",
+        "#AGENT_NAME=protovoice",
+        "ORBIS_ALLOWED_ORIGINS",
+        "ORBIS_PAIR_TOKEN",
+        "Session = WebRTC session",
+    )
+    for needle in forbidden:
+        assert needle not in env_example
