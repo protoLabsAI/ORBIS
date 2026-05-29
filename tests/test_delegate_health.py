@@ -14,6 +14,7 @@ import asyncio
 import httpx
 import pytest
 
+from agent import metrics
 from agent.delegates import (
     Delegate,
     DelegateRegistry,
@@ -274,6 +275,7 @@ async def test_loop_records_results_and_can_be_cancelled(respx_mock):
 async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
     """If probing one delegate raises, the loop keeps going for the
     others and records the failure for the broken one."""
+    metrics.reset()
     respx_mock.get("http://good/.well-known/agent-card.json").respond(
         status_code=200, json={"name": "good"},
     )
@@ -308,6 +310,34 @@ async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
     assert reg.health("good") is not None and reg.health("good").ok is True
     assert reg.health("bad") is not None and reg.health("bad").ok is False
     assert "simulated crash" in (reg.health("bad").last_error or "")
+    assert metrics.snapshot()["counters"]["delegate_probe_crashed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_loop_counts_delegate_probe_failures(respx_mock):
+    """Expected negative probe results should surface in /api/metrics."""
+    metrics.reset()
+    respx_mock.get("http://ava/.well-known/agent-card.json").respond(
+        status_code=503, text="warming up",
+    )
+    reg = DelegateRegistry(None)
+    reg._items["ava"] = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
+
+    task = asyncio.create_task(
+        health_loop(reg, interval_secs=10.0, initial_delay_secs=0.0),
+    )
+    for _ in range(5):
+        await asyncio.sleep(0.01)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    h = reg.health("ava")
+    assert h is not None
+    assert h.ok is False
+    assert metrics.snapshot()["counters"]["delegate_probe_failed"] == 1
 
 
 @pytest.mark.asyncio
