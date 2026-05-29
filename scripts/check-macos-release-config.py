@@ -202,6 +202,21 @@ def check_native_audio_sources() -> None:
         "Rust audio socket must log first playback frame receipt",
     )
     require_contains(
+        TAURI / "src" / "audio" / "socket.rs",
+        "CTRL_BARGE_IN",
+        "Rust audio socket must recognize the native barge-in control frame",
+    )
+    require_contains(
+        TAURI / "src" / "audio" / "socket.rs",
+        "engine.flush_playback();",
+        "Rust audio socket must flush playback on native barge-in",
+    )
+    require_contains(
+        ROOT / "voice" / "native_bargein.py",
+        "await transport._send_control_nowait(0x0001)",
+        "Python native barge-in observer must send CTRL_BARGE_IN to Rust",
+    )
+    require_contains(
         vp_rs,
         "setVoiceProcessingEnabled_error(true)",
         "voice-processing input must enable Apple's voice-processing IO",
