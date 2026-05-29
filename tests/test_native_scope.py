@@ -264,6 +264,38 @@ def test_env_example_documents_native_runtime_scope():
         assert needle not in env_example
 
 
+def test_example_config_documents_native_runtime_provider_knobs():
+    """The shipped config example must keep native STT/TTS runtime fields visible."""
+    config_example = (ROOT / "config/orbis.example.yaml").read_text(encoding="utf-8")
+
+    required = (
+        "optional tts_url/model/api_key fields below",
+        "# tts_url: http://localhost:8080/v1",
+        "# tts_model: tts-1",
+        "# tts_api_key: sk-...",
+        "# Speech-to-text backend. Leave this block out to use STT_* env vars.",
+        "# `local` keeps the native app's in-process Whisper path",
+        "# targets any OpenAI-compatible /v1/audio/transcriptions endpoint",
+        "# `sensevoice` enables the optional FunAudioLLM/SenseVoice backend",
+        "# stt:",
+        "#   backend: local                   # local | openai | sensevoice",
+        "#   whisper_model: openai/whisper-large-v3-turbo",
+        "#   url: https://api.openai.com/v1   # backend=openai",
+        "#   model: whisper-1",
+        "#   api_key: sk-...",
+    )
+    for needle in required:
+        assert needle in config_example
+
+    forbidden = (
+        "split deployment",
+        "browser WebRTC",
+        "pairing token",
+    )
+    for needle in forbidden:
+        assert needle not in config_example.lower()
+
+
 def test_readme_documents_native_runtime_scope():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
