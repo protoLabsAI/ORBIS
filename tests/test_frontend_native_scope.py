@@ -80,6 +80,38 @@ def test_vite_config_does_not_register_pwa_service_worker():
         assert needle in vite_config
 
 
+def test_web_public_icons_are_not_named_as_pwa_assets():
+    """The native shell may use web icons; do not present them as PWA assets."""
+    web_index = (WEB / "index.html").read_text(encoding="utf-8")
+    gen_icons = (ROOT / "scripts/gen-icons.mjs").read_text(encoding="utf-8")
+
+    required_paths = (
+        "public/favicon.svg",
+        "public/app-icon-192.png",
+        "public/app-icon-512.png",
+        "public/app-icon-maskable-512.png",
+    )
+    for path in required_paths:
+        assert (WEB / path).exists()
+
+    assert 'href="/app-icon-192.png"' in web_index
+    assert "web/public/app-icon-192.png" in gen_icons
+    assert "web/public/app-icon-maskable-512.png" in gen_icons
+
+    forbidden_paths = (
+        "public/pwa-192.png",
+        "public/pwa-512.png",
+        "public/pwa-maskable-512.png",
+    )
+    for path in forbidden_paths:
+        assert not (WEB / path).exists()
+
+    for source in (web_index, gen_icons):
+        assert "pwa-192.png" not in source
+        assert "pwa-512.png" not in source
+        assert "pwa-maskable-512.png" not in source
+
+
 def test_web_npm_lockfile_stays_absent():
     """Bun is the frontend package-manager source of truth."""
     assert not (WEB / "package-lock.json").exists()

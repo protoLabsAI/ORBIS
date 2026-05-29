@@ -4,7 +4,7 @@ name: 'Lint'
 # regressions (F821) and other pyflakes-equivalent F-rule issues that
 # would otherwise only surface at runtime — e.g. PR #44 deleted the
 # `skill_llm` local in app.py but left one orphan reference, which
-# 500'd every `/api/offer` call until #88 caught it manually.
+# 500'd voice session start until #88 caught it manually.
 #
 # Cheap (~30s) so it gates PRs without slowing the iteration loop.
 
