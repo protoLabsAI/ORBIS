@@ -28,6 +28,9 @@ Selective upstream work already brought forward into `orbis-native:main`:
 
 - Native/Tauri canon preserved: `src-tauri`, native audio transport,
   macOS permission IPC, release scripts, native tests, and native docs stay.
+- Orb product work carried forward: lattice, spectrum, tetra, and galaxy
+  variants; spectrum shader hardening; per-variant saved presets; and the
+  randomize-flow fix that preserves the user's selected resolution.
 - Runtime settings carried forward: OpenAI-compatible LLM custom URL,
   STT runtime settings, TTS endpoint settings, native audio runtime controls,
   simplified LLM provider display, and collapsible settings sections.
@@ -41,6 +44,10 @@ Selective upstream work already brought forward into `orbis-native:main`:
   prompt now lives in `config/persona.md`, and the Tauri first-run seed bundles
   and copies it next to `orbis.yaml` so packaged installs resolve
   `system_prompt_file` correctly.
+- Native-fork guardrails added: A2A agent-card identity now advertises ORBIS
+  native desktop, protoVoice runtime defaults were removed, stale PWA/workbox
+  dependencies are gone, and tests prevent PWA/WebRTC browser-client packages
+  from being reintroduced.
 
 Intentionally skipped from upstream unless redesigned for native:
 
@@ -51,16 +58,20 @@ Intentionally skipped from upstream unless redesigned for native:
   `voice/local_transport.py` / `voice/native_bargein.py` / `voice/sse_bus.py`.
 - OpenAPI generated client drift that assumes the hosted SPA path instead of
   the existing `@tauri-apps/plugin-http` wrapper.
+- Upstream deletes of native-only package-lock, desktop docs, rebuild scripts,
+  macOS release workflows, and native tests remain rejected.
 
 Current local validation on this fork:
 
 - `uv run --extra test pytest -q` passed: 646 tests, 2 skipped.
 - `cd web && bun run build` passed; Vite still reports the existing large
   bundle warning.
-- Changed-file ESLint for the new native event-log slice passed. Full
+- Changed-file ESLint for the native event-log/status/logBus slices passed. Full
   `bun run lint` is not a clean gate yet because of pre-existing repo-wide
   lint debt in orb/settings/voice code.
 - `scripts/check-macos-release-config.py` passed after each native-safe slice.
+- Focused guardrail tests for A2A native identity, Infisical `/orbis` defaults,
+  and native frontend package scope passed.
 
 The migration is staged in four phases:
 

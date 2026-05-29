@@ -30,6 +30,9 @@ fit the Tauri desktop runtime.
 What has been ported and pushed:
 
 - Native/Tauri canon preserved and hardened.
+- Orb product work: lattice, spectrum, tetra, and galaxy variants; spectrum
+  shader hardening; per-variant saved presets; and randomize preserving the
+  user's selected resolution.
 - Runtime provider settings: custom LLM URL, STT/TTS runtime fields, native
   audio controls, simplified provider list, collapsible settings sections.
 - Agent/delegation improvements: delegate CRUD/status/test UI, A2A auth,
@@ -41,6 +44,9 @@ What has been ported and pushed:
 - Default persona prompt: `config/persona.md` is bundled with the Tauri app and
   copied beside first-run `orbis.yaml`, preserving the upstream voice-first
   prompt without breaking packaged native installs.
+- Native-fork identity/guardrails: A2A advertises ORBIS native desktop, runtime
+  defaults no longer point at protoVoice, PWA/workbox deps are removed, and
+  tests guard against reintroducing PWA/WebRTC browser-client packages.
 
 What is intentionally not ported yet:
 
@@ -51,6 +57,7 @@ What is intentionally not ported yet:
   local native voice transport modules.
 - Generated OpenAPI client changes until they are adapted to the native
   `@tauri-apps/plugin-http` API wrapper.
+- Upstream deletes of native desktop docs/scripts/workflows/tests.
 
 Validation already run on the native fork:
 
@@ -60,6 +67,8 @@ Validation already run on the native fork:
 - Changed-file ESLint for the native event-log slice passed. Full
   `bun run lint` still fails on pre-existing repo-wide lint debt.
 - `scripts/check-macos-release-config.py` passed.
+- Focused tests now cover A2A native identity, Infisical `/orbis` defaults,
+  and native frontend package scope.
 
 ## Next-team handoff — Mac native audio
 
