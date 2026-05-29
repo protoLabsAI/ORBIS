@@ -343,6 +343,26 @@ def test_voice_clone_endpoint_scaffold_stays_removed():
     assert "externally managed Fish voices" in fish_tts
 
 
+def test_native_whisper_silence_and_hallucination_gates_stay_present():
+    """Native mic testing still depends on STT-side silence/noise filtering."""
+    stt_source = (ROOT / "voice/stt.py").read_text(encoding="utf-8")
+
+    required = (
+        "_STT_MIN_RMS",
+        "_STT_MIN_TEXT_LEN",
+        "_STT_STRONG_RMS",
+        "_HALLUCINATION_PHRASES",
+        "thanks for watching",
+        ".com",
+        "def _is_whisper_hallucination(",
+        "if rms < _STT_MIN_RMS:",
+        "dropped hallucination",
+        "dropped short low-rms output",
+    )
+    for needle in required:
+        assert needle in stt_source
+
+
 def test_example_config_documents_native_runtime_provider_knobs():
     """The shipped config example must keep native STT/TTS runtime fields visible."""
     config_example = (ROOT / "config/orbis.example.yaml").read_text(encoding="utf-8")
