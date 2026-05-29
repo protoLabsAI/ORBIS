@@ -1,3 +1,4 @@
+import { CollapsiblePanelProvider } from '@/components/ui/panel';
 import { Diagnostics } from './Diagnostics';
 import { DelegatesSettings } from './DelegatesSettings';
 import { LLMSettings } from './LLMSettings';
@@ -12,13 +13,15 @@ import { TTSSettings } from './TTSSettings';
  */
 export function SettingsPanel() {
   return (
-    <div className="space-y-5">
-      <LLMSettings />
-      <TTSSettings />
-      <STTSettings />
-      <DelegatesSettings />
-      <MicSettings />
-      <Diagnostics />
-    </div>
+    <CollapsiblePanelProvider storageKey="orbis.settingsPanel">
+      <div className="space-y-5">
+        <LLMSettings />
+        <TTSSettings />
+        <STTSettings />
+        <DelegatesSettings />
+        <MicSettings />
+        <Diagnostics />
+      </div>
+    </CollapsiblePanelProvider>
   );
 }
