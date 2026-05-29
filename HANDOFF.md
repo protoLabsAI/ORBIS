@@ -49,7 +49,9 @@ What has been ported and pushed:
   defaults no longer point at protoVoice, PWA/workbox deps are removed, and
   tests guard against reintroducing PWA/WebRTC browser-client packages,
   hosted-SPA pairing backend code, split-deployment generated API clients, and
-  OpenAPI codegen workflows. The guardrail suite also protects `CLAUDE.md` and
+  OpenAPI codegen workflows. The guardrail suite also protects Vite's
+  no-PWA/service-worker config, the native SSE `/api/events` voice bridge,
+  native event-log mirroring, `CLAUDE.md`, and
   `.claude/skills/orbis-rebuild-install/SKILL.md` so the Mac native rebuild
   handoff survives the upstream overwrite.
 - Overwrite-readiness: package version is aligned to upstream `0.2.22`,
@@ -59,8 +61,9 @@ What has been ported and pushed:
   `@tauri-apps/plugin-http` API transport and the native backend/Tauri
   scaffold. Additional guards now pin the future-overwrite workflow gates to
   `protoLabsAI/ORBIS`, protect upstream orb variants/fixes, keep custom orb
-  presets scoped per variant, verify the LLM-facing inbox tool, and verify
-  delegate probe failure counters.
+  presets scoped per variant, verify the PyApp sidecar workflow, Tauri
+  `Cargo.toml` native-audio/voice-processing feature graph, native barge-in
+  socket flush, LLM-facing inbox tool, and delegate probe failure counters.
 
 What is intentionally not ported yet:
 
@@ -84,8 +87,9 @@ Validation already run on the native fork:
 - Focused tests now cover A2A native identity, Infisical `/orbis` defaults,
   native frontend package/API transport scope, generated-client rejection,
   split-deployment backend rejection, upstream visual-port scope, native
-  backend/Tauri scope, default CI workflow scope, native operator handoff docs,
-  inbox-tool behavior, and delegate probe metrics.
+  backend/Tauri scope, default CI workflow scope, Vite PWA removal, native SSE
+  voice bridge, native operator handoff docs, async test extras, inbox-tool
+  behavior, and delegate probe metrics.
 
 ## Next-team handoff — Mac native audio
 

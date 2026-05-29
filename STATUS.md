@@ -48,19 +48,21 @@ Selective upstream work already brought forward into `orbis-native:main`:
   native desktop, protoVoice runtime defaults were removed, stale PWA/workbox
   dependencies are gone, and tests prevent PWA/WebRTC browser-client packages,
   hosted-SPA pairing backend code, split-deployment generated API clients, and
-  OpenAPI codegen workflows from being reintroduced. Guard tests also protect
-  the repo-local operator handoff docs (`CLAUDE.md`) and
-  `.claude/skills/orbis-rebuild-install/SKILL.md`, because those encode the
-  Mac native rebuild and diagnosis path.
+  OpenAPI codegen workflows from being reintroduced. Additional tests pin the
+  Vite config's no-PWA/service-worker posture, the SSE `/api/events` native
+  voice bridge, native event-log mirroring, and the repo-local operator
+  handoff docs (`CLAUDE.md` plus
+  `.claude/skills/orbis-rebuild-install/SKILL.md`).
 - Overwrite-readiness work carried forward: release workflow now uses the
   upstream shared `protoLabsAI/release-tools` action plus SPA fast-fail gate,
   package metadata is aligned to upstream `0.2.22`, frontend package management
   is Bun-only (`web/package-lock.json` removed), `web/dist/.gitkeep` keeps the
   packaging scaffold present on fresh clones, and tests guard the native
   `@tauri-apps/plugin-http` API transport, native backend/Tauri scaffold,
-  release workflow overwrite gates, upstream orb variants/fixes, per-variant
-  orb custom-preset storage, LLM-facing inbox tool behavior, and delegate probe
-  metrics counters.
+  release workflow overwrite gates, PyApp sidecar workflow, Tauri
+  `Cargo.toml` native-audio/voice-processing feature graph, native barge-in
+  socket flush, upstream orb variants/fixes, per-variant orb custom-preset
+  storage, LLM-facing inbox tool behavior, and delegate probe metrics counters.
 
 Intentionally skipped from upstream unless redesigned for native:
 
@@ -86,8 +88,9 @@ Current local validation on this fork:
 - Focused guardrail tests for A2A native identity, Infisical `/orbis` defaults,
   native frontend package scope/API transport, upstream visual-port scope,
   generated-client and split-deployment rejection, native backend/Tauri scope,
-  default CI workflow scope, native operator handoff docs, inbox-tool behavior,
-  and delegate probe metrics passed.
+  default CI workflow scope, Vite PWA removal, native SSE voice bridge,
+  native operator handoff docs, async test extras, inbox-tool behavior, and
+  delegate probe metrics passed.
 
 The migration is staged in four phases:
 
