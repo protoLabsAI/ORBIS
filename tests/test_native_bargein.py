@@ -17,7 +17,6 @@ from pipecat.observers.base_observer import FramePushed
 from voice.local_transport import (
     CTRL_BARGE_IN,
     DIR_CONTROL,
-    HEADER_FMT,
     HEADER_LEN,
     LocalAudioTransport,
     _decode_header,
