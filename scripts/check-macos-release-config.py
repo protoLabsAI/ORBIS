@@ -384,6 +384,31 @@ def check_workflow() -> None:
         "desktop workflow must avoid heredoc indentation hazards in the signing step",
     )
     require_contains(
+        workflow,
+        "PYAPP_EXEC_SPEC: 'app:main'",
+        "desktop workflow must build a PyApp sidecar that launches app:main",
+    )
+    require_contains(
+        workflow,
+        "PYAPP_FULL_ISOLATION: '1'",
+        "desktop workflow must keep the sidecar isolated from user Python installs",
+    )
+    require_contains(
+        workflow,
+        "ORBIS_ALLOW_CPU: '1'",
+        "desktop workflow smoke test must boot on GPU-less CI runners",
+    )
+    require_contains(
+        workflow,
+        "ORBIS_READY http://",
+        "desktop workflow smoke test must wait for the sidecar readiness marker",
+    )
+    require_contains(
+        workflow,
+        "src-tauri/binaries/${{ env.artifact_name }}",
+        "desktop workflow must stage the PyApp sidecar where Tauri externalBin expects it",
+    )
+    require_contains(
         preflight,
         "scripts/check-macos-release-config.py",
         "preflight workflow must run static macOS release guardrails",
