@@ -1,7 +1,7 @@
 /**
- * Tiny transient store for the StatusPill so callers outside RTVI's
- * own event surface (e.g. raw client.connect() rejections) can
- * surface a short-lived message into the same UI as RTVI Error events.
+ * Tiny transient store for the StatusPill so callers outside the
+ * derived voice-state stream can surface a short-lived message in the
+ * same UI.
  *
  * Mirrors the useSyncExternalStore pattern from voice/state.ts —
  * intentionally tiny, no external dep.
@@ -42,12 +42,10 @@ class StatusPillStore {
 export const statusPillStore = new StatusPillStore();
 
 /**
- * Push a transient into the StatusPill. Defaults to 4s — match the
- * Error-event duration so connect failures and RTVI errors look alike.
- *
- * Use this for connect/disconnect rejections and other surface that
- * doesn't ride RTVI events. Don't use it for happy-path state — those
- * should derive from transportState directly.
+ * Push a transient into the StatusPill. Defaults to 4s. Use this for
+ * one-off errors or actions that do not belong in the persistent
+ * voice-state snapshot; happy-path state should derive from
+ * voice/state.ts.
  */
 export function pushStatusTransient(text: string, ms = 4000): void {
   statusPillStore.push(text, ms);

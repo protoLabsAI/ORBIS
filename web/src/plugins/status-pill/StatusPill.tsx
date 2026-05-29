@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { statusPillStore } from './store';
 
@@ -16,6 +16,7 @@ export function StatusPill() {
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
   const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
+  const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
   const externalTransient = useSyncExternalStore(
     statusPillStore.subscribe,
     statusPillStore.getSnapshot,
@@ -37,8 +38,10 @@ export function StatusPill() {
   }, [externalTransient]);
 
   useEffect(() => {
-    if (delegationOutcome !== 'error') return;
-    statusPillStore.push('delegation failed', 4000);
+    if (delegationOutcome === 'error' && lastOutcomeRef.current !== 'error') {
+      statusPillStore.push('delegation failed', 4000);
+    }
+    lastOutcomeRef.current = delegationOutcome;
   }, [delegationOutcome]);
 
   const text = externalTransient?.text
@@ -64,16 +67,16 @@ function formatActiveToolCall(
 ): string {
   if (call.name === 'delegate_to') {
     const target = readDelegateTarget(call.args);
-    const base = target ? `asking ${target}...` : 'delegating...';
+    const base = target ? `asking ${target}…` : 'delegating…';
     return progress ? `${base} ${progress}` : base;
   }
   if (call.name === 'adjust_personality') {
-    return 'adjusting personality...';
+    return 'adjusting personality…';
   }
   if (call.name === 'check_inbox') {
-    return 'checking inbox...';
+    return 'checking inbox…';
   }
-  return `${call.name}...`;
+  return `${call.name}…`;
 }
 
 function readDelegateTarget(args: unknown): string | null {

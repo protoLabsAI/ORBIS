@@ -4,8 +4,8 @@
  * ORBIS is single-owner, multi-device. Auth exists to prevent a
  * tailnet neighbor from using your instance, not to separate users.
  * The owner's API key lives in config/users.yaml server-side; this
- * module holds the client-side copy so fetches can attach it as
- * ``X-API-Key`` and the WebRTC offer handshake includes it too.
+ * module holds the client-side copy so Tauri HTTP requests can attach
+ * it as ``X-API-Key``.
  *
  * When the key is missing or wrong, the server returns 401 on
  * /api/* routes. The UI surfaces a settings panel to paste it in;
@@ -30,7 +30,9 @@ export const apiKeyStore = {
     try {
       if (_key === null) localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, _key);
-    } catch {}
+    } catch {
+      // localStorage can be unavailable in restricted webviews.
+    }
     _listeners.forEach((l) => l());
   },
 
