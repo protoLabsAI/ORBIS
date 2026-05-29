@@ -99,6 +99,44 @@ def test_api_client_stays_tauri_native_not_split_deployment_browser_fetch():
         assert needle not in api_source
 
 
+def test_native_frontend_audio_and_settings_artifacts_stay_present():
+    """Native mic permission, diagnostics, and SSE bridge replace browser voice UI."""
+    required_files = (
+        WEB / "src/shared/audio/NativeLevelMeter.tsx",
+        WEB / "src/shared/audio/microphonePermission.ts",
+        WEB / "src/shared/audio/nativeAudio.ts",
+        WEB / "src/plugins/settings-panel/ApiKeyField.tsx",
+        WEB / "src/plugins/settings-panel/Diagnostics.tsx",
+        WEB / "src/voice/useVoiceBridge.ts",
+    )
+    assert [p.relative_to(ROOT).as_posix() for p in required_files if not p.exists()] == []
+
+    setup_wizard = (WEB / "src/plugins/setup-wizard/SetupWizard.tsx").read_text(
+        encoding="utf-8",
+    )
+    mic_settings = (WEB / "src/plugins/settings-panel/MicSettings.tsx").read_text(
+        encoding="utf-8",
+    )
+    settings_panel = (WEB / "src/plugins/settings-panel/SettingsPanel.tsx").read_text(
+        encoding="utf-8",
+    )
+    voice_bridge = (WEB / "src/voice/VoiceStateBridge.tsx").read_text(encoding="utf-8")
+    diagnostics = (WEB / "src/plugins/settings-panel/Diagnostics.tsx").read_text(
+        encoding="utf-8",
+    )
+
+    assert "@/shared/audio/NativeLevelMeter" in setup_wizard
+    assert "@/shared/audio/nativeAudio" in setup_wizard
+    assert "@/shared/audio/microphonePermission" in setup_wizard
+    assert "@/shared/audio/NativeLevelMeter" in mic_settings
+    assert "@/shared/audio/nativeAudio" in mic_settings
+    assert "@/shared/audio/microphonePermission" in mic_settings
+    assert "ApiKeyField" in settings_panel
+    assert "Diagnostics" in settings_panel
+    assert "useVoiceBridge" in voice_bridge
+    assert "clear_browsing_data" in diagnostics
+
+
 def test_generated_openapi_browser_client_pipeline_stays_absent():
     """Generated OpenAPI client drift belongs behind a native API redesign."""
     forbidden_files = (
