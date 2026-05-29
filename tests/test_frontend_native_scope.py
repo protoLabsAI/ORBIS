@@ -29,6 +29,7 @@ def test_web_package_does_not_reintroduce_pwa_runtime_dependencies():
         "@pipecat-ai/client-js",
         "@pipecat-ai/client-react",
         "@pipecat-ai/small-webrtc-transport",
+        "openapi-typescript",
     }
 
     assert forbidden.isdisjoint(deps)
@@ -45,6 +46,7 @@ def test_bun_lockfile_does_not_contain_pwa_runtime_packages():
         "@pipecat-ai/client-js",
         "@pipecat-ai/client-react",
         "@pipecat-ai/small-webrtc-transport",
+        "openapi-typescript",
     ):
         assert needle not in lock_text
 
@@ -76,3 +78,15 @@ def test_api_client_stays_tauri_native_not_split_deployment_browser_fetch():
     )
     for needle in forbidden_needles:
         assert needle not in api_source
+
+
+def test_generated_openapi_browser_client_pipeline_stays_absent():
+    """Generated OpenAPI client drift belongs behind a native API redesign."""
+    forbidden_files = (
+        ROOT / ".github/workflows/codegen-drift.yml",
+        ROOT / "scripts/codegen-api.sh",
+        ROOT / "scripts/dump_openapi.py",
+        WEB / "openapi.json",
+    )
+
+    assert [p.relative_to(ROOT).as_posix() for p in forbidden_files if p.exists()] == []
