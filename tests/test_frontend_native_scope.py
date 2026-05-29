@@ -165,6 +165,36 @@ def test_native_frontend_audio_and_settings_artifacts_stay_present():
     assert "clear_browsing_data" in diagnostics
 
 
+def test_native_voice_bridge_stays_sse_eventsource_based():
+    """Native voice UI state comes from /api/events, not browser RTVI hooks."""
+    bridge_hook = (WEB / "src/voice/useVoiceBridge.ts").read_text(encoding="utf-8")
+    bridge_mount = (WEB / "src/voice/VoiceStateBridge.tsx").read_text(encoding="utf-8")
+    logs_collector = (WEB / "src/plugins/logs-panel/LogsCollector.tsx").read_text(
+        encoding="utf-8",
+    )
+
+    assert "new EventSource('/api/events')" in bridge_hook
+    for event in ("bot-state", "transcript", "session", "tool-call", "delegation-progress"):
+        assert f"addEventListener('{event}'" in bridge_hook
+    assert "MIN_BACKOFF_MS" in bridge_hook
+    assert "MAX_BACKOFF_MS" in bridge_hook
+    assert "useVoiceBridge();" in bridge_mount
+    assert "source: 'sse'" in logs_collector
+    assert "source: 'voice'" in logs_collector
+    assert "voiceStore.subscribe(emit)" in logs_collector
+
+    forbidden = (
+        "@pipecat-ai/client-react",
+        "useRTVIClientEvent",
+        "usePipecatClientTransportState",
+        "RTVIEvent",
+        "PipecatClientProvider",
+    )
+    for source in (bridge_hook, bridge_mount, logs_collector):
+        for needle in forbidden:
+            assert needle not in source
+
+
 def test_browser_voice_and_connect_ui_stays_absent():
     """Hosted/WebRTC voice UI is not part of the native Tauri runtime."""
     forbidden_files = (
