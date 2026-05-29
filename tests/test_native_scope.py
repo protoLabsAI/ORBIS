@@ -203,6 +203,40 @@ def test_split_deployment_pairing_backend_stays_absent():
         assert needle not in app_source
 
 
+def test_native_backend_sse_event_bridge_stays_wired():
+    """Native voice state is published over /api/events instead of WebRTC."""
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    required = (
+        "from voice.sse_bus import sse_bus",
+        "class SseBusObserver(RTVIObserver):",
+        "await sse_bus.publish(\"bot-state\", {\"state\": \"speaking\"})",
+        "await sse_bus.publish(\"bot-state\", {\"state\": \"listening\"})",
+        "await sse_bus.publish(\"bot-state\", {\"state\": \"thinking\"})",
+        "await sse_bus.publish(\n                    \"transcript\",",
+        "SseBusObserver(rtvi)",
+        "delivery.set_message_emitter(",
+        "lambda payload: sse_bus.publish(\"delegation-progress\", payload)",
+        "await sse_bus.publish(\n            \"tool-call\",",
+        "await sse_bus.publish(\"tool-call\", {\"event\": \"end\", \"outcome\": \"error\"})",
+        "await sse_bus.publish(\"session\", {\"event\": \"start\", \"session_id\": sid})",
+        "await sse_bus.publish(\"session\", {\"event\": \"end\"})",
+        '@app.get("/api/events")',
+        "sse_bus.subscribe()",
+        'media_type="text/event-stream"',
+    )
+    for needle in required:
+        assert needle in app_source
+
+    forbidden = (
+        "@app.post(\"/api/offer\")",
+        "SmallWebRTCTransport",
+        "SmallWebRTCRequestHandler",
+    )
+    for needle in forbidden:
+        assert needle not in app_source
+
+
 def test_env_example_documents_native_runtime_scope():
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
