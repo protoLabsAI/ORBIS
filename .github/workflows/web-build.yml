@@ -1,0 +1,39 @@
+name: 'Web build'
+
+# Type-checks + builds the SPA on every PR + push to main. Catches
+# TypeScript regressions and broken Vite/Tailwind config that would
+# otherwise only surface when someone runs the desktop build.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: web-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type-check + build
+        run: bun run build
