@@ -18,6 +18,7 @@
 
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { authHeaders } from '@/auth/apiKey';
+import { logBus } from '@/shared/logBus';
 
 /** Resolve a relative API path against the document origin. */
 function url(path: string): string {
@@ -192,10 +193,7 @@ export class ApiError extends Error {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const r = await tauriFetch(url(path), { headers: authHeaders() });
-  if (r.status === 401) throw new UnauthorizedError(path);
-  if (!r.ok) throw new Error(`${path} → HTTP ${r.status}`);
-  return r.json() as Promise<T>;
+  return request<T>('GET', path);
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
@@ -211,12 +209,34 @@ async function deleteJSON<T>(path: string): Promise<T> {
 }
 
 async function sendJSON<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const r = await tauriFetch(url(path), {
-    method,
-    headers: body === undefined
-      ? authHeaders()
-      : authHeaders({ 'Content-Type': 'application/json' }),
-    body: body === undefined ? undefined : JSON.stringify(body),
+  return request<T>(method, path, body);
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const t0 = performance.now();
+  let r: Awaited<ReturnType<typeof tauriFetch>>;
+  try {
+    r = await tauriFetch(url(path), {
+      method,
+      headers: body === undefined
+        ? authHeaders()
+        : authHeaders({ 'Content-Type': 'application/json' }),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    const elapsed = Math.round(performance.now() - t0);
+    logBus.push({
+      source: 'api',
+      level: 'error',
+      message: `${method} ${path} -> ${(e as Error).message} (${elapsed}ms)`,
+    });
+    throw e;
+  }
+  const elapsed = Math.round(performance.now() - t0);
+  logBus.push({
+    source: 'api',
+    level: r.ok ? 'info' : 'warn',
+    message: `${method} ${path} -> ${r.status} (${elapsed}ms)`,
   });
   if (r.status === 401) throw new UnauthorizedError(path);
   if (!r.ok) {

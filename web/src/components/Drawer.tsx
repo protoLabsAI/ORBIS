@@ -12,25 +12,37 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slot } from '@/plugins/PluginHost';
 import { OrbPreview } from '@/plugins/orb/OrbPreview';
 import { useIsMobile } from '@/lib/useMediaQuery';
+import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'voice' | 'orb' | 'settings';
+type TabName = 'voice' | 'orb' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['voice', 'orb', 'settings', 'dev'];
+const isTabName = (value: string): value is TabName =>
+  (ALL_TABS as readonly string[]).includes(value);
 
 export function Drawer() {
   const isMobile = useIsMobile();
+  const devMode = useDevMode();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<TabName>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_TAB);
-      if (saved === 'voice' || saved === 'orb' || saved === 'settings') return saved;
-    } catch {}
+      if (saved && isTabName(saved)) return saved;
+    } catch {
+      // localStorage can be unavailable in restricted webviews.
+    }
     return 'voice';
   });
+  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'settings' : tab;
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_TAB, tab); } catch {}
-  }, [tab]);
+    try {
+      localStorage.setItem(STORAGE_TAB, effectiveTab);
+    } catch {
+      // localStorage can be unavailable in restricted webviews.
+    }
+  }, [effectiveTab]);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -82,17 +94,18 @@ export function Drawer() {
         )}
 
         <Tabs
-          value={tab}
+          value={effectiveTab}
           onValueChange={(v) => setTab(v as TabName)}
           className={cn(
             'flex-1 min-h-0 flex flex-col',
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className="grid grid-cols-3 w-full">
+          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-4' : 'grid-cols-3')}>
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="orb">Orb</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
+            {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
           <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-voice" />
@@ -103,6 +116,11 @@ export function Drawer() {
           <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-settings" />
           </TabsContent>
+          {devMode && (
+            <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+              <Slot name="drawer-dev" />
+            </TabsContent>
+          )}
         </Tabs>
       </SheetContent>
     </Sheet>
