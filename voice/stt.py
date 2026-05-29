@@ -11,8 +11,8 @@ when you want STT to live on the same box as your LLM gateway.
 Both backends expose the same module-level helpers:
   - `make_stt()` returns a Pipecat STTService
   - `prewarm()` warms whichever backend is selected
-  - `transcribe_bytes(audio_bytes)` one-shot transcribe (used by the
-    voice-clone endpoint) — also routes to the active backend.
+  - `transcribe_bytes(audio_bytes)` one-shot transcribe for diagnostics
+    and future import tools — also routes to the active backend.
 """
 
 from __future__ import annotations
@@ -306,7 +306,7 @@ def prewarm() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Backend-aware one-shot transcribe — used by /api/voice/clone
+# Backend-aware one-shot transcribe.
 # ---------------------------------------------------------------------------
 
 def _transcribe_local(audio_bytes: bytes) -> str:
@@ -346,9 +346,8 @@ async def _transcribe_openai_async(audio_bytes: bytes, *, filename: str = "audio
 def transcribe_bytes(audio_bytes: bytes) -> str:
     """Synchronous one-shot transcribe routed by STT_BACKEND.
 
-    The voice-clone endpoint calls this from an `asyncio.to_thread` so a
-    sync interface is the cleanest. For OpenAI backend we run the async
-    client via httpx-sync to avoid nesting event loops.
+    Keep a sync interface so FastAPI callers can use `asyncio.to_thread`.
+    For OpenAI backend we use httpx-sync to avoid nesting event loops.
     """
     if STT_BACKEND == "openai":
         return _transcribe_openai_sync(audio_bytes)

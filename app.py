@@ -506,7 +506,6 @@ _METRICS: dict = {
     "a2a_inbound_total": 0,
     "tool_calls_total": 0,
     "tool_calls_by_name": {},
-    "clone_requests_total": 0,
 }
 
 

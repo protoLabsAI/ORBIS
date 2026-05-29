@@ -318,6 +318,24 @@ def test_repo_runtime_identity_stays_orbis_scoped():
         assert needle not in fallback_static
 
 
+def test_voice_clone_endpoint_scaffold_stays_removed():
+    """Voice cloning was dropped; native STT helpers must not revive the endpoint."""
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    stt_source = (ROOT / "voice/stt.py").read_text(encoding="utf-8")
+
+    forbidden = (
+        "/api/voice/clone",
+        "clone_requests_total",
+        "voice-clone endpoint",
+    )
+    for needle in forbidden:
+        assert needle not in app_source
+        assert needle not in stt_source
+
+    assert "def transcribe_bytes(" in stt_source
+    assert "one-shot transcribe for diagnostics" in stt_source
+
+
 def test_example_config_documents_native_runtime_provider_knobs():
     """The shipped config example must keep native STT/TTS runtime fields visible."""
     config_example = (ROOT / "config/orbis.example.yaml").read_text(encoding="utf-8")
