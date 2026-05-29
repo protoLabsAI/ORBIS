@@ -9,7 +9,12 @@ without poisoning the source, reset() clears.
 
 from __future__ import annotations
 
+import asyncio
+import sys
+from types import SimpleNamespace
+
 from agent import metrics
+from agent.personality import analyze_session_drift
 
 
 def setup_function() -> None:
@@ -65,3 +70,69 @@ def test_unknown_counter_absent_until_inc():
     process."""
     snap = metrics.snapshot()
     assert "never_seen" not in snap["counters"]
+
+
+def test_personality_drift_call_failure_increments_metric(monkeypatch):
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise RuntimeError("boom")
+
+    class _AsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_AsyncOpenAI))
+    out = asyncio.run(analyze_session_drift(
+        [{"role": "user", "content": "hello"}],
+        llm_url="http://test/v1",
+        model="test",
+        api_key="test",
+    ))
+    assert out == []
+    assert metrics.snapshot()["counters"]["drift_llm_call_failed"] == 1
+
+
+def test_personality_drift_empty_response_increments_metric(monkeypatch):
+    class _Completions:
+        async def create(self, **_kwargs):
+            return SimpleNamespace(choices=[])
+
+    class _AsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_AsyncOpenAI))
+    out = asyncio.run(analyze_session_drift(
+        [{"role": "user", "content": "hello"}],
+        llm_url="http://test/v1",
+        model="test",
+        api_key="test",
+    ))
+    assert out == []
+    assert metrics.snapshot()["counters"]["drift_llm_empty_response"] == 1
+
+
+def test_personality_drift_json_parse_failure_increments_metric(monkeypatch):
+    class _Completions:
+        async def create(self, **_kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="not-json"),
+                    ),
+                ],
+            )
+
+    class _AsyncOpenAI:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(AsyncOpenAI=_AsyncOpenAI))
+    out = asyncio.run(analyze_session_drift(
+        [{"role": "user", "content": "hello"}],
+        llm_url="http://test/v1",
+        model="test",
+        api_key="test",
+    ))
+    assert out == []
+    assert metrics.snapshot()["counters"]["drift_json_parse_failed"] == 1
