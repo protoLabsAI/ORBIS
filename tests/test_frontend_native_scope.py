@@ -137,6 +137,25 @@ def test_native_frontend_audio_and_settings_artifacts_stay_present():
     assert "clear_browsing_data" in diagnostics
 
 
+def test_browser_voice_and_connect_ui_stays_absent():
+    """Hosted/WebRTC voice UI is not part of the native Tauri runtime."""
+    forbidden_files = (
+        WEB / "src/auth/ConnectScreen.tsx",
+        WEB / "src/shared/audio/MicTest.tsx",
+        WEB / "src/shared/audio/recordWav.ts",
+        WEB / "src/voice/ConnectionBanner.tsx",
+        WEB / "src/voice/DelegateHealthBanner.tsx",
+        WEB / "src/voice/MicPermissionRationale.tsx",
+        WEB / "src/voice/PiPHost.tsx",
+        WEB / "src/voice/PiPOverlay.tsx",
+        WEB / "src/voice/PiPTrigger.tsx",
+        WEB / "src/voice/client.ts",
+        WEB / "src/voice/useMicPermission.ts",
+        WEB / "src/voice/usePipSupport.ts",
+    )
+    assert [p.relative_to(ROOT).as_posix() for p in forbidden_files if p.exists()] == []
+
+
 def test_generated_openapi_browser_client_pipeline_stays_absent():
     """Generated OpenAPI client drift belongs behind a native API redesign."""
     forbidden_files = (
