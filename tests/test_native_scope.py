@@ -300,10 +300,22 @@ def test_repo_runtime_identity_stays_orbis_scoped():
     assert "<title>ORBIS</title>" in fallback_static
     assert "<h1>ORBIS</h1>" in fallback_static
     assert "orbis.params" in fallback_static
+    assert "native audio requires the Tauri shell" in fallback_static
 
     for source in (package, package_lock, fish_dockerfile, bench, fallback_static):
         assert "protoVoice" not in source
         assert "protovoice" not in source
+
+    forbidden_static = (
+        "/api/offer",
+        "/api/voice/clone",
+        "RTCPeerConnection",
+        "getUserMedia",
+        "navigator.mediaDevices",
+        "Clone voice",
+    )
+    for needle in forbidden_static:
+        assert needle not in fallback_static
 
 
 def test_example_config_documents_native_runtime_provider_knobs():

@@ -33,8 +33,6 @@
       font-size: 14px; line-height: 1.5;
       overflow: hidden;
     }
-    audio { display: none; }
-
     /* --- Orb = the viewport -------------------------------------------- */
     #viz { position: fixed; inset: 0; z-index: 0; }
     #viz canvas {
@@ -262,39 +260,6 @@
     }
     .tab-panel[hidden] { display: none; }
 
-    /* --- Collapsible --------------------------------------------------- */
-    details.clone { display: flex; flex-direction: column; gap: 0.625rem; }
-    details.clone summary {
-      cursor: pointer; user-select: none;
-      font-size: 0.75rem; color: var(--fg-muted);
-      padding: 0.25rem 0;
-      list-style: none;
-      display: flex; align-items: center; gap: 0.375rem;
-    }
-    details.clone summary::-webkit-details-marker { display: none; }
-    details.clone summary::before {
-      content: "›"; display: inline-block;
-      transition: transform 150ms;
-      font-size: 1rem; line-height: 1; color: var(--fg-subtle);
-    }
-    details.clone[open] summary::before { transform: rotate(90deg); }
-    details.clone summary:hover { color: var(--fg); }
-    .clone-form {
-      display: grid; gap: 0.5rem;
-      padding: 0.75rem; margin-top: 0.25rem;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-    }
-    .clone-form label {
-      display: flex; flex-direction: column; gap: 0.3rem;
-      font-size: 0.75rem; color: var(--fg-muted);
-    }
-    .clone-status {
-      font-size: 0.6875rem; color: var(--fg-subtle);
-      min-height: 1.1em;
-    }
-
     /* --- Floating helper text — single element for all statuses --------- */
     #status-pill {
       position: fixed; bottom: 1.75rem; left: 50%; transform: translateX(-50%);
@@ -350,31 +315,6 @@
           </div>
         </div>
 
-        <div class="section">
-          <details class="clone">
-            <summary>Clone a new voice</summary>
-            <form class="clone-form" id="clone-form">
-              <label>Audio sample (10–30 s)
-                <input type="file" id="clone-audio" accept="audio/*" required>
-              </label>
-              <label>Slug
-                <input type="text" id="clone-slug" placeholder="e.g. alex" required
-                  pattern="[a-z0-9][a-z0-9\-_]{1,63}">
-              </label>
-              <label>Display name (optional)
-                <input type="text" id="clone-name" placeholder="e.g. Alex">
-              </label>
-              <label>Transcript (leave empty to auto-transcribe)
-                <textarea id="clone-transcript" placeholder="Exactly what the clip says."></textarea>
-              </label>
-              <label>Description (optional)
-                <input type="text" id="clone-description" placeholder="e.g. Voice-cloned Alex">
-              </label>
-              <button type="submit" class="btn ghost">Clone voice</button>
-              <div class="clone-status" id="clone-status"></div>
-            </form>
-          </details>
-        </div>
       </div>
 
       <div role="tabpanel" id="panel-orb" class="tab-panel" aria-labelledby="tab-orb" hidden>
@@ -433,8 +373,7 @@
     </div>
   </aside>
 
-  <div id="status-pill">double-click the orb to start</div>
-  <audio id="audio" autoplay></audio>
+  <div id="status-pill">native audio requires the Tauri shell</div>
 
   <script type="module">
     import { VoiceOrb, PRESETS } from '/static/viz.js';
@@ -742,11 +681,10 @@
       syncAllInputs();
     })();
 
-    // --- WebRTC ---------------------------------------------------------
+    // --- Native fallback shell -----------------------------------------
     const btn = document.getElementById("btn");
-    const audioEl = document.getElementById("audio");
     const statusEl = document.getElementById("status-pill");
-    const IDLE_HINT = "double-click the orb to start";
+    const FALLBACK_HINT = "native audio requires the Tauri shell";
 
     let _transientTimer = null;
     const clearTransient = () => {
@@ -762,121 +700,12 @@
       }, seconds * 1000);
     };
 
-    let pc = null;
-    let localStream = null;
-    let session = 'idle';    // 'idle' | 'starting' | 'live'
-
-    const sendIceCandidate = async (pc, candidate) => {
-      await fetch("/api/offer", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pc_id: pc.pc_id,
-          candidates: [{
-            candidate: candidate.candidate,
-            sdp_mid: candidate.sdpMid,
-            sdp_mline_index: candidate.sdpMLineIndex,
-          }],
-        }),
-      });
-    };
-
-    const start = async () => {
-      if (session !== 'idle') return;
-      session = 'starting';
-      btn.disabled = true;
-      setStatus("requesting mic...");
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (_e) {
-        setStatus("mic denied");
-        btn.disabled = false;
-        session = 'idle';
-        setTimeout(() => { if (session === 'idle') setStatus(IDLE_HINT); }, 2000);
-        return;
-      }
-
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
-      pc.pendingIceCandidates = [];
-      pc.canSendIceCandidates = false;
-
-      pc.ontrack = (e) => {
-        if (e.track.kind === "audio") {
-          audioEl.srcObject = e.streams[0];
-          orb.attachStream(e.streams[0], 'remote');
-        }
-      };
-      pc.onconnectionstatechange = () => {
-        // Happy-path transitions (connecting → connected) are already
-        // covered by the transient "connected — speak" status set below.
-        // Only override the status for terminal bad states.
-        if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-          setStatus(pc.connectionState);
-          stop();
-        }
-      };
-      pc.onicecandidate = async (e) => {
-        if (!e.candidate) return;
-        if (pc.canSendIceCandidates && pc.pc_id) {
-          await sendIceCandidate(pc, e.candidate);
-        } else {
-          pc.pendingIceCandidates.push(e.candidate);
-        }
-      };
-
-      pc.addTransceiver(localStream.getAudioTracks()[0], { direction: "sendrecv" });
-      pc.addTransceiver("video", { direction: "sendrecv" });
-
-      orb.attachStream(localStream, 'local');
-
-      await pc.setLocalDescription(await pc.createOffer());
-      setStatus("negotiating...");
-      const res = await fetch("/api/offer", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sdp: pc.localDescription.sdp,
-          type: pc.localDescription.type,
-        }),
-      });
-      const answer = await res.json();
-      pc.pc_id = answer.pc_id;
-      await pc.setRemoteDescription(answer);
-
-      pc.canSendIceCandidates = true;
-      for (const c of pc.pendingIceCandidates) await sendIceCandidate(pc, c);
-      pc.pendingIceCandidates = [];
-
-      setTransientStatus("connected — speak", 3);
-      session = 'live';
-      btn.textContent = "Stop";
-      btn.disabled = false;
-    };
-
-    const stop = () => {
-      if (session === 'idle') return;
-      if (pc) { pc.close(); pc = null; }
-      if (localStream) { for (const t of localStream.getTracks()) t.stop(); localStream = null; }
-      audioEl.srcObject = null;
-      orb.detachStream('local');
-      orb.detachStream('remote');
-      btn.textContent = "Start";
-      btn.disabled = false;
-      session = 'idle';
-      setStatus(IDLE_HINT);
-    };
-
-    const toggleSession = () => {
-      if (session === 'idle') start();
-      else if (session === 'live') stop();
-    };
-
-    btn.onclick = toggleSession;
+    btn.textContent = "Voice unavailable";
+    btn.disabled = true;
+    setStatus(FALLBACK_HINT);
     document.getElementById('viz').addEventListener('dblclick', (e) => {
       e.preventDefault();
-      toggleSession();
+      setTransientStatus(FALLBACK_HINT, 3);
     });
 
     // --- Verbosity -------------------------------------------------------
@@ -916,39 +745,6 @@
       });
     });
 
-    // --- Voice clone -----------------------------------------------------
-    const cloneForm = document.getElementById("clone-form");
-    const cloneStatus = document.getElementById("clone-status");
-    cloneForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const audio = document.getElementById("clone-audio").files[0];
-      const slug = document.getElementById("clone-slug").value.trim();
-      const name = document.getElementById("clone-name").value.trim();
-      const transcript = document.getElementById("clone-transcript").value.trim();
-      const description = document.getElementById("clone-description").value.trim();
-      if (!audio || !slug) { cloneStatus.textContent = "audio + slug required"; return; }
-      cloneStatus.textContent = transcript ? "uploading..." : "uploading + auto-transcribing...";
-      const fd = new FormData();
-      fd.append("audio", audio);
-      fd.append("slug", slug);
-      if (name) fd.append("name", name);
-      if (transcript) fd.append("transcript", transcript);
-      if (description) fd.append("description", description);
-      try {
-        const resp = await fetch("/api/voice/clone", { method: "POST", body: fd });
-        const j = await resp.json();
-        if (j.error) {
-          cloneStatus.textContent = "error: " + j.error;
-          return;
-        }
-        const hint = j.auto_transcribed ? ` (transcribed: "${j.transcript.slice(0,60)}${j.transcript.length>60?'…':''}")` : "";
-        cloneStatus.textContent = `✓ cloned as ${j.name}${hint}`;
-        await refreshSkills(j.slug);
-        cloneForm.reset();
-      } catch (err) {
-        cloneStatus.textContent = "error: " + err;
-      }
-    });
   </script>
 </body>
 </html>
