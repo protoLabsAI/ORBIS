@@ -94,6 +94,29 @@ def test_native_workflow_guardrails_stay_present():
         assert needle in check_script
 
 
+def test_default_ci_workflows_stay_native_fork_scoped():
+    """Default PR checks should validate native guardrails, not hosted-app plumbing."""
+    pytest_workflow = (ROOT / ".github/workflows/pytest.yml").read_text(encoding="utf-8")
+    web_workflow = (ROOT / ".github/workflows/web-build.yml").read_text(encoding="utf-8")
+
+    for workflow in (pytest_workflow, web_workflow):
+        assert "pull_request:" in workflow
+        assert "branches: [main]" in workflow
+        assert "protoLabsAI/orbis-native" not in workflow
+        assert "codegen" not in workflow
+        assert "openapi" not in workflow
+
+    assert 'pip install -e ".[test]"' in pytest_workflow
+    assert "pytest -q" in pytest_workflow
+    assert "PWA/WebRTC" in pytest_workflow
+
+    assert "working-directory: web" in web_workflow
+    assert "bun install --frozen-lockfile" in web_workflow
+    assert "bun run build" in web_workflow
+    assert "Tauri UI build" in web_workflow
+    assert "hosted PWA/browser runtime gate" in web_workflow
+
+
 def test_backend_dependencies_stay_native_first():
     pyproject = _pyproject()
     dependencies = pyproject["project"]["dependencies"]
