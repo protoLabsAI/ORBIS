@@ -35,12 +35,8 @@ def test_web_package_does_not_reintroduce_pwa_runtime_dependencies():
     assert "@tauri-apps/plugin-http" in deps
 
 
-def test_lockfiles_do_not_contain_pwa_runtime_packages():
-    lock_text = "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in (WEB / "bun.lock", WEB / "package-lock.json")
-        if p.exists()
-    )
+def test_bun_lockfile_does_not_contain_pwa_runtime_packages():
+    lock_text = (WEB / "bun.lock").read_text(encoding="utf-8")
 
     for needle in (
         "vite-plugin-pwa",
@@ -51,6 +47,11 @@ def test_lockfiles_do_not_contain_pwa_runtime_packages():
         "@pipecat-ai/small-webrtc-transport",
     ):
         assert needle not in lock_text
+
+
+def test_web_npm_lockfile_stays_absent():
+    """Bun is the frontend package-manager source of truth."""
+    assert not (WEB / "package-lock.json").exists()
 
 
 def test_api_client_stays_tauri_native_not_split_deployment_browser_fetch():
