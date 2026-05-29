@@ -163,8 +163,8 @@ async def _stream_as_openai_chunks(
 
     Token generation runs synchronously inside MLX; we trampoline it
     through `loop.run_in_executor` chunk-by-chunk so the FastAPI
-    event loop stays responsive (web requests, WebRTC ICE, etc. don't
-    starve while the model is decoding).
+    event loop stays responsive (web requests, native voice events,
+    delegate probes, etc. don't starve while the model is decoding).
 
     When ``tools`` is provided, they're rendered into the prompt via
     the model's chat template and the streamed output is fed through

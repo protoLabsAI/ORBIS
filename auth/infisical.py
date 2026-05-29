@@ -1,8 +1,8 @@
 """Infisical-backed user-key source.
 
-The protoLabs fleet stores secrets in Infisical on pve01 (see
-/home/ava/dev/CLAUDE.md). When Infisical env vars are set, protoVoice
-fetches the user roster from Infisical instead of a local YAML file.
+The protoLabs fleet can store owner credentials in Infisical. When
+Infisical env vars are set, ORBIS fetches the user roster from
+Infisical instead of a local YAML file.
 Falls back to ``config/users.yaml`` when Infisical isn't configured —
 local dev workflow keeps working.
 
@@ -34,7 +34,7 @@ re-fetched on 401 or at boot. No refresh loop today; the registry's
     INFISICAL_CLIENT_SECRET    required (companion to client id)
     INFISICAL_PROJECT_ID       required — the workspace/project id
     INFISICAL_ENVIRONMENT      default "prod"
-    INFISICAL_SECRET_PATH      default "/protovoice"
+    INFISICAL_SECRET_PATH      default "/orbis"
     INFISICAL_USERS_SECRET_NAME default "USERS_YAML"
 """
 
@@ -97,7 +97,7 @@ def fetch_users_yaml() -> str | None:
         return None
     project_id = os.environ.get("INFISICAL_PROJECT_ID", "")
     env = os.environ.get("INFISICAL_ENVIRONMENT", "prod")
-    path = os.environ.get("INFISICAL_SECRET_PATH", "/protovoice")
+    path = os.environ.get("INFISICAL_SECRET_PATH", "/orbis")
     name = os.environ.get("INFISICAL_USERS_SECRET_NAME", "USERS_YAML")
     try:
         resp = httpx.get(

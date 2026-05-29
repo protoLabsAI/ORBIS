@@ -1,6 +1,6 @@
 """Cross-session persistence for ORBIS.
 
-Two things survive a WebRTC disconnect:
+Two things survive a native voice session ending:
 
   1. Rolling conversation summary (pipecat ``LLMContextSummarizer``
      output) — used for session-open memory callbacks.

@@ -1,6 +1,6 @@
 """Langfuse tracing — singleton + session/trace helpers.
 
-One Langfuse client per process. Each WebRTC session creates a
+One Langfuse client per process. Each native voice session creates a
 Langfuse session; each user turn creates a trace spanning STT → LLM →
 (optional tools) → TTS. Spans within the trace are labelled with the
 same prefixes that appear in our log lines so grep-and-Langfuse stay
@@ -122,7 +122,7 @@ _NULL = _NullSpan()
 
 
 def start_session(session_id: str, *, user_id: str | None = None) -> None:
-    """Mark a WebRTC session — no Langfuse object is created (sessions
+    """Mark a native voice session — no Langfuse object is created (sessions
     are implicit via the session.id OTEL attribute on traces), but we log
     for correlation."""
     if not enabled():

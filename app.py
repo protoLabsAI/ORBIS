@@ -140,7 +140,7 @@ from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-logger = logging.getLogger("protovoice")
+logger = logging.getLogger("orbis")
 
 PORT = int(os.environ.get("PORT", "7866"))
 LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1")
@@ -635,7 +635,7 @@ def _render_inbox_pending_block(mem) -> str:
 # ---------------------------------------------------------------------------
 # Text-only agent — used by inbound A2A (no voice, no tools, one-shot).
 # Keeps dependence on the pipeline decoupled so callers can hit /a2a even
-# when no WebRTC session is active.
+# when no native voice session is active.
 # ---------------------------------------------------------------------------
 
 from openai import AsyncOpenAI
@@ -663,7 +663,7 @@ def _get_text_client(url: str, api_key: str) -> AsyncOpenAI:
 _TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
 # Which user to attribute inbound A2A traffic to. A2A auth is separately
 # gated by A2A_AUTH_TOKEN (shared-secret across the fleet); this var picks
-# a protoVoice user whose skill / memory / verbosity the inbound turn
+# an ORBIS user whose persona / memory / verbosity the inbound turn
 # should read from.
 _A2A_USER_ID = os.environ.get("A2A_USER_ID", "default")
 
