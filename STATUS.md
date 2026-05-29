@@ -48,7 +48,10 @@ Selective upstream work already brought forward into `orbis-native:main`:
   native desktop, protoVoice runtime defaults were removed, stale PWA/workbox
   dependencies are gone, and tests prevent PWA/WebRTC browser-client packages,
   hosted-SPA pairing backend code, split-deployment generated API clients, and
-  OpenAPI codegen workflows from being reintroduced.
+  OpenAPI codegen workflows from being reintroduced. Guard tests also protect
+  the repo-local operator handoff docs (`CLAUDE.md`) and
+  `.claude/skills/orbis-rebuild-install/SKILL.md`, because those encode the
+  Mac native rebuild and diagnosis path.
 - Overwrite-readiness work carried forward: release workflow now uses the
   upstream shared `protoLabsAI/release-tools` action plus SPA fast-fail gate,
   package metadata is aligned to upstream `0.2.22`, frontend package management
@@ -73,7 +76,7 @@ Intentionally skipped from upstream unless redesigned for native:
 
 Current local validation on this fork:
 
-- `uv run --extra test pytest -q` passed: 646 tests, 2 skipped.
+- A previous full backend run of `uv run --extra test pytest -q` passed.
 - `cd web && bun run build` passed; Vite still reports the existing large
   bundle warning.
 - Changed-file ESLint for the native event-log/status/logBus slices passed. Full
@@ -83,7 +86,8 @@ Current local validation on this fork:
 - Focused guardrail tests for A2A native identity, Infisical `/orbis` defaults,
   native frontend package scope/API transport, upstream visual-port scope,
   generated-client and split-deployment rejection, native backend/Tauri scope,
-  inbox-tool behavior, and delegate probe metrics passed.
+  default CI workflow scope, native operator handoff docs, inbox-tool behavior,
+  and delegate probe metrics passed.
 
 The migration is staged in four phases:
 

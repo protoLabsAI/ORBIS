@@ -49,7 +49,9 @@ What has been ported and pushed:
   defaults no longer point at protoVoice, PWA/workbox deps are removed, and
   tests guard against reintroducing PWA/WebRTC browser-client packages,
   hosted-SPA pairing backend code, split-deployment generated API clients, and
-  OpenAPI codegen workflows.
+  OpenAPI codegen workflows. The guardrail suite also protects `CLAUDE.md` and
+  `.claude/skills/orbis-rebuild-install/SKILL.md` so the Mac native rebuild
+  handoff survives the upstream overwrite.
 - Overwrite-readiness: package version is aligned to upstream `0.2.22`,
   release workflow uses the upstream shared `protoLabsAI/release-tools` action
   plus SPA fast-fail, frontend package management is Bun-only, fresh-clone
@@ -73,7 +75,7 @@ What is intentionally not ported yet:
 
 Validation already run on the native fork:
 
-- `uv run --extra test pytest -q` passed: 646 tests, 2 skipped.
+- A previous full backend run of `uv run --extra test pytest -q` passed.
 - `cd web && bun run build` passed. The existing Vite large-bundle warning
   remains.
 - Changed-file ESLint for the native event-log slice passed. Full
@@ -82,7 +84,8 @@ Validation already run on the native fork:
 - Focused tests now cover A2A native identity, Infisical `/orbis` defaults,
   native frontend package/API transport scope, generated-client rejection,
   split-deployment backend rejection, upstream visual-port scope, native
-  backend/Tauri scope, inbox-tool behavior, and delegate probe metrics.
+  backend/Tauri scope, default CI workflow scope, native operator handoff docs,
+  inbox-tool behavior, and delegate probe metrics.
 
 ## Next-team handoff — Mac native audio
 
