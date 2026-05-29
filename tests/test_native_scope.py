@@ -21,6 +21,8 @@ def test_native_desktop_scaffold_stays_present():
         ".github/workflows/native-audio-preflight.yml",
         ".github/workflows/prepare-release.yml",
         ".github/workflows/release.yml",
+        ".claude/skills/orbis-rebuild-install/SKILL.md",
+        "CLAUDE.md",
         "docs/build-desktop-binary.md",
         "docs/desktop-dev.md",
         "docs/desktop-signing.md",
@@ -47,9 +49,13 @@ def test_native_desktop_scaffold_stays_present():
         "scripts/nuke-and-rebuild.sh",
         "scripts/preflight-native-audio-host.sh",
         "scripts/validate-macos-native-audio.sh",
+        "tests/test_frontend_native_scope.py",
         "tests/test_healthz_native_audio.py",
+        "tests/test_inbox_tool.py",
+        "tests/test_infisical.py",
         "tests/test_local_transport.py",
         "tests/test_native_bargein.py",
+        "tests/test_native_scope.py",
         "tests/test_prosody.py",
         "tests/test_sse_bus.py",
         "voice/local_transport.py",
@@ -92,6 +98,25 @@ def test_native_workflow_guardrails_stay_present():
 
     for needle in required:
         assert needle in check_script
+
+
+def test_native_operator_handoff_docs_stay_present():
+    """Mac test handoff depends on the repo-local rebuild notes and skill."""
+    claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    rebuild_skill = (ROOT / ".claude/skills/orbis-rebuild-install/SKILL.md").read_text(
+        encoding="utf-8",
+    )
+
+    for source in (claude, rebuild_skill):
+        assert "scripts/nuke-and-rebuild.sh" in source
+        assert "web/dist" in source
+        assert "src-tauri" in source
+        assert "studio.protolabs.orbis" in source
+
+    assert "Apple Silicon Mac is the only first-class platform" in claude
+    assert "Web / PWA / browser is dropped as a supported runtime" in claude
+    assert "orbis-rebuild-install" in rebuild_skill
+    assert "--voice-processing --launch" in rebuild_skill
 
 
 def test_default_ci_workflows_stay_native_fork_scoped():
