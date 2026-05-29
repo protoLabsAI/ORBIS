@@ -5,11 +5,11 @@ import { Diagnostics } from './Diagnostics';
 import { DelegatesSettings } from './DelegatesSettings';
 import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
+import { ApiKeyField } from './ApiKeyField';
+import { PersonalityPanel } from './PersonalityPanel';
 import { STTSettings } from './STTSettings';
 import { TTSSettings } from './TTSSettings';
-import { ApiKeyField } from '../voice-panel/ApiKeyField';
-import { PersonalityPanel } from '../voice-panel/PersonalityPanel';
-import { VerbositySelector } from '../voice-panel/VerbositySelector';
+import { VerbositySelector } from './VerbositySelector';
 
 /**
  * Runtime settings — provider config, native audio, agent behavior,
