@@ -90,3 +90,40 @@ def test_generated_openapi_browser_client_pipeline_stays_absent():
     )
 
     assert [p.relative_to(ROOT).as_posix() for p in forbidden_files if p.exists()] == []
+
+
+def test_upstream_orb_variants_stay_ported_to_native_frontend():
+    """Native ORBIS keeps upstream visual product work that fits Tauri."""
+    variants = WEB / "src/plugins/orb/variants"
+    imports = (variants / "index.ts").read_text(encoding="utf-8")
+
+    for variant in ("tetra", "lattice", "spectrum", "galaxy"):
+        assert f"import './{variant}';" in imports
+        assert (variants / variant / "index.tsx").exists()
+        assert (variants / variant / "schema.ts").exists()
+        assert (variants / variant / "presets.ts").exists()
+
+    assert "import './liquid';" not in imports
+    assert not (variants / "liquid").exists()
+
+
+def test_upstream_orb_spectrum_shader_hardening_stays_ported():
+    """The Rainbow spectrum palette must not regress to a blank render."""
+    spectrum = WEB / "src/plugins/orb/variants/spectrum"
+    presets = (spectrum / "presets.ts").read_text(encoding="utf-8")
+    shader = (spectrum / "shaders/spectrum.frag.glsl").read_text(encoding="utf-8")
+
+    assert "fadeOuter: 2.60, fadeInner: 2.45" in presets
+    assert "float lo = min(uFadeInner, uFadeOuter);" in shader
+    assert "float hi = max(uFadeInner, uFadeOuter);" in shader
+    assert "smoothstep(lo, max(hi, lo + 1e-4), distFromCenter)" in shader
+    assert "smoothstep(uFadeInner, uFadeOuter, distFromCenter)" not in shader
+
+
+def test_upstream_orb_randomize_keeps_user_resolution():
+    """Randomize should not mutate the user's manually tuned DPR setting."""
+    panel = (WEB / "src/plugins/orb-settings/OrbSettingsPanel.tsx").read_text(
+        encoding="utf-8",
+    )
+
+    assert "if (spec.key === 'dpr') continue;" in panel
