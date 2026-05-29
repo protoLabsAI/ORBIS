@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react';
 import { logBus } from '@/shared/logBus';
 import { voiceStore, type VoiceSnapshot } from '@/voice/state';
 
+/**
+ * Silent component mounted at the app root. It mirrors high-signal native
+ * SSE/voice state transitions into logBus so the Dev drawer can show what
+ * already happened before the user opened the log.
+ */
 export function LogsCollector() {
   const prevRef = useRef<VoiceSnapshot | null>(null);
 
