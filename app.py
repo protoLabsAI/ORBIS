@@ -1211,7 +1211,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
         # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~1500 ms (default; per-persona override via
+        # within ~2500 ms (default; per-persona override via
         # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
         # quiet "mm" / "hm" so the agent feels responsive on slow turns.
         # Cancels when the bot actually starts speaking. Vapi Fill
@@ -1255,7 +1255,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     import uuid as _uuid
     turn_tracer = _tracing.make_turn_tracer(
         session_id=_uuid.uuid4().hex,
-        user_id=None,  # multi-tenant work assigns per-client ids later
+        user_id=user_id,
+        llm_model=llm_model,
+        stt_backend=(skill.stt or {}).get("backend") or STT_BACKEND,
+        tts_backend=tts_backend,
     )
 
     # Barge-in observer flushes the Rust CPAL playback ring immediately
