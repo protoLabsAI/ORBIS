@@ -26,6 +26,9 @@ config/users.yaml
 # Per-project Automaker UI state — local config, should not be versioned.
 .automaker/
 
+# Local Proto/agent scratch state.
+.proto/
+
 # Tauri shell build + runtime artifacts.
 # - binaries/ is populated at build time by desktop-build.yml with
 #   the PyApp sidecar + by dev scripts with stub sidecars.

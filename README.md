@@ -7,10 +7,10 @@
 > Voice-first AI companion. An orb that talks to you, remembers you,
 > and routes the heavy lifting to your existing agents.
 
-ORBIS is a single-owner desktop / tailnet-hosted app. You talk to the
-orb; it talks back in real time; it remembers you across sessions;
-it hands off complex tasks to whatever agents you've configured (A2A
-fleet agents, OpenAI-compatible endpoints). The differentiator is the
+ORBIS is a single-owner native desktop app. You talk to the orb; it
+talks back in real time; it remembers you across sessions; it hands
+off complex tasks to whatever agents you've configured (A2A fleet
+agents, OpenAI-compatible endpoints). The differentiator is the
 *companion* layer — persistent memory, slow personality drift, moods,
 and a visible expressive form — around a thin voice-routing agent.
 
@@ -30,9 +30,9 @@ architectural snapshot.
 - **Companion-layer.** Persistent memory (SQLite-backed), slow-drift
   personality axes, short-term mood state, soft-neglect behavior over
   days-of-silence, visible personality panel for the user to peek at.
-- **Single-owner.** One instance, one owner. Multi-device access via
-  tailnet hosting (phone + laptop hit the same instance). Not
-  multi-tenant.
+- **Single-owner.** One instance, one owner. Multi-device access comes
+  through native desktop ports after the Mac release path stabilizes.
+  Not multi-tenant.
 
 ## What ORBIS isn't
 
@@ -42,6 +42,9 @@ architectural snapshot.
   no social visits).
 - Not a replacement for ChatGPT — your reasoning still lives in
   whichever model you've wired up.
+- Not a PWA or browser voice app. The supported runtime is native
+  Tauri desktop; Linux and Windows desktop support come after the Mac
+  native-audio build is stable.
 - Not gacha, loot boxes, energy timers, or FOMO-driven monetization.
 
 ## Running it (development)
@@ -64,17 +67,24 @@ See [Docker — with / without GPU](#docker--with--without-gpu) below.
 cp .env.example .env       # optional — env vars for pro setups
 # config/orbis.yaml is auto-written by the first-run setup wizard
 
-# Run (two processes)
+# Fast backend/UI iteration
 cd web && bun install && bun run dev   # frontend on :5173
 # in a second shell:
 python app.py                          # backend on :7866
 ```
 
-Open `http://localhost:5173` and the **setup wizard** walks you
-through: name yourself + name the orb, pick an LLM provider (15
-presets, with live "test connection" + model-list fetch + Ollama /
-LM Studio auto-detect if they're running), pick a starter orb, hatch.
-Ends in the main app ready to double-click-to-talk.
+For the native shell and packaged sidecar flow, use the desktop docs:
+
+```bash
+scripts/preflight-native-audio-host.sh
+scripts/nuke-and-rebuild.sh --launch --tail
+```
+
+On first boot, the **setup wizard** walks you through: name yourself +
+name the orb, pick an LLM provider (15 presets, with live "test
+connection" + model-list fetch + Ollama / LM Studio auto-detect if
+they're running), pick a starter orb, grant microphone access, hatch.
+Ends in the native app ready to talk.
 
 ### Docker — with / without GPU
 
@@ -107,9 +117,9 @@ in the requirements note above). Fish TTS is opt-in via the `fish`
 profile — unrelated to this GPU switch, see `docker-compose.yml` for
 that service.
 
-Tailnet hosting: `sudo tailscale serve --bg --https=8443 http://127.0.0.1:7866`
-and point your phone / other devices at the tailnet URL. The Drawer
-→ Voice tab → Access panel accepts the owner API key for tailnet
+Tailnet-hosted backend access is still possible for development and
+automation, but the browser/PWA voice runtime is not supported. The
+Drawer → Settings → Access panel accepts the owner API key for API
 auth (generate with
 `python3 -c "import secrets; print('pv_ak_' + secrets.token_urlsafe(32))"`
 and write it into `config/users.yaml`).
@@ -215,8 +225,9 @@ dashboard webhook at `POST https://<your-host>/api/stripe/webhook`.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest        # full backend suite (100+ tests)
+.venv/bin/python -m pytest        # full backend suite
 cd web && bun run build           # type-check + build frontend
+scripts/check-macos-release-config.py
 ```
 
 ## Project docs

@@ -20,7 +20,9 @@ Canonical native work now lives in
 [`protoLabsAI/orbis-native`](https://github.com/protoLabsAI/orbis-native).
 This repo is intentionally Tauri-first: upstream `protoLabsAI/ORBIS`
 remains useful as a source of product/backend changes, but its current
-PWA/WebRTC direction is not a merge target.
+PWA/WebRTC direction is not a merge target. Treat this as a greenfield
+native fork: bring forward only the upstream pieces that fit the native
+desktop product.
 
 Selective upstream work already brought forward into `orbis-native:main`:
 

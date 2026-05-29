@@ -24,6 +24,8 @@ architecture.
 `protoLabsAI/ORBIS` as a source of selective changes only. Do not merge
 upstream `main` wholesale: it carries hosted PWA/WebRTC work and deletes the
 native shell, native audio transport, Mac release scripts, and native tests.
+This is now a greenfield native fork: port only product/backend changes that
+fit the Tauri desktop runtime.
 
 What has been ported and pushed:
 

@@ -34,9 +34,12 @@ reason). Don't silently change direction.
 ## Architecture
 
 ### Voice pipeline
-- **Pipecat stays as-is.** WebRTC, STT, TTS, VAD, voice-quality
-  controllers (filler, backchannel, barge-in, micro-ack, echo-guard,
-  prosody, delivery) — all kept.
+- **Pipecat stays as the sidecar orchestrator.** STT, TTS, VAD, and
+  voice-quality controllers (filler, backchannel, barge-in, micro-ack,
+  echo-guard, prosody, delivery) are retained where they fit the native
+  desktop product. WebRTC/browser transport was explicitly removed by
+  the 2026-04-28 amendment and remains rejected by the 2026-05-29 fork
+  posture below.
 
 ### TTS providers
 - **kokoro default.** CPU-friendly, runs on broader hardware, no GPU
@@ -484,6 +487,15 @@ open or reintroduce the removed web/PWA runtime.
 passes signed/notarized release validation and live microphone soak. Docs and
 future planning should say "Mac first" instead of "Apple Silicon only" when
 describing product scope.
+
+**Fork policy:** `protoLabsAI/orbis-native` is a greenfield Tauri-first fork,
+not a temporary divergence from upstream `protoLabsAI/ORBIS`. Upstream remains
+useful as a source of narrow ideas: provider settings, delegation, memory,
+observability, backend correctness, and desktop UX can be cherry-picked when
+they fit the native product. Hosted SPA reach, browser audio, PWA
+installability, cross-device web pairing, generated clients tied to that
+hosted shape, and any deletion of the native shell or audio stack are out of
+scope unless explicitly redesigned for Tauri IPC and the local sidecar.
 
 ---
 
