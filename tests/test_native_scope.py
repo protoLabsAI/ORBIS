@@ -284,6 +284,28 @@ def test_docker_compose_documents_orbis_native_runtime_scope():
         assert needle not in compose
 
 
+def test_repo_runtime_identity_stays_orbis_scoped():
+    """Live fallback/runtime helpers should not advertise the protoVoice seed."""
+    package = (ROOT / "package.json").read_text(encoding="utf-8")
+    package_lock = (ROOT / "package-lock.json").read_text(encoding="utf-8")
+    fish_dockerfile = (ROOT / "Dockerfile.fish").read_text(encoding="utf-8")
+    bench = (ROOT / "scripts/bench.py").read_text(encoding="utf-8")
+    fallback_static = (ROOT / "static/index.html").read_text(encoding="utf-8")
+
+    assert '"name": "orbis-docs"' in package
+    assert '"name": "orbis-docs"' in package_lock
+    assert "Fish Audio S2-Pro sidecar for ORBIS" in fish_dockerfile
+    assert 'os.environ.get("ORBIS_URL"' in bench
+    assert "PROTOVOICE_URL" not in bench
+    assert "<title>ORBIS</title>" in fallback_static
+    assert "<h1>ORBIS</h1>" in fallback_static
+    assert "orbis.params" in fallback_static
+
+    for source in (package, package_lock, fish_dockerfile, bench, fallback_static):
+        assert "protoVoice" not in source
+        assert "protovoice" not in source
+
+
 def test_example_config_documents_native_runtime_provider_knobs():
     """The shipped config example must keep native STT/TTS runtime fields visible."""
     config_example = (ROOT / "config/orbis.example.yaml").read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-# Fish Audio S2-Pro sidecar for protoVoice.
+# Fish Audio S2-Pro sidecar for ORBIS.
 #
 # Expects build context = a checkout of fish-speech that already has
 # `.venv/` populated and `checkpoints/s2-pro/` present. The context path

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>protoVoice</title>
+  <title>ORBIS</title>
   <script type="importmap">
     {
       "imports": {
@@ -319,7 +319,7 @@
   <aside id="drawer" aria-hidden="true">
     <div class="drawer-inner">
       <div>
-        <h1>protoVoice</h1>
+        <h1>ORBIS</h1>
         <p>Double-click the orb to start or stop. Drag to spin. Hold to light up.</p>
       </div>
 
@@ -453,7 +453,7 @@
     });
 
     // --- Tabs ------------------------------------------------------------
-    const STORAGE_TAB = 'protoVoice.tab';
+    const STORAGE_TAB = 'orbis.tab';
     const tabs = document.querySelectorAll('[role="tab"]');
     const panels = document.querySelectorAll('.tab-panel');
     const selectTab = (name) => {
@@ -569,9 +569,9 @@
     createSlider(perfSec, { key: 'dpr', label: 'Resolution', min: 0.1, max: 2.0, step: 0.1 });
 
     // --- Persistence ----------------------------------------------------
-    const STORAGE_PARAMS  = 'protoVoice.params';
-    const STORAGE_PALETTE = 'protoVoice.palette';
-    const STORAGE_CUSTOM  = 'protoVoice.customPresets';
+    const STORAGE_PARAMS  = 'orbis.params';
+    const STORAGE_PALETTE = 'orbis.palette';
+    const STORAGE_CUSTOM  = 'orbis.customPresets';
 
     const syncAllInputs = () => {
       const p = orb.getParams();

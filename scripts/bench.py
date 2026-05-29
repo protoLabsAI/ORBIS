@@ -36,7 +36,7 @@ LLM_KEY = os.environ.get("LLM_API_KEY", "not-needed")
 FISH_URL = os.environ.get("FISH_URL", "http://localhost:8092")
 FISH_REF = os.environ.get("FISH_REFERENCE_ID", "josh_sample_1")
 
-PROTOVOICE_URL = os.environ.get("PROTOVOICE_URL", "http://localhost:7867")
+ORBIS_URL = os.environ.get("ORBIS_URL", "http://localhost:7867")
 
 PROMPTS = [
     "Say hi.",
@@ -212,7 +212,7 @@ async def bench_a2a(turns: int) -> list[float]:
                 },
             }
             t0 = time.time()
-            r = await c.post(f"{PROTOVOICE_URL}/a2a", json=body)
+            r = await c.post(f"{ORBIS_URL}/a2a", json=body)
             r.raise_for_status()
             samples.append(time.time() - t0)
     return samples
@@ -417,7 +417,7 @@ async def main() -> None:
 
     if args.a2a:
         try:
-            print(f"A2A  → {PROTOVOICE_URL}/a2a")
+            print(f"A2A  → {ORBIS_URL}/a2a")
             rt = await bench_a2a(args.turns)
             print(stats("A2A round-trip", rt))
             print()
