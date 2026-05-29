@@ -85,6 +85,27 @@ def test_backend_dependencies_stay_native_first():
         assert needle not in joined_dependencies
 
 
+def test_split_deployment_pairing_backend_stays_absent():
+    """Hosted-SPA pairing belongs to upstream web mode, not native ORBIS."""
+    assert not (ROOT / "auth/pairing.py").exists()
+
+    app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    forbidden = (
+        "CORSMiddleware",
+        "auth.pairing",
+        "get_pairing_token",
+        "is_pairing_enforced",
+        "ORBIS_ALLOWED_ORIGINS",
+        "ORBIS_PAIR_TOKEN",
+        "X-Orbis-Pair",
+        "x-orbis-pair",
+        "split-deployment pairing token",
+    )
+
+    for needle in forbidden:
+        assert needle not in app_source
+
+
 def test_env_example_documents_native_runtime_scope():
     env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
 
