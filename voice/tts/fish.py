@@ -17,7 +17,8 @@ bytes straight through as PCM.
 
 This client:
   - Uses streaming for low TTFA (pushes PCM chunks as bytes arrive).
-  - Supports reference_id (saved voice) or inline `references=[...]` (clone).
+  - Supports a saved `reference_id` when the user manages Fish references
+    outside ORBIS.
 """
 
 import base64
@@ -154,7 +155,7 @@ class FishAudioTTS(TTSService):
 
 
 # ---------------------------------------------------------------------------
-# Reference (voice clone) management — exposed for later UI + skills
+# Reference management helpers for externally managed Fish voices.
 # ---------------------------------------------------------------------------
 
 # Fish uses content-negotiation via `kui` — without an explicit Accept header
@@ -184,7 +185,7 @@ def add_reference(
     fish_url: str = FISH_URL,
     timeout: float = 30.0,
 ) -> bool:
-    """Save a new voice reference on the Fish server for later reuse."""
+    """Save a Fish reference for later reuse by reference_id."""
     try:
         r = httpx.post(
             f"{fish_url.rstrip('/')}/v1/references/add",

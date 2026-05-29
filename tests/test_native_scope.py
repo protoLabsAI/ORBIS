@@ -322,18 +322,25 @@ def test_voice_clone_endpoint_scaffold_stays_removed():
     """Voice cloning was dropped; native STT helpers must not revive the endpoint."""
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
     stt_source = (ROOT / "voice/stt.py").read_text(encoding="utf-8")
+    tts_init = (ROOT / "voice/tts/__init__.py").read_text(encoding="utf-8")
+    fish_tts = (ROOT / "voice/tts/fish.py").read_text(encoding="utf-8")
 
     forbidden = (
         "/api/voice/clone",
         "clone_requests_total",
         "voice-clone endpoint",
+        "voice cloning",
+        "later UI + skills",
+        "inline `references=[...]` (clone)",
     )
     for needle in forbidden:
-        assert needle not in app_source
-        assert needle not in stt_source
+        for source in (app_source, stt_source, tts_init, fish_tts):
+            assert needle not in source
 
     assert "def transcribe_bytes(" in stt_source
     assert "one-shot transcribe for diagnostics" in stt_source
+    assert "opt-in BYO reference voices" in tts_init
+    assert "externally managed Fish voices" in fish_tts
 
 
 def test_example_config_documents_native_runtime_provider_knobs():

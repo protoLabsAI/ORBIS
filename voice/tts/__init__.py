@@ -6,8 +6,8 @@ Backends:
                    (LocalAI, OpenRouter, ElevenLabs-OpenAI-compat, etc.)
   - elevenlabs   : Pipecat's native ElevenLabs WebSocket service (pay-API,
                    best quality).
-  - fish         : Fish Audio S2-Pro sidecar — opt-in, voice cloning,
-                   prosody tags. Requires the fish-speech compose profile.
+  - fish         : Fish Audio S2-Pro sidecar — opt-in BYO reference voices
+                   and prosody tags. Requires the fish-speech compose profile.
 
 Selection: ``TTS_BACKEND`` env var (default ``kokoro``) or via
 ``config/orbis.yaml``'s ``voice.tts_backend`` (the persona loader
