@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 
@@ -54,6 +55,24 @@ def test_bun_lockfile_does_not_contain_pwa_runtime_packages():
 def test_web_npm_lockfile_stays_absent():
     """Bun is the frontend package-manager source of truth."""
     assert not (WEB / "package-lock.json").exists()
+
+
+def test_frontend_dist_scaffold_stays_packageable_from_fresh_clone():
+    """PyApp packaging force-includes web/dist, so the path must exist."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    wheel_force_include = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"][
+        "force-include"
+    ]
+    sdist_force_include = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"][
+        "force-include"
+    ]
+    web_gitignore = (WEB / ".gitignore").read_text(encoding="utf-8")
+
+    assert (WEB / "dist/.gitkeep").exists()
+    assert wheel_force_include["web/dist"] == "web/dist"
+    assert sdist_force_include["web/dist"] == "web/dist"
+    assert "dist/*" in web_gitignore
+    assert "!dist/.gitkeep" in web_gitignore
 
 
 def test_api_client_stays_tauri_native_not_split_deployment_browser_fetch():
