@@ -27,12 +27,31 @@ from agent.delivery import DeliveryController, Priority
 logger = logging.getLogger(__name__)
 
 A2A_AUTH_TOKEN = os.environ.get("A2A_AUTH_TOKEN", "")  # shared secret for inbound auth
+# Explicit opt-in to anonymous /a2a traffic when A2A_AUTH_TOKEN is unset.
+# Default false so forgetting the token does not leave inbound A2A open.
+A2A_ALLOW_UNAUTH = os.environ.get("A2A_ALLOW_UNAUTH", "").strip().lower() in (
+    "1", "true", "yes",
+)
 # Shared secret for /a2a/push callbacks — we expect remote agents to
 # echo this back in their PushNotificationConfig.token or
 # Authorization: Bearer header. Generated on first use if empty.
 A2A_PUSH_TOKEN = os.environ.get("A2A_PUSH_TOKEN", "")
 AGENT_NAME = os.environ.get("AGENT_NAME", "protovoice")
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "0.1.0")
+
+if A2A_AUTH_TOKEN:
+    logger.info("[a2a] A2A_AUTH_TOKEN configured — inbound /a2a requires shared secret")
+elif A2A_ALLOW_UNAUTH:
+    logger.warning(
+        "[a2a] A2A_ALLOW_UNAUTH=1 — inbound /a2a accepts anonymous traffic. "
+        "Set A2A_AUTH_TOKEN=<secret> for production."
+    )
+else:
+    logger.warning(
+        "[a2a] no A2A_AUTH_TOKEN and A2A_ALLOW_UNAUTH not set — inbound "
+        "/a2a will reject all requests with 401. Set A2A_AUTH_TOKEN=<secret> "
+        "or A2A_ALLOW_UNAUTH=1 to permit anonymous traffic explicitly."
+    )
 
 
 def _extract_user_text(params: dict) -> str:
@@ -88,9 +107,10 @@ def build_agent_card(host: str, *, skills: list[dict] | None = None) -> dict:
 
 def _auth_ok(request: Request) -> bool:
     """Accept either X-API-Key or Authorization: Bearer with the shared
-    secret. If no secret is configured, accept anonymous."""
+    secret. When no secret is configured, accept anonymous only if
+    A2A_ALLOW_UNAUTH=1 is explicitly set."""
     if not A2A_AUTH_TOKEN:
-        return True
+        return A2A_ALLOW_UNAUTH
     if request.headers.get("X-API-Key", "") == A2A_AUTH_TOKEN:
         return True
     bearer = request.headers.get("Authorization", "")
