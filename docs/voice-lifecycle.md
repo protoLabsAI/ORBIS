@@ -432,7 +432,7 @@ Telemetry gap: `MicroAckInjector` has no `tracing.span` — only an INFO log. Ba
 
 ### Env vars (touched per layer)
 
-- **STT**: `STT_BACKEND`, `WHISPER_MODEL`, `STT_URL`, `STT_MODEL`
+- **STT**: `STT_BACKEND`, `WHISPER_MODEL`, `STT_URL`, `STT_MODEL`, `STT_API_KEY`; can also be set per install in `config/orbis.yaml` under `stt.{backend,whisper_model,url,model,api_key}`.
 - **VAD/turn**: `SMART_TURN` (off/local/v3)
 - **Echo**: `HALF_DUPLEX`, `ECHO_GUARD_MS`, `NOISE_FILTER`
 - **LLM**: `LLM_URL`, `LLM_SERVED_NAME`, `LLM_API_KEY`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`, `START_VLLM`, `VLLM_PORT`, `LLM_MODEL`, `ORBIS_LLM_DETECT_DISABLE`
@@ -441,7 +441,7 @@ Telemetry gap: `MicroAckInjector` has no `tracing.span` — only an INFO log. Ba
 - **Verbosity**: `VERBOSITY` (silent/brief/narrated/chatty)
 - **Delivery**: `DELIVERY_NEXT_SILENCE_FALLBACK_SECS`, `DELIVERY_WHEN_ASKED_TTL_SECS`, `SESSION_STORE_DIR`
 - **A2A push**: `A2A_PUSH_URL`, `A2A_PUSH_TOKEN`
-- **TTS**: `TTS_BACKEND`; per backend: `KOKORO_VOICE/LANG`, `TTS_OPENAI_*`, `ELEVENLABS_*`, `FISH_URL/TIMEOUT`
+- **TTS**: `TTS_BACKEND`; per backend: `KOKORO_VOICE/LANG`, `TTS_OPENAI_*`, `ELEVENLABS_*`, `FISH_URL/TIMEOUT`. OpenAI-compatible TTS can also be set in `config/orbis.yaml` via `voice.{tts_url,tts_model,tts_api_key}`.
 
 ### Per-skill `behavior` block
 

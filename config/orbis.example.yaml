@@ -63,13 +63,29 @@ voice:
   # Pipecat TTS backend. `kokoro` is the default and runs on CPU.
   # Alternatives:
   #   openai      — any OpenAI-compatible /v1/audio/speech endpoint
-  #                 (configure via TTS_OPENAI_* env vars)
+  #                 (configure via TTS_OPENAI_* env vars, or the
+  #                 optional tts_url/model/api_key fields below)
   #   elevenlabs  — ElevenLabs native WebSocket service
   #                 (configure via ELEVENLABS_* env vars; pay API)
   #   fish        — Fish S2-Pro sidecar (opt-in; requires the
   #                 fish-speech docker-compose profile)
   tts_backend: kokoro
   voice: af_heart              # kokoro voice id, ElevenLabs voice_id, etc.
+  # tts_url: http://localhost:8080/v1
+  # tts_model: tts-1
+  # tts_api_key: sk-...
+
+# Speech-to-text backend. Leave this block out to use STT_* env vars.
+# `local` keeps the native app's in-process Whisper path; `openai`
+# targets any OpenAI-compatible /v1/audio/transcriptions endpoint;
+# `sensevoice` enables the optional FunAudioLLM/SenseVoice backend.
+#
+# stt:
+#   backend: local                   # local | openai | sensevoice
+#   whisper_model: openai/whisper-large-v3-turbo
+#   url: https://api.openai.com/v1   # backend=openai
+#   model: whisper-1
+#   api_key: sk-...
 
 # LLM routing — the small/fast model that powers the voice agent's
 # routing + personality layer. When this block is set, it overrides

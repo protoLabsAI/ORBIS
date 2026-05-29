@@ -36,11 +36,15 @@ _ALLOWED_PERSONA_KEYS = {
     "slug", "name", "user_name", "system_prompt", "system_prompt_file",
     "temperature", "max_tokens", "filler_verbosity",
 }
-_ALLOWED_VOICE_KEYS = {"tts_backend", "voice"}
+_ALLOWED_VOICE_KEYS = {
+    "tts_backend", "voice", "tts_url", "tts_model", "tts_api_key",
+}
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
 _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
+_ALLOWED_STT_KEYS = {"backend", "whisper_model", "url", "model", "api_key"}
 _ALLOWED_VERBOSITIES = {"silent", "brief", "narrated", "chatty"}
 _ALLOWED_TTS_BACKENDS = {"kokoro", "openai", "elevenlabs", "fish"}
+_ALLOWED_STT_BACKENDS = {"local", "openai", "sensevoice"}
 
 # Orb state/mood authoring (DECISIONS.md 2026-04-23 amendment). Presets
 # grow optional delta maps per voice-state and per mood-dimension on top
@@ -114,6 +118,12 @@ def _validate_voice(block: Any) -> dict:
             out[k] = val
         elif k == "voice":
             out[k] = str(v) if v is not None else None
+        elif k in ("tts_url", "tts_model", "tts_api_key"):
+            if v is None:
+                out[k] = None
+            else:
+                trimmed = str(v).strip()
+                out[k] = trimmed if trimmed else None
     return out
 
 
@@ -242,6 +252,32 @@ def _validate_llm(block: Any) -> dict:
     return out
 
 
+def _validate_stt(block: Any) -> dict:
+    """Filter an stt block. Empty strings round-trip as None so clearing
+    a settings field falls back to env defaults."""
+    if not isinstance(block, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for k, v in block.items():
+        if k not in _ALLOWED_STT_KEYS:
+            logger.warning(f"[config_store] dropping unknown stt key {k!r}")
+            continue
+        if k == "backend":
+            val = str(v).strip().lower()
+            if val not in _ALLOWED_STT_BACKENDS:
+                raise ValueError(
+                    f"stt.backend must be one of {sorted(_ALLOWED_STT_BACKENDS)}"
+                )
+            out[k] = val
+        elif k in ("whisper_model", "url", "model", "api_key"):
+            if v is None:
+                out[k] = None
+            else:
+                trimmed = str(v).strip()
+                out[k] = trimmed if trimmed else None
+    return out
+
+
 def validate_and_normalize(data: dict) -> dict:
     """Apply schema filtering across the top-level blocks. Raises
     ValueError on typed validation failures; silently drops unknown
@@ -259,13 +295,17 @@ def validate_and_normalize(data: dict) -> dict:
         block = _validate_llm(data["llm"])
         if block:
             out["llm"] = block
+    if "stt" in data:
+        block = _validate_stt(data["stt"])
+        if block:
+            out["stt"] = block
     if "orb" in data:
         block = _validate_orb(data["orb"])
         if block:
             out["orb"] = block
     # Unknown top-level keys — drop with warning.
     for k in data:
-        if k not in ("persona", "voice", "llm", "orb"):
+        if k not in ("persona", "voice", "llm", "stt", "orb"):
             logger.warning(f"[config_store] dropping unknown top-level key {k!r}")
     return out
 
@@ -305,7 +345,7 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
     """
     current = read_config(path)
     merged: dict[str, Any] = dict(current)
-    for block_key in ("persona", "voice", "llm", "orb"):
+    for block_key in ("persona", "voice", "llm", "stt", "orb"):
         if block_key not in patch:
             continue
         block_patch = patch[block_key]

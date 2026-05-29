@@ -129,6 +129,9 @@ class Persona:
     # Voice + TTS provider overrides.
     tts_backend: str | None = None
     voice: str | None = None
+    tts_url: str | None = None
+    tts_model: str | None = None
+    tts_api_key: str | None = None
     # Starter orb visual state — (variant, palette, params).
     orb_variant: str | None = None
     orb_palette: str | None = None
@@ -148,6 +151,9 @@ class Persona:
     # run_bot falls back to env defaults. Set from the setup wizard's
     # LLM-provider step, writable via /api/config.
     llm: dict | None = None
+    # stt: dict with shape {backend, whisper_model, url, model, api_key}.
+    # Unset → make_stt falls back to STT_* env defaults.
+    stt: dict | None = None
     tools: list = field(default_factory=list)
 
     @property
@@ -224,6 +230,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     voice_block = data.get("voice") or {}
     orb_block = data.get("orb") or {}
     llm_block = data.get("llm") or {}
+    stt_block = data.get("stt") or {}
 
     slug = (persona_block.get("slug") or "orbis").strip()
     name = (persona_block.get("name") or "ORBIS").strip()
@@ -231,9 +238,25 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     system_prompt = _resolve_prompt(persona_block, config_dir)
 
     # Env-win over config for TTS selection so the same YAML file works
-    # across deployments with different TTS setups.
-    tts_backend = os.environ.get("TTS_BACKEND") or voice_block.get("tts_backend")
+    # across deployments with different TTS setups. Normalize hand-edited
+    # YAML/env values because downstream code string-matches on lowercase.
+    _raw_tts = os.environ.get("TTS_BACKEND") or voice_block.get("tts_backend")
+    tts_backend = (
+        _raw_tts.strip().lower()
+        if isinstance(_raw_tts, str) and _raw_tts.strip()
+        else None
+    )
     voice = os.environ.get("KOKORO_VOICE") or voice_block.get("voice")
+
+    def _str_or_none(v: object) -> str | None:
+        if not isinstance(v, str):
+            return None
+        s = v.strip()
+        return s or None
+
+    tts_url = _str_or_none(voice_block.get("tts_url"))
+    tts_model = _str_or_none(voice_block.get("tts_model"))
+    tts_api_key = _str_or_none(voice_block.get("tts_api_key"))
 
     try:
         temperature = float(
@@ -288,6 +311,20 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
             if v is not None:
                 llm[k] = v
 
+    stt: dict | None = None
+    if isinstance(stt_block, dict) and stt_block:
+        stt = {}
+        for k in ("backend", "whisper_model", "url", "model", "api_key"):
+            v = stt_block.get(k)
+            if isinstance(v, str):
+                trimmed = v.strip()
+                if trimmed:
+                    stt[k] = trimmed.lower() if k == "backend" else trimmed
+            elif v is not None:
+                stt[k] = v
+        if not stt:
+            stt = None
+
     persona = Persona(
         slug=slug,
         name=name,
@@ -298,12 +335,16 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         filler_verbosity=filler_verbosity,
         tts_backend=tts_backend,
         voice=voice,
+        tts_url=tts_url,
+        tts_model=tts_model,
+        tts_api_key=tts_api_key,
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,
         orb_state_overrides=orb_state_overrides,
         orb_mood_overrides=orb_mood_overrides,
         llm=llm,
+        stt=stt,
     )
     logger.info(f"[persona] loaded {persona.slug!r} from {path}")
     return persona

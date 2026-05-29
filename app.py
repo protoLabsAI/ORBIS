@@ -918,7 +918,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Override via NATIVE_ECHO_GUARD_MS env var.
     _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
 
-    stt = make_stt()
+    stt = make_stt(**(skill.stt or {}))
 
     # LLM routing — resolved by _resolve_skill_llm so the voice path and
     # the A2A inbound text path share a single source of truth. Per-field
@@ -970,6 +970,15 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 tts_kwargs["lang"] = lang
         elif tts_backend == "fish":
             tts_kwargs["reference_id"] = skill.voice
+        elif tts_backend == "openai":
+            tts_kwargs["voice"] = skill.voice
+    if tts_backend == "openai":
+        if skill.tts_url:
+            tts_kwargs["url"] = skill.tts_url
+        if skill.tts_model:
+            tts_kwargs["model"] = skill.tts_model
+        if skill.tts_api_key:
+            tts_kwargs["api_key"] = skill.tts_api_key
     tts = make_tts(**tts_kwargs)
 
     # Delivery controller — observes VAD + transcripts, drains push deliveries.

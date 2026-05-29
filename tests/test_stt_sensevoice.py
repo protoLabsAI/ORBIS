@@ -448,6 +448,51 @@ def test_make_stt_dispatches_sensevoice(monkeypatch) -> None:
     assert isinstance(svc, _S)
 
 
+def test_make_stt_accepts_openai_runtime_overrides(monkeypatch) -> None:
+    """Persona stt block can point STT at any OpenAI-compatible endpoint."""
+    import importlib
+    import voice.stt as stt_module
+    importlib.reload(stt_module)
+
+    captured = {}
+
+    class _FakeOpenAISTTService:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(stt_module, "OpenAISTTService", _FakeOpenAISTTService)
+    svc = stt_module.make_stt(
+        backend="openai",
+        url="http://localhost:8080/v1",
+        model="whisper-large",
+        api_key="test-key",
+    )
+    assert isinstance(svc, _FakeOpenAISTTService)
+    assert captured["base_url"] == "http://localhost:8080/v1"
+    assert captured["api_key"] == "test-key"
+    assert captured["settings"].model == "whisper-large"
+
+
+def test_make_stt_warns_when_local_model_override_needs_restart(
+    monkeypatch, caplog,
+) -> None:
+    import importlib
+    import voice.stt as stt_module
+    importlib.reload(stt_module)
+
+    class _FakeLocalWhisperSTT:
+        pass
+
+    monkeypatch.setattr(stt_module, "LocalWhisperSTT", _FakeLocalWhisperSTT)
+    with caplog.at_level("WARNING"):
+        svc = stt_module.make_stt(
+            backend="local",
+            whisper_model="different/model",
+        )
+    assert isinstance(svc, _FakeLocalWhisperSTT)
+    assert any("restart with WHISPER_MODEL" in r.message for r in caplog.records)
+
+
 # --- real-funasr smoke (skipped without the extra) ----------------------
 
 

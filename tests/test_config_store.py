@@ -83,6 +83,63 @@ def test_validate_rejects_bad_tts_backend():
         validate_and_normalize({"voice": {"tts_backend": "festival"}})
 
 
+def test_validate_accepts_voice_tts_endpoint_overrides():
+    out = validate_and_normalize({
+        "voice": {
+            "tts_backend": "OpenAI",
+            "voice": "nova",
+            "tts_url": " http://localhost:8080/v1 ",
+            "tts_model": " local-tts ",
+            "tts_api_key": " test-key ",
+        },
+    })
+    assert out["voice"] == {
+        "tts_backend": "openai",
+        "voice": "nova",
+        "tts_url": "http://localhost:8080/v1",
+        "tts_model": "local-tts",
+        "tts_api_key": "test-key",
+    }
+
+
+def test_validate_voice_tts_endpoint_blanks_clear_to_none():
+    out = validate_and_normalize({
+        "voice": {
+            "tts_backend": "openai",
+            "tts_url": " ",
+            "tts_model": "",
+            "tts_api_key": "   ",
+        },
+    })
+    assert out["voice"]["tts_url"] is None
+    assert out["voice"]["tts_model"] is None
+    assert out["voice"]["tts_api_key"] is None
+
+
+def test_validate_accepts_stt_block():
+    out = validate_and_normalize({
+        "stt": {
+            "backend": "OpenAI",
+            "whisper_model": " openai/whisper-large-v3-turbo ",
+            "url": " http://localhost:8080/v1 ",
+            "model": " whisper-large ",
+            "api_key": " test-key ",
+        },
+    })
+    assert out["stt"] == {
+        "backend": "openai",
+        "whisper_model": "openai/whisper-large-v3-turbo",
+        "url": "http://localhost:8080/v1",
+        "model": "whisper-large",
+        "api_key": "test-key",
+    }
+
+
+def test_validate_rejects_bad_stt_backend():
+    with pytest.raises(ValueError, match="stt.backend"):
+        validate_and_normalize({"stt": {"backend": "browser"}})
+
+
 def test_validate_rejects_bad_verbosity():
     with pytest.raises(ValueError, match="filler_verbosity"):
         validate_and_normalize({"persona": {"filler_verbosity": "raucous"}})

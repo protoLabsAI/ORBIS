@@ -253,23 +253,42 @@ class LocalWhisperSTT(SegmentedSTTService):
 # Public factory + helpers
 # ---------------------------------------------------------------------------
 
-def make_stt() -> SegmentedSTTService:
+def make_stt(
+    *,
+    backend: str | None = None,
+    whisper_model: str | None = None,
+    url: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
+    **_unused,
+) -> SegmentedSTTService:
     """Return the configured STT service for the pipeline."""
-    if STT_BACKEND == "openai":
-        logger.info(f"STT backend: openai @ {STT_URL} model={STT_MODEL}")
+    chosen_backend = (backend or STT_BACKEND or "local").strip().lower()
+    if chosen_backend == "openai":
+        chosen_url = url or STT_URL
+        chosen_model = model or STT_MODEL
+        chosen_api_key = api_key or STT_API_KEY
+        logger.info(f"STT backend: openai @ {chosen_url} model={chosen_model}")
         return OpenAISTTService(
-            api_key=STT_API_KEY,
-            base_url=STT_URL,
-            settings=STTSettings(model=STT_MODEL, language=None),
+            api_key=chosen_api_key,
+            base_url=chosen_url,
+            settings=STTSettings(model=chosen_model, language=None),
         )
-    if STT_BACKEND == "sensevoice":
+    if chosen_backend == "sensevoice":
         # Lazy import keeps funasr in the [sensevoice] optional extra —
         # local + openai backends still work without it installed.
         from voice.stt_sensevoice import SenseVoiceSTT
         logger.info("STT backend: sensevoice (FunAudioLLM/SenseVoiceSmall)")
         return SenseVoiceSTT()
-    if STT_BACKEND != "local":
-        logger.warning(f"Unknown STT_BACKEND={STT_BACKEND!r}; falling back to local")
+    if chosen_backend != "local":
+        logger.warning(f"Unknown STT backend={chosen_backend!r}; falling back to local")
+    if whisper_model and whisper_model != WHISPER_MODEL:
+        logger.warning(
+            "WHISPER_MODEL override %r differs from process model %r; "
+            "restart with WHISPER_MODEL set to change local Whisper weights",
+            whisper_model,
+            WHISPER_MODEL,
+        )
     return LocalWhisperSTT()
 
 

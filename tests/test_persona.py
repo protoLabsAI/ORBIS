@@ -91,6 +91,86 @@ def test_env_override_for_tts_backend_wins(tmp_path: Path, monkeypatch: pytest.M
     assert p.tts_backend == "elevenlabs"
 
 
+def test_tts_backend_case_normalized_from_yaml(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: OpenAI
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "openai"
+
+
+def test_tts_backend_case_normalized_from_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: kokoro
+    """)
+    monkeypatch.setenv("TTS_BACKEND", "Fish")
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "fish"
+
+
+def test_openai_tts_endpoint_overrides_load(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: openai
+          voice: nova
+          tts_url: " http://localhost:8080/v1 "
+          tts_model: " local-tts "
+          tts_api_key: " test-key "
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_backend == "openai"
+    assert p.voice == "nova"
+    assert p.tts_url == "http://localhost:8080/v1"
+    assert p.tts_model == "local-tts"
+    assert p.tts_api_key == "test-key"
+
+
+def test_openai_tts_endpoint_overrides_blank_treated_as_unset(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: openai
+          tts_url: " "
+          tts_model: ""
+          tts_api_key: "   "
+    """)
+    p = load_persona(yaml_path)
+    assert p.tts_url is None
+    assert p.tts_model is None
+    assert p.tts_api_key is None
+
+
+def test_stt_block_loads(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        stt:
+          backend: OpenAI
+          whisper_model: " openai/whisper-large-v3-turbo "
+          url: " http://localhost:8080/v1 "
+          model: " whisper-large "
+          api_key: " test-key "
+    """)
+    p = load_persona(yaml_path)
+    assert p.stt == {
+        "backend": "openai",
+        "whisper_model": "openai/whisper-large-v3-turbo",
+        "url": "http://localhost:8080/v1",
+        "model": "whisper-large",
+        "api_key": "test-key",
+    }
+
+
+def test_stt_block_absent_persona_stt_is_none(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        persona:
+          name: ORBIS
+    """)
+    p = load_persona(yaml_path)
+    assert p.stt is None
+
+
 def test_malformed_yaml_falls_back_to_defaults(tmp_path: Path):
     yaml_path = tmp_path / "orbis.yaml"
     yaml_path.write_text("this is not: valid: yaml: : :")
