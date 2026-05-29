@@ -171,6 +171,94 @@ async def adjust_personality_handler(params: FunctionCallParams) -> None:
     await params.result_callback(f"Okay — dialing {axis} {direction}.")
 
 
+@tool(
+    "check_inbox",
+    (
+        "Check the agent's inbox for messages pushed in by external "
+        "systems (webhooks, cron, sister agents). Use when the user asks "
+        "'anything new?' / 'any messages?' / 'what's in my inbox?', or "
+        "when picking up a conversation that might have offline updates. "
+        "\n\n"
+        "Messages have a priority — 'now' is urgent, 'next' is the "
+        "default, 'later' is background chatter. The default check "
+        "returns 'now' + 'next' (skipping 'later') so quick checks aren't "
+        "drowned in noise. Pass priority_floor='later' to also drain "
+        "background messages — use when the user explicitly wants 'show "
+        "me everything' or 'full inbox'. 'now'-priority items are also "
+        "auto-surfaced at session start so you may already know about "
+        "them; calling check_inbox after that just confirms / re-shows."
+        "\n\n"
+        "Surfaced messages are marked delivered so they don't show up "
+        "again on the next call."
+    ),
+    parameters={
+        "priority_floor": {
+            "type": "string",
+            "enum": ["now", "next", "later"],
+            "description": (
+                "Lowest priority to include. 'now'=urgent only, "
+                "'next'=urgent+normal (default), 'later'=everything."
+            ),
+        },
+        "include_delivered": {
+            "type": "boolean",
+            "description": "Include already-read messages too. Default false.",
+        },
+    },
+    required=[],
+    latency=Latency.FAST,
+)
+async def check_inbox_handler(params: FunctionCallParams) -> None:
+    raw_floor = (params.arguments.get("priority_floor") or "next").strip().lower()
+    if raw_floor not in ("now", "next", "later"):
+        raw_floor = "next"
+    include_delivered = bool(params.arguments.get("include_delivered", False))
+
+    try:
+        from app import get_memory  # type: ignore
+        mem = get_memory()
+        if include_delivered:
+            msgs = mem.inbox.list_all(limit=20)
+        else:
+            msgs = mem.inbox.list_unread(
+                priority_floor=raw_floor,  # type: ignore[arg-type]
+                limit=20,
+            )
+            # Mark surfaced messages delivered so the next check doesn't
+            # re-read them. Doing this BEFORE returning means a crash on
+            # the result callback won't replay the same batch — the user
+            # would otherwise hear the same message twice.
+            ids = [m["id"] for m in msgs]
+            if ids:
+                mem.inbox.mark_delivered(ids)
+    except Exception as exc:
+        logger.info(f"[inbox] check_inbox failed: {exc}")
+        await params.result_callback(
+            "I couldn't reach the inbox right now."
+        )
+        return
+
+    if not msgs:
+        await params.result_callback(
+            "Inbox is empty." if include_delivered else "No new messages."
+        )
+        return
+
+    # Compact summary the LLM can riff on. The full body is in the
+    # tool result so the model can quote it back if asked, but the
+    # spoken summary stays to one line per message.
+    lines = [f"You have {len(msgs)} message{'s' if len(msgs) != 1 else ''}:"]
+    for m in msgs:
+        sender = m.get("sender") or "unknown"
+        subject = m.get("subject") or ""
+        body = m.get("body") or ""
+        priority = m.get("priority") or "next"
+        snippet = body[:200] + ("…" if len(body) > 200 else "")
+        prefix = "[urgent] " if priority == "now" else ""
+        lines.append(f"- {prefix}from {sender}: {subject}\n  {snippet}")
+    await params.result_callback("\n".join(lines))
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).

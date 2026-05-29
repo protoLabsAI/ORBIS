@@ -59,7 +59,7 @@ def __getattr__(name: str) -> str:
     if name == "DEFAULT_DB_PATH":
         return _default_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +155,35 @@ CREATE TABLE IF NOT EXISTS entitlement_cache (
     verified_at  TEXT NOT NULL,
     expires_at   TEXT NOT NULL
 );
+
+-- Inbox: messages pushed in by external systems (webhooks, cron,
+-- other agents) that the voice agent can pull on demand. Read-then-
+-- mark-delivered semantics — undelivered messages surface again on
+-- the next check_inbox tool call until the agent (or an explicit
+-- POST /api/inbox/deliver) marks them delivered.
+--
+-- ``priority`` mirrors the CC-2.18 inbox pattern: 'now' (auto-surface
+-- at session start), 'next' (normal pull, default), 'later' (only
+-- shown when the agent explicitly asks for everything). The
+-- ingestor declares urgency; the agent (and the runtime) decide what
+-- to do with it. CHECK constraint guards against typos in writes.
+CREATE TABLE IF NOT EXISTS inbox (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at   TEXT NOT NULL,        -- UTC ISO8601 of ingestion
+    sender       TEXT NOT NULL,        -- 'system', 'webhook:slack', 'agent:ava', ...
+    channel      TEXT,                 -- optional grouping ('alerts', 'todos', null)
+    subject      TEXT NOT NULL,        -- short one-line summary
+    body         TEXT NOT NULL,        -- the full message
+    priority     TEXT NOT NULL DEFAULT 'next'
+                 CHECK (priority IN ('now', 'next', 'later')),
+    delivered_at TEXT                  -- nullable; set on first read by the agent
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_created_at ON inbox(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inbox_undelivered ON inbox(delivered_at) WHERE delivered_at IS NULL;
+-- The priority index is created in _migrate so existing DBs whose
+-- inbox table predates the priority column don't trip on a missing
+-- column reference here. Fresh installs hit it through migration too
+-- (current=0 → SCHEMA_VERSION).
 """
 
 
@@ -227,9 +256,25 @@ def _migrate(conn: sqlite3.Connection, *, from_version: int, to_version: int) ->
     logger.info(
         f"[memory] schema migration {from_version} → {to_version}"
     )
-    # Future migrations land here:
-    #   if from_version < 2:
-    #       conn.execute("ALTER TABLE facts ADD COLUMN embedding BLOB")
+    if from_version < 2:
+        # v2 adds the inbox table + priority column. The CREATE TABLE
+        # IF NOT EXISTS in _SCHEMA handles fresh installs; this branch
+        # handles the case where an earlier dev DB created the inbox
+        # table BEFORE the priority column existed (the executescript
+        # above will no-op on an existing table). Add the column if
+        # missing, then create the priority index.
+        cur = conn.execute("PRAGMA table_info(inbox)")
+        cols = {row["name"] for row in cur.fetchall()}
+        if cols and "priority" not in cols:
+            conn.execute(
+                "ALTER TABLE inbox ADD COLUMN priority TEXT NOT NULL "
+                "DEFAULT 'next' "
+                "CHECK (priority IN ('now', 'next', 'later'))"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inbox_priority "
+            "ON inbox(priority, delivered_at)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -249,11 +294,13 @@ class Memory:
         from .facts import FactsDAL
         from .personality import PersonalityDAL
         from .entitlement import EntitlementDAL
+        from .inbox import InboxDAL
 
         self.sessions = SessionsDAL(self.conn)
         self.facts = FactsDAL(self.conn)
         self.personality = PersonalityDAL(self.conn)
         self.entitlement = EntitlementDAL(self.conn)
+        self.inbox = InboxDAL(self.conn)
 
     def close(self) -> None:
         self.conn.close()
