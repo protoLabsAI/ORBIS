@@ -3,7 +3,7 @@
 #   docker compose up -d
 #
 # Default services:
-#   - orbis        WebRTC UI + Whisper + Kokoro + routing vLLM
+#   - orbis        native backend + Whisper + Kokoro + routing vLLM
 #
 # Fish S2-Pro TTS is opt-in via the `fish` profile:
 #
@@ -51,14 +51,14 @@ services:
     restart: unless-stopped
     # GPU for Whisper STT + Kokoro TTS + any local LLM. Requires the
     # nvidia-container-toolkit on the host. Override which GPU via
-    # PROTOVOICE_GPU (0 = first card).
+    # ORBIS_GPU (0 = first card).
     runtime: nvidia
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${PROTOVOICE_GPU:-0}"]
+              device_ids: ["${ORBIS_GPU:-0}"]
               capabilities: [gpu]
     ports:
       - "${PORT:-7866}:7866"

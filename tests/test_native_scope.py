@@ -256,12 +256,32 @@ def test_env_example_documents_native_runtime_scope():
     forbidden = (
         "protoVoice local secrets",
         "#AGENT_NAME=protovoice",
+        "PROTOVOICE_GPU",
         "ORBIS_ALLOWED_ORIGINS",
         "ORBIS_PAIR_TOKEN",
         "Session = WebRTC session",
     )
     for needle in forbidden:
         assert needle not in env_example
+
+
+def test_docker_compose_documents_orbis_native_runtime_scope():
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    required = (
+        "native backend + Whisper + Kokoro + routing vLLM",
+        "ORBIS_GPU",
+        'device_ids: ["${ORBIS_GPU:-0}"]',
+    )
+    for needle in required:
+        assert needle in compose
+
+    forbidden = (
+        "WebRTC UI",
+        "PROTOVOICE_GPU",
+    )
+    for needle in forbidden:
+        assert needle not in compose
 
 
 def test_example_config_documents_native_runtime_provider_knobs():
