@@ -59,6 +59,27 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # ── SPA fast-fail ─────────────────────────────────────────────────────────
+      #
+      # The Dockerfile builds the SPA inside its `web` stage, but that
+      # only fires after the CUDA runtime base image pulls. A broken
+      # `bun run build` would otherwise eat that cost before surfacing,
+      # and would shadow the real signal under a vague Docker failure.
+      # The Dockerfile re-runs the build because the wheel/Docker image
+      # needs `web/dist/` populated; the duplicate cost is small compared
+      # with the Docker build.
+
+      - name: Set up Bun (for SPA fast-fail)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Build SPA (fast-fail)
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
       # ── Docker ────────────────────────────────────────────────────────────────
 
       - name: Set up Docker Buildx
@@ -138,35 +159,43 @@ jobs:
             --title "${{ steps.version.outputs.tag }}" \
             --notes "${{ steps.notes.outputs.notes }}"
 
-      # ── Claude-rewritten notes + Discord announcement ─────────────────────────
+      # ── Polished release notes via the shared release-tools action ──────────
+
+      - name: Compute previous tag
+        id: prev_tag
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          # Pick the tag immediately preceding VERSION in version-sort
+          # order, not merely the newest other tag. Manual reruns for an
+          # older release would otherwise compare against a newer tag and
+          # ship inverted release notes.
+          PREV_TAG=$(
+            git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+              awk -v current="${VERSION}" '
+                $0 == current { seen = 1; next }
+                seen { print; exit }
+              '
+          )
+          echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          if [ -z "${PREV_TAG}" ]; then
+            echo "No predecessor tag found — first release or oldest tag; will skip polished notes."
+          fi
 
       - name: Polish release notes + post to Discord
-        # Best-effort: if ANTHROPIC_API_KEY or a webhook isn't set, or the
-        # Claude call fails, the release itself still shipped above — we
-        # just skip the polished announcement.
+        # Best-effort: if GATEWAY_API_KEY or DISCORD_RELEASE_WEBHOOK isn't
+        # set, or the LLM call fails, the release itself still shipped above
+        # — we just skip the polished announcement.
+        if: steps.prev_tag.outputs.tag != ''
         continue-on-error: true
+        # SHA-pinned because this action has access to release-channel
+        # credentials and the parent job has contents:write.
+        uses: protoLabsAI/release-tools@060f55eda935bb534073e6e35ea674063b854a53 # v0.1.3
+        with:
+          version: ${{ steps.version.outputs.tag }}
+          previous-version: ${{ steps.prev_tag.outputs.tag }}
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
-          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
-        run: |
-          if [ -z "${ANTHROPIC_API_KEY}" ]; then
-            echo "ANTHROPIC_API_KEY not set — skipping Claude rewrite."
-            exit 0
-          fi
-          VERSION="${{ steps.version.outputs.tag }}"
-          PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${VERSION}$" | head -1)
-          if [ -z "${PREV_TAG}" ]; then
-            echo "No previous tag found — this is the first release; skipping polished notes."
-            exit 0
-          fi
-          # Post to the release channel (user-facing) and the dev channel
-          # (engineering visibility). Either webhook can be unset; the
-          # script logs + skips individually.
-          node scripts/rewrite-release-notes.mjs \
-            "${VERSION}" "${PREV_TAG}" \
-            --post-discord-release \
-            --post-discord-dev
 
       # ── Failure alert ─────────────────────────────────────────────────────────
 
