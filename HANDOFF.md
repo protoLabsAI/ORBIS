@@ -47,13 +47,18 @@ What has been ported and pushed:
   prompt without breaking packaged native installs.
 - Native-fork identity/guardrails: A2A advertises ORBIS native desktop, runtime
   defaults no longer point at protoVoice, PWA/workbox deps are removed, and
-  tests guard against reintroducing PWA/WebRTC browser-client packages.
+  tests guard against reintroducing PWA/WebRTC browser-client packages,
+  hosted-SPA pairing backend code, split-deployment generated API clients, and
+  OpenAPI codegen workflows.
 - Overwrite-readiness: package version is aligned to upstream `0.2.22`,
   release workflow uses the upstream shared `protoLabsAI/release-tools` action
   plus SPA fast-fail, frontend package management is Bun-only, fresh-clone
   packaging keeps `web/dist/.gitkeep`, and tests guard both the native
   `@tauri-apps/plugin-http` API transport and the native backend/Tauri
-  scaffold.
+  scaffold. Additional guards now pin the future-overwrite workflow gates to
+  `protoLabsAI/ORBIS`, protect upstream orb variants/fixes, keep custom orb
+  presets scoped per variant, verify the LLM-facing inbox tool, and verify
+  delegate probe failure counters.
 
 What is intentionally not ported yet:
 
@@ -75,7 +80,9 @@ Validation already run on the native fork:
   `bun run lint` still fails on pre-existing repo-wide lint debt.
 - `scripts/check-macos-release-config.py` passed.
 - Focused tests now cover A2A native identity, Infisical `/orbis` defaults,
-  native frontend package/API transport scope, and native backend/Tauri scope.
+  native frontend package/API transport scope, generated-client rejection,
+  split-deployment backend rejection, upstream visual-port scope, native
+  backend/Tauri scope, inbox-tool behavior, and delegate probe metrics.
 
 ## Next-team handoff — Mac native audio
 
