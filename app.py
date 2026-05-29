@@ -1613,9 +1613,13 @@ async def events(user: User = Depends(require_user)):
 @app.get("/api/metrics")
 async def metrics(user: User = Depends(require_user)):
     uptime = time.time() - _METRICS["boot_at"]
+    from agent import metrics as metrics_mod
+    snap = metrics_mod.snapshot()
     return {
         **_METRICS,
         "uptime_secs": round(uptime, 1),
+        "counters": snap["counters"],
+        "gauges": snap["gauges"],
     }
 
 

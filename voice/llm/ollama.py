@@ -30,14 +30,27 @@ We don't try to reproduce the full openai SDK ChatCompletionChunk
 class — pipecat reads only a small handful of fields, and shimming
 those is enough.
 
-What's NOT supported (yet)
---------------------------
-- Tool / function calling. Ollama's native API supports it
-  (``tools`` request param, ``message.tool_calls`` in response) but
-  the pipecat tool-call format requires a more careful translation —
-  out of scope for the first version. The adapter logs a warning
-  and falls through with content-only when tools are present in
-  the context.
+Tool calling
+------------
+Ollama's native ``/api/chat`` accepts a ``tools`` request param with
+the same OpenAI-compat schema pipecat already produces, and emits
+``message.tool_calls`` in the streamed response when the model decides
+to call a function. Two shape differences pipecat doesn't tolerate:
+
+  - Ollama returns ``arguments`` as a parsed JSON object; OpenAI
+    streams it as a stringified JSON delta. We ``json.dumps`` to bridge.
+  - Ollama emits the whole tool_calls list atomically in one chunk;
+    OpenAI streams ``id``+``name`` first then accumulates ``arguments``
+    fragments. Pipecat's loop tolerates a single fat chunk per call as
+    long as the shape matches, so we don't bother fragmenting.
+  - Ollama omits a tool-call ``id``. We synthesize ``call_<uuid>`` per
+    call so the assistant→tool→assistant turn-roundtrip matching works.
+
+Pipecat closes the call set on ``finish_reason="tool_calls"``; we emit
+that instead of ``"stop"`` whenever any tool_calls flowed.
+
+Other deltas from OpenAI (still not bridged):
+
 - Vision / multimodal. Ollama supports image inputs on multimodal
   models; we ignore them for now (voice is text-in, text-out).
 - ``stream_options.include_usage``. Ollama provides usage in the
@@ -48,6 +61,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -143,22 +157,17 @@ class OllamaLLMService(BaseOpenAILLMService):
             convert_developer_to_user=not self.supports_developer_role,
         )
         messages = params.get("messages", [])
-        if params.get("tools") and not getattr(self, "_warned_tools", False):
-            # Log once per service instance — the wizard / main flow
-            # always carries the delegate tools in context, so without
-            # this dedupe we'd warn every single turn.
-            logger.warning(
-                "[ollama-llm] tool calls in context but the Ollama "
-                "adapter does not yet translate them — proceeding "
-                "content-only. See voice/llm/ollama.py."
-            )
-            self._warned_tools = True
+        # OpenAI tools schema is wire-compatible with Ollama's /api/chat
+        # tools field, so we forward it directly. None / empty → omit
+        # so we don't trigger Ollama's tool-aware codepath needlessly.
+        tools = params.get("tools") or None
         return _stream_as_openai_chunks(
             self._http,
             self._ollama_root,
             self._settings.model,
             messages,
             think=self._think,
+            tools=tools,
         )
 
 
@@ -169,6 +178,7 @@ async def _stream_as_openai_chunks(
     messages: list[dict],
     *,
     think: bool,
+    tools: list[dict] | None = None,
 ) -> AsyncIterator[Any]:
     """POST to ``/api/chat`` and translate each NDJSON line into a
     SimpleNamespace shaped like an OpenAI ChatCompletionChunk.
@@ -178,13 +188,24 @@ async def _stream_as_openai_chunks(
     ``choices[0].delta.{role,content,tool_calls,audio}``,
     ``choices[0].finish_reason``, and a final ``usage`` block.
     Anything else is unset.
+
+    When ``tools`` is non-empty it's forwarded to Ollama; any
+    ``message.tool_calls`` in the response are translated into the
+    OpenAI delta shape pipecat reads, with synthetic ``call_<uuid>``
+    ids and JSON-stringified arguments. The closing chunk's
+    ``finish_reason`` flips from ``"stop"`` to ``"tool_calls"``
+    whenever a tool call flowed, so pipecat's loop closes the
+    accumulator the way it expects.
     """
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": True,
         "think": think,
     }
+    if tools:
+        payload["tools"] = tools
+    saw_tool_call = False
     async with http.stream("POST", f"{root}/api/chat", json=payload) as resp:
         resp.raise_for_status()
         async for line in resp.aiter_lines():
@@ -198,7 +219,10 @@ async def _stream_as_openai_chunks(
 
             chunk_model = data.get("model") or model
             if data.get("done"):
-                # Final chunk — emit usage and finish_reason=stop.
+                # Final chunk — emit usage and the right finish_reason.
+                # Pipecat closes the tool-call accumulator on
+                # `tool_calls`; closing on `stop` instead would silently
+                # discard the call. Inverse for plain content turns.
                 usage = SimpleNamespace(
                     prompt_tokens=int(data.get("prompt_eval_count") or 0),
                     completion_tokens=int(data.get("eval_count") or 0),
@@ -224,7 +248,7 @@ async def _stream_as_openai_chunks(
                                 tool_calls=None,
                                 audio=None,
                             ),
-                            finish_reason="stop",
+                            finish_reason="tool_calls" if saw_tool_call else "stop",
                         )
                     ],
                     usage=usage,
@@ -232,8 +256,48 @@ async def _stream_as_openai_chunks(
                 continue
 
             msg = data.get("message") or {}
+            tool_calls = msg.get("tool_calls") or []
             content = msg.get("content") or ""
             role = msg.get("role")
+
+            if tool_calls:
+                # Ollama ships the whole call list atomically. Emit each
+                # as its own OpenAI-shaped delta with the matching
+                # `index`; pipecat's loop already supports >1 call per
+                # turn (e.g. parallel tool use) and closes them out
+                # together when finish_reason="tool_calls" arrives.
+                saw_tool_call = True
+                for idx, tc in enumerate(tool_calls):
+                    fn = (tc or {}).get("function") or {}
+                    name = fn.get("name") or ""
+                    raw_args = fn.get("arguments")
+                    args_str = _stringify_args(raw_args)
+                    yield SimpleNamespace(
+                        model=chunk_model,
+                        choices=[
+                            SimpleNamespace(
+                                delta=SimpleNamespace(
+                                    role=role or "assistant",
+                                    content=None,
+                                    tool_calls=[
+                                        SimpleNamespace(
+                                            index=idx,
+                                            id=f"call_{uuid.uuid4().hex[:24]}",
+                                            type="function",
+                                            function=SimpleNamespace(
+                                                name=name,
+                                                arguments=args_str,
+                                            ),
+                                        )
+                                    ],
+                                    audio=None,
+                                ),
+                                finish_reason=None,
+                            )
+                        ],
+                        usage=None,
+                    )
+
             # Skip empty content chunks and any reasoning-only chunks
             # (Ollama emits `reasoning` even when `think: false` is
             # honored on some model builds — defensive filter).
@@ -254,3 +318,24 @@ async def _stream_as_openai_chunks(
                 ],
                 usage=None,
             )
+
+
+def _stringify_args(raw: Any) -> str:
+    """Coerce Ollama's tool-call arguments to the JSON string shape
+    pipecat / OpenAI expect. Ollama returns a parsed dict in the happy
+    path, but older builds + 3rd-party model-server forks have been
+    seen returning a pre-stringified blob — accept both. Anything
+    else (None, list, weird primitive) round-trips through json.dumps
+    so the downstream consumer always sees a valid JSON document."""
+    if isinstance(raw, str):
+        return raw
+    try:
+        return json.dumps(raw if raw is not None else {})
+    except (TypeError, ValueError):
+        # Last-ditch: stringify the repr so the call doesn't crash the
+        # pipeline. The handler will likely reject it, but a logged
+        # failure beats a silent dropped call.
+        logger.warning(f"[ollama-llm] non-JSON-serializable tool args: {raw!r}")
+        from agent import metrics
+        metrics.inc("ollama_tool_args_non_serializable")
+        return "{}"

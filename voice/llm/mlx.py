@@ -23,11 +23,25 @@ it can ONLY be imported on macOS arm64. The factory in
 ``voice/llm/__init__.py`` imports it lazily and falls back to the
 Ollama / OpenAI adapters elsewhere.
 
+Tool calling
+------------
+Qwen3+ chat templates accept a ``tools=[...]`` kwarg that renders the
+schema in the prompt; the model emits calls as
+``<tool_call>{"name": ..., "arguments": ...}</tool_call>`` blocks
+inline with normal output. The streaming parser in
+``_qwen_tool_parser.py`` watches the token stream for these blocks and
+hands back structured events; we translate those into the OpenAI
+``delta.tool_calls`` shape pipecat reads. ``finish_reason`` flips to
+``"tool_calls"`` whenever a call flowed (otherwise pipecat closes the
+turn on ``"stop"`` and silently discards the parsed call).
+
+Older / strict chat templates that don't accept ``tools`` fall through
+without it — the model won't know about the schema, no calls fire,
+and behaviour matches the pre-tool era. Same fallback for
+``enable_thinking``.
+
 What's NOT supported (yet)
 --------------------------
-- Tool / function calling. Same gap as the Ollama adapter — the
-  factory's `tools` payload comes through but we don't translate it.
-  Logged once per service instance.
 - True streaming token timing for pipecat's TTFB metric. The MLX
   generator yields tokens as they're produced, so we still get
   pipecat's sentence-aggregator coalescing benefit; what we don't
@@ -37,7 +51,9 @@ What's NOT supported (yet)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -48,6 +64,13 @@ import mlx.core as mx  # noqa: F401  — mx itself isn't used here but mlx_lm ne
 from mlx_lm import load as mlx_load, stream_generate  # type: ignore[import-not-found]
 
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
+
+from ._qwen_tool_parser import (
+    ContentEvent,
+    QwenToolParser,
+    ToolCallEvent,
+    render_chat_template_with_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,24 +138,25 @@ class MLXLLMService(BaseOpenAILLMService):
             convert_developer_to_user=not self.supports_developer_role,
         )
         messages = params.get("messages", [])
-        if params.get("tools") and not getattr(self, "_warned_tools", False):
-            logger.warning(
-                "[mlx-llm] tool calls in context but the MLX adapter "
-                "does not yet translate them — proceeding content-only."
-            )
-            self._warned_tools = True
+        # Forwarded straight through to the chat template; rendering +
+        # parsing is the parser's problem from there.
+        tools = params.get("tools") or None
         max_tokens = (
             int(self._settings.max_tokens or self._max_tokens)
             if hasattr(self._settings, "max_tokens")
             else self._max_tokens
         )
-        return _stream_as_openai_chunks(self._settings.model, messages, max_tokens)
+        return _stream_as_openai_chunks(
+            self._settings.model, messages, max_tokens, tools=tools,
+        )
 
 
 async def _stream_as_openai_chunks(
     model_id: str,
     messages: list[dict],
     max_tokens: int,
+    *,
+    tools: list[dict] | None = None,
 ) -> AsyncIterator[Any]:
     """Run mlx-lm's stream_generate and yield SimpleNamespace chunks
     matching the subset of ChatCompletionChunk pipecat reads.
@@ -140,35 +164,17 @@ async def _stream_as_openai_chunks(
     Token generation runs synchronously inside MLX; we trampoline it
     through `loop.run_in_executor` chunk-by-chunk so the FastAPI
     event loop stays responsive (web requests, WebRTC ICE, etc. don't
-    starve while the model is decoding)."""
+    starve while the model is decoding).
+
+    When ``tools`` is provided, they're rendered into the prompt via
+    the model's chat template and the streamed output is fed through
+    ``QwenToolParser`` to detect ``<tool_call>...</tool_call>`` blocks.
+    Each parsed call is emitted as a synthetic OpenAI tool_calls
+    delta with ``call_<uuid>`` ids; the closing chunk's
+    ``finish_reason`` flips to ``"tool_calls"`` whenever any flowed.
+    """
     model, tokenizer = await _get_model(model_id)
-    # Apply the model's chat template so the prompt matches what the
-    # model was instruction-tuned for. Pass `enable_thinking=False` —
-    # Qwen3 / DeepSeek-R1 / similar reasoning models accept it as a
-    # template kwarg and drop the `<think>...</think>` preamble that
-    # would otherwise jam pipecat's sentence aggregator (TTS waits
-    # for sentence-break tokens that never arrive in the reasoning
-    # phase). Non-thinking models silently ignore unknown kwargs;
-    # try with the flag first, fall back without if the tokenizer
-    # raises (some templates are strict about unrecognized kwargs).
-    try:
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-            enable_thinking=False,
-        )
-    except TypeError:
-        # Older / strict templates don't accept enable_thinking — retry
-        # without. Models that don't have a thinking phase don't need
-        # the flag anyway.
-        try:
-            prompt = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True,
-            )
-        except Exception:
-            prompt = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
-    except Exception:
-        # Last-ditch: stuff messages together with role tags.
-        prompt = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
+    prompt = render_chat_template_with_tools(tokenizer, messages, tools)
 
     loop = asyncio.get_running_loop()
 
@@ -221,6 +227,70 @@ async def _stream_as_openai_chunks(
 
     fut = loop.run_in_executor(None, _producer)
 
+    parser = QwenToolParser()
+    saw_tool_call = False
+    tool_call_index = 0
+
+    def _content_chunk(text: str):
+        return SimpleNamespace(
+            model=model_id,
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        role="assistant",
+                        content=text,
+                        tool_calls=None,
+                        audio=None,
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+
+    def _tool_call_chunk(idx: int, name: str, arguments: object):
+        # Pipecat reads delta.tool_calls[0].function.arguments as a
+        # JSON string and accumulates across chunks; we emit one whole
+        # chunk per call. Stringify whatever the parser surfaced so a
+        # dict / list / scalar all round-trip cleanly.
+        try:
+            args_str = (
+                arguments if isinstance(arguments, str)
+                else json.dumps(arguments if arguments is not None else {})
+            )
+        except (TypeError, ValueError):
+            logger.warning(
+                f"[mlx-llm] non-JSON-serializable tool args: {arguments!r}"
+            )
+            from agent import metrics
+            metrics.inc("mlx_tool_args_non_serializable")
+            args_str = "{}"
+        return SimpleNamespace(
+            model=model_id,
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                index=idx,
+                                id=f"call_{uuid.uuid4().hex[:24]}",
+                                type="function",
+                                function=SimpleNamespace(
+                                    name=name,
+                                    arguments=args_str,
+                                ),
+                            )
+                        ],
+                        audio=None,
+                    ),
+                    finish_reason=None,
+                )
+            ],
+            usage=None,
+        )
+
     try:
         while True:
             kind, payload = await queue.get()
@@ -229,22 +299,29 @@ async def _stream_as_openai_chunks(
             if kind == "error":
                 logger.error(f"[mlx-llm] generation failed: {payload}")
                 break
-            yield SimpleNamespace(
-                model=model_id,
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(
-                            role="assistant",
-                            content=payload,
-                            tool_calls=None,
-                            audio=None,
-                        ),
-                        finish_reason=None,
+            for event in parser.feed(payload):
+                if isinstance(event, ContentEvent):
+                    if event.text:
+                        yield _content_chunk(event.text)
+                elif isinstance(event, ToolCallEvent):
+                    saw_tool_call = True
+                    yield _tool_call_chunk(
+                        tool_call_index, event.name, event.arguments,
                     )
-                ],
-                usage=None,
-            )
-        # Final chunk with usage + finish_reason=stop.
+                    tool_call_index += 1
+        # Drain any text held back for partial-tag detection.
+        for event in parser.flush():
+            if isinstance(event, ContentEvent) and event.text:
+                yield _content_chunk(event.text)
+            elif isinstance(event, ToolCallEvent):
+                saw_tool_call = True
+                yield _tool_call_chunk(
+                    tool_call_index, event.name, event.arguments,
+                )
+                tool_call_index += 1
+        # Final chunk with usage + finish_reason. Flip to
+        # "tool_calls" whenever any call flowed; pipecat closes the
+        # call accumulator on that signal.
         prompt_tokens = int(final_meta.get("prompt_tokens") or 0)
         completion_tokens = int(final_meta.get("generation_tokens") or 0)
         yield SimpleNamespace(
@@ -254,7 +331,7 @@ async def _stream_as_openai_chunks(
                     delta=SimpleNamespace(
                         role=None, content=None, tool_calls=None, audio=None,
                     ),
-                    finish_reason="stop",
+                    finish_reason="tool_calls" if saw_tool_call else "stop",
                 )
             ],
             usage=SimpleNamespace(
