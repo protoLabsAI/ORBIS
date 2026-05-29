@@ -71,3 +71,29 @@ def test_env_example_documents_native_runtime_scope():
     )
     for needle in forbidden:
         assert needle not in env_example
+
+
+def test_readme_documents_native_runtime_scope():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    required = (
+        "single-owner native desktop app",
+        "macOS Tauri shell",
+        "Not a PWA or browser voice app",
+        "native PCM socket",
+        "scripts/preflight-native-audio-host.sh",
+        "scripts/nuke-and-rebuild.sh --launch --tail",
+    )
+    for needle in required:
+        assert needle in readme
+
+    forbidden = (
+        "single-owner WebRTC PWA",
+        "via WebRTC + Pipecat",
+        "Split deployment",
+        "ORBIS_ALLOWED_ORIGINS",
+        "X-Orbis-Pair",
+        "Document Picture-in-Picture",
+    )
+    for needle in forbidden:
+        assert needle not in readme
