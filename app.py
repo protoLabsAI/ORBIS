@@ -2672,17 +2672,16 @@ async def index():
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# React SPA assets — /assets/*, /pwa-*.png, /manifest.webmanifest, /sw.js, etc.
+# React/Tauri SPA assets — /assets/* plus any root-level icons or metadata
+# emitted by the Vite build.
 if _serve_react():
     app.mount(
         "/assets",
         StaticFiles(directory=str(WEB_DIST / "assets")),
         name="assets",
     )
-    # Root-level SPA artifacts — manifest, service worker + registration
-    # shim, workbox chunks (hash-named so they change per build), icons,
-    # favicon. Enumerated from dist/ at startup so new Vite-emitted files
-    # don't require a route update.
+    # Root-level SPA artifacts. Enumerated from dist/ at startup so new
+    # Vite-emitted files don't require a route update.
     for fpath in WEB_DIST.iterdir():
         if not fpath.is_file() or fpath.name == "index.html":
             continue
