@@ -1,0 +1,39 @@
+name: 'Pytest'
+
+# Runs the native fork's backend suite on every PR and push to main.
+# Optional audio extras continue to skip cleanly unless installed; the
+# [test] extra is enough for the current CI gate.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pytest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install package + test extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Run pytest
+        run: pytest -q
