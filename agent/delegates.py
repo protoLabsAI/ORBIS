@@ -1,4 +1,4 @@
-"""Unified delegate registry.
+"""Unified delegate registry + reachability probe.
 
 The agent has ONE tool — `delegate_to(target, query)` — for handing off
 heavy questions to:
@@ -30,9 +30,12 @@ Schema (config/delegates.yaml):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import random
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,6 +86,16 @@ class Delegate:
     system_prompt: str | None = None
     max_tokens: int = 400
     temperature: float = 0.4
+
+    def origin(self) -> str:
+        """Scheme+host+port of ``url`` (the JSON-RPC endpoint for a2a,
+        the /v1 base for openai). Used by the probe to derive the agent
+        card URL for a2a delegates without hard-coding the path."""
+        from urllib.parse import urlparse
+        parsed = urlparse(self.url)
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
 
     def auth_headers(self) -> dict[str, str]:
         """A2A auth header dict. Empty for openai delegates."""
@@ -155,12 +168,58 @@ def _parse_entry(raw: dict) -> Delegate | None:
     )
 
 
+def _config_changed(a: "Delegate", b: "Delegate") -> bool:
+    """Did the dispatch-relevant config change between two registry
+    entries with the same name? Lightweight comparison — auth headers
+    are derived from credentialsEnv resolution at parse time, so
+    comparing the resolved values catches credential rotations too.
+
+    Description / system_prompt changes don't invalidate the health
+    cache because they don't affect reachability, only LLM picks.
+    """
+    if a.type != b.type or a.url != b.url:
+        return True
+    if a.type == "a2a":
+        return (
+            a.auth_scheme != b.auth_scheme
+            or a.a2a_credential != b.a2a_credential
+            or a.a2a_headers != b.a2a_headers
+        )
+    if a.type == "openai":
+        return a.model != b.model or a.openai_api_key != b.openai_api_key
+    return False
+
+
+@dataclass
+class DelegateHealth:
+    """Cached reachability snapshot for a single delegate.
+
+    Populated by the background prober (``health_loop``); exposed via
+    ``/healthz.delegates[]`` so the SPA can render a "delegate degraded"
+    banner before the user tries to delegate to one that's down. The
+    ``ok`` field is ``None`` until the first probe lands so the UI can
+    distinguish "not yet checked" from "confirmed down".
+    """
+    ok: bool | None = None
+    latency_ms: int | None = None
+    # epoch seconds (time.time) so it round-trips cleanly through JSON
+    last_checked: float | None = None
+    last_error: str | None = None
+    # Counter for "degraded" classification — a single transient failure
+    # (network blip, DNS jitter) shouldn't trip the banner. Caller picks
+    # the threshold; we just maintain the counter.
+    consecutive_failures: int = 0
+
+
 class DelegateRegistry:
     """Loads + indexes delegates from YAML."""
 
     def __init__(self, path: str | Path | None = None):
         self._path = Path(path) if path else None
         self._items: dict[str, Delegate] = {}
+        # Reachability cache, keyed by delegate name. Populated by the
+        # background prober; missing entry = "not probed yet".
+        self._health: dict[str, DelegateHealth] = {}
         if self._path and self._path.exists():
             self._load()
 
@@ -188,21 +247,84 @@ class DelegateRegistry:
     def all(self) -> list[Delegate]:
         return list(self._items.values())
 
+    def health(self, name: str) -> DelegateHealth | None:
+        """Latest probe result for ``name`` or ``None`` if never probed."""
+        return self._health.get(name)
+
+    def all_health(self) -> dict[str, DelegateHealth]:
+        """Snapshot of every probed delegate's health. Returns a copy
+        so callers can't mutate the live cache."""
+        return dict(self._health)
+
+    def record_health(self, name: str, ok: bool, *,
+                      latency_ms: int | None = None,
+                      error: str | None = None) -> DelegateHealth:
+        """Update the health cache for ``name``. Returns the new entry.
+
+        Increments ``consecutive_failures`` on a fail; resets it on a
+        pass. Caller (the prober) is responsible for actually deciding
+        what "fail" means — we just bookkeep.
+        """
+        prev = self._health.get(name)
+        consecutive = (prev.consecutive_failures if prev else 0) + 1 if not ok else 0
+        entry = DelegateHealth(
+            ok=ok,
+            latency_ms=latency_ms,
+            last_checked=time.time(),
+            last_error=error,
+            consecutive_failures=consecutive,
+        )
+        self._health[name] = entry
+        return entry
+
     def reload(self) -> list[str]:
         """Re-read the YAML from disk and replace the in-memory index.
         Returns the list of delegate names after reload. Safe to call
         mid-session — delegate selection happens per-tool-call, so
         existing sessions pick up the new registry on their next
         delegate_to() invocation. No-op when this is a filtered copy
-        (no _path set)."""
+        (no _path set).
+
+        Reloads also drop any cached health for delegates whose config
+        changed (URL, auth, type) — a green cache from the *previous*
+        config would otherwise lie about the new endpoint until the
+        next background probe lands. Names that were removed get
+        pruned. Names that survive unchanged keep their cached health
+        so the SPA's banner doesn't flicker on every reload.
+        """
         if not self._path:
             return list(self._items.keys())
+        prev = self._items
         self._items = {}
         if self._path.exists():
             self._load()
         else:
             logger.warning(f"[delegates] reload: {self._path} missing, registry now empty")
+        self._prune_stale_health(prev)
         return list(self._items.keys())
+
+    def _prune_stale_health(self, prev: dict[str, Delegate]) -> None:
+        """Drop ``_health`` entries for delegates that were removed OR
+        whose dispatchable config changed. Called after each reload
+        so the cache reflects only what's currently configured.
+        """
+        if not self._health:
+            return
+        valid: dict[str, DelegateHealth] = {}
+        for name, h in self._health.items():
+            new = self._items.get(name)
+            old = prev.get(name)
+            if new is None:
+                continue  # delegate removed — drop its health
+            if old is None or _config_changed(old, new):
+                continue  # delegate added or reconfigured — force re-probe
+            valid[name] = h
+        if len(valid) != len(self._health):
+            logger.info(
+                f"[delegates] health cache pruned: "
+                f"{len(self._health)} → {len(valid)} entries after reload"
+            )
+        self._health = valid
 
     def filtered(self, allow: list[str] | None) -> "DelegateRegistry":
         """Return a shallow-copy registry limited to the given names.
@@ -355,3 +477,204 @@ async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) ->
         return (body["choices"][0]["message"]["content"] or "").strip()
     except Exception as e:
         raise DelegateError(f"{delegate.name}: malformed response ({e})") from e
+
+
+# ---------------------------------------------------------------------------
+# Reachability probe — used by /api/delegates/test + the background loop.
+# ---------------------------------------------------------------------------
+
+
+async def probe(delegate: Delegate, *, timeout: float = 8.0) -> dict:
+    """Cheap reachability check for a delegate.
+
+    For ``a2a`` delegates: GET ``{origin}/.well-known/agent-card.json``
+    using the configured auth header. The card is an A2A spec
+    requirement (the same endpoint our own ``a2a/server.py`` exposes
+    at line 124-156), so it's the canonical "is this thing alive"
+    surface. 401/403 reported distinctly from "unreachable" so the
+    UI can show "your key is wrong" vs "delegate is down."
+
+    For ``openai`` delegates: a one-shot ``/chat/completions`` ping
+    via ``agent.llm_probe.ping_endpoint``, same as
+    ``/api/llm/test``. Error shapes line up with the LLM probe so
+    the Settings panel can render results identically across surfaces.
+
+    Returns ``{ok: bool, latency_ms?: int, error?: str, status?: int}``.
+    Never raises — every failure mode comes back as ``ok: False``.
+    """
+    if delegate.type == "a2a":
+        origin = delegate.origin()
+        if not origin:
+            return {"ok": False, "error": f"malformed url: {delegate.url!r}"}
+        card_url = f"{origin}/.well-known/agent-card.json"
+        headers = delegate.auth_headers()
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                r = await client.get(card_url, headers=headers)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            return {"ok": False, "error": f"unreachable: {e}"}
+        except Exception as e:  # noqa: BLE001 — surface but don't raise
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        if r.status_code in (401, 403):
+            return {
+                "ok": False, "error": "auth rejected",
+                "status": r.status_code, "latency_ms": latency_ms,
+            }
+        if r.status_code != 200:
+            return {
+                "ok": False,
+                "error": f"agent card HTTP {r.status_code}",
+                "status": r.status_code, "latency_ms": latency_ms,
+            }
+        return {"ok": True, "latency_ms": latency_ms}
+
+    if delegate.type == "openai":
+        from agent.llm_probe import ping_endpoint
+        return await ping_endpoint(
+            url=delegate.url,
+            model=delegate.model or "",
+            api_key=delegate.openai_api_key
+            if delegate.openai_api_key and delegate.openai_api_key != "not-needed"
+            else "",
+        )
+
+    return {"ok": False, "error": f"unknown delegate type {delegate.type!r}"}
+
+
+# Default cadence — measured in seconds. Faster than the 30s personality
+# poll (delegates can drop independently of the LLM stack the SPA already
+# polls) but slow enough that a network blip doesn't burn through 12 probes
+# in a minute. Override per-deployment via DELEGATE_HEALTH_INTERVAL.
+_HEALTH_INTERVAL_SECS = float(
+    os.environ.get("DELEGATE_HEALTH_INTERVAL", "300")
+)
+# Defer the FIRST probe by this many seconds after boot so the LLM model
+# loads + the SPA hands shake without a stampede of probes competing for
+# the event loop on a cold start.
+_HEALTH_INITIAL_DELAY_SECS = float(
+    os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "30")
+)
+
+# Per-delegate fast-retry steps (seconds) for the first N consecutive
+# failures, before settling into the base interval. Picks up a recovery
+# inside ~30s instead of waiting the full 5-minute base cadence — the
+# audit's "marks degraded and stays there until next cycle" gap.
+# Tuple length defines how many fast retries before backing off to base.
+_RETRY_STEPS_SECS: tuple[float, ...] = (30.0, 60.0, 120.0)
+
+# Loop poll cadence — how often the outer loop wakes to check which
+# delegates are due. Must be ≤ the smallest retry step so a fast retry
+# fires on time. Cap at the base interval too — if a deployment sets
+# a tiny DELEGATE_HEALTH_INTERVAL, we'd prefer a tighter tick than
+# this hard 10s ceiling.
+_HEALTH_TICK_SECS = 10.0
+
+
+def _next_probe_delay(consecutive_failures: int, base_interval: float) -> float:
+    """How long to wait before re-probing this delegate.
+
+    Healthy delegates get the base interval with ±10% jitter (so a
+    fleet of delegates doesn't all probe at the same instant against
+    a shared backend). Failing delegates get a short fast-retry step
+    so transient blips don't park the UI banner red for 5 minutes.
+    Beyond ``_RETRY_STEPS_SECS`` consecutive failures, fall back to
+    the jittered base interval — the service is genuinely down and
+    hammering it on a fast retry buys nothing.
+    """
+    if consecutive_failures > 0:
+        idx = consecutive_failures - 1
+        if idx < len(_RETRY_STEPS_SECS):
+            return _RETRY_STEPS_SECS[idx]
+    return base_interval * random.uniform(0.9, 1.1)
+
+
+async def health_loop(
+    registry: "DelegateRegistry",
+    *,
+    interval_secs: float | None = None,
+    initial_delay_secs: float | None = None,
+) -> None:
+    """Background task: probe every delegate periodically and update
+    the registry's health cache.
+
+    Started by ``app.py``'s lifespan handler. Cancelled cleanly on
+    shutdown. Never raises out of the loop — a transient probe failure
+    is the *expected* signal we're trying to capture, and an
+    unexpected exception (e.g. from a bad delegate config) gets logged
+    and swallowed so the loop stays alive for the other delegates.
+
+    Scheduling is per-delegate: each delegate carries a ``next_due``
+    timestamp. Healthy delegates are probed every ``interval_secs``
+    (with ±10% jitter to avoid stampedes); failing delegates use
+    ``_RETRY_STEPS_SECS`` for the first few consecutive failures so
+    a quick recovery is picked up inside ~30s. The outer loop wakes
+    on ``_HEALTH_TICK_SECS`` to check which delegates are due.
+    """
+    iv = interval_secs if interval_secs is not None else _HEALTH_INTERVAL_SECS
+    delay = (
+        initial_delay_secs if initial_delay_secs is not None
+        else _HEALTH_INITIAL_DELAY_SECS
+    )
+    try:
+        await asyncio.sleep(delay)
+    except asyncio.CancelledError:
+        return
+
+    # Per-delegate next-probe deadlines (monotonic seconds). Missing key
+    # means "due now"; newly added delegates land here on their first
+    # registry.all() iteration and get probed immediately.
+    next_due: dict[str, float] = {}
+    # Outer poll cadence — capped by the base interval so tiny intervals
+    # in tests don't stretch beyond the test's expected tick.
+    tick = min(_HEALTH_TICK_SECS, iv)
+
+    while True:
+        try:
+            now = time.monotonic()
+            for delegate in registry.all():
+                if next_due.get(delegate.name, 0.0) > now:
+                    continue  # not due yet — wait for the deadline
+                try:
+                    result = await probe(delegate)
+                except Exception as e:  # noqa: BLE001 — defensive
+                    logger.exception(
+                        f"[delegate-health] probe of {delegate.name} crashed: {e}"
+                    )
+                    registry.record_health(
+                        delegate.name, ok=False, error=str(e),
+                    )
+                    from agent import metrics
+                    metrics.inc("delegate_probe_crashed")
+                    h = registry.health(delegate.name)
+                    consecutive = h.consecutive_failures if h else 1
+                    next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)
+                    continue
+                ok = bool(result.get("ok"))
+                registry.record_health(
+                    delegate.name,
+                    ok=ok,
+                    latency_ms=result.get("latency_ms"),
+                    error=result.get("error"),
+                )
+                if not ok:
+                    from agent import metrics
+                    metrics.inc("delegate_probe_failed")
+                h = registry.health(delegate.name)
+                consecutive = h.consecutive_failures if h else 0
+                next_due[delegate.name] = now + _next_probe_delay(consecutive, iv)
+                if not ok and h and h.consecutive_failures > 1:
+                    # Keep the noise gradient sensible: first failure
+                    # is INFO (might be transient), repeated is WARNING.
+                    logger.warning(
+                        f"[delegate-health] {delegate.name} degraded "
+                        f"({h.consecutive_failures} consecutive): "
+                        f"{result.get('error')}"
+                    )
+        except Exception as e:  # noqa: BLE001 — never let the loop die
+            logger.exception(f"[delegate-health] loop iteration crashed: {e}")
+        try:
+            await asyncio.sleep(tick)
+        except asyncio.CancelledError:
+            return

@@ -1550,6 +1550,11 @@ async def lifespan(app: FastAPI):
         _entitlement_refresh_loop(), name="orbis-entitlement"
     )
 
+    from agent.delegates import health_loop as _delegate_health_loop
+    delegate_health_task = asyncio.create_task(
+        _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",
+    )
+
     # Start the persistent native voice pipeline. The Rust shell sets
     # ORBIS_AUDIO_SOCK to the unix socket the native audio engine is listening
     # on — direct `python app.py` runs without that env var (e.g. the
@@ -1580,7 +1585,7 @@ async def lifespan(app: FastAPI):
                 pass
         _native_pipeline_task = None
         _native_transport = None
-        for t in (curator_task, entitlement_task):
+        for t in (curator_task, entitlement_task, delegate_health_task):
             t.cancel()
             try:
                 await t
@@ -1589,6 +1594,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
+
+
+def _delegate_health_payload(delegate, *, public: bool = False) -> dict:
+    """Serialize a delegate with cached reachability state."""
+    h = _DELEGATES.health(delegate.name)
+    payload: dict = {
+        "name": delegate.name,
+        "type": delegate.type,
+        "ok": h.ok if h else None,
+        "latency_ms": h.latency_ms if h else None,
+        "last_checked": h.last_checked if h else None,
+        "consecutive_failures": h.consecutive_failures if h else 0,
+    }
+    if not public:
+        payload["last_error"] = h.last_error if h else None
+    return payload
 
 
 @app.get("/healthz")
@@ -1602,7 +1623,7 @@ async def health():
         "owner_configured": not user_registry.single_user_mode(),
         "active_sessions": len(active_user_states()),
         "delegates": [
-            {"name": d.name, "type": d.type} for d in _DELEGATES.all()
+            _delegate_health_payload(d, public=True) for d in _DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
         "audio": {
@@ -1842,6 +1863,133 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
     """
     names = _DELEGATES.reload()
     return {"ok": True, "delegates": names}
+
+
+# --- Delegates CRUD ---------------------------------------------------------
+
+
+@app.get("/api/delegates")
+async def list_delegates_endpoint(user: User = Depends(require_user)):
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+    )
+    try:
+        entries = read_delegates()
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    parsed_names = set(_DELEGATES.names())
+    parsed_by_name = {d.name: d for d in _DELEGATES.all()}
+
+    def _decorate(entry: dict) -> dict:
+        name = entry.get("name")
+        d = parsed_by_name.get(name)
+        h = _DELEGATES.health(name) if isinstance(name, str) else None
+        return {
+            **entry,
+            "configured": name in parsed_names,
+            "health": {
+                "ok": h.ok if h else None,
+                "latency_ms": h.latency_ms if h else None,
+                "last_checked": h.last_checked if h else None,
+                "last_error": h.last_error if h else None,
+                "consecutive_failures": h.consecutive_failures if h else 0,
+            } if d else None,
+        }
+
+    return {"delegates": [_decorate(e) for e in entries]}
+
+
+@app.post("/api/delegates")
+async def create_delegate_endpoint(
+    body: dict, user: User = Depends(require_user),
+):
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+        upsert_delegate,
+    )
+    try:
+        name = (body or {}).get("name")
+        if isinstance(name, str) and any(e.get("name") == name for e in read_delegates()):
+            return JSONResponse(
+                status_code=409,
+                content={"error": f"delegate {name!r} already exists; use PUT to update"},
+            )
+        entries = upsert_delegate(body)
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.put("/api/delegates/{name}")
+async def update_delegate_endpoint(
+    name: str, body: dict, user: User = Depends(require_user),
+):
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        read_delegates,
+        upsert_delegate,
+    )
+    body = body or {}
+    body_name = body.get("name")
+    if body_name and body_name != name:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    f"path name {name!r} does not match body name {body_name!r}; "
+                    "DELETE then POST to rename"
+                ),
+            },
+        )
+    body["name"] = name
+    if not any(e.get("name") == name for e in read_delegates()):
+        return JSONResponse(
+            status_code=404, content={"error": f"delegate {name!r} not found"},
+        )
+    try:
+        entries = upsert_delegate(body)
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.delete("/api/delegates/{name}")
+async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)):
+    from agent.delegate_config_store import delete_delegate
+    try:
+        entries = delete_delegate(name)
+    except KeyError:
+        return JSONResponse(
+            status_code=404, content={"error": f"delegate {name!r} not found"},
+        )
+    _DELEGATES.reload()
+    return {"ok": True, "delegates": entries}
+
+
+@app.post("/api/delegates/test")
+async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
+    return await _probe_delegate(body or {})
+
+
+async def _probe_delegate(entry: dict) -> dict:
+    from agent.delegate_config_store import (
+        DelegateValidationError,
+        validate_entry,
+    )
+    from agent.delegates import _parse_entry, probe
+    try:
+        normalized = validate_entry(entry)
+    except DelegateValidationError as e:
+        return {"ok": False, "error": str(e)}
+    delegate = _parse_entry(normalized)
+    if delegate is None:
+        return {"ok": False, "error": "registry rejected normalized entry"}
+    return await probe(delegate)
 
 
 @app.post("/api/persona/reload")
