@@ -1,8 +1,10 @@
 name: 'Pytest'
 
 # Runs the native fork's backend suite on every PR and push to main.
-# Optional audio extras continue to skip cleanly unless installed; the
-# [test] extra is enough for the current CI gate.
+# The [test] extra is enough for this gate; optional model/audio extras
+# such as speechbrain and funasr continue to skip cleanly unless installed.
+# Native-only guardrails also live here, including checks that PWA/WebRTC
+# browser-client packages do not return to the Tauri-first fork.
 
 on:
   pull_request:
@@ -33,6 +35,9 @@ jobs:
       - name: Install package + test extra
         run: |
           python -m pip install --upgrade pip
+          # mlx-lm is darwin/arm64-gated in pyproject, so this is a no-op
+          # on Ubuntu. Whisper remains installed in the native fork because
+          # Mac desktop local STT is still the default path.
           pip install -e ".[test]"
 
       - name: Run pytest

@@ -2,7 +2,8 @@ name: 'Web build'
 
 # Type-checks + builds the SPA on every PR + push to main. Catches
 # TypeScript regressions and broken Vite/Tailwind config that would
-# otherwise only surface when someone runs the desktop build.
+# otherwise only surface when someone runs the desktop build. This is still
+# a Tauri UI build, not a hosted PWA/browser runtime gate.
 
 on:
   pull_request:
