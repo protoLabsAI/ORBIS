@@ -100,3 +100,19 @@ def test_allow_unauth_accepts_truthy_variants(monkeypatch):
         from a2a import server
         importlib.reload(server)
         assert server.A2A_ALLOW_UNAUTH is False, f"value {val!r} should NOT opt in"
+
+
+def test_agent_card_defaults_to_orbis_native_identity(monkeypatch):
+    monkeypatch.delenv("AGENT_NAME", raising=False)
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    from a2a import server
+    importlib.reload(server)
+
+    card = server.build_agent_card("orbis.local:7866")
+
+    assert card["name"] == "orbis"
+    assert "ORBIS" in card["description"]
+    assert "Tauri desktop" in card["description"]
+    assert "browser-only" not in card["description"]
+    assert "protoVoice" not in card["description"]
+    assert card["skills"][0]["tags"] == ["voice", "chat", "delegation"]

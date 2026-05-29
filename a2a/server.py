@@ -36,7 +36,7 @@ A2A_ALLOW_UNAUTH = os.environ.get("A2A_ALLOW_UNAUTH", "").strip().lower() in (
 # echo this back in their PushNotificationConfig.token or
 # Authorization: Bearer header. Generated on first use if empty.
 A2A_PUSH_TOKEN = os.environ.get("A2A_PUSH_TOKEN", "")
-AGENT_NAME = os.environ.get("AGENT_NAME", "protovoice")
+AGENT_NAME = os.environ.get("AGENT_NAME", "orbis")
 AGENT_VERSION = os.environ.get("AGENT_VERSION", "0.1.0")
 
 if A2A_AUTH_TOKEN:
@@ -74,9 +74,9 @@ def build_agent_card(host: str, *, skills: list[dict] | None = None) -> dict:
     return {
         "name": AGENT_NAME,
         "description": (
-            "protoVoice — full-duplex voice agent with web search, calculator, "
-            "datetime, and A2A dispatch. Inbound A2A returns text; voice "
-            "is browser-only."
+            "ORBIS — native desktop voice companion and router for configured "
+            "agents. Inbound A2A returns text; interactive voice runs through "
+            "the local Tauri desktop app."
         ),
         "url": f"http://{host}/a2a",
         "version": AGENT_VERSION,
@@ -95,9 +95,15 @@ def build_agent_card(host: str, *, skills: list[dict] | None = None) -> dict:
             {
                 "id": "chat",
                 "name": "Chat",
-                "description": "Free-form conversation with web search, calculator, and A2A dispatch.",
-                "tags": ["voice", "chat"],
-                "examples": ["what's the weather in Tokyo?", "what time is it?"],
+                "description": (
+                    "Free-form conversation with ORBIS and delegation to "
+                    "configured A2A/OpenAI-compatible agents."
+                ),
+                "tags": ["voice", "chat", "delegation"],
+                "examples": [
+                    "summarize the current project state",
+                    "ask my coding agent to inspect the failing test",
+                ],
             },
         ],
         "securitySchemes": schemes,
