@@ -14,6 +14,13 @@ import pytest
 
 from agent.filler import Verbosity
 from agent.micro_ack import MicroAckInjector
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    LLMFullResponseEndFrame,
+    LLMTextFrame,
+    UserStoppedSpeakingFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection
 
 
 @pytest.fixture
@@ -136,6 +143,11 @@ async def test_phrases_match_backend(injector_factory) -> None:
     kokoro = injector_factory(tts_backend="kokoro")
     await kokoro._fire_after_delay()
     assert not kokoro._pushed_frames[0].text.startswith("[")
+    assert kokoro._pushed_frames[0].text in {"yeah", "got it", "right", "okay"}
+
+    openai = injector_factory(tts_backend="openai")
+    await openai._fire_after_delay()
+    assert openai._pushed_frames[0].text in {"mm", "mhm", "hm", "okay"}
 
 
 @pytest.mark.asyncio
@@ -181,4 +193,41 @@ async def test_disabled_means_no_emit() -> None:
     )
     inj._arm_timer()
     # _arm_timer should no-op on disabled.
+    assert inj._timer is None
+
+
+@pytest.mark.asyncio
+async def test_llm_text_cancels_pending_ack(injector_factory) -> None:
+    """Once real LLM text is flowing, an ack would queue behind the reply."""
+    inj = injector_factory()
+    inj._arm_timer()
+    assert inj._timer is not None
+
+    await inj.process_frame(LLMTextFrame("hello"), FrameDirection.DOWNSTREAM)
+
+    assert inj._llm_responding is True
+    assert inj._timer is None
+    assert len(inj._pushed_frames) == 1
+    assert isinstance(inj._pushed_frames[0], LLMTextFrame)
+
+
+@pytest.mark.asyncio
+async def test_llm_response_end_allows_future_ack(injector_factory) -> None:
+    inj = injector_factory()
+    await inj.process_frame(LLMTextFrame("hello"), FrameDirection.DOWNSTREAM)
+    assert inj._llm_responding is True
+
+    await inj.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+
+    assert inj._llm_responding is False
+
+
+@pytest.mark.asyncio
+async def test_post_bot_grace_suppresses_echo_retrigger(injector_factory) -> None:
+    """Native speaker bleed can create a fake UserStopped after bot audio."""
+    inj = injector_factory()
+    await inj.process_frame(BotStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    await inj.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+
     assert inj._timer is None
