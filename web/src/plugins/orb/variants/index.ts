@@ -7,3 +7,7 @@ import './fractal';
 import './nebula';
 import './crystal';
 import './particles';
+import './tetra';
+import './lattice';
+import './spectrum';
+import './galaxy';
