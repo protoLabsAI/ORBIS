@@ -1,6 +1,7 @@
 # STATUS — current snapshot
 
-*Last updated 2026-05-29 (macOS native-audio production hardening). Branch: `main`.*
+*Last updated 2026-05-29 (native fork selective upstream port). Branch:
+`tori/canon-native-mac`, pushed to `protoLabsAI/orbis-native:main`.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -12,6 +13,48 @@ first on any resume before digging into code.
 **ORBIS starts with Apple Silicon Mac as the production desktop target; Linux and Windows desktop support are intentionally sequenced after the Mac native-audio build is stable. iOS / iPad remains a planned secondary target. Web / PWA / browser is dropped entirely.**
 
 The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Mac-first desktop, Linux/Windows later" amendment (2026-05-29)](./DECISIONS.md) and [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide.
+
+## Native fork status — 2026-05-29
+
+Canonical native work now lives in
+[`protoLabsAI/orbis-native`](https://github.com/protoLabsAI/orbis-native).
+This repo is intentionally Tauri-first: upstream `protoLabsAI/ORBIS`
+remains useful as a source of product/backend changes, but its current
+PWA/WebRTC direction is not a merge target.
+
+Selective upstream work already brought forward into `orbis-native:main`:
+
+- Native/Tauri canon preserved: `src-tauri`, native audio transport,
+  macOS permission IPC, release scripts, native tests, and native docs stay.
+- Runtime settings carried forward: OpenAI-compatible LLM custom URL,
+  STT runtime settings, TTS endpoint settings, native audio runtime controls,
+  simplified LLM provider display, and collapsible settings sections.
+- Delegation/agent hardening carried forward: delegate UI/API/health,
+  A2A auth hardening, inbox ingress, tool-call translation, delegation
+  progress, micro-ack timing hardening, and personality drift fallback metrics.
+- Observability carried forward/adapted: enriched Langfuse turn spans,
+  web build CI, backend pytest CI, and a native event log drawer that tails
+  Tauri API calls plus SSE-derived voice state.
+
+Intentionally skipped from upstream unless redesigned for native:
+
+- Hosted PWA/split-deployment connection flow, pairing, browser
+  `getUserMedia`, Pipecat WebRTC client, Document PiP, PWA Vite/service-worker
+  pieces, and browser mic-permission rationale components.
+- Upstream deletes of `src-tauri`, native audio scripts/tests/docs, and
+  `voice/local_transport.py` / `voice/native_bargein.py` / `voice/sse_bus.py`.
+- OpenAPI generated client drift that assumes the hosted SPA path instead of
+  the existing `@tauri-apps/plugin-http` wrapper.
+
+Current local validation on this fork:
+
+- `uv run --extra test pytest -q` passed: 646 tests, 2 skipped.
+- `cd web && bun run build` passed; Vite still reports the existing large
+  bundle warning.
+- Changed-file ESLint for the new native event-log slice passed. Full
+  `bun run lint` is not a clean gate yet because of pre-existing repo-wide
+  lint debt in orb/settings/voice code.
+- `scripts/check-macos-release-config.py` passed after each native-safe slice.
 
 The migration is staged in four phases:
 

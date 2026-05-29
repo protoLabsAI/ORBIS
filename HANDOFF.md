@@ -1,8 +1,7 @@
 # HANDOFF — ORBIS
 
-*Updated 2026-05-29 (after the architectural redirect: Mac-first native
-audio, drop web/PWA target). The 2026-04-24 desktop-voice arc still applies
-as the substrate; what changed is direction, not what's shipped.*
+*Updated 2026-05-29 (native fork selective upstream port). Canon branch:
+`tori/canon-native-mac`, pushed to `protoLabsAI/orbis-native:main`.*
 
 This doc is for the next human to sit down with ORBIS — whether
 that's tomorrow-you, a teammate picking it up, or a handoff to a
@@ -18,6 +17,44 @@ developer-facing overview.
 is the comprehensive guide for the Mac-first native audio direction and
 the 4-phase migration plan that supersedes the dual-transport
 architecture.
+
+## Current fork posture
+
+`protoLabsAI/orbis-native` is the canonical Tauri-first fork. Treat upstream
+`protoLabsAI/ORBIS` as a source of selective changes only. Do not merge
+upstream `main` wholesale: it carries hosted PWA/WebRTC work and deletes the
+native shell, native audio transport, Mac release scripts, and native tests.
+
+What has been ported and pushed:
+
+- Native/Tauri canon preserved and hardened.
+- Runtime provider settings: custom LLM URL, STT/TTS runtime fields, native
+  audio controls, simplified provider list, collapsible settings sections.
+- Agent/delegation improvements: delegate CRUD/status/test UI, A2A auth,
+  inbox ingress, tool-call translation, delegation progress, micro-ack timing,
+  and drift fallback metrics.
+- CI/observability: web build gate, backend pytest gate, enriched native turn
+  spans, and a Dev drawer event log adapted for Tauri API calls plus SSE voice
+  state.
+
+What is intentionally not ported yet:
+
+- PWA/split-deployment connect flow, pairing, browser `getUserMedia`, Pipecat
+  WebRTC client, Document PiP, service-worker/Vite PWA pieces, and browser mic
+  permission UI.
+- Any upstream delete of `src-tauri`, native audio scripts/tests/docs, or the
+  local native voice transport modules.
+- Generated OpenAPI client changes until they are adapted to the native
+  `@tauri-apps/plugin-http` API wrapper.
+
+Validation already run on the native fork:
+
+- `uv run --extra test pytest -q` passed: 646 tests, 2 skipped.
+- `cd web && bun run build` passed. The existing Vite large-bundle warning
+  remains.
+- Changed-file ESLint for the native event-log slice passed. Full
+  `bun run lint` still fails on pre-existing repo-wide lint debt.
+- `scripts/check-macos-release-config.py` passed.
 
 ## Next-team handoff — Mac native audio
 
@@ -84,18 +121,9 @@ stderr path printed by the harness, and both files under
 deletes CPAL fallback paths or STT/VAD band-aids until the AVAudioEngine soak
 passes.
 
-**Worktree transfer note:** this handoff was prepared from an intentionally
-dirty worktree. Do not drop or revert the modified files listed by
-`git status`; they are the Mac hardening changes. Make sure the following
-untracked files move with the branch or patch set:
-
-- `.github/workflows/native-audio-preflight.yml`
-- `scripts/check-macos-release-config.py`
-- `scripts/preflight-native-audio-host.sh`
-- `scripts/validate-macos-native-audio.sh`
-- `tests/test_healthz_native_audio.py`
-- `web/src/shared/audio/microphonePermission.ts`
-- `web/src/shared/audio/nativeAudio.ts`
+**Worktree transfer note:** the native-fork work described above has been
+committed and pushed to `protoLabsAI/orbis-native:main`. Start from a clean
+checkout of that repo before continuing.
 
 ## 2026-04-28 update — direction change + Phase 1 complete
 
