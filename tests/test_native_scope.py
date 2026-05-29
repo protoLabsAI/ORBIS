@@ -16,6 +16,11 @@ def _pyproject() -> dict:
 def test_native_desktop_scaffold_stays_present():
     """Upstream ORBIS may delete these; orbis-native must keep them."""
     required_paths = (
+        ".github/workflows/desktop-build.yml",
+        ".github/workflows/docker-publish.yml",
+        ".github/workflows/native-audio-preflight.yml",
+        ".github/workflows/prepare-release.yml",
+        ".github/workflows/release.yml",
         "src-tauri/Cargo.toml",
         "src-tauri/tauri.conf.json",
         "scripts/check-macos-release-config.py",
@@ -28,6 +33,38 @@ def test_native_desktop_scaffold_stays_present():
     missing = [path for path in required_paths if not (ROOT / path).exists()]
 
     assert missing == []
+
+
+def test_release_workflows_remain_ready_for_upstream_overwrite():
+    """This fork stages the future protoLabsAI/ORBIS overwrite, not a separate product."""
+    gated_workflows = (
+        ".github/workflows/desktop-build.yml",
+        ".github/workflows/docker-publish.yml",
+        ".github/workflows/prepare-release.yml",
+        ".github/workflows/release.yml",
+    )
+
+    for path in gated_workflows:
+        workflow = (ROOT / path).read_text(encoding="utf-8")
+        assert "github.repository == 'protoLabsAI/ORBIS'" in workflow
+        assert "protoLabsAI/orbis-native" not in workflow
+
+
+def test_native_workflow_guardrails_stay_present():
+    check_script = (ROOT / "scripts/check-macos-release-config.py").read_text(encoding="utf-8")
+    required = (
+        ".github",
+        "desktop-build.yml",
+        "native-audio-preflight.yml",
+        "scripts/validate-macos-native-audio.sh --release",
+        "cargo tauri build --features native-audio,voice-processing",
+        "cargo test --manifest-path src-tauri/Cargo.toml --features native-audio,voice-processing",
+        "runs-on: macos-14",
+        "orbis-aarch64-apple-darwin",
+    )
+
+    for needle in required:
+        assert needle in check_script
 
 
 def test_backend_dependencies_stay_native_first():
