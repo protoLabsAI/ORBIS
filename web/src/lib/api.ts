@@ -58,6 +58,11 @@ export type OrbisConfig = {
   voice?: {
     tts_backend?: 'kokoro' | 'openai' | 'elevenlabs' | 'fish';
     voice?: string;
+    // OpenAI-compatible endpoint overrides. Empty / undefined means
+    // fall back to TTS_OPENAI_* env defaults at session startup.
+    tts_url?: string;
+    tts_model?: string;
+    tts_api_key?: string;
   };
   llm?: {
     url?: string;
@@ -65,6 +70,16 @@ export type OrbisConfig = {
     api_key?: string;
     api_key_env?: string;
     extra_body?: Record<string, unknown> | null;
+  };
+  stt?: {
+    backend?: 'local' | 'openai' | 'sensevoice';
+    // HF model id used by the local Whisper backend. Honored at boot
+    // only; runtime changes warn and no-op until restart.
+    whisper_model?: string;
+    // OpenAI-compatible endpoint overrides.
+    url?: string;
+    model?: string;
+    api_key?: string;
   };
   orb?: {
     variant?: string;
@@ -246,6 +261,17 @@ export const api = {
   llmDetectLocal: () =>
     get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
       '/api/llm/detect_local',
+    ),
+  ttsVoices: (backend: string) =>
+    get<{
+      backend: string;
+      voices: Array<{ id: string; label: string; cached?: boolean }>;
+      fish_url?: string;
+      error?: string;
+    }>(`/api/tts/voices?backend=${encodeURIComponent(backend)}`),
+  ttsDownloadVoice: (body: { backend: string; voice: string }) =>
+    postJSON<{ ok: boolean; path?: string; error?: string }>(
+      '/api/tts/voices/download', body,
     ),
   delegates: {
     list: () => get<{ delegates: DelegateWithStatus[] }>('/api/delegates'),

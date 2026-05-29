@@ -85,6 +85,32 @@ def test_voice_patch_allowed_without_entitlement(
     assert r.json()["config"]["voice"]["tts_backend"] == "kokoro"
 
 
+def test_stt_patch_allowed_without_entitlement(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+):
+    """STT provider swaps are native runtime settings, not paid orb edits."""
+    import agent.entitlement
+    monkeypatch.setattr(agent.entitlement, "has_customization", lambda _mem: False)
+    r = client.post("/api/config", json={"stt": {"backend": "openai"}})
+    assert r.status_code == 200
+    assert r.json()["config"]["stt"]["backend"] == "openai"
+
+
+def test_tts_voice_list_openai_is_authenticated(client: TestClient):
+    r = client.get("/api/tts/voices?backend=openai")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["backend"] == "openai"
+    assert {"id": "alloy", "label": "alloy"} in body["voices"]
+
+
+def test_tts_voice_download_requires_voice(client: TestClient):
+    r = client.post("/api/tts/voices/download", json={"backend": "kokoro"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "voice is required" in r.json()["error"]
+
+
 def test_mixed_patch_with_orb_403s_when_not_entitled(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ):

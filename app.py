@@ -2403,6 +2403,56 @@ async def llm_detect_local():
     return await detect_local()
 
 
+@app.get("/api/tts/voices")
+async def tts_voices(
+    backend: str = "kokoro",
+    user: User = Depends(require_user),
+):
+    """Enumerate voices/references for a TTS backend.
+
+    The native settings panel uses this to render a picker where the
+    backend has a finite catalogue. Each entry is ``{id, label, ...}``;
+    backends that cache voices on disk include ``cached``.
+    """
+    backend = (backend or "kokoro").strip().lower()
+    if backend == "kokoro":
+        from voice.tts.kokoro import list_voices
+        return {"backend": "kokoro", "voices": list_voices()}
+    if backend == "openai":
+        from voice.tts.openai import OPENAI_TTS_VOICES
+        return {
+            "backend": "openai",
+            "voices": [{"id": v, "label": v} for v in OPENAI_TTS_VOICES],
+        }
+    if backend == "fish":
+        from voice.tts.fish import FISH_URL, list_references
+        refs = list_references()
+        return {
+            "backend": "fish",
+            "fish_url": FISH_URL,
+            "voices": [{"id": r, "label": r} for r in refs],
+        }
+    if backend == "elevenlabs":
+        return {"backend": "elevenlabs", "voices": []}
+    return {"backend": backend, "voices": [], "error": f"unknown backend: {backend!r}"}
+
+
+@app.post("/api/tts/voices/download")
+async def tts_download_voice(
+    payload: dict,
+    user: User = Depends(require_user),
+):
+    """Eagerly download a Kokoro voice tensor into the local HF cache."""
+    backend = (payload.get("backend") or "").strip().lower()
+    voice = (payload.get("voice") or "").strip()
+    if not voice:
+        return {"ok": False, "error": "voice is required"}
+    if backend == "kokoro":
+        from voice.tts.kokoro import download_voice
+        return download_voice(voice)
+    return {"ok": False, "error": f"{backend!r} backend has no downloadable voices"}
+
+
 @app.get("/api/starter_orbs")
 async def get_starter_orbs():
     """Return the curated starter-orb pool. The setup wizard calls this
