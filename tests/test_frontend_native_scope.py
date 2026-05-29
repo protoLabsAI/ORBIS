@@ -52,6 +52,34 @@ def test_bun_lockfile_does_not_contain_pwa_runtime_packages():
         assert needle not in lock_text
 
 
+def test_vite_config_does_not_register_pwa_service_worker():
+    """WKWebView service workers broke native /api calls; keep Vite PWA out."""
+    vite_config = (WEB / "vite.config.ts").read_text(encoding="utf-8")
+
+    forbidden = (
+        "vite-plugin-pwa",
+        "VitePWA",
+        "registerType",
+        "workbox",
+        "navigateFallbackDenylist",
+        "pwa-192.png",
+        "pwa-maskable-512.png",
+    )
+    for needle in forbidden:
+        assert needle not in vite_config
+
+    required = (
+        "PWA support removed",
+        "transition SW *itself* intercepts /api/* fetches",
+        "if a future ORBIS-on-the-web revival happens",
+        "ORBIS_BACKEND_URL",
+        "'/api'",
+        "'/.well-known'",
+    )
+    for needle in required:
+        assert needle in vite_config
+
+
 def test_web_npm_lockfile_stays_absent():
     """Bun is the frontend package-manager source of truth."""
     assert not (WEB / "package-lock.json").exists()
