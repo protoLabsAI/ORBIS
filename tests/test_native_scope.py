@@ -119,6 +119,26 @@ def test_native_operator_handoff_docs_stay_present():
     assert "--voice-processing --launch" in rebuild_skill
 
 
+def test_gitignore_keeps_project_claude_skills_versionable():
+    """Most Claude state is local scratch; repo-level operating skills are not."""
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    required = (
+        ".claude/*",
+        "!.claude/skills/",
+        ".claude/skills/ is the documented exception",
+    )
+    for needle in required:
+        assert needle in gitignore
+
+    forbidden = (
+        ".claude/",
+        ".claude/skills/",
+    )
+    for needle in forbidden:
+        assert needle not in gitignore.splitlines()
+
+
 def test_default_ci_workflows_stay_native_fork_scoped():
     """Default PR checks should validate native guardrails, not hosted-app plumbing."""
     pytest_workflow = (ROOT / ".github/workflows/pytest.yml").read_text(encoding="utf-8")
