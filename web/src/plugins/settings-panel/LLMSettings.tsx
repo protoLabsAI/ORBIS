@@ -26,6 +26,10 @@ type SaveState =
  * LLM settings — edit the router-brain provider without re-running the
  * setup wizard. Persists via POST /api/config which reloads the persona
  * server-side, so the next voice turn picks up the new endpoint.
+ *
+ * Shows the same minimal "featured" preset surface as the wizard's LLM
+ * step, with an expander for the long-tail of OpenAI-compatible
+ * providers.
  */
 export function LLMSettings() {
   const [loading, setLoading] = useState(true);
@@ -39,6 +43,7 @@ export function LLMSettings() {
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [showAllProviders, setShowAllProviders] = useState(false);
 
   // Tracks the "saved" → "idle" timer so we can cancel it on unmount and
   // avoid setState-after-unmount if the drawer closes mid-toast.
@@ -74,6 +79,11 @@ export function LLMSettings() {
 
   const current: LLMPreset =
     LLM_PRESETS.find((p) => p.id === provider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
+
+  const visiblePresets = (showAllProviders || !current.featured)
+    ? LLM_PRESETS
+    : LLM_PRESETS.filter((p) => p.featured || p.id === provider);
+  const hiddenCount = LLM_PRESETS.length - visiblePresets.length;
 
   useEffect(() => {
     setKeyPlaceholder(
@@ -185,8 +195,8 @@ export function LLMSettings() {
           Router brain. Pick a preset or type your own URL.
         </p>
 
-        <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
-          {LLM_PRESETS.map((p) => (
+        <div className="grid grid-cols-2 gap-2">
+          {visiblePresets.map((p) => (
             <button
               key={p.id}
               type="button"
@@ -205,6 +215,25 @@ export function LLMSettings() {
             </button>
           ))}
         </div>
+
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAllProviders(true)}
+            className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            Show {hiddenCount} more providers
+          </button>
+        )}
+        {showAllProviders && (
+          <button
+            type="button"
+            onClick={() => setShowAllProviders(false)}
+            className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            Show fewer
+          </button>
+        )}
 
         <div className="space-y-3">
           <div>
