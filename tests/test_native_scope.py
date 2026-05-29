@@ -165,12 +165,14 @@ def test_default_ci_workflows_stay_native_fork_scoped():
 def test_backend_dependencies_stay_native_first():
     pyproject = _pyproject()
     dependencies = pyproject["project"]["dependencies"]
+    optional_dependencies = pyproject["project"]["optional-dependencies"]
     joined_dependencies = "\n".join(dependencies)
 
     assert "transformers>=4.46" in dependencies
     assert "accelerate" in dependencies
     assert "kokoro>=0.9" in dependencies
     assert "mlx-lm>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'" in dependencies
+    assert {"pytest", "pytest-asyncio", "respx"}.issubset(optional_dependencies["test"])
 
     forbidden = (
         "pipecat-ai[webrtc",
