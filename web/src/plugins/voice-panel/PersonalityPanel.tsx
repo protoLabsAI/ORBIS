@@ -63,9 +63,12 @@ export function PersonalityPanel() {
   };
 
   useEffect(() => {
-    load();
+    const firstLoad = setTimeout(load, 0);
     const id = setInterval(load, 60_000);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(firstLoad);
+      clearInterval(id);
+    };
   }, []);
 
   if (error) {

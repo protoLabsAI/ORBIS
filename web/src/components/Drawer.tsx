@@ -16,8 +16,8 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'voice' | 'orb' | 'settings' | 'dev';
-const ALL_TABS: readonly TabName[] = ['voice', 'orb', 'settings', 'dev'];
+type TabName = 'orb' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['orb', 'settings', 'dev'];
 const isTabName = (value: string): value is TabName =>
   (ALL_TABS as readonly string[]).includes(value);
 
@@ -32,7 +32,7 @@ export function Drawer() {
     } catch {
       // localStorage can be unavailable in restricted webviews.
     }
-    return 'voice';
+    return 'settings';
   });
   const effectiveTab: TabName = !devMode && tab === 'dev' ? 'settings' : tab;
 
@@ -101,15 +101,11 @@ export function Drawer() {
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-4' : 'grid-cols-3')}>
-            <TabsTrigger value="voice">Voice</TabsTrigger>
+          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-3' : 'grid-cols-2')}>
             <TabsTrigger value="orb">Orb</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
-          <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-            <Slot name="drawer-voice" />
-          </TabsContent>
           <TabsContent value="orb" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-orb" />
           </TabsContent>

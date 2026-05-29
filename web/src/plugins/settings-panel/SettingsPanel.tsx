@@ -7,11 +7,15 @@ import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { STTSettings } from './STTSettings';
 import { TTSSettings } from './TTSSettings';
+import { ApiKeyField } from '../voice-panel/ApiKeyField';
+import { PersonalityPanel } from '../voice-panel/PersonalityPanel';
+import { VerbositySelector } from '../voice-panel/VerbositySelector';
 
 /**
- * Runtime settings — swap provider / voice without re-running the setup
- * wizard. Saves land in config/orbis.yaml and reload the persona
- * server-side, so the next voice turn picks up the change.
+ * Runtime settings — provider config, native audio, agent behavior,
+ * access, diagnostics, and developer tools in one drawer tab. Saves land
+ * in config/orbis.yaml and reload the persona server-side, so the next
+ * voice turn picks up the change.
  */
 export function SettingsPanel() {
   const devMode = useDevMode();
@@ -19,11 +23,18 @@ export function SettingsPanel() {
   return (
     <CollapsiblePanelProvider storageKey="orbis.settingsPanel">
       <div className="space-y-5">
+        <MicSettings />
+        <STTSettings />
         <LLMSettings />
         <TTSSettings />
-        <STTSettings />
+        <Panel title="Agent">
+          <VerbositySelector />
+        </Panel>
         <DelegatesSettings />
-        <MicSettings />
+        <PersonalityPanel />
+        <Panel title="Access">
+          <ApiKeyField />
+        </Panel>
         <Diagnostics />
         <Panel title="Developer">
           <div className="flex items-center justify-between gap-3">

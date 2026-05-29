@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Field } from '@/components/ui/field';
 import { Button } from '@/components/ui/button';
 import { apiKeyStore } from '@/auth/apiKey';
@@ -7,7 +7,7 @@ import { api, UnauthorizedError } from '@/lib/api';
 
 /**
  * Paste-in field for the owner API key. Stored in localStorage +
- * attached to every /api/* fetch + the WebRTC offer handshake. Empty
+ * attached to every /api/* fetch. Empty
  * = single-user fallback mode (no auth required server-side).
  *
  * After save, we ping /api/whoami to give immediate feedback — the
@@ -18,11 +18,6 @@ export function ApiKeyField() {
   const [draft, setDraft] = useState<string>(stored ?? '');
   const [status, setStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const [error, setError] = useState<string | null>(null);
-
-  // Keep the local draft in sync when the store changes (e.g. wizard wrote it).
-  useEffect(() => {
-    setDraft(stored ?? '');
-  }, [stored]);
 
   const onSave = async () => {
     setError(null);
