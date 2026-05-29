@@ -13,35 +13,24 @@
 //! - Apple docs: <https://developer.apple.com/documentation/avfaudio/audio_engine/audio_units/using_voice_processing>
 //! - objc2-avf-audio: <https://docs.rs/objc2-avf-audio>
 //!
-//! Status: opt-in behind the `voice-processing` Cargo feature. The
-//! struct compiles, links AVFAudio, sets up voice-processing on the
-//! input node, installs a tap that resamples to 16 kHz mono i16, and
-//! emits `AudioMsg::MicFrame` chunks of `MIC_FRAME_SAMPLES` samples to
-//! the same mpsc channel the CPAL path uses — so the socket layer
-//! and downstream Pipecat pipeline don't change shape.
-//!
-//! Live validation needed:
-//! - Verify `setVoiceProcessingEnabled(true)` succeeds on the test box.
-//! - Verify the tap fires at expected cadence and frame size.
-//! - Verify mic levels are AGC-normalized (no more 0.013 RMS issue).
-//! - Verify echo bleed no longer triggers VAD on bot tail (so we can
-//!   re-enable backchannel + microack).
-//!
-//! After live validation, this becomes the default input path and
-//! `engine.rs`'s `build_input_stream` (CPAL) is deleted.
+//! The tap updates the same RMS meter as the CPAL path and logs the
+//! first callback so production diagnostics can distinguish "permission
+//! granted but no render callbacks" from downstream STT issues.
 
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
-use objc2::AnyThread;
 use objc2::rc::Retained;
+use objc2::AnyThread;
 use objc2_avf_audio::{
-    AVAudioEngine, AVAudioInputNode, AVAudioNode, AVAudioNodeBus,
-    AVAudioPCMBuffer, AVAudioTime,
+    AVAudioEngine, AVAudioInputNode, AVAudioNode, AVAudioNodeBus, AVAudioPCMBuffer, AVAudioTime,
 };
 
 use super::engine::{AudioMsg, MIC_FRAME_SAMPLES, MIC_SAMPLE_RATE};
+
+const AUDIBLE_RMS_THRESHOLD: f32 = 0.001;
 
 /// Owns the AVAudioEngine + tap installation. Drops the engine and
 /// removes the tap on `Drop`.
@@ -68,6 +57,7 @@ impl VoiceProcessingInput {
     /// of `MIC_FRAME_SAMPLES` samples each.
     pub fn new(
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
+        rms: Arc<AtomicU32>,
     ) -> Result<Self, String> {
         // SAFETY: AVAudioEngine, the input node, and tap installation
         // are all standard AVFAudio API surface. The tap block runs on
@@ -75,8 +65,7 @@ impl VoiceProcessingInput {
         // mpsc UnboundedSender (Send + Sync) so no shared mutable
         // state escapes the block.
         unsafe {
-            let engine: Retained<AVAudioEngine> =
-                AVAudioEngine::init(AVAudioEngine::alloc());
+            let engine: Retained<AVAudioEngine> = AVAudioEngine::init(AVAudioEngine::alloc());
 
             let input_node: Retained<AVAudioInputNode> = engine.inputNode();
             let _input_av_node: &AVAudioNode = &*input_node;
@@ -89,9 +78,7 @@ impl VoiceProcessingInput {
             input_node
                 .setVoiceProcessingEnabled_error(true)
                 .map_err(|e| {
-                    format!(
-                        "AVAudioInputNode::setVoiceProcessingEnabled(true) failed: {e:?}"
-                    )
+                    format!("AVAudioInputNode::setVoiceProcessingEnabled(true) failed: {e:?}")
                 })?;
 
             let format = input_node.outputFormatForBus(0 as AVAudioNodeBus);
@@ -111,6 +98,9 @@ impl VoiceProcessingInput {
                 accumulator: Vec::with_capacity(MIC_FRAME_SAMPLES * 4),
                 native_rate,
                 native_channels,
+                rms,
+                tap_count: Arc::new(AtomicU64::new(0)),
+                audible_logged: Arc::new(AtomicBool::new(false)),
             }));
 
             let state_clone = std::sync::Arc::clone(&state);
@@ -163,6 +153,9 @@ struct TapState {
     accumulator: Vec<i16>,
     native_rate: u32,
     native_channels: usize,
+    rms: Arc<AtomicU32>,
+    tap_count: Arc<AtomicU64>,
+    audible_logged: Arc<AtomicBool>,
 }
 
 /// Tap callback body. Runs on AVAudioEngine's render thread.
@@ -214,6 +207,28 @@ unsafe fn handle_tap(
             }
             mono.push(sum / native_channels as f32);
         }
+    }
+
+    let rms_val = {
+        let sum_sq: f32 = mono.iter().map(|sample| sample * sample).sum();
+        (sum_sq / mono.len().max(1) as f32).sqrt().min(1.0)
+    };
+    state.rms.store(rms_val.to_bits(), Ordering::Relaxed);
+
+    let tap_index = state.tap_count.fetch_add(1, Ordering::Relaxed);
+    if tap_index == 0 {
+        log::info!(
+            "[voice-processing] first input tap: {} frames, {} channel(s), rms={:.4}",
+            frame_length,
+            native_channels,
+            rms_val
+        );
+    }
+    if rms_val >= AUDIBLE_RMS_THRESHOLD && !state.audible_logged.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "[voice-processing] input became audible: rms={:.4}",
+            rms_val
+        );
     }
 
     // Resample to MIC_SAMPLE_RATE if needed (linear; same algorithm

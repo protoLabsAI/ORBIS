@@ -49,28 +49,26 @@
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(target_os = "macos")]
+use std::os::raw::c_int;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+#[cfg(feature = "native-audio")]
+use std::sync::Arc;
+use std::sync::Mutex;
 
 #[cfg(feature = "native-audio")]
 mod audio;
 
+use serde::Serialize;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[cfg(target_os = "macos")]
 extern "C" {
-    /// macOS. Defined in `src/mic_permission.m`; without this the
-    /// webview's `getUserMedia` call silently auto-grants through
-    /// wry's default WKUIDelegate, so Core Audio hands back dead
-    /// streams and the app never appears under System Settings →
-    /// Privacy & Security → Microphone. We fire this once at boot —
-    /// the first call shows the consent dialog; subsequent calls
-    /// (across launches) hit the cached TCC decision. See the shim's
-    /// header comment for the full rationale.
-    fn orbis_request_macos_av_access();
-
+    fn orbis_macos_microphone_authorization_status() -> c_int;
+    fn orbis_request_macos_microphone_access_blocking() -> bool;
+    fn orbis_open_macos_microphone_settings();
 }
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
@@ -82,9 +80,9 @@ const STDERR_RING_CAPACITY: usize = 80;
 /// Exit code the Python hardware probe uses. See agent/hardware.py.
 const HARDWARE_EXIT_CODE: i32 = 2;
 
-/// Tauri-managed state: the native CPAL audio engine, kept alive for
+/// Tauri-managed state: the native audio engine, kept alive for
 /// the duration of the app. Only present when `native-audio` feature
-/// is compiled in and `AUDIO_TRANSPORT=native` is set at runtime.
+/// is compiled in.
 #[cfg(feature = "native-audio")]
 struct AudioEngineState {
     engine: Mutex<Option<Arc<audio::engine::AudioEngine>>>,
@@ -93,7 +91,9 @@ struct AudioEngineState {
 #[cfg(feature = "native-audio")]
 impl AudioEngineState {
     fn new() -> Self {
-        Self { engine: Mutex::new(None) }
+        Self {
+            engine: Mutex::new(None),
+        }
     }
     fn store(&self, engine: Arc<audio::engine::AudioEngine>) {
         if let Ok(mut g) = self.engine.lock() {
@@ -113,12 +113,114 @@ impl AudioEngineState {
 // Tauri IPC commands — native audio
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[serde(rename_all = "snake_case")]
+enum MicrophonePermissionStatus {
+    NotDetermined,
+    Restricted,
+    Denied,
+    Authorized,
+    Unsupported,
+}
+
+impl MicrophonePermissionStatus {
+    #[cfg(target_os = "macos")]
+    fn from_macos_raw(status: c_int) -> Self {
+        match status {
+            0 => Self::NotDetermined,
+            1 => Self::Restricted,
+            2 => Self::Denied,
+            3 => Self::Authorized,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
+fn microphone_permission_status() -> MicrophonePermissionStatus {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        return MicrophonePermissionStatus::from_macos_raw(
+            orbis_macos_microphone_authorization_status(),
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        MicrophonePermissionStatus::Unsupported
+    }
+}
+
+fn ensure_microphone_permission() -> MicrophonePermissionStatus {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        if microphone_permission_status() == MicrophonePermissionStatus::Authorized {
+            return MicrophonePermissionStatus::Authorized;
+        }
+        let _ = orbis_request_macos_microphone_access_blocking();
+        return microphone_permission_status();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        MicrophonePermissionStatus::Unsupported
+    }
+}
+
+#[tauri::command]
+fn get_microphone_permission_status() -> MicrophonePermissionStatus {
+    microphone_permission_status()
+}
+
+#[tauri::command]
+fn request_microphone_permission() -> MicrophonePermissionStatus {
+    ensure_microphone_permission()
+}
+
+#[tauri::command]
+fn open_microphone_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        orbis_open_macos_microphone_settings();
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("microphone settings are only supported by the macOS app".to_string())
+    }
+}
+
 /// Return the names of all CPAL input devices on the host.
 /// Only compiled when the `native-audio` feature is active.
 #[cfg(feature = "native-audio")]
 #[tauri::command]
 fn list_audio_inputs() -> Vec<String> {
     audio::engine::AudioEngine::list_input_devices()
+}
+
+/// Return the active native input path so the frontend can avoid
+/// presenting controls that do not apply to the production macOS
+/// AVAudioEngine voice-processing build.
+#[tauri::command]
+fn get_audio_input_mode() -> &'static str {
+    #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+    {
+        "voice_processing"
+    }
+
+    #[cfg(all(
+        feature = "native-audio",
+        not(all(feature = "voice-processing", target_os = "macos"))
+    ))]
+    {
+        "cpal"
+    }
+
+    #[cfg(not(feature = "native-audio"))]
+    {
+        "unsupported"
+    }
 }
 
 /// Return the current microphone RMS level (0.0–1.0) from the running
@@ -182,16 +284,6 @@ impl Sidecar {
 }
 
 pub fn run() {
-    // Kick the macOS TCC consent dialog for mic + camera now, before
-    // the webview opens. Completion blocks fire async but that's fine
-    // — by the time the user interacts with the app the grant has
-    // landed and the audio engine's CPAL open will pick it up. See
-    // `src/mic_permission.m` for the full why.
-    #[cfg(target_os = "macos")]
-    unsafe {
-        orbis_request_macos_av_access();
-    }
-
     tauri::Builder::default()
         // tauri-plugin-log: unifies Rust + sidecar stdio into a
         // rotating file at the OS log dir. The sidecar log stream
@@ -229,9 +321,27 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .invoke_handler({
             #[cfg(feature = "native-audio")]
-            { tauri::generate_handler![list_audio_inputs, get_audio_level, clear_browsing_data] }
+            {
+                tauri::generate_handler![
+                    list_audio_inputs,
+                    get_audio_level,
+                    get_audio_input_mode,
+                    get_microphone_permission_status,
+                    request_microphone_permission,
+                    open_microphone_settings,
+                    clear_browsing_data
+                ]
+            }
             #[cfg(not(feature = "native-audio"))]
-            { tauri::generate_handler![clear_browsing_data] }
+            {
+                tauri::generate_handler![
+                    get_microphone_permission_status,
+                    request_microphone_permission,
+                    open_microphone_settings,
+                    get_audio_input_mode,
+                    clear_browsing_data
+                ]
+            }
         })
         .manage(Sidecar::new())
         .setup(|app| {
@@ -309,12 +419,8 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         // sidecar will boot to a broken state (no config, no place for
         // the wizard to write). Propagating the error routes us to the
         // fatal-dialog path with a clear "ORBIS couldn't start" message.
-        std::fs::create_dir_all(parent).map_err(|e| {
-            format!(
-                "couldn't create config dir {}: {e}",
-                parent.display()
-            )
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("couldn't create config dir {}: {e}", parent.display()))?;
     }
     seed_default_config(&app, &config_path);
     let start_vllm = std::env::var("START_VLLM").unwrap_or_else(|_| "0".to_string());
@@ -327,15 +433,24 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         log::info!("sidecar env: ORBIS_STARTER_ORBS={}", p.display());
     }
 
-    // --- Native audio engine (optional) ---
-    // Start CPAL mic/speaker engine and Unix socket server when
-    // AUDIO_TRANSPORT=native. The socket path is passed to the sidecar
-    // as ORBIS_AUDIO_SOCK so Python can connect to it.
-    // When compiled with --features native-audio the desktop app always
-    // runs in native mode — no env var override required.
+    // --- Native audio engine ---
+    // Start the native mic/speaker engine and Unix socket server. The
+    // socket path is passed to the sidecar as ORBIS_AUDIO_SOCK so Python
+    // can connect to it. Production macOS builds use AVAudioEngine
+    // voice-processing input plus CPAL output.
     #[cfg(feature = "native-audio")]
     let native_audio_sock: Option<std::path::PathBuf> = {
         if true {
+            #[cfg(target_os = "macos")]
+            {
+                let status = ensure_microphone_permission();
+                if status != MicrophonePermissionStatus::Authorized {
+                    return Err(format!(
+                        "microphone permission is {status:?}; ORBIS needs microphone access before native audio can start. Enable it in System Settings → Privacy & Security → Microphone, then reopen ORBIS."
+                    ));
+                }
+            }
+
             let (mic_tx, mic_rx) =
                 tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
             match audio::engine::AudioEngine::new(None, mic_tx) {
@@ -351,10 +466,7 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                         }
                     };
                     let sock_path = sock_server.path().clone();
-                    log::info!(
-                        "orbis_audio_sock={}",
-                        sock_path.display()
-                    );
+                    log::info!("orbis_audio_sock={}", sock_path.display());
                     // Accept loop runs in a background task.
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = sock_server.accept_and_run(engine, mic_rx).await {
@@ -364,8 +476,7 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                     Some(sock_path)
                 }
                 Err(e) => {
-                    log::warn!("[audio] failed to start native audio engine: {e} — falling back to WebRTC");
-                    None
+                    return Err(format!("native audio engine failed to start: {e}"));
                 }
             }
         } else {
@@ -391,14 +502,21 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     if let Some(p) = starter_orbs_path.as_ref() {
         command = command.env("ORBIS_STARTER_ORBS", p);
     }
-    // Pass AUDIO_TRANSPORT=native + socket path to Python when built
-    // with native-audio. Python reads both to activate the CPAL pipeline
-    // and to report the correct transport in /healthz.
+    // Pass AUDIO_TRANSPORT=native + socket path to Python. Python reads
+    // both to activate the native socket pipeline and to report the
+    // correct transport in /healthz.
     #[cfg(feature = "native-audio")]
     if let Some(ref sock_path) = native_audio_sock {
-        command = command
-            .env("AUDIO_TRANSPORT", "native")
-            .env("ORBIS_AUDIO_SOCK", sock_path);
+        command = command.env("AUDIO_TRANSPORT", "native");
+        #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+        {
+            command = command.env("ORBIS_AUDIO_INPUT_MODE", "voice_processing");
+        }
+        #[cfg(not(all(feature = "voice-processing", target_os = "macos")))]
+        {
+            command = command.env("ORBIS_AUDIO_INPUT_MODE", "cpal");
+        }
+        command = command.env("ORBIS_AUDIO_SOCK", sock_path);
     }
 
     let (mut rx, child) = command
@@ -632,8 +750,7 @@ fn handle_termination(
             "ORBIS needs a supported GPU",
             "ORBIS's voice pipeline runs in real time, so it needs \
              hardware acceleration:\n\n\
-             • macOS — Apple Silicon (M1 or newer)\n\
-             • Windows / Linux — NVIDIA GPU with driver 570 or newer\n\n\
+             • macOS — Apple Silicon (M1 or newer)\n\n\
              Neither was detected on this machine. If you want to run \
              ORBIS on a CPU-only box anyway, the Docker self-host path \
              is the supported route:\n\n\
@@ -678,7 +795,7 @@ fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ready;
+    use super::{get_audio_input_mode, parse_ready};
 
     #[test]
     fn parse_ready_happy_path() {
@@ -714,5 +831,20 @@ mod tests {
         assert_eq!(parse_ready("ORBIS_READY"), None);
         assert_eq!(parse_ready("ORBIS_READY "), None);
         assert_eq!(parse_ready("ORBIS_READY   "), None);
+    }
+
+    #[test]
+    fn audio_input_mode_matches_compile_target() {
+        #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+        assert_eq!(get_audio_input_mode(), "voice_processing");
+
+        #[cfg(all(
+            feature = "native-audio",
+            not(all(feature = "voice-processing", target_os = "macos"))
+        ))]
+        assert_eq!(get_audio_input_mode(), "cpal");
+
+        #[cfg(not(feature = "native-audio"))]
+        assert_eq!(get_audio_input_mode(), "unsupported");
     }
 }

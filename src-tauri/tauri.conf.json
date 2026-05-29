@@ -25,7 +25,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "msi", "appimage"],
+    "targets": ["dmg"],
     "icon": [
       "icons/icon.png"
     ],
@@ -40,7 +40,9 @@
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "infoPlist": "./Info.plist",
+      "minimumSystemVersion": "13.0"
     }
   },
   "plugins": {}

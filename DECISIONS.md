@@ -327,17 +327,21 @@ run Ollama or want to share models with other tooling. We deliberately
 don't auto-upgrade Ollama users to MLX — a multi-GB silent download
 under the user violates the "no surprises" principle.
 
-This decision pushes the explicit cross-platform desktop story:
-**Apple Silicon Mac is the supported desktop product. Linux/Windows
-desktop builds remain in CI for completeness but are deprioritized;
-the supported answer for those platforms is the Docker self-host
-path that's already documented.**
+This decision originally pushed an Apple Silicon desktop focus. As of the
+2026-05-29 amendment below, that means Mac first for production hardening;
+Linux and Windows desktop builds are deferred until the Mac native-audio path
+is proven, not rejected.
 
 ## Amendment — 2026-04-24: Tauri shell + WebContent media capture
 
-The Tauri 2 desktop shell now ships with three runtime patches that
-make the WKWebView's WebContent subprocess actually usable for
-real-time voice on a Developer-ID-signed Mac build:
+> Historical note: this WebContent media-capture patch set was superseded by
+> the 2026-04-28 web/PWA removal and the 2026-05-29 native Mac audio hardening
+> path. The active production path uses Rust-owned microphone permission and
+> native audio; it does not use WebKit `getUserMedia`.
+
+The Tauri 2 desktop shell shipped with three runtime patches that made the
+WKWebView's WebContent subprocess usable for real-time voice on a
+Developer-ID-signed Mac build:
 
 - `src-tauri/src/mic_permission.m` — calls
   `AVCaptureDevice.requestAccessForMediaType:` at app boot so TCC
@@ -349,9 +353,11 @@ real-time voice on a Developer-ID-signed Mac build:
   audio stream. We replace the decision with `Prompt`, which routes
   through TCC properly. Re-applies on a 1-second heartbeat so
   reload / new-webview events get caught.
-- `src-tauri/entitlements.plist` — adds `audio-input`, `camera`,
-  network, JIT, library-validation exceptions required by hardened
-  runtime + WebContent.
+- `src-tauri/entitlements.plist` — previously added audio input, camera,
+  network, JIT, and library-validation exceptions required by hardened runtime
+  + WebContent. Current production entitlements are microphone audio input,
+  network client/server, and the narrow WKWebView JIT exception; camera and
+  broad code-signing exceptions are intentionally absent.
 
 These patches are Mac-specific (no-op on other platforms via cfg).
 They're considered part of the supported architecture, not
@@ -381,7 +387,12 @@ AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
 - WebRTC in a Tauri WKWebView requires two Obj-C shims, TCC registration, and hardened-runtime entitlements. Even then, the audio stack is mediated by the browser engine, limiting AEC and device control.
 - CPAL gives direct CoreAudio access: device selection, sample-rate negotiation, native AEC via speexdsp, lower latency (~20ms less round-trip).
 
-**Architecture toggle:** `AUDIO_TRANSPORT` env var (set by Tauri at spawn; manually overridable for dev/test). The `native-audio` Cargo feature compiles the CPAL engine into `src-tauri`; omitting it produces a WebRTC-only desktop build.
+**Historical architecture toggle:** `AUDIO_TRANSPORT=native|webrtc` selected the
+transport during this brief dual-transport phase. This was superseded on
+2026-05-29 by the Mac-first native-only desktop path: production desktop builds
+enable `native-audio,voice-processing`, Tauri spawns the sidecar with
+`AUDIO_TRANSPORT=native`, and omitting `native-audio` is not a supported
+desktop product build.
 
 **SSE state bridge (Phase 5):** In native mode, no RTVI data channel exists, so the frontend reads voice state from a new SSE endpoint (`GET /api/events`) that the `SseBusObserver` pipeline observer publishes to. `VoiceStateBridge.tsx` detects native mode via `/healthz` on mount and activates the `useNativeBridge` hook instead of relying on RTVI events.
 
@@ -398,11 +409,15 @@ AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
 
 ---
 
-## Amendment — 2026-04-28: Apple Silicon (+ iOS planned) only; drop web/PWA
+## Amendment — 2026-04-28: Apple Silicon (+ iOS planned) first; drop web/PWA
+
+> Platform-scope note: the 2026-05-29 amendment below supersedes the
+> "Apple Silicon only" framing. The enduring decision here is dropping the
+> web/PWA/browser runtime and moving desktop audio to native transport.
 
 **Supersedes:** "Dual-transport audio architecture" (2026-04-27 amendment above) and the "WebRTC remains the first-class browser/PWA path" framing carried from the original architecture section.
 
-**What changed:** Web / PWA / browser is dropped entirely as a supported runtime. ORBIS targets **Apple Silicon Mac** as the only first-class platform today. **iOS / iPad** is the planned secondary target. The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport, and it is native CPAL today, AVAudioEngine voice-processing IO in Phase 2, `protolabs-voice-core` (vendored from `protoLabsAI/protoApp`) in Phase 3, and the same on iOS in Phase 4.
+**What changed:** Web / PWA / browser is dropped entirely as a supported runtime. ORBIS targets **Apple Silicon Mac** as the first production desktop platform for this hardening pass. **iOS / iPad** is the planned secondary target. The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport, and it is native CPAL today, AVAudioEngine voice-processing IO in Phase 2, `protolabs-voice-core` (vendored from `protoLabsAI/protoApp`) in Phase 3, and the same on iOS in Phase 4.
 
 **Why (research-validated 2026-04-28, three parallel streams):**
 - The cross-platform reach the WebRTC path provided is currently zero benefit. Linux/Windows desktop is already deprioritized (Docker self-host); a browser path adds maintenance cost and zero strategic value.
@@ -419,7 +434,7 @@ AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
 
 **Trade-offs explicitly accepted:**
 - No browser / PWA access. Users wanting ORBIS from a phone-not-on-tailnet browser are out of luck (mitigation: iOS app is on the roadmap; tailnet remains the multi-device answer for desktop).
-- No Linux/Windows desktop product (mitigation: Docker self-host stays documented).
+- No Linux/Windows desktop in the Mac hardening pass (mitigation: Docker self-host stays documented until the native desktop ports are added).
 - Tighter coupling to Apple's audio stack (mitigation: AVAudioEngine has been stable since 10.10; voice-processing IO since 10.13).
 - Migration in three phases is non-trivial; we accept this in exchange for permanent simplification.
 
@@ -443,6 +458,35 @@ AUDIO_TRANSPORT=webrtc  →  getUserMedia → SmallWebRTCTransport (unchanged)
 
 ---
 
+## Amendment — 2026-05-29: Mac-first desktop, Linux/Windows later
+
+**Supersedes only the platform-scope wording in the 2026-04-28 amendment.**
+The web/PWA/browser rejection still stands. Native audio remains the desktop
+transport direction.
+
+**What changed:** ORBIS is no longer framed as Apple Silicon only forever.
+The production desktop sequence is now:
+
+1. Harden the Apple Silicon Mac build first with native
+   `native-audio,voice-processing`, Developer ID signing, notarized DMG,
+   microphone-only entitlements, and live AVAudioEngine validation.
+2. Add Linux and Windows desktop builds after the Mac path is stable, using
+   the native transport shape rather than restoring browser WebRTC.
+3. Keep iOS / iPad as the planned secondary Apple target.
+
+**Why:** The Mac build is still the fastest path to a production-quality native
+audio experience because AVAudioEngine voice-processing gives us AEC + AGC +
+noise suppression now. Linux and Windows support should follow from that
+hardened native architecture, but they should not hold the Mac release path
+open or reintroduce the removed web/PWA runtime.
+
+**Decision impact:** CI and release automation stay Mac-only until the Mac DMG
+passes signed/notarized release validation and live microphone soak. Docs and
+future planning should say "Mac first" instead of "Apple Silicon only" when
+describing product scope.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:
@@ -455,5 +499,5 @@ These were considered and rejected during the design conversation:
 - Multi-tenant roster with per-user `allowed_skills` (rejected — we're single-user)
 - Skills-as-personas catalog (rejected — one orb per install)
 - Fish TTS as default (rejected — broader hardware support via kokoro)
-- Web / PWA / browser as a supported runtime (rejected 2026-04-28 — see Apple-Silicon-only amendment above)
-- Linux / Windows desktop builds as a supported product (Docker self-host is the documented answer for non-Apple stacks)
+- Web / PWA / browser as a supported runtime (rejected 2026-04-28)
+- Linux / Windows desktop builds in the Mac hardening pass (deferred 2026-05-29 until the Mac native-audio release path is proven)

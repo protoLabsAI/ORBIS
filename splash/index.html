@@ -63,14 +63,12 @@
       </div>
     </div>
     <script>
-      // First-run on Windows/Linux downloads ~3 GB of cu128 wheels;
-      // keep the status text slowly encouraging rather than silent.
       const status = document.querySelector('.status');
       const phases = [
         'Starting up…',
-        'Unpacking Python runtime…',
-        'Preparing models…',
-        'This can take a few minutes on first run.',
+        'Checking microphone access…',
+        'Preparing native audio…',
+        'Starting the local companion…',
       ];
       let i = 0;
       setInterval(() => {

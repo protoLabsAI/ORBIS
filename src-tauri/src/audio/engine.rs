@@ -124,8 +124,12 @@ impl AudioEngine {
                 "[audio] input device: {} (CPAL)",
                 input_device.name().unwrap_or_default()
             );
-            let stream =
-                build_input_stream(&input_device, tx.clone(), Arc::clone(&aec), Arc::clone(&rms))?;
+            let stream = build_input_stream(
+                &input_device,
+                tx.clone(),
+                Arc::clone(&aec),
+                Arc::clone(&rms),
+            )?;
             stream
                 .play()
                 .map_err(|e| format!("input stream play: {e}"))?;
@@ -135,7 +139,7 @@ impl AudioEngine {
         #[cfg(all(feature = "voice-processing", target_os = "macos"))]
         let _vp_input = {
             log::info!("[audio] input path: AVAudioEngine voice-processing");
-            super::voice_processing_input::VoiceProcessingInput::new(tx.clone())?
+            super::voice_processing_input::VoiceProcessingInput::new(tx.clone(), Arc::clone(&rms))?
         };
 
         Ok(Self {
@@ -188,9 +192,7 @@ impl AudioEngine {
     pub fn list_input_devices() -> Vec<String> {
         let host = cpal::default_host();
         host.input_devices()
-            .map(|devs| {
-                devs.filter_map(|d| d.name().ok()).collect()
-            })
+            .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
             .unwrap_or_default()
     }
 }
@@ -269,8 +271,7 @@ fn build_input_stream(
                     if let Ok(mut acc) = accumulator.lock() {
                         acc.extend_from_slice(&resampled);
                         while acc.len() >= MIC_FRAME_SAMPLES {
-                            let frame: Vec<i16> =
-                                acc.drain(..MIC_FRAME_SAMPLES).collect();
+                            let frame: Vec<i16> = acc.drain(..MIC_FRAME_SAMPLES).collect();
 
                             // AEC: subtract delayed reference.
                             let frame = if let Ok(mut a) = aec.lock() {
@@ -294,10 +295,7 @@ fn build_input_stream(
 
 /// Build the CPAL output stream. Drains from `playback_ring` into the
 /// hardware buffer; outputs silence when the ring is empty.
-fn build_output_stream(
-    device: &Device,
-    playback_ring: PlaybackRing,
-) -> Result<Stream, String> {
+fn build_output_stream(device: &Device, playback_ring: PlaybackRing) -> Result<Stream, String> {
     let config = preferred_output_config(device)?;
     log::info!(
         "[audio] output config: {:?} {}ch {}Hz",
@@ -317,8 +315,7 @@ fn build_output_stream(
                 let frames_needed = data.len() / channels;
                 // Resample TTS_SAMPLE_RATE → native_rate worth of samples.
                 let ring_samples_needed = if native_rate != TTS_SAMPLE_RATE {
-                    (frames_needed as u64 * TTS_SAMPLE_RATE as u64 / native_rate as u64)
-                        as usize
+                    (frames_needed as u64 * TTS_SAMPLE_RATE as u64 / native_rate as u64) as usize
                 } else {
                     frames_needed
                 };
@@ -348,10 +345,7 @@ fn build_output_stream(
                 // Mono-to-channel-0 is the conventional CPAL pattern;
                 // user can route channel 0 from their device's mixer.
                 for (frame_idx, frame) in data.chunks_mut(channels).enumerate() {
-                    let s = resampled
-                        .get(frame_idx)
-                        .copied()
-                        .unwrap_or(0);
+                    let s = resampled.get(frame_idx).copied().unwrap_or(0);
                     let f = s as f32 / i16::MAX as f32;
                     if let Some((first, rest)) = frame.split_first_mut() {
                         *first = f;
@@ -434,7 +428,11 @@ fn resample_linear(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
         let frac = src_pos - src_idx as f64;
         let a = input.get(src_idx).copied().unwrap_or(0) as f64;
         let b = input.get(src_idx + 1).copied().unwrap_or(0) as f64;
-        out.push((a + frac * (b - a)).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16);
+        out.push(
+            (a + frac * (b - a))
+                .round()
+                .clamp(i16::MIN as f64, i16::MAX as f64) as i16,
+        );
     }
     out
 }

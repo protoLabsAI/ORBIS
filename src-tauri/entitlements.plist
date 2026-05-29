@@ -4,30 +4,14 @@
 <dict>
     <key>com.apple.security.device.audio-input</key>
     <true/>
-    <key>com.apple.security.device.camera</key>
-    <true/>
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
     <true/>
-    <!-- WKWebView's WebContent subprocess runs JavaScriptCore, which
-         needs MAP_JIT pages for the JS engine. Without allow-jit on a
-         hardened-runtime app the JS engine falls back to interpreted
-         mode and the WebRTC audio path silently fails to wire up to
-         Core Audio.
-
-         Earlier revs of this PR also carried
-         `allow-unsigned-executable-memory` and `disable-library-validation`
-         to work around a silent-deny mic failure (see commit b2bc203).
-         Those broader exceptions were dropped after the wry-side
-         WKUIDelegate patch in `src/media_permission_patch.m` started
-         intercepting media-capture before the WebContent JS path runs,
-         which appears to have removed the symptom that originally
-         required them. Apple's narrowest-entitlement guidance:
-         https://developer.apple.com/documentation/security/hardened_runtime
-         If silent-deny ever returns, the first move is to add back
-         `allow-unsigned-executable-memory` (the JIT-page exec exception)
-         not `disable-library-validation`. -->
+    <!-- Tauri's WKWebView still runs JavaScriptCore under the hardened
+         runtime even though audio capture is native. Keep the narrow JIT
+         exception for the web shell; do not add camera or broader code
+         signing exceptions unless a concrete shipped feature requires it. -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
 </dict>

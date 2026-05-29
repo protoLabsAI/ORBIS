@@ -1,35 +1,45 @@
-// Minimal Obj-C shim that triggers macOS's mic + camera TCC prompts
-// from the Rust app-launch path, before the webview ever opens.
+// Minimal Obj-C shim for macOS microphone TCC.
 //
-// Without this, WKWebView's default `WKUIDelegate` (as installed by
-// wry) silently auto-grants `getUserMedia` requests without ever
-// asking TCC. The resulting MediaStream tracks are "alive" but Core
-// Audio hands back silence forever, so our voice pipeline errors out
-// ~48s in reading the dead stream. That path also means the app
-// never shows up in System Settings → Privacy & Security → Microphone,
-// so the user has no UI to grant permission from.
-//
-// `requestAccessForMediaType:` registers the request with TCC (the
-// app *does* then appear in System Settings), surfaces the native
-// consent prompt on first call, and caches the grant/deny outcome
-// for subsequent launches. We fire-and-forget; the async completion
-// block's boolean is useful only for logging — by the time it runs,
-// TCC already has an entry for our bundle id either way.
+// ORBIS owns audio natively in Rust/AVAudioEngine. This file does not
+// grant WebView media access and intentionally never touches camera
+// permissions. It exposes a synchronous request helper so Rust can gate
+// native audio startup on an explicit TCC grant instead of racing the
+// prompt or starting the sidecar with a dead microphone.
 
 #import <AVFoundation/AVFoundation.h>
+#import <AppKit/AppKit.h>
+#import <dispatch/dispatch.h>
+#import <stdbool.h>
 
-void orbis_request_macos_av_access(void) {
+int orbis_macos_microphone_authorization_status(void) {
+    return (int)[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+}
+
+bool orbis_request_macos_microphone_access_blocking(void) {
+    AVAuthorizationStatus status =
+        [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+
+    if (status == AVAuthorizationStatusAuthorized) {
+        return true;
+    }
+    if (status == AVAuthorizationStatusDenied ||
+        status == AVAuthorizationStatusRestricted) {
+        return false;
+    }
+
+    __block BOOL granted = NO;
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
     [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio
-                             completionHandler:^(BOOL granted) {
-        // Intentionally empty. See header comment — by the time this
-        // fires the user has already answered the dialog or TCC has
-        // returned a cached decision; the webview's later
-        // `getUserMedia` inherits that result. Logging the bool would
-        // be nice but we don't have log state wired into this TU.
-        (void)granted;
+                             completionHandler:^(BOOL didGrant) {
+        granted = didGrant;
+        dispatch_semaphore_signal(sema);
     }];
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
-                             completionHandler:^(BOOL granted) {
-        (void)granted;
-    }];
+    dispatch_semaphore_wait(sema, DISPATCH_TIME_FOREVER);
+    return granted;
+}
+
+void orbis_open_macos_microphone_settings(void) {
+    NSURL *url = [NSURL URLWithString:
+        @"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"];
+    [[NSWorkspace sharedWorkspace] openURL:url];
 }

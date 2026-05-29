@@ -1,8 +1,8 @@
 # HANDOFF — ORBIS
 
-*Updated 2026-04-28 (after the architectural redirect: Apple-Silicon-only,
-drop web/PWA target). The 2026-04-24 desktop-voice arc still applies as
-the substrate; what changed is direction, not what's shipped.*
+*Updated 2026-05-29 (after the architectural redirect: Mac-first native
+audio, drop web/PWA target). The 2026-04-24 desktop-voice arc still applies
+as the substrate; what changed is direction, not what's shipped.*
 
 This doc is for the next human to sit down with ORBIS — whether
 that's tomorrow-you, a teammate picking it up, or a handoff to a
@@ -15,16 +15,96 @@ questions, and ordered next steps.
 — read that first if you haven't. [README.md](./README.md) has the
 developer-facing overview.
 [`docs/native-audio-direction.md`](./docs/native-audio-direction.md)
-is the comprehensive guide for the Apple-Silicon-only direction and
+is the comprehensive guide for the Mac-first native audio direction and
 the 4-phase migration plan that supersedes the dual-transport
 architecture.
 
+## Next-team handoff — Mac native audio
+
+**Current state:** the repo is ready to pull onto an Apple Silicon Mac for
+the final production proof pass. Off-Mac guardrails, CI/preflight coverage,
+local rebuild scripts, release signing checks, DMG payload validation,
+microphone permission IPC, and the AVAudioEngine voice-processing input path
+are wired. Do not declare the Mac build production-ready until the evidence
+below is captured from a real Mac.
+
+**First commands on the Mac:**
+
+```sh
+cd ~/dev/ORBIS
+scripts/preflight-native-audio-host.sh
+scripts/check-macos-release-config.py
+scripts/nuke-and-rebuild.sh --dmg
+DMG="$(ls -t src-tauri/target/release/bundle/dmg/*.dmg | head -1)"
+scripts/validate-macos-native-audio.sh --dmg "${DMG:?local DMG missing}"
+scripts/validate-macos-native-audio.sh --launch --duration 240
+```
+
+During `--launch`, grant microphone access if prompted, speak normally, and
+complete one short voice turn. The harness writes
+`macos-native-audio-validation.txt`.
+
+**Evidence required before calling Mac production-ready:**
+
+- Local or CI `.dmg` contains `ORBIS.app` at the volume root.
+- `ORBIS.app` executable and bundled `orbis-aarch64-apple-darwin` sidecar are
+  arm64.
+- `config/orbis.example.yaml` and `config/starter_orbs.yaml` are bundled.
+- Mic permission prompt/status/settings IPC works without camera permission.
+- Launch logs show `[voice-processing] engine started` and
+  `[voice-processing] first input tap`.
+- Launch logs show `[voice-processing] input became audible` while the tester
+  speaks during the validation window.
+- Sidecar logs show `audio_input_mode=voice_processing mic_gain=1.00`.
+- Sidecar logs show `[local_transport] connected`.
+- Sidecar logs show `[local_transport] first mic frame`.
+- Sidecar logs show `[local_transport] first speaker frame` after a short
+  voice turn.
+- Rust logs show `[audio/socket] first playback frame received`.
+- `/healthz` returns `status: ok`, `audio.transport: native`,
+  `audio.input_mode: voice_processing`, `audio.mic_gain: 1.0`, and
+  `audio.socket_configured: true`, `audio.socket_connected: true`, and
+  `audio.pipeline_running: true`, with `audio.mic_frames_received > 0` and
+  `audio.speaker_frames_sent > 0`.
+- For release artifacts only:
+
+```sh
+scripts/validate-macos-native-audio.sh --release --dmg path/to/ORBIS.dmg
+```
+
+That additionally proves Developer ID signing, Gatekeeper assessment, stapled
+notarization tickets, narrow entitlements, and downloaded-DMG validation.
+Release mode checks both the build-tree `.app` and the `ORBIS.app` mounted
+from the DMG, so the exact installed payload is covered even when validating
+a downloaded artifact without a local build-tree `.app`.
+
+**If validation fails:** keep `macos-native-audio-validation.txt`, the Rust
+stderr path printed by the harness, and both files under
+`~/Library/Logs/studio.protolabs.orbis/`. Do not start cleanup work that
+deletes CPAL fallback paths or STT/VAD band-aids until the AVAudioEngine soak
+passes.
+
+**Worktree transfer note:** this handoff was prepared from an intentionally
+dirty worktree. Do not drop or revert the modified files listed by
+`git status`; they are the Mac hardening changes. Make sure the following
+untracked files move with the branch or patch set:
+
+- `.github/workflows/native-audio-preflight.yml`
+- `scripts/check-macos-release-config.py`
+- `scripts/preflight-native-audio-host.sh`
+- `scripts/validate-macos-native-audio.sh`
+- `tests/test_healthz_native_audio.py`
+- `web/src/shared/audio/microphonePermission.ts`
+- `web/src/shared/audio/nativeAudio.ts`
+
 ## 2026-04-28 update — direction change + Phase 1 complete
 
-**ORBIS is now Apple-Silicon-only on the desktop, with iOS / iPad as
-the planned secondary target. Web / PWA / browser is dropped as a
-supported runtime.** See DECISIONS.md amendment of the same date and
-`docs/native-audio-direction.md` for the comprehensive guide.
+**ORBIS is Mac-first on the desktop, with Apple Silicon as the current
+production target and Linux / Windows sequenced after the Mac native-audio
+build stabilizes. iOS / iPad remains a planned secondary target. Web / PWA /
+browser is dropped as a supported runtime.** See DECISIONS.md amendment of
+the same date and `docs/native-audio-direction.md` for the comprehensive
+guide.
 
 **Phase 1 is done.** All 11 ROI-ranked items shipped today across 11
 focused commits, except items 2 (`webrtc-audio-processing`) and 7
@@ -33,8 +113,9 @@ deferred — Phase 2's AVAudioEngine adoption supersedes both. Net
 **−1,391 LoC**, **−442 kB JS bundle**, the `unsafe impl Send for
 AudioEngine {}` shim is gone, and the day-long voice loop debugging
 that started the morning is captured as load-bearing band-aids in
-the tree (VAD thresholds, software mic gain, STT hallucination
-filters) — these get removed when Phase 2 brings real AEC + AGC.
+the tree (VAD thresholds, legacy CPAL software mic gain, STT hallucination
+filters). The current macOS voice-processing path defaults mic gain to unity;
+the remaining cleanup waits for a signed DMG and live AVAudioEngine soak.
 STATUS.md § "Phase 1 — what shipped" has the per-commit table.
 
 ## Context at a glance
@@ -56,15 +137,18 @@ STATUS.md § "Phase 1 — what shipped" has the per-commit table.
   user-picked starter orb. Paid tier (one-time Stripe purchase,
   7-day offline-tolerant cache) unlocks full customization.
 - **Status:** Architecture is locked. Engineering spine is complete.
-  **Mac desktop build runs the full voice loop end-to-end** —
-  signed + notarized .dmg installs, mic permission prompts cleanly,
-  audio reaches Pipecat, MLX-LM in-process replies, Kokoro speaks
-  back. ~1.0-1.2s first-audio-out per turn on M1 base. Remaining
-  work is polish + follow-ups.
+  The Mac desktop build is in production hardening for native
+  `native-audio,voice-processing`: CI, local rebuilds, signing
+  guardrails, microphone permission IPC, and the Apple Silicon live
+  validation harness are wired. The signed/notarized DMG plus live
+  AVAudioEngine microphone soak still gates declaring the Mac build
+  production-ready.
 
 ## What works — verified live
 
-- `python -m pytest` → 131 passing, zero failures
+- Focused native-audio host checks pass:
+  `tests/test_local_transport.py`, `tests/test_healthz_native_audio.py`, and
+  Tauri Rust tests with `native-audio,voice-processing`
 - `python app.py` boots cleanly
 - Frontend builds + typechecks
 - **Setup wizard runs end-to-end** (confirmed 2026-04-23 user test):
@@ -79,9 +163,11 @@ STATUS.md § "Phase 1 — what shipped" has the per-commit table.
   from the wizard (HTTP path AND the new `mlx://` HF-id probe)
 - **Local auto-detect** surfaces running Ollama / LM Studio when
   present
-- **Mac desktop build (signed + notarized .dmg)** installs from the
-  CI artifact, opens, prompts for mic permission via TCC, completes
-  the full voice round-trip with MLX in-process LLM
+- **Historical Mac desktop CPAL loop** installed and completed the full
+  voice round-trip with MLX in-process LLM. The current production
+  target is AVAudioEngine voice-processing and still needs the
+  signed/notarized DMG + live soak evidence from
+  `scripts/validate-macos-native-audio.sh`.
 - **MLX-LM adapter** loads Qwen3.5-4B in 1.8s warm, generates at 42
   tok/s decode on M1 base, no thinking-preamble dead air
 - **Bench harness** (`python scripts/bench.py --turns 10`) produces
@@ -198,8 +284,9 @@ before declaring a release.
   needs scoping if ever multi-tenant.
 - **Drift analyzer silence-on-error.** If the LLM endpoint is broken,
   personality drift silently never happens. Worth a metrics counter.
-- **Frontend CI.** No `bun run build` in the release pipeline.
-  Add `.github/workflows/frontend-check.yml` on next pass.
+- **Frontend CI.** Covered by native-audio preflight and desktop build;
+  add broader lint/test coverage only if the frontend grows beyond the
+  current setup/build contract.
 - **No `docs/` site.** VitePress was purged. README + DECISIONS +
   STATUS + HANDOFF do the work; a rebuilt docs site is future.
 - **Select controlled/uncontrolled warning** in console — minor
@@ -241,15 +328,17 @@ worth doing in parallel where it doesn't conflict with the carve.
 
 ### Phase 1 — DONE 2026-04-28
 
-All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deferred — Phase 2's AVAudioEngine adoption supersedes them, integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands. See STATUS.md § "Phase 1 — what shipped" for the per-commit table.
+All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deferred — Phase 2's AVAudioEngine adoption supersedes them, integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The legacy CPAL path still carries the defensive mic-gain and STT RMS gates; the macOS voice-processing path uses unity gain and waits on live soak before deleting those fallback band-aids. See STATUS.md § "Phase 1 — what shipped" for the per-commit table.
 
 Total Phase-1 delta: **−1,391 net LoC** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB), and the `unsafe impl Send for AudioEngine {}` shim is gone from `engine.rs`.
 
 ### Phase 2 — Apple-native audio
 
-**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input shipped in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature (off by default). Build with `./scripts/nuke-and-rebuild.sh --voice-processing --launch --tail`. STATUS.md has the four-step validation playbook.
+**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input shipped in `src-tauri/src/audio/voice_processing_input.rs`.
 
-**Phase 2b — pending live validation.** Once 2a passes the validation playbook live, the cleanup commit makes `voice-processing` the default and deletes:
+**Phase 2 production hardening — IN PROGRESS 2026-05-29.** Production Mac builds now use `native-audio,voice-processing` by default. Build locally with `./scripts/nuke-and-rebuild.sh --launch --tail`; use `--dmg` for an unsigned local installer packaged from the signed `.app`. Validate live on Apple Silicon with `./scripts/validate-macos-native-audio.sh --launch --duration 240` and validate signed releases with `--release --dmg <path>`.
+
+**Phase 2b — pending live validation.** Once the production hardening playbook passes live, the cleanup commit deletes:
 - `src-tauri/src/audio/aec.rs` (Apple AEC supersedes)
 - The CPAL `build_input_stream` + `preferred_input_config` paths
 - `voice/local_transport.py` `MIC_GAIN` + `_apply_gain_i16` (Apple AGC supersedes)
@@ -277,7 +366,7 @@ These were "next steps" in the prior version of HANDOFF.md and remain relevant:
 - **Tool-call translation in Ollama + MLX adapters.** Currently warned + skipped — needed for `delegate_to` to reach gemma3+/qwen3+ on local backends. Half-day each.
 - **Per-variant mood wiring.** Pick Fractal (default) and wire `useMood()` into its shader uniforms.
 - **`_active_skill()` rename pass.** Cosmetic but reduces confusion. 1 hour.
-- **Frontend CI.** Add `.github/workflows/frontend-check.yml` that runs `bun install + bun run build` on every PR.
+- **Frontend CI.** Native-audio preflight already runs `bun install + bun run build` on PRs and main. Add a separate frontend workflow only if lint/unit coverage grows beyond the current release checks.
 - **Retire `session_store.py` text summaries.** Orphan-delivery stash stays; summary file is now dead code.
 - **Task #68 — Docker hostname warning** in the LLM wizard step.
 - **State/mood authoring editor.** Big UI task; paid customization unlock surface per DECISIONS.md.

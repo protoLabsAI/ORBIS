@@ -1,6 +1,6 @@
 # STATUS — current snapshot
 
-*Last updated 2026-04-28 (architectural redirect: drop web target, Apple-Silicon-only). Branch: `main`.*
+*Last updated 2026-05-29 (macOS native-audio production hardening). Branch: `main`.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -9,14 +9,14 @@ first on any resume before digging into code.
 
 ## Direction (locked 2026-04-28)
 
-**ORBIS targets Apple Silicon Mac as the only first-class platform; iOS / iPad is the planned secondary target. Web / PWA / browser is dropped entirely.**
+**ORBIS starts with Apple Silicon Mac as the production desktop target; Linux and Windows desktop support are intentionally sequenced after the Mac native-audio build is stable. iOS / iPad remains a planned secondary target. Web / PWA / browser is dropped entirely.**
 
-The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Apple Silicon (+ iOS planned) only" amendment (2026-04-28)](./DECISIONS.md) and [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide.
+The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Mac-first desktop, Linux/Windows later" amendment (2026-05-29)](./DECISIONS.md) and [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide.
 
 The migration is staged in four phases:
 
 1. **Strip web** — **DONE 2026-04-28.** Deleted WebRTC client deps, PWA service worker, `getUserMedia` paths, multi-input mixer, transport factory, `/api/offer`, `media_permission_patch.m`, plus 7 ROI-ranked Phase-1 sub-items below. **−1,391 LoC net** in the working tree, **−442 kB off the JS bundle** (1,962 → 1,520 kB).
-2. **Apple-native audio** (1–2 weeks). Replace CPAL input + custom `aec.rs` with `AVAudioEngine` voice-processing IO via `objc2-avf-audio` (already a transitive dep via cpal 0.17). Apple ships AEC + AGC + NS tuned per Mac model. Today's 8× software-mic-gain hack and STT_MIN_RMS gates dissolve.
+2. **Apple-native audio** — **IN PROGRESS / production hardening 2026-05-29.** Production macOS builds now use `native-audio,voice-processing`, request/check macOS microphone permission explicitly, default the sidecar to Apple-AGC-safe unity mic gain, ship DMG artifacts, and verify source + built `.app` microphone metadata in CI. Live Apple Silicon audio soak still gates declaring this phase complete.
 3. **protoApp consolidation** (Q2). Adopt `protolabs-voice-core` from `protoLabsAI/protoApp` as the shared Rust audio + inference substrate. ORBIS becomes a Python sidecar speaking the `orbis-sidecar` WebSocket contract.
 4. **iOS** (Q3+). Full migration to in-process Rust (`whisper-rs`, `kokoros`, `llama-cpp-2`). Python sidecar becomes desktop-only optional.
 
@@ -39,11 +39,11 @@ All 11 Phase-1 ROI-ranked items from `docs/native-audio-direction.md`, except it
 
 ### Today's voice-loop band-aids (still in the tree, deliberately)
 
-These get superseded in Phase 2 (AVAudioEngine gives us real AEC + AGC). They're not bugs to fix — they're load-bearing today and the comments in code reference Phase 2 as the proper supersession.
+These are being retired behind the production `voice-processing` path, but remain as fallback/sidecar tuning until live Apple Silicon soak proves the AVAudioEngine path across first-run, denied-permission, and noisy-room scenarios.
 
 - VAD: `confidence=0.85→0.7`, `min_volume=0.75→0.2` (compensates for M1 mic delivering ~0.013 RMS raw)
 - STT-side hallucination filters: phrase blocklist, `STT_MIN_RMS=0.07`, `STT_MIN_TEXT_LEN=10`, `STT_STRONG_RMS=0.15` in `voice/stt.py`
-- 8× software mic gain in `voice/local_transport.py` (`_apply_gain_i16`)
+- Software mic gain in `voice/local_transport.py` (`_apply_gain_i16`) for legacy CPAL input only; macOS voice-processing defaults to `MIC_GAIN=1.0`
 - Python echo guard at 800ms (was disabled on the incorrect "Rust handles AEC" assumption)
 - Backchannel + MicroAck default-off (false-trigger on bot's TTS bleed without real AEC)
 - `cancel_on_idle_timeout=False` on `PipelineTask` (Pipecat's 5-min default was tearing down the persistent pipeline mid-wizard)
@@ -59,7 +59,7 @@ These get superseded in Phase 2 (AVAudioEngine gives us real AEC + AGC). They're
 ### Lessons memorialized
 
 - **PWA service worker + WKWebView state outlive builds.** Phase 1 replaces this with `Webview::clear_all_browsing_data()`; the script's offline rm -rf stays as the rebuild-path fallback.
-- **M1 internal mic without AGC is too quiet for default VAD.** RMS ~0.013 raw. Software gain is the band-aid until Phase 2 swaps to AVAudioEngine voice-processing.
+- **M1 internal mic without AGC is too quiet for default VAD.** RMS ~0.013 raw. Software gain remains a CPAL-only band-aid; the production macOS voice-processing path lets Apple AGC own normalization.
 - **Filler controllers had their own LLM_URL env var** independent of persona config — split-brain. Routes to persona LLM now.
 - **Idle-timeout default kills the persistent-pipeline pattern.** `cancel_on_idle_timeout=False` is mandatory for the always-on CPAL path.
 - **The Tauri-spawned binary used to have TWO bundle IDs** depending on launch path (`open ORBIS.app` → `studio.protolabs.orbis`; running `orbis-tauri` directly → `orbis-tauri`). Phase 1 ad-hoc signing with stable `--identifier` collapsed this to one TCC identity.
@@ -69,10 +69,12 @@ These get superseded in Phase 2 (AVAudioEngine gives us real AEC + AGC). They're
 ## Repo state
 
 - **Branch:** `main` (no release tag cut for today's working-tree changes yet)
-- **Tests:** 493 passing, 2 skipped (`pytest`), zero failures
+- **Tests:** focused native-audio host checks pass (`tests/test_local_transport.py`,
+  `tests/test_healthz_native_audio.py`, and Tauri Rust tests with
+  `native-audio,voice-processing`). Run the full suite before cutting a release.
 - **Build:** `scripts/nuke-and-rebuild.sh --launch --tail` is the supported dev loop
-- **Live verified:** voice loop functional end-to-end with the today-band-aids in place; native CPAL mode confirmed via `/healthz` (`audio.transport: native`)
-- **Release pipeline:** `.github/workflows/` retargeted to `protoLabsAI/ORBIS`; v0.1.10 was last tagged. Desktop-build workflow produces signed + notarized .dmg via App Store Connect API key
+- **Live verified:** historical native CPAL loop functional end-to-end with the old band-aids in place; current AVAudioEngine voice-processing production path still needs Apple Silicon soak evidence.
+- **Release pipeline:** `.github/workflows/` retargeted to `protoLabsAI/ORBIS`; v0.1.10 was last tagged. Desktop-build workflow is Mac-first, builds signed + notarized DMGs via App Store Connect API key on semver tags, and fails if the DMG cannot be attached to the GitHub Release.
 
 ---
 
@@ -80,7 +82,7 @@ These get superseded in Phase 2 (AVAudioEngine gives us real AEC + AGC). They're
 
 ORBIS is a voice-first AI companion — an orb that talks back in real time, remembers you across sessions, and delegates heavy reasoning to your configured agents. Single-owner, tailnet-hostable, SQLite-backed memory + personality, pipecat voice pipeline with kokoro default TTS.
 
-Apple Silicon Mac is the only supported desktop today; iOS is the planned secondary target. The Python sidecar pattern stays through Phase 1+2 then migrates to a WebSocket contract over `protolabs-voice-core` in Phase 3.
+Apple Silicon Mac is the supported desktop build we are hardening first; Linux and Windows desktop support come after that. iOS is the planned secondary target. The Python sidecar pattern stays through Phase 1+2 then migrates to a WebSocket contract over `protolabs-voice-core` in Phase 3.
 
 Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on the in-process MLX path), Kokoro speaks back (0.16× realtime). First-audio-out ~1.0–1.2s per turn on M1 Pro 32GB.
 
@@ -93,7 +95,8 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 - **Repo:** [github.com/protoLabsAI/ORBIS](https://github.com/protoLabsAI/ORBIS)
 - **Sibling repo (Phase 3 target):** [github.com/protoLabsAI/protoApp](https://github.com/protoLabsAI/protoApp) — has `protolabs-voice-core` (in-process Rust voice substrate) and `orbis-sidecar` crate (WS contract for Python sidecars)
 - **Branch:** `main` (no release tag cut yet for today's changes)
-- **Tests:** 493 passing, 2 skipped, zero failures
+- **Tests:** run the full release-candidate suite before tagging; current
+  host-side native-audio verification is listed in Repo state above.
 
 ### What's shipped (still applies, modulo Phase 1 deletes)
 
@@ -110,10 +113,11 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 - LLM-endpoint probing (test, model list, local auto-detect, MLX HF-id validation)
 
 **Desktop shell (Tauri 2 + Mac signing)**
-- Tauri 2.10.3 shell with PyApp-bundled Python sidecar. Apple Silicon arm64 is the only supported target.
-- WKWebView WebContent media-capture works via the Obj-C shim `mic_permission.m` (TCC registration via `AVCaptureDevice`). The `media_permission_patch.m` runtime UIDelegate swap **gets deleted in Phase 1** — irrelevant once getUserMedia is gone.
-- Hardened-runtime entitlements: `device.audio-input`, `device.camera`, network, JIT, `disable-library-validation`
-- CI builds Developer-ID-signed + notarized .dmg via App Store Connect API key
+- Tauri 2.10.3 shell with PyApp-bundled Python sidecar. Apple Silicon arm64 is the current production target.
+- Native audio is required in production desktop builds. The Rust shell gates sidecar startup on macOS microphone authorization, exposes permission status/request/settings IPC, and uses AVAudioEngine voice-processing input for AEC + AGC + noise suppression when built with `voice-processing`. That build passes `ORBIS_AUDIO_INPUT_MODE=voice_processing` to the sidecar so `MIC_GAIN` defaults to 1.0 unless explicitly overridden.
+- The frontend asks the shell for the active input mode. macOS voice-processing uses the current system input and does not show the legacy CPAL device picker; CPAL builds still expose selectable input devices.
+- Hardened-runtime entitlements: `device.audio-input`, network client/server, narrow JIT exception for WKWebView. Camera and broader code-signing exceptions are intentionally absent.
+- CI builds Developer-ID-signed + notarized `.dmg` via App Store Connect API key. Tag builds fail unless signing secrets are present, then verify source plists, built `.app` metadata, arm64 main executable, bundled PyApp sidecar, embedded signed entitlements, Gatekeeper assessment, stapled notarization tickets for both `.app` and `.dmg`, and run `scripts/validate-macos-native-audio.sh --release` with the report uploaded as a workflow artifact. The release harness now repeats the signing, Gatekeeper, stapler, and narrow-entitlement checks on the `ORBIS.app` mounted from the DMG, so the installed payload is verified, not just the build-tree app.
 
 **Voice loop benchmarks** — Apple M1 Pro 10-core 32GB, 10-turn run
 - STT (Whisper-base.en): 244ms p50 for 3s clip
@@ -122,7 +126,7 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 - TTS (Kokoro): 294ms TTFA p50, 0.13× RTF
 - End-to-end first-audio-out: ~1.0s per turn
 
-**API surface** (`/api/*`, auth-gated except where noted) — **`/api/offer` (WebRTC signalling) goes in Phase 1.**
+**API surface** (`/api/*`, auth-gated except where noted). `/api/offer` is gone with the WebRTC path.
 
 | Route | Method | Auth | Purpose |
 |:---|:---:|:---:|:---|
@@ -147,7 +151,7 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 | ~~`offer`~~ | ~~POST/PATCH~~ | ~~✓~~ | **Phase 1 delete — WebRTC signalling, no longer used** |
 
 **Frontend (React + Vite + shadcn)**
-- First-run setup wizard (welcome → names → llm → pick → done → hatch). Phase 1 simplifies: voiceprint enrollment step gets removed, `MicTest.tsx`/`recordWav.ts` getUserMedia paths deleted, NativeLevelMeter (already calls Tauri IPC) is the only mic-test surface.
+- First-run setup wizard (welcome → names → llm → pick → microphone → done → hatch). The microphone step now uses Tauri IPC for macOS permission status/request/settings plus the native RMS meter.
 - Drawer with Voice + Orb tabs.
 - Mood polling plugin — subscribable via `useMood()`.
 - Orb plugin system (Fractal / Nebula / Crystal / Particles).
@@ -158,18 +162,22 @@ Whisper transcribes (~250ms), MLX-LM or remote gateway replies (~350ms TTFB on t
 
 ### Phase 1 — DONE 2026-04-28
 
-All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deliberately deferred — Phase 2's AVAudioEngine adoption supersedes them, and integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The 8× software-mic-gain hack and STT_MIN_RMS gates remain in place as load-bearing band-aids until Phase 2 lands.
+All ROI-ranked items shipped except #2 (`webrtc-audio-processing`) and #7 (rubato `FftFixedIn` outside callback). Both deliberately deferred — Phase 2's AVAudioEngine adoption supersedes them, and integrating webrtc-audio-processing's C++ build dep + writing fresh resampler glue would be thrown-away work in 1-2 weeks. The software-mic-gain hack now remains only for the legacy CPAL path; the macOS voice-processing path defaults to unity gain. STT_MIN_RMS gates stay in place until live Apple Silicon soak proves they can be removed.
 
 ### Phase 2
 
-**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input lands in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature (off by default). Both feature combinations (`native-audio` alone and `native-audio,voice-processing`) compile clean and Tauri builds successfully on Apple Silicon. Phase 1 band-aids stay in place until live validation.
+**Phase 2a — DONE 2026-04-28.** `AVAudioEngine` voice-processing input lands in `src-tauri/src/audio/voice_processing_input.rs` behind the `voice-processing` Cargo feature.
+
+**Phase 2 production hardening — IN PROGRESS 2026-05-29.** macOS CI, release builds, the PR/main preflight workflow, and the local clean rebuild script now enable or verify `native-audio,voice-processing`, gate startup on macOS microphone permission, expose permission IPC to the wizard/settings panel, default voice-processing input to unity gain, hide the legacy CPAL device picker for the macOS system-input voice-processing path, ship DMG artifacts, assert source + built `.app` microphone metadata, and gate signed tag artifacts on Developer ID/Gatekeeper/stapler checks. The desktop release job waits for the parallel Docker release workflow and fails if the signed DMG cannot be attached to the GitHub Release. The preflight workflow includes focused Python native-transport tests plus a macOS arm64 compile/test job for the Apple-specific AVAudioEngine path before release tags. The local rebuild script can also produce an unsigned DMG with `--dmg` for release-candidate packaging checks; it signs `ORBIS.app` first, stages it at the DMG volume root, then packages that staged signed app into the local DMG. `scripts/check-macos-release-config.py` is the host-portable static guardrail for source/workflow drift; `scripts/validate-macos-native-audio.sh` is the repeatable Apple Silicon live-validation harness and now truncates logs before launch, verifies the app executable and bundled PyApp sidecar are arm64, verifies first-run config resources are bundled, validates manual/unsigned DMG payloads, verifies release mode includes a DMG, can validate a downloaded DMG without a separate built app, mounts the DMG to prove it contains `ORBIS.app` with the arm64 executable, sidecar, and resources, checks signing/notarization for both the build-tree app and the mounted DMG app, verifies signed entitlements stay narrow, proves launch logs show AVAudioEngine + sidecar readiness, non-silent microphone input while the tester speaks, Python transport connection to the native audio socket, Python-side mic frame receipt, Python-side speaker frame send, and Rust-side playback frame receipt, and verifies `/healthz` reports native transport, voice-processing input mode, unity mic gain, a configured plus currently connected native audio socket, a running native voice pipeline task, received mic frames, and sent speaker frames. Phase 1 CPAL band-aids stay available outside the voice-processing path until live Apple Silicon validation clears them.
 
 **Phase 2b — pending live validation.** Build with the feature flag, run, verify, then ship the cleanup commit:
 
 ```bash
-./scripts/nuke-and-rebuild.sh --voice-processing --launch --tail
+./scripts/nuke-and-rebuild.sh --launch --tail
 # or
 cargo tauri build --features native-audio,voice-processing --bundles app
+# then
+./scripts/validate-macos-native-audio.sh --launch --duration 240
 ```
 
 Live validation playbook (test in this order, each gates the next):
@@ -180,7 +188,7 @@ Live validation playbook (test in this order, each gates the next):
 4. **Sustained turn-taking works.** Multi-turn conversation — verify the loop stays clean.
 
 If all four pass, Phase 2b is the cleanup commit:
-- Make `voice-processing` the default for `native-audio` builds.
+- Keep `--legacy-cpal` only if live validation finds a device-specific AVAudioEngine blocker; otherwise remove the fallback.
 - Delete `src-tauri/src/audio/aec.rs` (187 LoC; Apple supersedes).
 - Delete the CPAL `build_input_stream` + `preferred_input_config` paths.
 - Delete `voice/local_transport.py` `MIC_GAIN` + `_apply_gain_i16` (Apple AGC supersedes).
@@ -239,40 +247,42 @@ auth/                          single-owner API-key auth
 a2a/                           A2A inbound + outbound
 memory/                        SQLite memory backend
 voice/                         STT + TTS pipecat adapters + native audio transport
-  transport_factory.py         Phase 1 — DELETE (factory branching)
-  local_transport.py           LocalAudioInputTransport / Output (CPAL path) — kept through Phase 2; deleted Phase 3
+  local_transport.py           LocalAudioInputTransport / Output over Unix socket; voice-processing mode uses unity mic gain
   sse_bus.py                   SseBus singleton; /api/events fan-out — kept through Phase 2; deleted Phase 3
-  native_bargein.py            NativeBargeInObserver — Phase 1 simplifies (drop WebRTC branch); Phase 3 deletes
-  tee_processor.py             TeeFrameProcessor; LocalAudioOutputSink — Phase 1 simplifies (drop WebRTC sink)
-  multi_input_mixer.py         Phase 1 — DELETE (CPAL+WebRTC arbitration only)
+  native_bargein.py            NativeBargeInObserver — flushes Rust playback over the native socket; Phase 3 deletes
+  stt.py / stt_sensevoice.py   local STT adapters and silence/hallucination gates
+  llm/                         LLM factory + adapters
+  tts/                         Kokoro / OpenAI-compatible / ElevenLabs / Fish adapters
 
-src-tauri/src/audio/           Rust CPAL engine
-  engine.rs                    CPAL streams (kept through Phase 1; input migrates to AVAudioEngine in Phase 2)
+src-tauri/src/audio/           Rust native audio engine
+  engine.rs                    CPAL output + fallback input; Mac production input is AVAudioEngine voice-processing
   socket.rs                    Unix socket protocol (kept through Phase 2; deleted Phase 3 → WebSocket)
-  aec.rs                       Phase 1 swap → webrtc-audio-processing; Phase 2 delete
+  voice_processing_input.rs    macOS AVAudioEngine voice-processing microphone path
+  aec.rs                       legacy CPAL fallback AEC; Phase 2 cleanup deletes after live soak
 
 src-tauri/src/                 Tauri shell
   mic_permission.m             AVCaptureDevice TCC registration (kept)
-  media_permission_patch.m     Phase 1 — DELETE (WKUIDelegate Grant→Prompt swap, dead without getUserMedia)
+  media_permission_patch.m     deleted (WKUIDelegate Grant→Prompt swap, dead without getUserMedia)
 
 web/src/
-  App.tsx                      side-effect imports; top-level PipecatClient (Phase 1: WebRTC client deletes)
-  voice/                       pipecat client + state bridge
-    VoiceStateBridge.tsx       Phase 1 simplifies (drop WebRTC branches)
-    useNativeBridge.ts         Phase 1 → promote to default, rename useVoiceBridge.ts
-    state.ts                   Phase 1: drop audioTransport field (always native)
+  App.tsx                      desktop UI root; audio runs in native shell/sidecar
+  voice/                       SSE-backed voice state bridge
+    VoiceStateBridge.tsx       subscribes to native sidecar events
+    useVoiceBridge.ts          default native bridge hook
+    state.ts                   native voice UI state
   components/Drawer.tsx
   plugins/
     orb/                       R3F orb + variants + store
     orb-settings/
     voice-panel/
     status-pill/               Phase 1 simplifies (drop WebRTC connection state)
-    setup-wizard/              Phase 1: voiceprint step removed
+    setup-wizard/              first-run config + native microphone permission step
     mood/
   shared/audio/
     NativeLevelMeter.tsx       (kept; the only mic-test surface after Phase 1)
-    MicTest.tsx                Phase 1 — DELETE (getUserMedia)
-    recordWav.ts               Phase 1 — DELETE (getUserMedia)
+    microphonePermission.ts    Tauri mic permission IPC wrapper
+    nativeAudio.ts             Tauri native audio mode/device wrapper
+    preferredDevice.ts         legacy CPAL preferred-device storage
   auth/
   lib/api.ts                   Phase 1: drop /api/offer wrapper
 
@@ -303,7 +313,7 @@ cp config/users.example.yaml config/users.yaml   # tailnet only
 ./scripts/nuke-and-rebuild.sh --launch --tail
 
 # Tests
-python -m pytest                                  # 493 passing, 2 skipped
+python -m pytest                                  # full release-candidate suite
 python -m pip install -e '.[test]'                # respx for LLM-probe tests
 ```
 
@@ -317,10 +327,10 @@ Carried forward; updated 2026-04-28 with today's lessons.
 - **`cancel_on_interruption=True`** default for sync tools.
 - **`cancel_on_idle_timeout=False` in native mode.** Pipecat's 5-min default tears down the persistent pipeline mid-wizard. *(2026-04-28 today)*
 - **Filler/backchannel LLM URL must follow the persona.** Hardcoded `LLM_URL` env var defaults to `localhost:8100/v1` and spams connection-error retries forever if the user isn't running vLLM there. *(2026-04-28 today)*
-- **M1 internal mic without AGC delivers ~0.013 RMS for normal speech.** Until Phase 2 (AVAudioEngine), `MIC_GAIN=8` software boost in `voice/local_transport.py` is required. *(2026-04-28 today)*
+- **M1 internal mic without AGC delivers ~0.013 RMS for normal speech.** The legacy CPAL path still defaults to `MIC_GAIN=16`; the macOS voice-processing path sets `ORBIS_AUDIO_INPUT_MODE=voice_processing`, so `MIC_GAIN` defaults to 1.0 and lets Apple AGC own normalization. *(2026-05-29 update)*
 - **WebView state outlives builds.** `~/Library/WebKit/<bid>/` and `~/Library/HTTPStorages/<bid>*/` for both bundle IDs (`studio.protolabs.orbis` AND `orbis-tauri`) cache stale frontend bundles and intercept `/api/*` fetches with "Load failed". `scripts/nuke-and-rebuild.sh` wipes them; Phase 1 replaces with `Webview::clear_all_browsing_data()`. *(2026-04-28 today)*
 - **Whisper hallucinates on silence/breath/clicks** — "thanks for watching", "you", ".com", Korean phrases. STT-side phrase blocklist + `STT_MIN_RMS` gate filters them. *(2026-04-28 today; goes away in Phase 2 with Apple's NS)*
-- **Backchannel + MicroAck are off by default in native mode.** Speaker bleed + 8× mic gain false-trigger them on the bot's own tail. Re-enable in Phase 2 once real AEC lands. *(2026-04-28 today)*
+- **Backchannel + MicroAck are off by default in native mode.** Speaker bleed false-triggered them on the bot's own tail before AVAudioEngine AEC. Re-enable after live voice-processing soak proves tail suppression. *(2026-05-29 update)*
 - **Browser mic constraints stay at defaults** (AGC/NS/EC on) — relevant only through Phase 1; deleted thereafter.
 - **Fractal orb rotation + uTime wrap at 2π·N** to avoid float32 precision drift after ~10 min.
 - **FTS5 is required** in the SQLite build — ORBIS refuses to start without it.

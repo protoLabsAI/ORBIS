@@ -10,10 +10,18 @@ maps companion-stack experiments onto the pipe slots below.
 Snapshot: 2026-04-26, main at v0.1.32. Anchor file is `app.py`; the
 pipeline is built in `run_bot()`.
 
+> 2026-05-29 note: this document is historical for the WebRTC/CPAL
+> audit. The current Mac production path is native desktop audio with
+> Rust-owned microphone permission, AVAudioEngine voice-processing
+> input, CPAL output, and the Python sidecar over the Unix socket. See
+> `STATUS.md`, `docs/desktop-dev.md`, and
+> `scripts/validate-macos-native-audio.sh` for the current Mac release
+> validation path.
+
 ## Pipeline spine
 
 ```
-transport.input()                              SmallWebRTCTransport, audio_in_filter=rnnoise?
+transport.input()                              LocalAudioTransport over Unix socket
   -> EchoGuardSuppressor(_ECHO_STATE)          drops InputAudioRawFrame during/after bot TTS
   -> SpeakerGate                               #35 PR 1 — owner-vs-stranger via cosine cmp; default owner-trust
   -> RTVIProcessor                             inbound client->server data-channel msgs
@@ -63,12 +71,23 @@ pollute LLM history.
 
 ## Stage 1 — Mic acquisition
 
-- `<MicTest>` (`web/src/shared/audio/MicTest.tsx`) is a user-gesture gate — Safari/WKWebView only prompt for mic from a direct click handler.
-- Constraints are minimal: `audio: deviceId ? { deviceId: { exact: deviceId } } : true` (`MicTest.tsx:93-95`). No explicit sample rate / AEC / noise-suppression hints — defaults from `SmallWebRTCTransport`.
-- `AnalyserNode` (fftSize 512) drives a level meter; thresholds: `VERIFIED_RMS=0.04` (real voice) and `SILENT_FLOOR_RMS=0.003` over 8s (TCC silent-deny detection).
-- Tauri TCC shims (macOS):
-  - `src-tauri/src/mic_permission.m:21-35` — `[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio]` at boot. Without it the app never appears in System Settings → Microphone.
-  - `src-tauri/src/media_permission_patch.m:36-147` — swaps wry's `WKUIDelegate`. wry hardcodes `WKPermissionDecision::Grant`, which is JS-layer approval that bypasses TCC and yields a silent stream. The patch returns `Prompt` to honor TCC.
+Production Mac desktop builds use Tauri IPC + native audio, not WebRTC
+`getUserMedia`.
+
+- `src-tauri/src/mic_permission.m` requests `AVMediaTypeAudio` through
+  `AVCaptureDevice`, reports authorization status, and opens System Settings →
+  Microphone when the user needs to grant access.
+- `src-tauri/src/lib.rs` gates sidecar startup on authorized microphone access
+  before starting the native audio engine.
+- `src-tauri/src/audio/voice_processing_input.rs` starts AVAudioEngine
+  voice-processing input for AEC + AGC + noise suppression, then sends 20 ms
+  16 kHz PCM frames over the local Unix socket.
+- `voice/local_transport.py` reads `ORBIS_AUDIO_INPUT_MODE=voice_processing`
+  and defaults `MIC_GAIN` to 1.0 for the Mac path. Legacy CPAL builds still use
+  the old defensive gain unless explicitly overridden.
+
+The historical WebRTC setup wizard mic test remains useful reference material
+for browser-era behavior, but it is not the production Mac audio path.
 
 ### Voiceprint enrollment (optional, #35 PR 1.3)
 
@@ -385,8 +404,8 @@ Server events emitted but NOT consumed: `BotTtsStarted` / `BotTtsStopped` / `Bot
 ### Tauri shell + sidecar
 
 - Bundle: `externalBin: ["binaries/orbis"]`; capabilities pin to `binaries/orbis --host 127.0.0.1 --port 0`.
-- `entitlements.plist`: `audio-input`, `camera`, `network.client/server`, plus `cs.allow-jit` / `cs.allow-unsigned-executable-memory` / `cs.disable-library-validation` for WebContent's WebRTC media decode.
-- Sidecar spawn (`src-tauri/src/lib.rs`): pre-warm TCC dialog → install UIDelegate patch → resolve config path (`$ORBIS_CONFIG` else `<app_data_dir>/orbis.yaml`, no relative-path fallback) → seed example config if missing → spawn with `ORBIS_CONFIG=<path>` and `START_VLLM=<env or "0">` (default 0 — bundled python doesn't ship vLLM) → stream stdout for `ORBIS_READY http://...` line → navigate webview.
+- `entitlements.plist`: microphone audio input, network client/server, and the narrow JIT exception needed by WKWebView. Camera and broad code-signing exceptions are intentionally absent.
+- Sidecar spawn (`src-tauri/src/lib.rs`): check/request macOS microphone permission → start the native audio engine (AVAudioEngine voice-processing input on Mac production builds, CPAL output) → bind the Unix audio socket → resolve config path (`$ORBIS_CONFIG` else `<app_data_dir>/orbis.yaml`, no relative-path fallback) → seed example config if missing → spawn with `ORBIS_CONFIG=<path>`, `START_VLLM=<env or "0">`, `AUDIO_TRANSPORT=native`, `ORBIS_AUDIO_SOCK=<path>`, and `ORBIS_AUDIO_INPUT_MODE=voice_processing` → stream stdout for `ORBIS_READY http://...` line → navigate webview.
 
 ---
 

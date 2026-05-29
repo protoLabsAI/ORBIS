@@ -1,16 +1,13 @@
 /**
  * Shared, persistent selected-microphone state.
  *
- * Both the wizard's MicStep and the settings panel's MicSettings let
- * the user pick an `audioinput` device; voice client init in
- * web/src/voice/client.ts will eventually feed the same value into
- * Pipecat's `getUserMedia` constraints. Without persistence the
- * picker resets to "system default" every time its host panel
- * remounts, which is jarring.
+ * The legacy CPAL input path lets the user pick an input device from
+ * the wizard and settings panel. The production macOS voice-processing
+ * path follows the system input instead, so this store is used only
+ * when the native shell reports a selectable input mode.
  *
  * Storage is a single `localStorage` slot. Empty string / missing
- * means "no preference, use system default" — that's the natural
- * neutral that browsers also use when `deviceId` is omitted.
+ * means "no preference, use system default."
  *
  * Subscriber API exists so the settings panel and the wizard step
  * can stay in sync within a single tab without lifting state — the

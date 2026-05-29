@@ -1,0 +1,120 @@
+name: 'Native Audio Preflight'
+
+# Cheap enough to run before release prep, broad enough to catch the
+# Mac desktop contract drifting before a semver tag triggers the signed
+# macOS build. Signed/notarized DMG validation runs in desktop-build.yml;
+# the interactive live microphone soak still has to run on a real Mac via
+# scripts/validate-macos-native-audio.sh --launch.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: native-audio-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-source:
+    name: Source and Linux host checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux build deps
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            pkg-config \
+            wget
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: macOS release config guardrails
+        run: scripts/check-macos-release-config.py
+
+      - name: Build web SPA
+        working-directory: web
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Python native audio tests
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'pipecat-ai>=1.0' numpy pytest pytest-asyncio
+          python -m pytest \
+            tests/test_local_transport.py \
+            tests/test_healthz_native_audio.py
+
+      - name: Rust tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$(rustc -vV | sed -n 's/host: //p')"
+          sidecar="src-tauri/binaries/orbis-${target}"
+          mkdir -p src-tauri/binaries
+          printf '#!/bin/sh\necho dummy sidecar\n' > "${sidecar}"
+          chmod +x "${sidecar}"
+          trap 'rm -f "${sidecar}"; rmdir src-tauri/binaries 2>/dev/null || true' EXIT
+
+          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo test --manifest-path src-tauri/Cargo.toml --features native-audio,voice-processing
+
+  macos-native-audio:
+    name: macOS native-audio compile
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: macOS release config guardrails
+        run: scripts/check-macos-release-config.py
+
+      - name: Compile and test macOS voice-processing path
+        shell: bash
+        run: |
+          set -euo pipefail
+          sidecar="src-tauri/binaries/orbis-aarch64-apple-darwin"
+          mkdir -p src-tauri/binaries
+          printf '#!/bin/sh\necho dummy sidecar\n' > "${sidecar}"
+          chmod +x "${sidecar}"
+          trap 'rm -f "${sidecar}"; rmdir src-tauri/binaries 2>/dev/null || true' EXIT
+
+          cargo test --manifest-path src-tauri/Cargo.toml --features native-audio,voice-processing

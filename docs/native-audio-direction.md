@@ -1,5 +1,12 @@
 # Native audio direction — 2026-04-28
 
+> 2026-05-29 update: platform scope is now Mac-first, not Mac-only
+> forever. Apple Silicon Mac is the current production desktop target while
+> signing, notarization, microphone permission, and AVAudioEngine
+> voice-processing are hardened. Linux and Windows desktop support are
+> sequenced after the Mac release path is stable. Web / PWA / browser remains
+> dropped.
+
 Comprehensive decision guide for ORBIS's audio + transport architecture
 following the 2026-04-28 debug session and three parallel research
 streams.
@@ -12,19 +19,21 @@ reference it. If you change direction here, update those.
 
 ## TL;DR
 
-ORBIS targets **Apple Silicon Mac** as the only first-class platform.
-**iOS / iPad** is the planned secondary target. **Web / PWA / browser**
-is dropped entirely as a supported runtime.
+ORBIS targets **Apple Silicon Mac** as the first production desktop platform.
+**Linux / Windows desktop** support follows after the Mac native-audio release
+path is stable. **iOS / iPad** remains the planned secondary Apple target.
+**Web / PWA / browser** is dropped entirely as a supported runtime.
 
 The architecture migrates in four phases:
 
 1. **Strip web** (this week) — delete WebRTC client, PWA service worker,
    getUserMedia paths, multi-input mixer, transport factory branching.
    Net ~600+ LoC removed plus several MB of bundle weight.
-2. **Apple-native audio** (1–2 weeks) — replace CPAL input + custom AEC
+2. **Apple-native audio** (Mac hardening) — replace CPAL input + custom AEC
    with AVAudioEngine voice-processing IO via `objc2-avf-audio`. Apple
-   ships AEC + AGC + NS tuned per Mac model. Today's 8× software-mic
-   gain hack and STT_MIN_RMS gates dissolve.
+   ships AEC + AGC + NS tuned per Mac model. The current Mac path defaults
+   microphone gain to unity; the legacy CPAL defensive gain and STT RMS gates
+   stay only until live soak proves the voice-processing path.
 3. **protoApp consolidation** (Q2, weeks) — adopt `protolabs-voice-core`
    from `github.com/protoLabsAI/protoApp` as the shared Rust audio +
    inference substrate. ORBIS becomes a Python sidecar speaking the
@@ -49,10 +58,12 @@ the following:
   choice is defensible — but it cost us ~1,432 lines of bespoke audio
   plumbing, a custom AEC that's worse than what's on crates.io, and an
   entire day of debugging mic gain / VAD / hallucination filters.
-- The cost of cross-platform reach (Linux/Windows/Web/iOS via WebRTC)
+- The cost of browser-style cross-platform reach (Web/PWA via WebRTC)
   is currently zero benefit — WebRTC has been a source of complexity,
-  not portability. The browser path's mic permission UIDelegate hack
-  alone (`media_permission_patch.m`) is a 50-line Obj-C runtime swap.
+  not portability. Linux and Windows desktop support should use the native
+  transport shape after Mac stabilizes, not resurrect the browser runtime. The
+  browser path's mic permission UIDelegate hack alone
+  (`media_permission_patch.m`) was a 50-line Obj-C runtime swap.
 - Apple Silicon **already gives us a better answer** for AEC + AGC + NS
   than anything in the Rust audio ecosystem: `AVAudioEngine` voice-
   processing IO, per WWDC23-10235. It's tuned per-Mac-model by Apple's
@@ -69,8 +80,8 @@ the following:
 - No browser/PWA access. Users who want to use ORBIS from a phone-not-
   on-tailnet browser are out of luck. (Mitigation: iOS app is on the
   roadmap; tailnet remains the supported multi-device answer.)
-- No Linux/Windows desktop. (Mitigation: Docker self-host for power
-  users who want a non-Apple stack — already documented.)
+- No Linux/Windows desktop in the Mac hardening pass. (Mitigation: Docker
+  self-host stays documented until the native desktop ports are added.)
 - Tighter coupling to Apple's audio stack. If Apple changes
   AVAudioEngine semantics, we follow. (Mitigation: AVAudioEngine has
   been stable since 10.10; voice-processing IO since 10.13.)
@@ -211,7 +222,7 @@ Items 5+ can be split.
 
 ---
 
-## Phase 2 — Apple-native audio (1–2 weeks after Phase 1 lands)
+## Phase 2 — Apple-native audio (Mac hardening)
 
 ### Migrate input from CPAL → AVAudioEngine voice-processing IO
 
@@ -228,8 +239,8 @@ Items 5+ can be split.
   processing` in Phase 1, now deleted entirely).
 - `src-tauri/src/audio/engine.rs` input path (CPAL → AVAudioEngine).
   Output stays on CPAL or also moves — designer's call.
-- `voice/local_transport.py` 8× `MIC_GAIN` software boost — Apple's
-  AGC replaces it.
+- `voice/local_transport.py` legacy CPAL `MIC_GAIN` software boost — Apple's
+  AGC replaces it on the Mac voice-processing path.
 - `voice/stt.py` `STT_MIN_RMS` / `STT_STRONG_RMS` / `STT_MIN_TEXT_LEN`
   gates — Apple's NS + Whisper's natural performance handle hallucination
   from real silence.

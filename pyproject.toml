@@ -5,7 +5,7 @@ description = "ORBIS — voice-first AI companion. Pipecat voice pipeline + orb 
 requires-python = ">=3.11"
 dependencies = [
     # Pipecat + transports
-    "pipecat-ai[webrtc,silero,openai]>=1.0",
+    "pipecat-ai[silero,openai]>=1.0",
     # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
     # but baseline; users who only want cloud STT/TTS can skip by
     # installing a slim variant (future work).
@@ -51,14 +51,15 @@ speaker-id = ["speechbrain>=1.0", "torchaudio"]
 # STT + 7-class emotion + audio events in one forward pass per #66.
 sensevoice = ["funasr>=1.2"]
 audio = ["pipecat-ai[rnnoise,local-smart-turn]"]
-# Test-only: respx mocks httpx for the LLM-probe tests.
-test = ["pytest", "respx"]
+# Test-only: respx mocks httpx for the LLM-probe tests; pytest-asyncio
+# runs the native Unix-socket transport tests.
+test = ["pytest", "pytest-asyncio", "respx"]
 # Lint — ruff catches F821 (undefined names), F401 (unused imports),
 # F841 (unused locals), and the rest of the pyflakes-equivalent F-set.
 # Wired into CI on every PR — see .github/workflows/lint.yml. The
 # regression that triggered this gate: PR #44 deleted the
 # `skill_llm` local but left one orphan reference, and every
-# `/api/offer` call 500'd in production until #88 caught it.
+# voice-session start 500'd in production until #88 caught it.
 lint = ["ruff>=0.5"]
 
 [project.scripts]

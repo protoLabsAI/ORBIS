@@ -1,23 +1,22 @@
 # Desktop code signing — operator guide
 
 ORBIS's desktop installers are built by `.github/workflows/
-desktop-build.yml` on every semver tag. The workflow is **conditional
-on secret presence** — if signing secrets aren't set, you still get
-unsigned `.dmg` / `.msi` / `.AppImage` artifacts (what ships today).
-When you're ready to go public, adding the right secrets flips every
-future release to signed with zero code change.
+desktop-build.yml` on every semver tag. The current production target
+is macOS: semver tag releases require the Apple signing/notarization
+secrets and fail fast if any are missing. Manual workflow dispatches
+can still produce unsigned `.dmg` artifacts for development/testing.
+Linux and Windows signing are intentionally deferred until those
+desktop builds come back into the release matrix.
 
 This page covers: which secrets are needed, where to get the certs,
-and how each platform's signing actually fires.
+and how macOS signing actually fires today.
 
 ## Signing matrix
 
 | Platform | Format | Secrets required |
 |---|---|---|
 | macOS | Developer ID signing + Apple notarization | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`, `APPLE_TEAM_ID` |
-| Windows | Authenticode | `WINDOWS_CERTIFICATE` (base64 PFX), `WINDOWS_CERTIFICATE_PASSWORD` |
-| Linux (AppImage) | No native format; optional Tauri updater signature | `TAURI_SIGNING_PRIVATE_KEY` (+ optional password) |
-| Tauri auto-updater (all OS) | Ed25519 signature on each installer | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| Tauri auto-updater (future) | Ed25519 signature on the DMG | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 All secrets are set in **Settings → Secrets and variables → Actions**
 on the repo.
@@ -79,45 +78,15 @@ on the repo.
 | `APPLE_SIGNING_IDENTITY` | the full identity string, e.g. `Developer ID Application: Your Name (ABC123DEF4)` |
 | `APPLE_API_ISSUER` | Issuer ID (UUID) from step 4 |
 | `APPLE_API_KEY` | Key ID (10-char) from step 4 |
-| `APPLE_API_KEY_PATH` | base64-encoded `.p8` from step 5 (CI decodes it to a tmp file) |
+| `APPLE_API_KEY_PATH` | base64-encoded `.p8` from step 5 (CI decodes it to a temp file path before invoking Tauri) |
 | `APPLE_TEAM_ID` | 10-char Team ID from step 6 |
 
 Next tagged release will sign + notarize the `.dmg` and `.app`
-inside. Users no longer get the Gatekeeper warning on first open.
-
-## Windows — Authenticode
-
-### Prerequisites
-
-- A Windows code-signing certificate from a recognized CA. Options:
-  - **DigiCert** (~$500/year) — fastest trust accumulation
-  - **SSL.com / Sectigo** (~$250/year) — more patience required
-  - **Azure Trusted Signing** (~$10/month) — newest option, Azure-managed
-
-EV certs (hardware token) give instant SmartScreen reputation but
-require a token signing machine or HSM service — out of scope for
-first-release.
-
-### One-time setup
-
-1. Obtain a PFX file from the CA.
-2. Base64-encode it:
-   ```sh
-   base64 -i signing.pfx | pbcopy   # macOS
-   certutil -encode signing.pfx enc.txt && findstr /v CERTIFICATE enc.txt > enc-body.txt   # Windows, then copy contents
-   ```
-
-### Secrets to set
-
-| Secret | Value |
-|---|---|
-| `WINDOWS_CERTIFICATE` | base64-encoded PFX |
-| `WINDOWS_CERTIFICATE_PASSWORD` | PFX password |
-
-Tauri's bundler picks these up via env and signs the `.msi` + the
-`.exe` inside. First Windows install will still show a mild SmartScreen
-reputation warning for a few weeks until the cert accumulates trust
-via downloads.
+inside. On semver tag builds, CI verifies the signed `.app`, checks
+the embedded entitlements, runs Gatekeeper assessment, and validates
+the stapled notarization tickets on both the build-tree `.app` and the
+`ORBIS.app` mounted from the `.dmg`, plus the `.dmg` container itself.
+Users no longer get the Gatekeeper warning on first open.
 
 ## Tauri auto-updater signing
 
@@ -169,15 +138,31 @@ dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDQ0E3RjE2QzhFQTc0NEEKUldS
 ### macOS
 ```sh
 # Signature + notarization status
-codesign --verify --verbose "ORBIS.app"
-spctl --assess --type exec --verbose "ORBIS.app"
+codesign --verify --deep --strict --verbose=2 "ORBIS.app"
+codesign -dv "ORBIS.app" 2>&1 | grep "Authority=Developer ID Application:"
+codesign -d --entitlements :- "ORBIS.app"
+spctl --assess --type execute --verbose=4 "ORBIS.app"
+xcrun stapler validate "ORBIS.app"
+
+# DMG release artifact
+spctl --assess --type open --context context:primary-signature --verbose=4 "ORBIS.dmg"
+xcrun stapler validate "ORBIS.dmg"
 ```
 
-### Windows
+Or run the project wrapper against a downloaded/built DMG:
+
 ```sh
-# PowerShell
-Get-ChildItem .\ORBIS-*-x86_64-pc-windows-msvc.msi | Get-AuthenticodeSignature
+scripts/validate-macos-native-audio.sh --release --dmg "ORBIS.dmg"
 ```
+
+The wrapper requires the DMG path. If the local build `.app` is not present,
+it mounts the DMG and validates the contained `ORBIS.app` directly. It checks
+the app metadata, verifies the main executable is `arm64`, confirms the
+bundled PyApp sidecar is present, verifies the signed entitlement set stays
+narrow (microphone + network, no camera or broad code-signing exceptions),
+runs the signing/notarization checks above, proves the DMG contains
+`ORBIS.app` with the arm64 executable, sidecar, and first-run config
+resources, and writes `macos-native-audio-validation.txt`.
 
 ### Tauri updater signatures
 The updater plugin verifies each downloaded bundle against a sibling
@@ -188,11 +173,9 @@ naming is platform-specific:
   updater does **not** use the DMG for macOS updates; you need
   `bundle.createUpdaterArtifacts: true` in `tauri.conf.json` for the
   tarball + sig to land in `target/release/bundle/macos/`.
-- **Windows** — `*.msi` + `*.msi.sig`.
-- **Linux** — `*.AppImage` + `*.AppImage.sig`.
 
-All of the above are uploaded to the GitHub release alongside the
-installer by `desktop-build.yml`.
+The updater artifact is uploaded to the GitHub release alongside the
+DMG by `desktop-build.yml` once updater artifacts are enabled.
 
 ## Rollback / key rotation
 
@@ -200,7 +183,6 @@ installer by `desktop-build.yml`.
   [Apple Developer → Certificates](https://developer.apple.com/account/resources/certificates/list),
   reissue, re-provision the secrets. Past releases stay signed with
   the old cert until it expires.
-- Lost Windows cert → revoke via the CA's portal, reissue. Same idea.
 - Lost Tauri updater key → generate a new one + flip the pubkey in
   `tauri.conf.json`. This breaks auto-update for every installed
   version — users have to re-download manually. Don't lose it.
@@ -210,9 +192,7 @@ installer by `desktop-build.yml`.
 | | Individual | Org |
 |---|---|---|
 | Apple Developer Program | $99 | $299 |
-| Windows Authenticode (Sectigo OV) | ~$250 | ~$250 |
 | GitHub Actions macOS-14 runners | included in free tier for public, paid for private | same |
 
-Total ~$350–$550/year for signed releases on all three platforms.
-Punting the Windows cert saves the most; users can still install
-with one extra SmartScreen click.
+Total ~$99–$299/year plus GitHub Actions usage for signed macOS
+releases.

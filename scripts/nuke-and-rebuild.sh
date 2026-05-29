@@ -30,6 +30,8 @@
 #   scripts/nuke-and-rebuild.sh                    # build only
 #   scripts/nuke-and-rebuild.sh --launch           # build + launch
 #   scripts/nuke-and-rebuild.sh --launch --tail    # + tail sidecar log
+#   scripts/nuke-and-rebuild.sh --dmg              # build local DMG
+#   scripts/nuke-and-rebuild.sh --legacy-cpal      # fallback input path
 #
 # Stops on first error.
 
@@ -40,15 +42,22 @@ ROOT="$(pwd)"
 
 LAUNCH=0
 TAIL=0
-VOICE_PROCESSING=0
+DMG=0
+DMG_STAGE=""
+VOICE_PROCESSING=1
 for arg in "$@"; do
   case "$arg" in
     --launch) LAUNCH=1 ;;
     --tail)   TAIL=1 ;;
+    --dmg)    DMG=1 ;;
     --voice-processing|--vp)
-      # Phase 2a — replace CPAL input with AVAudioEngine
-      # voice-processing IO (Apple AEC + AGC + NS).
+      # Kept for compatibility with older runbooks; voice-processing
+      # is now the default Mac dev/release path.
       VOICE_PROCESSING=1 ;;
+    --legacy-cpal|--no-voice-processing)
+      # Escape hatch while validating device-specific AVAudioEngine
+      # behavior. This is not the production Mac path.
+      VOICE_PROCESSING=0 ;;
     -h|--help)
       sed -n '1,40p' "$0" | grep -E '^#' | sed 's/^# *//'
       exit 0 ;;
@@ -60,6 +69,7 @@ CARGO_FEATURES="native-audio"
 if [ "${VOICE_PROCESSING}" = "1" ]; then
   CARGO_FEATURES="native-audio,voice-processing"
 fi
+BUNDLE_TARGETS="app"
 
 ts() { date "+%H:%M:%S"; }
 log() { printf '\033[1;36m[%s]\033[0m %s\n' "$(ts)" "$*"; }
@@ -67,7 +77,18 @@ ok()  { printf '\033[1;32m[%s] ✓\033[0m %s\n' "$(ts)" "$*"; }
 warn() { printf '\033[1;33m[%s] ⚠\033[0m %s\n' "$(ts)" "$*"; }
 
 START_TS=$(date +%s)
-trap 'echo; warn "aborted after $(( $(date +%s) - START_TS ))s"' INT TERM
+cleanup() {
+  status=$?
+  if [ -n "${DMG_STAGE:-}" ] && [ -d "${DMG_STAGE}" ]; then
+    rm -rf "${DMG_STAGE}"
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo
+    warn "aborted after $(( $(date +%s) - START_TS ))s"
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # 0. Sanity
@@ -82,6 +103,7 @@ VERSION="$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')
 log "repo: ${ROOT}"
 log "version: ${VERSION}"
 log "target: ${TARGET}"
+log "bundle target: ${BUNDLE_TARGETS}"
 
 # ---------------------------------------------------------------------------
 # 1. Kill all ORBIS processes
@@ -190,16 +212,22 @@ ok "sidecar staged: src-tauri/binaries/orbis-${TARGET} ($(du -h "${ROOT}/src-tau
 # ---------------------------------------------------------------------------
 # 6. Tauri bundle
 # ---------------------------------------------------------------------------
-log "building Tauri app bundle (--features ${CARGO_FEATURES})…"
-cargo tauri build --features "${CARGO_FEATURES}" --bundles app
+log "building Tauri bundle (--features ${CARGO_FEATURES}, --bundles ${BUNDLE_TARGETS})…"
+cargo tauri build --features "${CARGO_FEATURES}" --bundles "${BUNDLE_TARGETS}"
 APP="${ROOT}/src-tauri/target/release/bundle/macos/ORBIS.app"
 [ -d "${APP}" ] || { echo "expected ${APP}" >&2; exit 3; }
+EXECUTABLE_NAME="$(plutil -extract CFBundleExecutable raw "${APP}/Contents/Info.plist" 2>/dev/null || true)"
+EXECUTABLE="${APP}/Contents/MacOS/${EXECUTABLE_NAME}"
+[ -n "${EXECUTABLE_NAME}" ] && [ -x "${EXECUTABLE}" ] || {
+  echo "could not resolve executable from ${APP}/Contents/Info.plist" >&2
+  exit 3
+}
 ok "bundle: ${APP}"
 
 # ---------------------------------------------------------------------------
 # 6a. Ad-hoc codesign with a STABLE identifier
 # ---------------------------------------------------------------------------
-# macOS TCC keys mic + camera + screen-recording grants on the binary's
+# macOS TCC keys microphone grants on the binary's
 # code signature requirement (csreq). When we ad-hoc sign with no
 # explicit --identifier, codesign picks one from the bundle's
 # Info.plist (CFBundleIdentifier) — usually fine — but `cargo run` and
@@ -216,6 +244,29 @@ ok "bundle: ${APP}"
 log "ad-hoc signing with stable identifier (TCC stability across rebuilds)…"
 codesign --force --deep --sign - --identifier studio.protolabs.orbis "${APP}"
 ok "signed: $(codesign -dvv "${APP}" 2>&1 | grep -E 'Identifier|Signature' | head -2 | xargs)"
+
+if [ "${DMG}" = "1" ]; then
+  # Build a local installer from the already-signed .app. Asking
+  # `cargo tauri build --bundles dmg` would create the DMG before this
+  # script applies its stable ad-hoc signature, so the installer would
+  # not contain the exact app that local launch validation uses.
+  if ! command -v hdiutil >/dev/null 2>&1; then
+    echo "hdiutil is required for --dmg on macOS" >&2
+    exit 2
+  fi
+  DMG_DIR="${ROOT}/src-tauri/target/release/bundle/dmg"
+  DMG_PATH="${DMG_DIR}/ORBIS_${VERSION}_aarch64.dmg"
+  DMG_STAGE="${ROOT}/src-tauri/target/release/bundle/dmg-stage"
+  mkdir -p "${DMG_DIR}"
+  rm -f "${DMG_PATH}"
+  rm -rf "${DMG_STAGE}"
+  mkdir -p "${DMG_STAGE}"
+  cp -R "${APP}" "${DMG_STAGE}/ORBIS.app"
+  log "creating local DMG from signed app…"
+  hdiutil create -volname "ORBIS" -srcfolder "${DMG_STAGE}" -ov -format UDZO "${DMG_PATH}" >/dev/null
+  rm -rf "${DMG_STAGE}"
+  ok "dmg: ${DMG_PATH}"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. Final pyapp cache wipe (paranoia)
@@ -238,11 +289,11 @@ echo
 # ---------------------------------------------------------------------------
 if [ "${LAUNCH}" = "1" ]; then
   log "launching ${APP} from terminal (Rust stderr → /tmp/orbis-tauri.stderr)…"
-  RUST_LOG=info "${APP}/Contents/MacOS/orbis-tauri" \
+  RUST_LOG=info "${EXECUTABLE}" \
     >/tmp/orbis-tauri.stdout \
     2>/tmp/orbis-tauri.stderr &
   TAURI_PID=$!
-  ok "launched orbis-tauri (PID ${TAURI_PID})"
+  ok "launched ${EXECUTABLE_NAME} (PID ${TAURI_PID})"
   echo
   echo "  Rust  log: /tmp/orbis-tauri.stderr"
   echo "  Sidecar  : ${HOME}/Library/Logs/studio.protolabs.orbis/sidecar.log"
@@ -261,7 +312,7 @@ else
   echo "next:"
   echo "  open ${APP}"
   echo "  # OR with stderr visible:"
-  echo "  ${APP}/Contents/MacOS/orbis-tauri 2>&1 | tee /tmp/orbis-tauri.log"
+  echo "  ${EXECUTABLE} 2>&1 | tee /tmp/orbis-tauri.log"
   echo
   echo "  # OR re-run this script with --launch --tail to do both."
 fi

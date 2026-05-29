@@ -3,9 +3,19 @@
 **Status:** Implemented — Phases 1–5 complete (2026-04-27)  
 **Decision date:** 2026-04-27
 
-## Goal
+> Historical note: this document records the dual-transport CPAL/WebRTC design
+> from 2026-04-27. It is superseded by
+> [`native-audio-direction.md`](./native-audio-direction.md), the 2026-05-29
+> Mac-first hardening path, and the production `native-audio,voice-processing`
+> build. Web / PWA / browser is no longer a supported runtime; Linux and
+> Windows desktop support are deferred until the Mac native-audio release path
+> is proven.
 
-Replace browser WebRTC audio on desktop with native Rust/CPAL while keeping WebRTC as a permanent first-class path for browser/PWA clients (phone via Tailscale, etc). Both transports feed the **same shared Pipecat pipeline session**.
+## Original Goal
+
+Replace browser WebRTC audio on desktop with native Rust/CPAL while keeping
+WebRTC as a first-class path for browser/PWA clients (phone via Tailscale,
+etc). Both transports feed the **same shared Pipecat pipeline session**.
 
 ## Final Architecture
 
@@ -32,11 +42,18 @@ Browser/PWA mic (getUserMedia → WebRTC)
 
 **Session model:** One persistent pipeline. Desktop is the native client. Phone/browser connects via WebRTC as a second concurrent input/output. Barge-in from either source flushes both outputs.
 
-## Feature Flags
+## Historical Feature Flags
 
-- Rust: `native-audio` Cargo feature (gates all new audio code)
-- Python: `AUDIO_TRANSPORT=native|webrtc` env var
-- Frontend: `VITE_AUDIO_TRANSPORT=native|webrtc` build-time env var
+These were the 2026-04-27 dual-transport flags. They are not the current
+production contract. The Mac release path now builds Tauri with
+`native-audio,voice-processing`; Tauri starts the sidecar with
+`AUDIO_TRANSPORT=native`, `ORBIS_AUDIO_SOCK`, and
+`ORBIS_AUDIO_INPUT_MODE=voice_processing`; the browser/PWA/WebRTC transport
+and frontend `VITE_AUDIO_TRANSPORT` switch are gone.
+
+- Rust: `native-audio` Cargo feature gated the original CPAL code.
+- Python: `AUDIO_TRANSPORT=native|webrtc` selected the original transport.
+- Frontend: `VITE_AUDIO_TRANSPORT=native|webrtc` selected original UI branches.
 
 ## Phases
 

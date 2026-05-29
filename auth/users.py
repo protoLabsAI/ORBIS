@@ -231,8 +231,8 @@ def current_user_or_none(
 
 def key_from_scope(scope: dict[str, Any]) -> str | None:
     """Extract the key from raw ASGI scope.headers (used where a
-    FastAPI Depends() isn't practical — e.g. the raw /api/offer
-    handler that receives the SmallWebRTCRequest body)."""
+    FastAPI Depends() isn't practical — e.g. raw protocol handlers that do
+    not run through the usual dependency injection path."""
     for name, value in scope.get("headers", []) or []:
         if name.lower() == b"x-api-key":
             return value.decode("utf-8", errors="ignore")

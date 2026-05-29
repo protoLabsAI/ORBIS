@@ -1,4 +1,4 @@
-//! Unix socket IPC between the Rust CPAL engine and the Python sidecar.
+//! Unix socket IPC between the Rust native audio engine and the Python sidecar.
 //!
 //! Wire protocol — all fields little-endian:
 //!
@@ -25,10 +25,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
-use super::engine::{AudioEngine, AudioMsg, MIC_SAMPLE_RATE, TTS_SAMPLE_RATE};
+use super::engine::{AudioEngine, AudioMsg, MIC_SAMPLE_RATE};
 
 // Direction constants.
 pub const DIR_MIC_TO_PYTHON: u16 = 0x0001;
@@ -44,8 +44,7 @@ const HEADER_LEN: usize = 8;
 /// Compute the socket path for this process.
 pub fn socket_path() -> PathBuf {
     let pid = std::process::id();
-    let tmp = std::env::var("TMPDIR")
-        .unwrap_or_else(|_| "/tmp".to_string());
+    let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(tmp).join(format!("orbis-audio-{pid}.sock"))
 }
 
@@ -77,9 +76,9 @@ pub fn encode_control(control_code: u16) -> Vec<u8> {
 
 /// Decode a frame header. Returns (direction, sample_rate, channels, num_samples).
 pub fn decode_header(buf: &[u8; HEADER_LEN]) -> (u16, u16, u16, u16) {
-    let direction   = u16::from_le_bytes([buf[0], buf[1]]);
+    let direction = u16::from_le_bytes([buf[0], buf[1]]);
     let sample_rate = u16::from_le_bytes([buf[2], buf[3]]);
-    let channels    = u16::from_le_bytes([buf[4], buf[5]]);
+    let channels = u16::from_le_bytes([buf[4], buf[5]]);
     let num_samples = u16::from_le_bytes([buf[6], buf[7]]);
     (direction, sample_rate, channels, num_samples)
 }
@@ -99,8 +98,8 @@ impl SocketServer {
         let path = socket_path();
         // Remove stale socket from a previous crashed run.
         let _ = std::fs::remove_file(&path);
-        let listener = UnixListener::bind(&path)
-            .map_err(|e| format!("bind {}: {e}", path.display()))?;
+        let listener =
+            UnixListener::bind(&path).map_err(|e| format!("bind {}: {e}", path.display()))?;
         log::info!("[audio/socket] listening on {}", path.display());
         Ok(Self { path, listener })
     }
@@ -148,12 +147,12 @@ impl SocketServer {
 
         // Reader loop: receive TTS PCM and control frames from Python.
         let mut header_buf = [0u8; HEADER_LEN];
+        let mut playback_frames_received = 0usize;
         loop {
             if reader.read_exact(&mut header_buf).await.is_err() {
                 break; // EOF or error → Python disconnected
             }
-            let (direction, _sample_rate, _channels, num_samples) =
-                decode_header(&header_buf);
+            let (direction, _sample_rate, _channels, num_samples) = decode_header(&header_buf);
 
             let body_bytes = num_samples as usize * 2;
             let mut body = vec![0u8; body_bytes];
@@ -168,6 +167,13 @@ impl SocketServer {
                         .chunks_exact(2)
                         .map(|b| i16::from_le_bytes([b[0], b[1]]))
                         .collect();
+                    playback_frames_received += 1;
+                    if playback_frames_received == 1 {
+                        log::info!(
+                            "[audio/socket] first playback frame received: samples={}",
+                            samples.len()
+                        );
+                    }
                     engine.push_playback(&samples);
                 }
                 DIR_CONTROL => {

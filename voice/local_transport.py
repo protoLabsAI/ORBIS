@@ -1,6 +1,6 @@
 """LocalAudioTransport — native desktop audio transport for ORBIS.
 
-Connects to the Rust CPAL engine via a Unix socket. The only voice
+Connects to the Rust native audio engine via a Unix socket. The only voice
 transport since DECISIONS.md amendment 2026-04-28 dropped the
 WebRTC / browser path; src-tauri/src/audio/socket.rs is the other
 half of the protocol.
@@ -12,8 +12,9 @@ Wire protocol (8-byte header, little-endian):
   [6..8]  u16  num_samples
   body:   num_samples × 2 bytes i16 LE (PCM) or control payload
 
-The transport implements the same event_handler / input() / output()
-interface as SmallWebRTCTransport so app.py wiring is identical.
+The transport keeps Pipecat's event_handler / input() / output() shape so the
+pipeline wiring stays conventional without restoring the removed WebRTC
+runtime.
 """
 
 import asyncio
@@ -51,12 +52,28 @@ TTS_SAMPLE_RATE = 24_000
 MIC_SAMPLE_RATE = 16_000
 
 # Software gain applied to incoming mic samples before they reach the
-# pipeline. The CPAL path has no AGC (unlike WebRTC's getUserMedia),
-# so the M1 internal mic delivers ~0.03–0.05 RMS for normal speech —
-# below VAD's typical min_volume threshold. Boosting here lifts both
-# VAD and STT into a usable range without touching Rust. Override via
-# MIC_GAIN env var if a different mic profile needs less/more.
-_MIC_GAIN = float(os.environ.get("MIC_GAIN", "16.0"))
+# pipeline. The legacy CPAL input path has no AGC, so it keeps the old
+# boost. The macOS production path uses AVAudioEngine voice processing
+# with Apple's AGC and defaults to unity gain to avoid clipping.
+# Override via MIC_GAIN env var if a specific mic profile needs tuning.
+_AUDIO_INPUT_MODE = os.environ.get("ORBIS_AUDIO_INPUT_MODE", "cpal").lower()
+
+
+def _resolve_mic_gain(audio_input_mode: str, explicit_gain: str | None) -> float:
+    if explicit_gain is not None:
+        return float(explicit_gain)
+    return 1.0 if audio_input_mode == "voice_processing" else 16.0
+
+
+_MIC_GAIN = _resolve_mic_gain(_AUDIO_INPUT_MODE, os.environ.get("MIC_GAIN"))
+
+
+def audio_runtime_info() -> dict[str, float | str]:
+    """Runtime audio config surfaced by /healthz and validation scripts."""
+    return {
+        "input_mode": _AUDIO_INPUT_MODE,
+        "mic_gain": _MIC_GAIN,
+    }
 
 
 def _apply_gain_i16(audio: bytes, gain: float) -> bytes:
@@ -135,18 +152,18 @@ class LocalAudioOutputTransport(FrameProcessor):
 
 
 # ---------------------------------------------------------------------------
-# LocalAudioTransport — the public API, mirrors SmallWebRTCTransport
+# LocalAudioTransport — the public API
 # ---------------------------------------------------------------------------
 
 class LocalAudioTransport(BaseTransport):
     """Native desktop audio transport over Unix socket.
 
-    Usage in app.py is identical to SmallWebRTCTransport:
+    Usage in app.py:
 
         transport = LocalAudioTransport(sock_path=os.environ["ORBIS_AUDIO_SOCK"])
         pipeline = Pipeline([transport.input(), ..., transport.output()])
 
-    Events fired (same names as SmallWebRTCTransport):
+    Events fired:
         on_client_connected(transport)
         on_client_disconnected(transport)
     """
@@ -160,10 +177,15 @@ class LocalAudioTransport(BaseTransport):
         self._input_proc = LocalAudioInputTransport(self, name="LocalAudioInput")
         self._output_proc = LocalAudioOutputTransport(self, name="LocalAudioOutput")
         self._connected = False
+        self._mic_frames_received = 0
+        self._speaker_frames_sent = 0
+        logger.info(
+            "[local_transport] audio_input_mode=%s mic_gain=%.2f",
+            _AUDIO_INPUT_MODE,
+            _MIC_GAIN,
+        )
 
-        # Register the same event names SmallWebRTCTransport exposes so
-        # app.py @transport.event_handler("on_client_connected") works
-        # without modification.
+        # Register the connection event names app.py listens for.
         self._register_event_handler("on_client_connected")
         self._register_event_handler("on_client_disconnected")
 
@@ -175,10 +197,25 @@ class LocalAudioTransport(BaseTransport):
     def output(self) -> FrameProcessor:
         return self._output_proc
 
+    @property
+    def connected(self) -> bool:
+        """Whether the Python transport is currently connected to Rust."""
+        return self._connected
+
+    @property
+    def mic_frames_received(self) -> int:
+        """Mic frames received from Rust during this transport session."""
+        return self._mic_frames_received
+
+    @property
+    def speaker_frames_sent(self) -> int:
+        """Speaker frames successfully written to Rust during this session."""
+        return self._speaker_frames_sent
+
     # --- Socket lifecycle ---
 
     async def _connect(self) -> None:
-        """Open Unix socket connection to the Rust CPAL engine."""
+        """Open Unix socket connection to the Rust native audio engine."""
         if self._connected:
             return
         logger.info(f"[local_transport] connecting to {self._sock_path}")
@@ -233,6 +270,14 @@ class LocalAudioTransport(BaseTransport):
 
                 if direction == DIR_MIC_TO_PYTHON:
                     # Mic audio from Rust CPAL — push into the pipeline.
+                    self._mic_frames_received += 1
+                    if self._mic_frames_received == 1:
+                        logger.info(
+                            "[local_transport] first mic frame: sample_rate=%s channels=%s samples=%s",
+                            sample_rate,
+                            channels,
+                            num_samples,
+                        )
                     if _MIC_GAIN != 1.0:
                         body = _apply_gain_i16(body, _MIC_GAIN)
                     frame = InputAudioRawFrame(
@@ -269,6 +314,13 @@ class LocalAudioTransport(BaseTransport):
         try:
             self._writer.write(frame)
             await self._writer.drain()
+            self._speaker_frames_sent += 1
+            if self._speaker_frames_sent == 1:
+                logger.info(
+                    "[local_transport] first speaker frame: sample_rate=%s samples=%s",
+                    sample_rate,
+                    len(audio_bytes) // 2,
+                )
         except Exception as e:
             logger.error(f"[local_transport] write error: {e}")
 

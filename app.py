@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""ORBIS — Pipecat pipeline (Apple Silicon native, single transport).
+"""ORBIS — Pipecat pipeline (Mac-first native audio, single transport).
 
 Pipeline (all in-process Python; mic + speaker frames cross a Unix
-socket to the Rust CPAL engine in src-tauri/):
+socket to the Rust native audio engine in src-tauri/):
 
-  CPAL mic (Rust) → Unix socket → LocalAudioTransport.input()
+  Native mic (AVAudioEngine voice-processing on Mac) → Unix socket
+                  → LocalAudioTransport.input()
                   → LocalWhisperSTT
                   → user aggregator (VAD attached here)
                   → OpenAILLMService — tools registered for delegate_to etc.
@@ -12,8 +13,9 @@ socket to the Rust CPAL engine in src-tauri/):
                   → LocalAudioTransport.output() → Unix socket → CPAL speaker (Rust)
                   → assistant aggregator
 
-Native is the only supported transport — see DECISIONS.md amendment
-2026-04-28 ("Apple Silicon (+ iOS planned) only; drop web/PWA").
+Native is the supported desktop transport. Apple Silicon Mac is the current
+production hardening target; Linux and Windows desktop builds come later. See
+DECISIONS.md amendments 2026-04-28 and 2026-05-29.
 
 Duplex behavior:
   - on `on_function_calls_started`: queue a TTSSpeakFrame opening filler
@@ -78,7 +80,7 @@ from pipecat.utils.context.llm_context_summarization import (
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm import make_llm
-from voice.local_transport import LocalAudioTransport
+from voice.local_transport import LocalAudioTransport, audio_runtime_info
 from voice.native_bargein import NativeBargeInObserver
 from voice.sse_bus import sse_bus
 from pipecat.frames.frames import TTSSpeakFrame
@@ -167,6 +169,8 @@ from agent.persona import get_active_persona, reload_persona  # noqa: E402
 from memory import Memory  # noqa: E402
 
 _memory: Memory | None = None
+_native_transport: LocalAudioTransport | None = None
+_native_pipeline_task: asyncio.Task | None = None
 
 
 def get_memory() -> Memory:
@@ -830,7 +834,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     """Run the persistent native voice pipeline.
 
     Called once from lifespan with a pre-built LocalAudioTransport that
-    bridges to the Rust CPAL engine over a Unix socket. The pipeline
+    bridges to the Rust native audio engine over a Unix socket. The pipeline
     runs for the lifetime of the app — `cancel_on_idle_timeout=False`
     on the PipelineTask keeps it alive across UI idle periods.
     """
@@ -864,8 +868,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         if not sock_path:
             raise RuntimeError(
                 "run_bot() requires either a transport= kwarg or "
-                "ORBIS_AUDIO_SOCK env var pointing at the Rust CPAL "
-                "engine's unix socket."
+                "ORBIS_AUDIO_SOCK env var pointing at the Rust native "
+                "audio engine's unix socket."
             )
         transport = LocalAudioTransport(sock_path=sock_path)
 
@@ -1037,11 +1041,11 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             confidence=0.7,    # default 0.7
             start_secs=0.2,    # default 0.2
             stop_secs=0.4,     # default 0.2 — longer pause before cutting
-            min_volume=0.2,    # default 0.6 — lowered for native CPAL path.
-                               # voice/local_transport.py applies an 8x mic gain
-                               # (MIC_GAIN env var) so boosted speech RMS lands
-                               # ~0.20–0.40, well above this threshold; ambient
-                               # stays under it. STT_MIN_RMS (in voice/stt.py) is
+            min_volume=0.2,    # default 0.6 — lowered for native desktop audio.
+                               # The legacy CPAL input path applies MIC_GAIN in
+                               # voice/local_transport.py; the macOS voice-processing
+                               # path defaults to unity gain because Apple AGC is
+                               # already active. STT_MIN_RMS (in voice/stt.py) is
                                # the second gate against Whisper silence-hallucinations.
         )
     )}
@@ -1212,8 +1216,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
-        # The native CPAL pipeline is persistent for the lifetime of the
-        # app: mic frames flow continuously regardless of UI state, so
+        # The native audio pipeline is persistent for the lifetime of the
+        # app: mic frames flow continuously in production builds, so
         # Pipecat's default "cancel after 5 min idle" tears it down
         # mid-wizard / between turns. Disable.
         cancel_on_idle_timeout=False,
@@ -1463,6 +1467,11 @@ def prewarm_all() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _native_pipeline_task, _native_transport
+
+    _native_pipeline_task = None
+    _native_transport = None
+
     # Prewarm off the event loop so the startup handshake isn't blocked by
     # TTS / STT / LLM cold starts; we just begin work in the background.
     asyncio.get_running_loop().run_in_executor(None, prewarm_all)
@@ -1504,14 +1513,14 @@ async def lifespan(app: FastAPI):
     )
 
     # Start the persistent native voice pipeline. The Rust shell sets
-    # ORBIS_AUDIO_SOCK to the unix socket the CPAL engine is listening
+    # ORBIS_AUDIO_SOCK to the unix socket the native audio engine is listening
     # on — direct `python app.py` runs without that env var (e.g. the
     # test suite, A2A-only deployments) skip the pipeline cleanly.
     sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
-    native_pipeline_task: asyncio.Task | None = None
     if sock_path:
         native_transport = LocalAudioTransport(sock_path=sock_path)
-        native_pipeline_task = asyncio.create_task(
+        _native_transport = native_transport
+        _native_pipeline_task = asyncio.create_task(
             run_bot(transport=native_transport, user_id="default"),
             name="orbis-native-pipeline",
         )
@@ -1525,12 +1534,14 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if native_pipeline_task and not native_pipeline_task.done():
-            native_pipeline_task.cancel()
+        if _native_pipeline_task and not _native_pipeline_task.done():
+            _native_pipeline_task.cancel()
             try:
-                await native_pipeline_task
+                await _native_pipeline_task
             except (asyncio.CancelledError, Exception):
                 pass
+        _native_pipeline_task = None
+        _native_transport = None
         for t in (curator_task, entitlement_task):
             t.cancel()
             try:
@@ -1558,6 +1569,18 @@ async def health():
         "persona": get_active_persona().slug,
         "audio": {
             "transport": "native",
+            **audio_runtime_info(),
+            "socket_configured": bool(os.environ.get("ORBIS_AUDIO_SOCK")),
+            "socket_connected": bool(_native_transport and _native_transport.connected),
+            "mic_frames_received": (
+                _native_transport.mic_frames_received if _native_transport else 0
+            ),
+            "speaker_frames_sent": (
+                _native_transport.speaker_frames_sent if _native_transport else 0
+            ),
+            "pipeline_running": bool(
+                _native_pipeline_task and not _native_pipeline_task.done()
+            ),
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
             "noise_filter": NOISE_FILTER,

@@ -1,15 +1,14 @@
 name: 'Desktop Build'
 
-# Produces per-OS ORBIS binaries for the Tauri shell (PR 3) to spawn
-# as a sidecar. Fires on semver tags (alongside release.yml's Docker
-# build) and on manual dispatch for iteration.
+# Produces the current macOS ORBIS app bundle and its PyApp sidecar.
+# Linux and Windows desktop jobs will be reintroduced after the Mac
+# native-audio build is stable. Fires on semver tags (alongside
+# release.yml's Docker build) and on manual dispatch for iteration.
 #
-# Binary naming follows Tauri's `externalBin` convention so the
-# src-tauri config in PR 3 can reference a single `binaries/orbis`
+# Binary naming follows Tauri's `externalBin` convention so
+# src-tauri/tauri.conf.json can reference a single `binaries/orbis`
 # entry that resolves per-target:
 #   orbis-aarch64-apple-darwin
-#   orbis-x86_64-pc-windows-msvc.exe
-#   orbis-x86_64-unknown-linux-gnu
 #
 # Built with PyApp — produces a small (~10 MB) Rust launcher that
 # lazily downloads Python + pip-installs ORBIS on first run. Matches
@@ -48,38 +47,11 @@ jobs:
             binary_suffix: ''
             # MPS ships in the default arm64 torch wheel; no extra index needed.
             torch_index: ''
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            binary_suffix: ''
-            # CUDA 12.8 wheels; matches the Dockerfile cu128 pin.
-            torch_index: 'https://download.pytorch.org/whl/cu128'
-          - os: windows-2022
-            target: x86_64-pc-windows-msvc
-            binary_suffix: '.exe'
-            torch_index: 'https://download.pytorch.org/whl/cu128'
 
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-
-      # Reclaim ~14 GB on Ubuntu runners — torch+cu128 pulls
-      # cuda-toolkit + cublas + cudnn + nccl + triton, which blew
-      # past the default Ubuntu runner's 14 GB free-space budget in
-      # #10. Windows runners ship with ~85 GB free by default so
-      # cu128 fits without cleanup; macOS doesn't install cu128
-      # (uses the default MPS-bundled wheel).
-      - name: Free disk space (Linux)
-        if: runner.os == 'Linux'
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          docker-images: false
-          swap-storage: false
 
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
@@ -179,10 +151,7 @@ jobs:
           PYAPP_EXEC_SPEC: 'app:main'
           # Full isolation — don't touch the user's Python or site-packages.
           PYAPP_FULL_ISOLATION: '1'
-          # Per-platform pip config:
-          # - macOS arm64: default PyPI (torch ships with MPS).
-          # - Windows/Linux: add the pytorch cu128 index so torch
-          #   resolves to +cu128 wheels matching the driver we target.
+          # macOS arm64 uses default PyPI wheels; torch ships with MPS.
           PYAPP_PIP_EXTRA_ARGS: ${{ matrix.torch_index && format('--extra-index-url {0}', matrix.torch_index) || '' }}
           # Show the full pip install log in CI so torch/wheel issues
           # are easy to triage.
@@ -193,11 +162,7 @@ jobs:
           # PyApp produces `dist/bin/pyapp` (or `pyapp.exe`). Rename
           # to match Tauri's externalBin target-suffix convention.
           OUT="orbis-${{ matrix.target }}${{ matrix.binary_suffix }}"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/bin/pyapp.exe "dist/${OUT}"
-          else
-            mv dist/bin/pyapp "dist/${OUT}"
-          fi
+          mv dist/bin/pyapp "dist/${OUT}"
           echo "artifact=dist/${OUT}" >> "$GITHUB_ENV"
           echo "artifact_name=${OUT}" >> "$GITHUB_ENV"
 
@@ -262,10 +227,10 @@ jobs:
         shell: bash
         run: cargo install tauri-cli --version '^2' --locked
 
-      - name: Generate platform icons from source PNG
+      - name: Generate macOS icons from source PNG
         shell: bash
-        # Creates icon.icns (macOS) + icon.ico (Windows) + sized PNG
-        # variants in src-tauri/icons/ from the committed source.
+        # Creates icon.icns + sized PNG variants in src-tauri/icons/
+        # from the committed source.
         # Idempotent; safe to re-run. Replace icon.png with a branded
         # one before a public launch and regeneration picks it up.
         run: |
@@ -275,7 +240,7 @@ jobs:
       - name: Stage sidecar under src-tauri/binaries
         shell: bash
         # Tauri's externalBin resolver expects the binary at
-        # `src-tauri/binaries/orbis-<target>[.exe]`.
+        # `src-tauri/binaries/orbis-<target>`.
         run: |
           mkdir -p src-tauri/binaries
           cp "${{ env.artifact }}" "src-tauri/binaries/${{ env.artifact_name }}"
@@ -283,9 +248,8 @@ jobs:
 
       - name: Stamp release version into tauri.conf.json
         shell: bash
-        # jq is the idiomatic CI JSON mutator; available on all three
-        # runners by default. Preserves the file's formatting better
-        # than a Python heredoc would.
+        # jq is available on macOS runners and preserves formatting
+        # better than a Python heredoc would.
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           jq --arg v "$VERSION" '.version = $v' \
@@ -293,15 +257,20 @@ jobs:
           mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
           grep '"version"' src-tauri/tauri.conf.json | head -1
 
+      - name: Verify macOS native audio bundle config
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/check-macos-release-config.py
+
       - name: Build Tauri installer
         shell: bash
-        # Signing is conditional on secret presence — the workflow
-        # stays green for test releases (no secrets → unsigned) and
-        # flips to signed automatically once the org provisions the
-        # certs + Apple Developer ID. See docs/desktop-signing.md for
-        # the cert procurement steps + secret names.
+        # Semver tag releases require Developer ID signing +
+        # notarization secrets. Manual dispatches can still emit
+        # unsigned test DMGs for iteration. See docs/desktop-signing.md
+        # for cert procurement steps + secret names.
         #
-        # tauri-cli picks up the Apple / Windows signing env vars
+        # tauri-cli picks up the Apple signing env vars
         # automatically — we don't need per-OS flags, just export
         # the right vars when the matching secret exists.
         env:
@@ -317,15 +286,13 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows Authenticode signing (base64-encoded PFX).
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           # Tauri updater signing key (v1 format). When set, the
           # builder also emits a `.sig` file per installer that the
           # future updater plugin can verify against the public key
           # baked into tauri.conf.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           cd src-tauri
           SIGNED="no"
@@ -348,27 +315,18 @@ jobs:
                 # base64-encoded .p8 — decode to a tmp file and
                 # repoint the env var at it.
                 KEYFILE="$(mktemp -t orbis-apple-api-XXXXXX).p8"
-                echo "${APPLE_API_KEY_PATH}" | base64 --decode > "${KEYFILE}"
+                python3 -c 'import base64, os, sys; open(sys.argv[1], "wb").write(base64.b64decode(os.environ["APPLE_API_KEY_PATH"]))' "$KEYFILE"
                 export APPLE_API_KEY_PATH="${KEYFILE}"
                 SIGNED="Developer ID"
+              elif [ "${{ github.event_name }}" = "push" ]; then
+                echo "::error::Semver tag macOS releases require the full Apple signing/notarization secret set."
+                echo "::error::Set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_API_ISSUER, APPLE_API_KEY, APPLE_API_KEY_PATH, and APPLE_TEAM_ID."
+                exit 2
               else
                 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
                       APPLE_SIGNING_IDENTITY APPLE_API_ISSUER \
                       APPLE_API_KEY APPLE_API_KEY_PATH APPLE_TEAM_ID
               fi
-              ;;
-            Windows)
-              if [ -n "${WINDOWS_CERTIFICATE}" ] \
-                  && [ -n "${WINDOWS_CERTIFICATE_PASSWORD}" ]; then
-                SIGNED="Authenticode"
-              else
-                unset WINDOWS_CERTIFICATE WINDOWS_CERTIFICATE_PASSWORD
-              fi
-              ;;
-            Linux)
-              # Linux doesn't have a native signing format; the
-              # Tauri updater .sig is the only signature here.
-              [ -n "${TAURI_SIGNING_PRIVATE_KEY}" ] && SIGNED="updater-only"
               ;;
           esac
           # Updater key requires its password to be valid if the key is
@@ -378,7 +336,89 @@ jobs:
             unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           fi
           echo "Signing mode: ${SIGNED}"
-          cargo tauri build --features native-audio
+          cargo tauri build --features native-audio,voice-processing
+
+      - name: Verify built macOS app metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          APPS=(src-tauri/target/release/bundle/macos/*.app)
+          if [ "${#APPS[@]}" -eq 0 ]; then
+            echo "::error::No .app bundle produced under bundle/macos"
+            find src-tauri/target/release/bundle -maxdepth 3 -type d 2>/dev/null || true
+            exit 1
+          fi
+          APP="${APPS[0]}"
+          python - "$APP" <<'PY'
+          import plistlib
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          app = Path(sys.argv[1])
+          info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+          assert "NSMicrophoneUsageDescription" in info
+          assert "NSCameraUsageDescription" not in info
+          assert info["CFBundleIdentifier"] == "studio.protolabs.orbis"
+
+          executable = app / "Contents" / "MacOS" / info["CFBundleExecutable"]
+          assert executable.exists(), executable
+          assert os.access(executable, os.X_OK), executable
+          archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).split()
+          assert archs == ["arm64"], archs
+
+          contents = app / "Contents"
+          sidecars = [
+              p for p in contents.rglob("orbis-aarch64-apple-darwin")
+              if p.is_file() and os.access(p, os.X_OK)
+          ]
+          assert sidecars, "bundled aarch64 sidecar missing"
+          for sidecar in sidecars:
+              assert sidecar.stat().st_size > 1_000_000, sidecar
+              sidecar_archs = subprocess.check_output(["lipo", "-archs", str(sidecar)], text=True).split()
+              assert sidecar_archs == ["arm64"], sidecar_archs
+
+          resources = app / "Contents" / "Resources"
+          assert (resources / "config" / "orbis.example.yaml").is_file()
+          assert (resources / "config" / "starter_orbs.yaml").is_file()
+          PY
+
+      - name: Verify macOS release signing
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          APPS=(src-tauri/target/release/bundle/macos/*.app)
+          if [ "${#APPS[@]}" -eq 0 ]; then
+            echo "::error::No .app bundle produced under bundle/macos"
+            exit 1
+          fi
+          APP="${APPS[0]}"
+
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv "$APP" 2> codesign-details.txt
+          grep -q "Authority=Developer ID Application:" codesign-details.txt
+          grep -q "TeamIdentifier=" codesign-details.txt
+
+          codesign -d --entitlements :- "$APP" > actual-entitlements.plist
+          python - <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          entitlements = plistlib.loads(Path("actual-entitlements.plist").read_bytes())
+          assert entitlements["com.apple.security.device.audio-input"] is True
+          assert "com.apple.security.device.camera" not in entitlements
+          assert entitlements["com.apple.security.network.client"] is True
+          assert entitlements["com.apple.security.network.server"] is True
+          assert "com.apple.security.cs.allow-unsigned-executable-memory" not in entitlements
+          assert "com.apple.security.cs.disable-library-validation" not in entitlements
+          PY
+
+          spctl --assess --type execute --verbose=4 "$APP"
+          xcrun stapler validate "$APP"
 
       - name: Locate installer artifact
         shell: bash
@@ -389,23 +429,18 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          case "${{ runner.os }}" in
-            macOS)
-              CANDIDATES=(src-tauri/target/release/bundle/dmg/*.dmg)
-              ;;
-            Linux)
-              CANDIDATES=(src-tauri/target/release/bundle/appimage/*.AppImage)
-              ;;
-            Windows)
-              CANDIDATES=(src-tauri/target/release/bundle/msi/*.msi)
-              ;;
-          esac
+          CANDIDATES=(src-tauri/target/release/bundle/dmg/*.dmg)
           if [ "${#CANDIDATES[@]}" -eq 0 ]; then
             echo "::error::No installer produced by cargo tauri build." \
                  "Expected bundle artifact under src-tauri/target/release/bundle/"
             echo "--- bundle dir contents ---"
             find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null || \
               echo "(bundle dir missing entirely)"
+            exit 1
+          fi
+          if [ "${#CANDIDATES[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one DMG installer, found ${#CANDIDATES[@]}."
+            printf '  %s\n' "${CANDIDATES[@]}"
             exit 1
           fi
           INSTALLER="${CANDIDATES[0]}"
@@ -423,6 +458,35 @@ jobs:
           echo "installer=$OUT" >> "$GITHUB_ENV"
           echo "installer_name=$OUT" >> "$GITHUB_ENV"
           ls -la "$OUT"
+
+      - name: Verify macOS installer notarization
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "${installer:?installer env missing}"
+          spctl --assess --type open --context context:primary-signature \
+            --verbose=4 "${installer}"
+          xcrun stapler validate "${installer}"
+
+      - name: Run macOS validation harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            scripts/validate-macos-native-audio.sh --release --dmg "${installer:?installer env missing}"
+          else
+            scripts/validate-macos-native-audio.sh --dmg "${installer:?installer env missing}"
+          fi
+
+      - name: Upload macOS validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-audio-validation-${{ matrix.target }}
+          path: macos-native-audio-validation.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload installer as workflow artifact
         uses: actions/upload-artifact@v4
@@ -452,16 +516,16 @@ jobs:
           if [ -n "${{ env.installer_sig }}" ] && [ -f "${{ env.installer_sig }}" ]; then
             ARTIFACTS+=("${{ env.installer_sig }}")
           fi
-          # release.yml creates the release on tag push; this job
-          # runs in parallel, so the release may not exist yet. Poll
-          # briefly before uploading.
-          for _ in $(seq 1 30); do
+          # release.yml creates the release on tag push after the
+          # Docker image build. This job runs in parallel and can
+          # finish first, so wait long enough for a slow Docker release
+          # instead of stranding the DMG as only a workflow artifact.
+          for _ in $(seq 1 180); do
             if gh release view "${TAG}" >/dev/null 2>&1; then
               gh release upload "${TAG}" "${ARTIFACTS[@]}" --clobber
               exit 0
             fi
             sleep 10
           done
-          echo "Release ${TAG} did not appear within 5 min; leaving" \
-               "artifacts as workflow artifacts only."
-          exit 0  # best-effort
+          echo "::error::Release ${TAG} did not appear within 30 min; DMG upload would be missing from the GitHub release."
+          exit 1

@@ -20,7 +20,9 @@ architectural snapshot.
 
 ## What ORBIS is
 
-- **Voice-first.** Real-time bidirectional audio via WebRTC + Pipecat.
+- **Voice-first.** Real-time bidirectional audio through the native
+  macOS Tauri shell, Rust-owned microphone/speaker transport, and the
+  Pipecat pipeline.
   Text fallback is possible but the pitch is "talk to it, don't chat."
 - **Router-first.** The orb's primary capability is delegating to
   your configured agents — it's the voice frontend for the AI stack
@@ -116,10 +118,10 @@ and write it into `config/users.yaml`).
 
 ```
 ┌──────────────────────────────┐
-│  Browser / PWA               │
+│  macOS Tauri app             │
 │  (orb viz + drawer)          │
 └────────┬─────────────────────┘
-         │ WebRTC
+         │ native PCM socket
          ▼
 ┌──────────────────────────────┐        ┌────────────────────┐
 │  Pipecat voice pipeline      │◀──────▶│  Your agents       │

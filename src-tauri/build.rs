@@ -1,20 +1,16 @@
 fn main() {
     tauri_build::build();
 
-    // On macOS compile the AV-permission Obj-C shim and link
-    // AVFoundation so `orbis_request_macos_av_access()` (see
-    // src/mic_permission.m) is callable from Rust. The shim
-    // registers a real TCC mic record at app boot — needed even
-    // though we no longer use getUserMedia, because the CPAL audio
-    // engine still needs the bundle to appear in System Settings →
-    // Privacy & Security → Microphone.
-    #[cfg(target_os = "macos")]
-    {
+    // For macOS targets, compile the microphone permission shim and link
+    // the frameworks it uses. Native audio is Rust/AVAudioEngine-owned;
+    // the shim is only responsible for TCC status/request/settings plumbing.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rerun-if-changed=src/mic_permission.m");
         cc::Build::new()
             .file("src/mic_permission.m")
             .flag("-fobjc-arc")
             .compile("orbis_mac_shims");
         println!("cargo:rustc-link-lib=framework=AVFoundation");
+        println!("cargo:rustc-link-lib=framework=AppKit");
     }
 }

@@ -140,7 +140,7 @@ mod tests {
         // measurable noise floor to compare against.
         let mic_with_echo: Vec<i16> = (0..FRAME)
             .map(|i| {
-                let echo  = reference[i] as f32 * 0.5;
+                let echo = reference[i] as f32 * 0.5;
                 let noise = f32::cos(2.0 * PI * FREQ * i as f32 / SR) * AMP * 0.05;
                 (echo + noise).clamp(i16::MIN as f32, i16::MAX as f32) as i16
             })
@@ -173,10 +173,7 @@ mod tests {
         let out = aec.process_mic(&mic);
         // With zero reference, output should equal input (no subtraction).
         for (i, (&m, &o)) in mic.iter().zip(out.iter()).enumerate() {
-            assert_eq!(
-                m, o,
-                "sample {i}: expected {m} got {o} with zero reference"
-            );
+            assert_eq!(m, o, "sample {i}: expected {m} got {o} with zero reference");
         }
     }
 

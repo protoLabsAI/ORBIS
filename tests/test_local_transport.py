@@ -27,6 +27,8 @@ from voice.local_transport import (
     _decode_header,
     _encode_control,
     _encode_pcm_frame,
+    _resolve_mic_gain,
+    audio_runtime_info,
 )
 
 
@@ -72,6 +74,58 @@ def test_decode_header_little_endian():
     assert sr == 16000
     assert ch == 1
     assert ns == 320
+
+
+def test_voice_processing_defaults_to_unity_gain():
+    assert _resolve_mic_gain("voice_processing", None) == 1.0
+
+
+def test_cpal_defaults_to_legacy_gain():
+    assert _resolve_mic_gain("cpal", None) == 16.0
+
+
+def test_explicit_mic_gain_overrides_input_mode():
+    assert _resolve_mic_gain("voice_processing", "4.0") == 4.0
+
+
+def test_audio_runtime_info_exposes_input_mode_and_gain():
+    info = audio_runtime_info()
+    assert info["input_mode"] in {"cpal", "voice_processing"}
+    assert isinstance(info["mic_gain"], float)
+
+
+def test_transport_connected_property_defaults_false():
+    transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
+    assert transport.connected is False
+
+
+@pytest.mark.asyncio
+async def test_send_pcm_counts_speaker_frames():
+    class _Writer:
+        def __init__(self):
+            self.data = bytearray()
+
+        def write(self, data: bytes):
+            self.data.extend(data)
+
+        async def drain(self):
+            return None
+
+    writer = _Writer()
+    transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
+    transport._writer = writer
+
+    samples = struct.pack("<4h", 100, -100, 200, -200)
+    await transport._send_pcm(samples, TTS_SAMPLE_RATE)
+
+    assert transport.speaker_frames_sent == 1
+    direction, sample_rate, channels, num_samples = _decode_header(
+        bytes(writer.data[:HEADER_LEN])
+    )
+    assert direction == DIR_PYTHON_TO_SPEAKER
+    assert sample_rate == TTS_SAMPLE_RATE
+    assert channels == 1
+    assert num_samples == 4
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +196,7 @@ async def test_10_mic_frames_produce_10_input_audio_frames():
         await server.wait_closed()
 
     assert len(received) == 10, f"expected 10 frames, got {len(received)}"
+    assert transport.mic_frames_received == 10
     for frame in received:
         assert isinstance(frame, InputAudioRawFrame)
         assert frame.sample_rate == MIC_SAMPLE_RATE

@@ -17,6 +17,20 @@ import {
   getPreferredAudioDeviceId,
   setPreferredAudioDeviceId,
 } from '@/shared/audio/preferredDevice';
+import {
+  getAudioInputMode,
+  usesSelectableInputDevice,
+  type AudioInputMode,
+} from '@/shared/audio/nativeAudio';
+import {
+  canRequestMicrophone,
+  getMicrophonePermissionStatus,
+  isMicrophoneAuthorized,
+  needsMicrophoneSettings,
+  openMicrophoneSettings,
+  requestMicrophonePermission,
+  type MicrophonePermissionStatus,
+} from '@/shared/audio/microphonePermission';
 import { OrbPreviewModal } from './OrbPreviewModal';
 import { paletteColors } from './paletteColors';
 
@@ -53,9 +67,13 @@ export function SetupWizard() {
 
   return (
     <div className="fixed inset-0 z-30 bg-[#0a0a0a]/95 backdrop-blur-sm overflow-y-auto">
-      <WizardFlow
-        onFinish={() => {
-          try { localStorage.setItem(STORAGE_COMPLETE, 'true'); } catch {}
+        <WizardFlow
+          onFinish={() => {
+          try {
+            localStorage.setItem(STORAGE_COMPLETE, 'true');
+          } catch {
+            // Ignore storage failures; setup completion is best-effort UI state.
+          }
           setNeedsSetup(false);
         }}
       />
@@ -905,34 +923,145 @@ function MicStep({
 }) {
   const [devices, setDevices] = useState<string[]>([]);
   const [device, setDevice] = useState<string>('');
+  const [permission, setPermission] =
+    useState<MicrophonePermissionStatus>('not_determined');
+  const [audioInputMode, setAudioInputMode] =
+    useState<AudioInputMode>('unsupported');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const onChangeDevice = (name: string) => {
     setDevice(name);
     setPreferredAudioDeviceId(name);
   };
 
+  const refreshDevices = async () => {
+    const devs = await invoke<string[]>('list_audio_inputs');
+    setDevices(devs);
+    if (devs.length > 0) {
+      const saved = getPreferredAudioDeviceId();
+      setDevice(devs.includes(saved) ? saved : devs[0]);
+    }
+  };
+
+  const refreshPermission = async () => {
+    setError(null);
+    const [status, mode] = await Promise.all([
+      getMicrophonePermissionStatus(),
+      getAudioInputMode(),
+    ]);
+    setPermission(status);
+    setAudioInputMode(mode);
+    if (isMicrophoneAuthorized(status) && usesSelectableInputDevice(mode)) {
+      await refreshDevices();
+    } else {
+      setDevices([]);
+      setDevice('');
+    }
+  };
+
   useEffect(() => {
-    invoke<string[]>('list_audio_inputs')
-      .then((devs) => {
-        setDevices(devs);
-        if (devs.length > 0) {
-          const saved = getPreferredAudioDeviceId();
-          setDevice(devs.includes(saved) ? saved : devs[0]);
-        }
-      })
-      .catch(() => {});
+    queueMicrotask(() => {
+      refreshPermission().catch((e) => {
+        setError(String((e as Error).message ?? e));
+      });
+    });
+    // Initial Tauri permission probe runs once when this wizard step mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const onRequestPermission = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const status = await requestMicrophonePermission();
+      setPermission(status);
+      const mode = await getAudioInputMode();
+      setAudioInputMode(mode);
+      if (isMicrophoneAuthorized(status) && usesSelectableInputDevice(mode)) {
+        await refreshDevices();
+      } else {
+        setDevices([]);
+        setDevice('');
+      }
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onOpenSettings = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await openMicrophoneSettings();
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRefreshPermission = async () => {
+    setBusy(true);
+    try {
+      await refreshPermission();
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const authorized = isMicrophoneAuthorized(permission);
+  const selectableInput = usesSelectableInputDevice(audioInputMode);
+  const canContinue = authorized && (!selectableInput || devices.length > 0);
 
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Microphone</h2>
         <p className="text-sm text-zinc-500 max-w-sm mx-auto">
-          ORBIS is voice-first. Select your input device and watch the level meter react to your voice.
+          ORBIS needs microphone access before the native audio engine starts.
         </p>
       </div>
 
-      {devices.length > 0 && (
+      {!authorized && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 space-y-3">
+          <div>
+            <div className="text-sm text-zinc-200">Microphone access</div>
+            <div className="text-xs text-zinc-500 mt-1">
+              Current status: {permission.replace('_', ' ')}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {canRequestMicrophone(permission) && (
+              <Button onClick={onRequestPermission} disabled={busy}>
+                {busy ? 'Waiting…' : 'Allow microphone'}
+              </Button>
+            )}
+            {needsMicrophoneSettings(permission) && (
+              <>
+                <Button onClick={onOpenSettings} disabled={busy}>
+                  Open Settings
+                </Button>
+                <Button variant="ghost" onClick={onRefreshPermission} disabled={busy}>
+                  Recheck
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {authorized && !selectableInput && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+          Input source: macOS system input
+        </div>
+      )}
+
+      {authorized && selectableInput && devices.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-xs uppercase tracking-wider text-zinc-500">
             Input device
@@ -952,11 +1081,23 @@ function MicStep({
         </div>
       )}
 
-      <NativeLevelMeter deviceName={device} />
+      {authorized && selectableInput && devices.length === 0 && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+          No microphone input device was found.
+        </div>
+      )}
+
+      {authorized && <NativeLevelMeter deviceName={device || audioInputMode} />}
+
+      {error && (
+        <p className="text-xs text-red-300 text-center">
+          {error}
+        </p>
+      )}
 
       <div className="flex justify-between pt-2">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onNext}>Continue</Button>
+        <Button onClick={onNext} disabled={!canContinue}>Continue</Button>
       </div>
     </div>
   );

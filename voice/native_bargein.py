@@ -10,8 +10,7 @@ This observer watches the pipeline for BotStoppedSpeakingFrame and
 CancelFrame, then immediately sends control frame 0x0001 (CTRL_BARGE_IN)
 over the Unix socket so the Rust engine calls flush_playback().
 
-Placement: added to PipelineTask observers list when AUDIO_TRANSPORT=native.
-In webrtc mode this observer is never instantiated — zero overhead.
+Placement: added to the native desktop PipelineTask observers list.
 """
 
 from __future__ import annotations

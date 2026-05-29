@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 /**
- * Live microphone RMS meter backed by the native CPAL audio engine.
+ * Live microphone RMS meter backed by the native audio engine.
  * Polls `get_audio_level` (Tauri IPC) every 80 ms. Only renders
  * meaningfully when the native-audio feature is active and the engine
  * has started.
