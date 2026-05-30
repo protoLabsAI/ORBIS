@@ -112,7 +112,9 @@ impl VoiceProcessingInput {
                                 duckingLevel: level,
                             },
                         );
-                        log::info!("[voice-processing] other-audio ducking = {pref} (advanced off)");
+                        log::info!(
+                            "[voice-processing] other-audio ducking = {pref} (advanced off)"
+                        );
                     }
                     None => {
                         log::info!("[voice-processing] other-audio ducking = default (Apple VoIP)");
