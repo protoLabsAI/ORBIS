@@ -3,8 +3,13 @@
 ORBIS's tool surface is deliberately narrow:
 
   - ``delegate_to(target, query)`` — hand off to a user-configured agent
-    (A2A or OpenAI-compat). The user's configured agents are where heavy
-    reasoning lives; ORBIS is the voice frontend for them.
+    (A2A or OpenAI-compat), blocking for the reply you relay in the same
+    breath. The user's configured agents are where heavy reasoning lives;
+    ORBIS is the voice frontend for them.
+  - ``delegate_async(target, query)`` — fire-and-forget variant for longer
+    work: acks immediately, dispatches in the background, and speaks the
+    answer via the DeliveryController when the delegate finishes. Only
+    registered when a DeliveryController is available.
   - ``adjust_personality`` — shift a personality axis in response to an
     explicit user request ("be more playful", "be less sarcastic").
 
@@ -23,7 +28,9 @@ live delegate registry and therefore changes per-session.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -32,10 +39,21 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams, LLMService
 
 from .delegates import DelegateError, DelegateRegistry, dispatch as delegate_dispatch
-from .delivery import DeliveryController
+from .delivery import DeliveryController, Priority
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
+
+# Hand-wired tools (built per-session, not via @tool) that should still be
+# treated as async — they ack immediately and surface their real result
+# later via the DeliveryController, so the progress-narration loop must NOT
+# run for them. ``_AsyncToolNames`` checks this set in addition to the
+# @tool registry.
+_HANDWIRED_ASYNC_NAMES = frozenset({"delegate_async"})
+
+# Strong refs to in-flight background delegation tasks so the event loop
+# can't GC them mid-flight (asyncio holds only weak refs to bare tasks).
+_BG_DELEGATE_TASKS: set[asyncio.Task] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +117,18 @@ def latency_for(tool_name: str) -> Latency:
 class _AsyncToolNames:
     """Derived view on the registry for `name in ASYNC_TOOL_NAMES` checks."""
     def __contains__(self, name: str) -> bool:
+        if name in _HANDWIRED_ASYNC_NAMES:
+            return True
         spec = _TOOL_REGISTRY.get(name)
         return bool(spec and spec.async_tool)
 
     def __iter__(self):
-        return iter(
-            name for name, spec in _TOOL_REGISTRY.items() if spec.async_tool
-        )
+        seen = set(_HANDWIRED_ASYNC_NAMES)
+        for name in _HANDWIRED_ASYNC_NAMES:
+            yield name
+        for name, spec in _TOOL_REGISTRY.items():
+            if spec.async_tool and name not in seen:
+                yield name
 
 
 ASYNC_TOOL_NAMES = _AsyncToolNames()
@@ -347,6 +370,112 @@ def _delegate_to_handler(
 
 
 # ---------------------------------------------------------------------------
+# delegate_async — fire-and-forget delegation (orbis-1s0). Returns an
+# immediate verbal ack so the conversation keeps flowing, then surfaces the
+# delegate's answer through the DeliveryController when it lands. Use for
+# work that takes more than a few seconds; `delegate_to` stays for quick
+# questions whose answer you relay in the same breath.
+# ---------------------------------------------------------------------------
+
+def _delegate_async_schema(registry: DelegateRegistry) -> FunctionSchema:
+    items = registry.all()
+    target_lines = "\n".join(f"  - {d.name}: {d.description}" for d in items)
+    return FunctionSchema(
+        name="delegate_async",
+        description=(
+            "Hand off a task to one of the user's agents in the BACKGROUND. "
+            "Use this instead of `delegate_to` when the task will take more "
+            "than a few seconds (research, a multi-step job, 'go do X and "
+            "report back'). This returns immediately — acknowledge to the "
+            "user that you've sent it off and will tell them when it's done; "
+            "do NOT wait for or invent the answer. The real reply is spoken "
+            "automatically when the agent finishes.\n\n"
+            f"Available targets:\n{target_lines}\n\n"
+            "Pass `target` (one of the names above) and `query`."
+        ),
+        properties={
+            "target": {
+                "type": "string",
+                "enum": [d.name for d in items],
+                "description": "Which delegate to ask",
+            },
+            "query": {
+                "type": "string",
+                "description": "The task to hand off, phrased as you'd ask a person",
+            },
+        },
+        required=["target", "query"],
+    )
+
+
+def _delegate_async_handler(
+    registry: DelegateRegistry,
+    *,
+    delivery: DeliveryController,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+):
+    """Async tool: ack now, dispatch in the background, deliver the result
+    through the DeliveryController (TIME_SENSITIVE → spoken at the next
+    natural pause) when the delegate finishes."""
+    bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
+
+    async def _handler(params: FunctionCallParams) -> None:
+        target = (params.arguments.get("target") or "").strip()
+        query = (params.arguments.get("query") or "").strip()
+        if not target or not query:
+            await params.result_callback(
+                "I need both a target and a task to hand off."
+            )
+            return
+        delegate = registry.get(target)
+        if not delegate:
+            available = ", ".join(registry.names()) or "(none)"
+            await params.result_callback(
+                f"I don't know a delegate named '{target}'. Available: {available}."
+            )
+            return
+
+        logger.info(f"[delegate_async] target={target} query={query!r} (background)")
+
+        async def _run_and_deliver() -> None:
+            try:
+                result = await delegate_dispatch(
+                    delegate, query,
+                    timeout=bg_timeout,
+                    push_notification_url=push_notification_url,
+                    push_notification_token=push_notification_token,
+                )
+                await delivery.deliver(
+                    result, priority=Priority.TIME_SENSITIVE, source=target,
+                )
+            except DelegateError as e:
+                logger.warning(f"[delegate_async] {target} failed: {e}")
+                await delivery.deliver(
+                    f"that thing I handed off didn't go through — {e}",
+                    priority=Priority.TIME_SENSITIVE, source=target,
+                )
+            except Exception as e:
+                logger.exception(f"[delegate_async] {target} errored: {e}")
+                await delivery.deliver(
+                    f"that thing I handed off to {target} errored out.",
+                    priority=Priority.TIME_SENSITIVE, source=target,
+                )
+
+        task = asyncio.create_task(_run_and_deliver())
+        _BG_DELEGATE_TASKS.add(task)
+        task.add_done_callback(_BG_DELEGATE_TASKS.discard)
+
+        # Immediate ack — the LLM speaks this and the turn ends; the answer
+        # arrives later via the DeliveryController.
+        await params.result_callback(
+            f"Sent that off to {target}. I'll let you know as soon as they're back."
+        )
+
+    return _handler
+
+
+# ---------------------------------------------------------------------------
 # Text-mode tool runner (A2A inbound ReAct) — unchanged interface.
 # ---------------------------------------------------------------------------
 
@@ -467,5 +596,23 @@ def register_tools(
             cancel_on_interruption=True,
         )
         standard.append(_delegate_to_schema(delegates))
+
+        # delegate_async — fire-and-forget variant (orbis-1s0). Only
+        # registered when a DeliveryController exists to surface the result
+        # later; without one there'd be no way to speak the answer.
+        # async tool → cancel_on_interruption=False so barge-in doesn't kill
+        # the in-flight background task; on_finish still fires via _wrap_sync.
+        if delivery is not None:
+            llm.register_function(
+                "delegate_async",
+                _wrap_sync(_delegate_async_handler(
+                    delegates,
+                    delivery=delivery,
+                    push_notification_url=push_notification_url,
+                    push_notification_token=push_notification_token,
+                )),
+                cancel_on_interruption=False,
+            )
+            standard.append(_delegate_async_schema(delegates))
 
     return ToolsSchema(standard_tools=standard)
