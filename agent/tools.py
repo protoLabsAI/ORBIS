@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -43,6 +44,39 @@ from .delivery import DeliveryController, Priority
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Markdown → speech (orbis-nhu). Delegate replies (e.g. Ava) come back as
+# markdown; spoken verbatim by TTS that's "asterisk asterisk number 4028,
+# open bracket…". Flatten the unambiguous constructs before the text reaches
+# the voice path. Conservative on purpose: the italic rule requires the
+# delimiter to sit on a word boundary so "snake_case" / "2 * 3" are left
+# alone.
+# ---------------------------------------------------------------------------
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")            # [label](url) → label
+_MD_BOLD = re.compile(r"(\*\*|__)(.+?)\1", re.DOTALL)     # **x** / __x__ → x
+_MD_ITALIC = re.compile(
+    r"(?<![A-Za-z0-9])([*_])(?=\S)(.+?)(?<=\S)\1(?![A-Za-z0-9])", re.DOTALL
+)                                                          # *x* / _x_ → x
+_MD_CODE = re.compile(r"`+([^`]+)`+")                      # `x` → x
+_MD_HEADER = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]*")    # ## h → h
+_MD_BULLET = re.compile(r"(?m)^[ \t]*[-*+][ \t]+")         # - item → item
+_MD_QUOTE = re.compile(r"(?m)^[ \t]*>[ \t]?")              # > q → q
+
+
+def _strip_markdown_for_speech(text: str) -> str:
+    if not text:
+        return text
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_BOLD.sub(r"\2", text)
+    text = _MD_ITALIC.sub(r"\2", text)
+    text = _MD_CODE.sub(r"\1", text)
+    text = _MD_HEADER.sub("", text)
+    text = _MD_BULLET.sub("", text)
+    text = _MD_QUOTE.sub("", text)
+    return text.strip()
+
 
 # Hand-wired tools (built per-session, not via @tool) that should still be
 # treated as async — they ack immediately and surface their real result
@@ -359,7 +393,7 @@ def _delegate_to_handler(
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
-            await params.result_callback(result)
+            await params.result_callback(_strip_markdown_for_speech(result))
         except DelegateError as e:
             await params.result_callback(f"Couldn't reach {target}: {e}")
         except Exception as e:
@@ -447,7 +481,8 @@ def _delegate_async_handler(
                     push_notification_token=push_notification_token,
                 )
                 await delivery.deliver(
-                    result, priority=Priority.TIME_SENSITIVE, source=target,
+                    _strip_markdown_for_speech(result),
+                    priority=Priority.TIME_SENSITIVE, source=target,
                 )
             except DelegateError as e:
                 logger.warning(f"[delegate_async] {target} failed: {e}")
