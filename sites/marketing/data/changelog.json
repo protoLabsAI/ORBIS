@@ -6,7 +6,7 @@
       "feat(marketing): launch orbis.protolabs.studio marketing site",
       "chore(tools): remove orb-control tools from LLM surface (visual control decoupled)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.41/ORBIS_0.1.41.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.41/ORBIS_0.1.41.dmg"
   },
   {
     "version": "v0.1.40",
@@ -14,7 +14,7 @@
     "changes": [
       "perf(voice): route Whisper + Kokoro through MPS on Apple Silicon"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.40/ORBIS_0.1.40.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.40/ORBIS_0.1.40.dmg"
   },
   {
     "version": "v0.1.39",
@@ -22,7 +22,7 @@
     "changes": [
       "fix(docker): preserve PEP 508 env markers when seeding deps from pyproject"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.39/ORBIS_0.1.39.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.39/ORBIS_0.1.39.dmg"
   },
   {
     "version": "v0.1.38",
@@ -30,7 +30,7 @@
     "changes": [
       "fix(api): restore skill_llm provider lookup + wire ruff lint gate"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.38/ORBIS_0.1.38.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.38/ORBIS_0.1.38.dmg"
   },
   {
     "version": "v0.1.37",
@@ -38,7 +38,7 @@
     "changes": [
       "fix(desktop): bundle starter_orbs.yaml + set ORBIS_STARTER_ORBS env"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.37/ORBIS_0.1.37.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.37/ORBIS_0.1.37.dmg"
   },
   {
     "version": "v0.1.36",
@@ -46,7 +46,7 @@
     "changes": [
       "feat(perception): wire AudioTagsTap into pipeline (Phase 4 — final)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.36/ORBIS_0.1.36.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.36/ORBIS_0.1.36.dmg"
   },
   {
     "version": "v0.1.35",
@@ -54,7 +54,7 @@
     "changes": [
       "fix(audio-tags): defer mood write to TranscriptionFrame"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.35/ORBIS_0.1.35.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.35/ORBIS_0.1.35.dmg"
   },
   {
     "version": "v0.1.34",
@@ -62,7 +62,7 @@
     "changes": [
       "feat(perception): AudioTagsTap — per-turn mood writes + [audio] context injection (Phase 3)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.34/ORBIS_0.1.34.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.34/ORBIS_0.1.34.dmg"
   },
   {
     "version": "v0.1.33",
@@ -70,7 +70,7 @@
     "changes": [
       "docs: sync lifecycle + risks to v0.1.32 (9 of 16 risks resolved)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.33/ORBIS_0.1.33.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.33/ORBIS_0.1.33.dmg"
   },
   {
     "version": "v0.1.32",
@@ -78,7 +78,7 @@
     "changes": [
       "fix(sensevoice): gate trust_remote_code via allow-list + opt-in smoke test"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.32/ORBIS_0.1.32.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.32/ORBIS_0.1.32.dmg"
   },
   {
     "version": "v0.1.31",
@@ -86,7 +86,7 @@
     "changes": [
       "feat(stt): SenseVoiceSTT backend — STT + emotion + audio events in one pass (Phase 2)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.31/ORBIS_0.1.31.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.31/ORBIS_0.1.31.dmg"
   },
   {
     "version": "v0.1.30",
@@ -94,7 +94,7 @@
     "changes": [
       "fix(memory): drift_mood true no-op + tuple-compare EMOTION_LABELS"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.30/ORBIS_0.1.30.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.30/ORBIS_0.1.30.dmg"
   },
   {
     "version": "v0.1.29",
@@ -102,7 +102,7 @@
     "changes": [
       "feat(perception): EmotionFrame + AudioEventFrame + drift_mood + audio_context_block (Phase 1)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.29/ORBIS_0.1.29.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.29/ORBIS_0.1.29.dmg"
   },
   {
     "version": "v0.1.28",
@@ -110,7 +110,7 @@
     "changes": [
       "feat(speaker-gate): wizard enrollment step + voiceprint endpoint"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.28/ORBIS_0.1.28.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.28/ORBIS_0.1.28.dmg"
   },
   {
     "version": "v0.1.27",
@@ -118,7 +118,7 @@
     "changes": [
       "fix(speaker-gate): defensive threshold parsing + tighten test assertions"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.27/ORBIS_0.1.27.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.27/ORBIS_0.1.27.dmg"
   },
   {
     "version": "v0.1.26",
@@ -126,7 +126,7 @@
     "changes": [
       "feat(speaker-gate): wire SpeakerGate into pipeline"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.26/ORBIS_0.1.26.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.26/ORBIS_0.1.26.dmg"
   },
   {
     "version": "v0.1.25",
@@ -134,7 +134,7 @@
     "changes": [
       "feat(memory): drift_mood_toward + neglect-via-drift"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.25/ORBIS_0.1.25.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.25/ORBIS_0.1.25.dmg"
   },
   {
     "version": "v0.1.24",
@@ -142,7 +142,7 @@
     "changes": [
       "fix(speaker-gate): differentiate corrupt voiceprint, guard shape mismatch"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.24/ORBIS_0.1.24.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.24/ORBIS_0.1.24.dmg"
   },
   {
     "version": "v0.1.23",
@@ -150,7 +150,7 @@
     "changes": [
       "feat(speaker-gate): ECAPA-TDNN embedder via speechbrain"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.23/ORBIS_0.1.23.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.23/ORBIS_0.1.23.dmg"
   },
   {
     "version": "v0.1.22",
@@ -158,7 +158,7 @@
     "changes": [
       "feat(speaker-gate): foundation for owner-vs-stranger verification"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.22/ORBIS_0.1.22.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.22/ORBIS_0.1.22.dmg"
   },
   {
     "version": "v0.1.21",
@@ -166,7 +166,7 @@
     "changes": [
       "fix(delivery): persist _bid_issued across reconnect"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.21/ORBIS_0.1.21.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.21/ORBIS_0.1.21.dmg"
   },
   {
     "version": "v0.1.20",
@@ -174,7 +174,7 @@
     "changes": [
       "fix(delivery): word-boundary bid matching, drop bare \"what\" from accept list"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.20/ORBIS_0.1.20.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.20/ORBIS_0.1.20.dmg"
   },
   {
     "version": "v0.1.19",
@@ -182,7 +182,7 @@
     "changes": [
       "feat(micro-ack): live verbosity gate + filler.micro_ack tracing span"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.19/ORBIS_0.1.19.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.19/ORBIS_0.1.19.dmg"
   },
   {
     "version": "v0.1.18",
@@ -190,7 +190,7 @@
     "changes": [
       "fix(memory): identify rolling summary by sentinel tags, not role/string match"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.18/ORBIS_0.1.18.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.18/ORBIS_0.1.18.dmg"
   },
   {
     "version": "v0.1.17",
@@ -200,7 +200,7 @@
       "fix(session-store): atomic-rename drain + fcntl-locked stash",
       "feat(status-pill): surface connect errors + show \"connecting...\" state"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.17/ORBIS_0.1.17.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.17/ORBIS_0.1.17.dmg"
   },
   {
     "version": "v0.1.16",
@@ -208,7 +208,7 @@
     "changes": [
       "docs(voice): end-to-end lifecycle audit, risks punch list, and research integration plan"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.16/ORBIS_0.1.16.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.16/ORBIS_0.1.16.dmg"
   },
   {
     "version": "v0.1.15",
@@ -216,7 +216,7 @@
     "changes": [
       "chore(desktop): narrow hardened-runtime entitlements to allow-jit only"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.15/ORBIS_0.1.15.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.15/ORBIS_0.1.15.dmg"
   },
   {
     "version": "v0.1.14",
@@ -224,7 +224,7 @@
     "changes": [
       "feat(voice): native Ollama adapter + WebContent mic + STT/UX polish"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.14/ORBIS_0.1.14.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.14/ORBIS_0.1.14.dmg"
   },
   {
     "version": "v0.1.13",
@@ -232,7 +232,7 @@
     "changes": [
       "fix(desktop): seed config + set ORBIS_CONFIG/START_VLLM env on sidecar spawn"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.13/ORBIS_0.1.13.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.13/ORBIS_0.1.13.dmg"
   },
   {
     "version": "v0.1.12",
@@ -240,7 +240,7 @@
     "changes": [
       "chore: gitignore .claude/ and dist-sdist/"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.12/ORBIS_0.1.12.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.12/ORBIS_0.1.12.dmg"
   },
   {
     "version": "v0.1.11",
@@ -248,7 +248,7 @@
     "changes": [
       "feat(desktop): mic wizard + entitlements + Developer ID signing infra"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.11/ORBIS_0.1.11.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.11/ORBIS_0.1.11.dmg"
   },
   {
     "version": "v0.1.10",
@@ -256,7 +256,7 @@
     "changes": [
       "feat(desktop): Ollama-first wizard + conditional signing"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.10/ORBIS_0.1.10.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.10/ORBIS_0.1.10.dmg"
   },
   {
     "version": "v0.1.9",
@@ -264,7 +264,7 @@
     "changes": [
       "feat(desktop): src-tauri/ Tauri 2 shell"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.9/ORBIS_0.1.9.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.9/ORBIS_0.1.9.dmg"
   },
   {
     "version": "v0.1.8",
@@ -272,7 +272,7 @@
     "changes": [
       "ci(desktop): PyApp build workflow + local build script"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.8/ORBIS_0.1.8.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.8/ORBIS_0.1.8.dmg"
   },
   {
     "version": "v0.1.7",
@@ -280,7 +280,7 @@
     "changes": [
       "feat(desktop): platform paths + ephemeral port + hardware probe"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.7/ORBIS_0.1.7.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.7/ORBIS_0.1.7.dmg"
   },
   {
     "version": "v0.1.6",
@@ -288,7 +288,7 @@
     "changes": [
       "feat(orb): replicate state/mood composition to Nebula, Crystal, Particles variants"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.6/ORBIS_0.1.6.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.6/ORBIS_0.1.6.dmg"
   },
   {
     "version": "v0.1.5",
@@ -296,7 +296,7 @@
     "changes": [
       "feat(orb): authoring UI for state + mood overrides"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.5/ORBIS_0.1.5.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.5/ORBIS_0.1.5.dmg"
   },
   {
     "version": "v0.1.4",
@@ -304,7 +304,7 @@
     "changes": [
       "feat(orb): state + mood delta composition (Fractal proven)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.4/ORBIS_0.1.4.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.4/ORBIS_0.1.4.dmg"
   },
   {
     "version": "v0.1.3",
@@ -312,7 +312,7 @@
     "changes": [
       "fix(ci): drop actions/attest-build-provenance (paid feature)"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.3/ORBIS_0.1.3.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.3/ORBIS_0.1.3.dmg"
   },
   {
     "version": "v0.1.2",
@@ -320,7 +320,7 @@
     "changes": [
       "fix(ci): reclaim runner disk space before the torch+cu128 build"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.2/ORBIS_0.1.2.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.2/ORBIS_0.1.2.dmg"
   },
   {
     "version": "v0.1.1",
@@ -332,6 +332,6 @@
       "feat(tracing): migrate to Langfuse v4 OTEL client",
       "feat(docker): GPU passthrough + pin torch to cu128 wheels"
     ],
-    "dmgUrl": "https://github.com/protolabsstudio/ORBIS/releases/download/v0.1.1/ORBIS_0.1.1.dmg"
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.1.1/ORBIS_0.1.1.dmg"
   }
 ]
