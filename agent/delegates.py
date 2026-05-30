@@ -390,34 +390,45 @@ async def _dispatch_a2a(
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
 ) -> str:
-    """Try streaming first; fall back to sync message/send if stream fails.
+    """Reliable synchronous `message/send` by default; opt into streaming
+    (progress narration) with ``A2A_STREAM=1``.
 
-    Streaming lets the voice layer narrate intermediate status updates
-    through `progress_callback` as the remote agent works. Sync fallback
-    keeps the delegate usable against servers that haven't implemented
-    `message/stream` yet.
+    Streaming HANGS against servers that send their reply but never emit a
+    recognized terminal SSE event (no ``final: true`` / terminal status) —
+    the client waits for more lines until the httpx read timeout (was 120s),
+    and that ``TimeoutException`` isn't an ``A2ADispatchError`` so the old
+    fallback never fired and delegate_to looked dead. A2A push-back can't
+    reach a 127.0.0.1 desktop app either, so the streaming path buys little
+    here. Default to sync; bound the opt-in stream with ``asyncio.wait_for``
+    (``A2A_STREAM_TIMEOUT``, default 20s) and fall back to sync on any
+    failure or timeout.
     """
-    try:
-        return await _a2a_stream(
-            url=delegate.url,
-            headers=delegate.auth_headers(),
-            user_text=query,
-            timeout=timeout,
-            progress_callback=progress_callback,
-            push_notification_url=push_notification_url,
-            push_notification_token=push_notification_token,
-        )
-    except A2ADispatchError as e:
-        logger.warning(
-            f"[delegates] {delegate.name} streaming failed ({e}); "
-            "falling back to message/send"
-        )
-        return await _a2a_dispatch(
-            url=delegate.url,
-            headers=delegate.auth_headers(),
-            user_text=query,
-            timeout=timeout,
-        )
+    if os.environ.get("A2A_STREAM", "0") == "1":
+        stream_timeout = float(os.environ.get("A2A_STREAM_TIMEOUT", "20"))
+        try:
+            return await asyncio.wait_for(
+                _a2a_stream(
+                    url=delegate.url,
+                    headers=delegate.auth_headers(),
+                    user_text=query,
+                    timeout=timeout,
+                    progress_callback=progress_callback,
+                    push_notification_url=push_notification_url,
+                    push_notification_token=push_notification_token,
+                ),
+                timeout=stream_timeout,
+            )
+        except (A2ADispatchError, asyncio.TimeoutError, httpx.TimeoutException) as e:
+            logger.warning(
+                f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
+                "falling back to message/send"
+            )
+    return await _a2a_dispatch(
+        url=delegate.url,
+        headers=delegate.auth_headers(),
+        user_text=query,
+        timeout=timeout,
+    )
 
 
 async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) -> str:

@@ -41,6 +41,15 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
     load_dotenv()
+    # Runtime tuning override: an optional .env in the user-config dir
+    # (next to orbis.yaml) lets us flip env knobs — VAD windows, echo
+    # guard, SMART_TURN, micro-ack — with a 5-second app restart instead
+    # of an 80-second sidecar rebuild. override=True so it wins over the
+    # values the Tauri shell injects when it spawns the sidecar.
+    from pathlib import Path as _RTPath
+    _rt_env = _RTPath.home() / "Library/Application Support/studio.protolabs.orbis/.env"
+    if _rt_env.is_file():
+        load_dotenv(_rt_env, override=True)
 except ImportError:
     # Missing dotenv shouldn't crash boot — secrets just have to come
     # from the shell env in that case.
@@ -141,6 +150,14 @@ from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("orbis")
+
+# Quiet the per-inference noise that floods the sidecar log and buries the
+# signal we tune against (STT/LLM/TTS timings, turn events). torch + kokoro
+# emit a UserWarning on every istft call; phonemizer warns per line.
+import warnings as _warnings  # noqa: E402
+_warnings.filterwarnings("ignore", category=UserWarning)
+_warnings.filterwarnings("ignore", category=FutureWarning)  # torch weight_norm etc.
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
 PORT = int(os.environ.get("PORT", "7866"))
 LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1")
@@ -529,8 +546,38 @@ def _resolve_behavior_block(raw) -> dict:
     return {"enabled": True}
 
 
+def _fleet_block(delegates) -> str:
+    """Dynamic roster of the agents THIS session can actually reach via
+    delegate_to — the single source of truth so the LLM never invents or
+    denies the wrong fleet. Built from the live (post-filter) registry, so
+    it always matches the delegate_to tool's real targets instead of a
+    hard-coded guess in the persona prompt."""
+    try:
+        items = list(delegates.all()) if delegates is not None else []
+    except Exception:
+        items = []
+    if not items:
+        return (
+            "## YOUR FLEET\n\n"
+            "No agents are wired up right now, so you cannot hand work off. "
+            "Answer everything yourself; never offer to delegate or claim to "
+            "reach another agent."
+        )
+    roster = "\n".join(
+        f"- {d.name} — {' '.join((d.description or '').split())}" for d in items
+    )
+    return (
+        "## YOUR FLEET\n\n"
+        "These are the ONLY agents you can reach, via the delegate_to tool. "
+        "When a request clearly fits one, hand it off; otherwise just answer "
+        "yourself. Never claim to reach an agent that is not on this list, and "
+        "do not invent capabilities beyond what each line says:\n\n"
+        f"{roster}"
+    )
+
+
 def _effective_prompt(
-    skill, tts_backend: str, *, verbosity, user_id: str,
+    skill, tts_backend: str, *, verbosity, user_id: str, delegates=None,
 ) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
@@ -576,6 +623,8 @@ def _effective_prompt(
         + tool_use_block(verbosity, tts_backend)
         + "\n\n"
         + tool_response_block(verbosity)
+        + "\n\n"
+        + _fleet_block(delegates)
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
@@ -700,6 +749,7 @@ async def text_agent(message: str, session_id: str) -> str:
                 skill, TTS_BACKEND,
                 verbosity=state.filler_settings.verbosity,
                 user_id=user_id,
+                delegates=session_delegates,
             ),
         },
         *history[-(_A2A_MAX_TURNS * 2):],
@@ -1078,18 +1128,29 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 tts_backend,
                 verbosity=user_state.filler_settings.verbosity,
                 user_id=user_id,
+                delegates=session_delegates,
             ),
         }],
         tools=tools_schema,
     )
 
     _turn_strategies = _build_user_turn_strategies()
+    # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
+    # the runtime .env). stop_secs is the dominant fixed per-turn delay;
+    # Smart Turn (SMART_TURN=local) lets it drop without clipping pauses.
+    _vad_stop = float(os.environ.get("VAD_STOP_SECS", "0.4"))
+    logger.info(
+        "[tuning] vad stop_secs=%s start_secs=%s min_volume=%s | echo_guard=%sms | smart_turn=%s",
+        _vad_stop, os.environ.get("VAD_START_SECS", "0.2"),
+        os.environ.get("VAD_MIN_VOLUME", "0.2"),
+        os.environ.get("NATIVE_ECHO_GUARD_MS", "800"), SMART_TURN,
+    )
     _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.7,    # default 0.7
-            start_secs=0.2,    # default 0.2
-            stop_secs=0.4,     # default 0.2 — longer pause before cutting
-            min_volume=0.2,    # default 0.6 — lowered for native desktop audio.
+            confidence=float(os.environ.get("VAD_CONFIDENCE", "0.7")),
+            start_secs=float(os.environ.get("VAD_START_SECS", "0.2")),
+            stop_secs=_vad_stop,  # default 0.4 — longer pause before cutting
+            min_volume=float(os.environ.get("VAD_MIN_VOLUME", "0.2")),  # native desktop audio
                                # The legacy CPAL input path applies MIC_GAIN in
                                # voice/local_transport.py; the macOS voice-processing
                                # path defaults to unity gain because Apple AGC is
@@ -1512,7 +1573,10 @@ def prewarm_llm() -> None:
         )
         logger.info("LLM warm")
     except Exception as e:
-        logger.warning(f"LLM prewarm skipped: {e}")
+        # Expected when the configured LLM is a remote gateway that doesn't
+        # need (or want) a boot-time warmup ping, or a local vLLM that isn't
+        # up. Not warning-worthy — the LLM still works at request time.
+        logger.info(f"LLM prewarm skipped ({type(e).__name__})")
 
 
 def _emit_boot(stage: str, detail: str) -> None:
@@ -1931,12 +1995,25 @@ async def list_delegates_endpoint(user: User = Depends(require_user)):
         read_delegates,
     )
     try:
+        # Uses the config-store DEFAULT_PATH, now unified to resolve the same
+        # way the live registry does (DELEGATES_YAML) so it reads the file the
+        # registry loaded. The registry fallback below covers any residual
+        # path divergence in the bundle.
         entries = read_delegates()
     except DelegateValidationError as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     parsed_names = set(_DELEGATES.names())
     parsed_by_name = {d.name: d for d in _DELEGATES.all()}
+
+    # Belt-and-suspenders: if the file read produced nothing but the live
+    # registry has delegates, surface those so the UI reflects reality.
+    if not entries and parsed_by_name:
+        entries = [
+            {"name": d.name, "type": d.type, "url": d.url,
+             "description": d.description}
+            for d in _DELEGATES.all()
+        ]
 
     def _decorate(entry: dict) -> dict:
         name = entry.get("name")

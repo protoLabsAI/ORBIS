@@ -44,7 +44,7 @@ _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
 _ALLOWED_STT_KEYS = {"backend", "whisper_model", "url", "model", "api_key"}
 _ALLOWED_VERBOSITIES = {"silent", "brief", "narrated", "chatty"}
 _ALLOWED_TTS_BACKENDS = {"kokoro", "openai", "elevenlabs", "fish"}
-_ALLOWED_STT_BACKENDS = {"local", "openai", "sensevoice"}
+_ALLOWED_STT_BACKENDS = {"local", "openai", "sensevoice", "parakeet"}
 
 # Orb state/mood authoring (DECISIONS.md 2026-04-23 amendment). Presets
 # grow optional delta maps per voice-state and per mood-dimension on top

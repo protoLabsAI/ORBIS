@@ -23,9 +23,12 @@ use std::sync::{Arc, Mutex};
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::AnyThread;
+use objc2::runtime::{Bool, NSObjectProtocol};
+use objc2::{sel, AnyThread};
 use objc2_avf_audio::{
     AVAudioEngine, AVAudioInputNode, AVAudioNode, AVAudioNodeBus, AVAudioPCMBuffer, AVAudioTime,
+    AVAudioVoiceProcessingOtherAudioDuckingConfiguration,
+    AVAudioVoiceProcessingOtherAudioDuckingLevel,
 };
 
 use super::engine::{AudioMsg, MIC_FRAME_SAMPLES, MIC_SAMPLE_RATE};
@@ -80,6 +83,44 @@ impl VoiceProcessingInput {
                 .map_err(|e| {
                     format!("AVAudioInputNode::setVoiceProcessingEnabled(true) failed: {e:?}")
                 })?;
+
+            // macOS treats a voice-processing input like a VoIP call and
+            // ducks ALL other system audio for the engine's whole lifetime
+            // — so music/video go quiet the entire time ORBIS runs, even
+            // idling muted. macOS 14+ lets us tune that. Optional via
+            // ORBIS_VP_DUCKING:
+            //   min (default) — minimal duck, advanced (voice-activity) off
+            //   mid | max     — progressively more ducking
+            //   default/full  — leave Apple's full VoIP ducking on
+            // Guarded by respondsToSelector since the selector is macOS 14+
+            // and the deployment target is 13.
+            if input_node
+                .respondsToSelector(sel!(setVoiceProcessingOtherAudioDuckingConfiguration:))
+            {
+                let pref = std::env::var("ORBIS_VP_DUCKING").unwrap_or_else(|_| "min".to_string());
+                let level = match pref.as_str() {
+                    "max" => Some(AVAudioVoiceProcessingOtherAudioDuckingLevel::Max),
+                    "mid" => Some(AVAudioVoiceProcessingOtherAudioDuckingLevel::Mid),
+                    "default" | "full" | "on" => None, // leave Apple's default
+                    _ => Some(AVAudioVoiceProcessingOtherAudioDuckingLevel::Min),
+                };
+                match level {
+                    Some(level) => {
+                        input_node.setVoiceProcessingOtherAudioDuckingConfiguration(
+                            AVAudioVoiceProcessingOtherAudioDuckingConfiguration {
+                                enableAdvancedDucking: Bool::new(false),
+                                duckingLevel: level,
+                            },
+                        );
+                        log::info!(
+                            "[voice-processing] other-audio ducking = {pref} (advanced off)"
+                        );
+                    }
+                    None => {
+                        log::info!("[voice-processing] other-audio ducking = default (Apple VoIP)");
+                    }
+                }
+            }
 
             let format = input_node.outputFormatForBus(0 as AVAudioNodeBus);
             log::info!(

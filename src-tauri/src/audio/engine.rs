@@ -77,6 +77,11 @@ pub struct AudioEngine {
     /// callback. Drives the orb's audio-reactivity (she pulses to her
     /// own voice). Stored as f32 bits in an AtomicU32 for lock-free reads.
     playback_rms: Arc<AtomicU32>,
+    /// Output device sample rate, published by the output stream once it's
+    /// built. `push_playback` resamples each TTS chunk to this rate ONCE
+    /// (full context) so the output callback can drain native-rate samples
+    /// without per-block resampling artifacts (crackle).
+    output_rate: Arc<AtomicU32>,
     // Keep streams alive — they stop when dropped.
     // CPAL input is gated off when the voice-processing feature is on;
     // AVAudioEngine takes its place as the input source.
@@ -119,12 +124,14 @@ impl AudioEngine {
         let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: muted by default
         let last_play_ms = Arc::new(AtomicU64::new(0)); // half-duplex echo guard
         let playback_rms = Arc::new(AtomicU32::new(0)); // TTS level for orb reactivity
+        let output_rate = Arc::new(AtomicU32::new(TTS_SAMPLE_RATE)); // set by the output stream
 
         let output_stream = build_output_stream(
             &output_device,
             Arc::clone(&playback_ring),
             Arc::clone(&last_play_ms),
             Arc::clone(&playback_rms),
+            Arc::clone(&output_rate),
         )?;
         output_stream
             .play()
@@ -173,6 +180,7 @@ impl AudioEngine {
             listening,
             last_play_ms,
             playback_rms,
+            output_rate,
             #[cfg(not(feature = "voice-processing"))]
             _input_stream,
             _output_stream: output_stream,
@@ -225,9 +233,16 @@ impl AudioEngine {
         if let Ok(mut aec) = self.aec.lock() {
             aec.feed_reference(&reference_16k);
         }
-        // Push to playback ring.
+        // Resample the whole chunk ONCE to the output device rate (full
+        // context) before queueing, so the output callback just drains —
+        // this eliminates the per-block resampling crackle.
+        let out_rate = self.output_rate.load(Ordering::Relaxed);
         if let Ok(mut ring) = self.playback_ring.lock() {
-            ring.extend(samples.iter().copied());
+            if out_rate != TTS_SAMPLE_RATE {
+                ring.extend(resample_cubic(samples, TTS_SAMPLE_RATE, out_rate));
+            } else {
+                ring.extend(samples.iter().copied());
+            }
         }
     }
 
@@ -374,6 +389,7 @@ fn build_output_stream(
     playback_ring: PlaybackRing,
     last_play_ms: Arc<AtomicU64>,
     playback_rms: Arc<AtomicU32>,
+    output_rate: Arc<AtomicU32>,
 ) -> Result<Stream, String> {
     let config = preferred_output_config(device)?;
     log::info!(
@@ -384,49 +400,57 @@ fn build_output_stream(
     );
 
     let native_rate = config.sample_rate();
+    // Publish the device rate so push_playback resamples each TTS chunk to it
+    // once (continuous) — the callback below then just drains, no per-block
+    // resampling.
+    output_rate.store(native_rate, Ordering::Relaxed);
     let channels = config.channels() as usize;
     let stream_config: StreamConfig = config.into();
 
+    // Held across callbacks so an underrun fades from the last real sample
+    // instead of snapping to silence.
+    let mut prev_last: i16 = 0;
     let stream = device
         .build_output_stream(
             &stream_config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let frames_needed = data.len() / channels;
-                // Resample TTS_SAMPLE_RATE → native_rate worth of samples.
-                let ring_samples_needed = if native_rate != TTS_SAMPLE_RATE {
-                    (frames_needed as u64 * TTS_SAMPLE_RATE as u64 / native_rate as u64) as usize
-                } else {
-                    frames_needed
-                };
 
-                let mut pcm_16: Vec<i16> = Vec::with_capacity(ring_samples_needed);
+                // The ring already holds samples at the device rate
+                // (push_playback resampled each chunk once, with full
+                // context), so just drain what we need — no per-block
+                // resampling, which was the dominant crackle source.
+                let mut pcm: Vec<i16> = Vec::with_capacity(frames_needed);
                 if let Ok(mut ring) = playback_ring.lock() {
-                    let take = ring_samples_needed.min(ring.len());
+                    let take = frames_needed.min(ring.len());
                     if take > 0 {
                         // Real TTS audio is going out the speaker now.
                         last_play_ms.store(now_ms(), Ordering::Relaxed);
                     }
-                    pcm_16.extend(ring.drain(..take));
+                    pcm.extend(ring.drain(..take));
                 }
-                // Pad with silence if ring ran dry.
-                pcm_16.resize(ring_samples_needed, 0i16);
+                // Underrun: ramp the tail down to zero instead of a hard cut
+                // (which clicks). Start from the last real sample, or from the
+                // previous callback's last sample if fully dry.
+                if pcm.len() < frames_needed {
+                    let start = *pcm.last().unwrap_or(&prev_last) as f32;
+                    let missing = frames_needed - pcm.len();
+                    for i in 0..missing {
+                        let t = (i + 1) as f32 / missing as f32; // 0..1
+                        pcm.push((start * (1.0 - t)) as i16);
+                    }
+                }
+                prev_last = *pcm.last().unwrap_or(&0);
 
                 // Playback level (0..1 RMS) for orb audio-reactivity — she
                 // pulses to her own voice while speaking.
-                let pb = if pcm_16.is_empty() {
+                let pb = if pcm.is_empty() {
                     0.0
                 } else {
-                    let sum_sq: f64 = pcm_16.iter().map(|&s| (s as f64).powi(2)).sum();
-                    ((sum_sq / pcm_16.len() as f64).sqrt() / 32768.0) as f32
+                    let sum_sq: f64 = pcm.iter().map(|&s| (s as f64).powi(2)).sum();
+                    ((sum_sq / pcm.len() as f64).sqrt() / 32768.0) as f32
                 };
                 playback_rms.store(pb.to_bits(), Ordering::Relaxed);
-
-                // Resample to native device rate if needed.
-                let resampled = if native_rate != TTS_SAMPLE_RATE {
-                    resample_cubic(&pcm_16, TTS_SAMPLE_RATE, native_rate)
-                } else {
-                    pcm_16
-                };
 
                 // Convert i16 → f32 and write the mono signal to the
                 // first TWO channels (L+R) so ordinary stereo headphones
@@ -435,7 +459,7 @@ fn build_output_stream(
                 // monitor + USB returns) stay silent so we don't bleed
                 // into auxiliary buses the user isn't monitoring.
                 for (frame_idx, frame) in data.chunks_mut(channels).enumerate() {
-                    let s = resampled.get(frame_idx).copied().unwrap_or(0);
+                    let s = pcm.get(frame_idx).copied().unwrap_or(0);
                     let f = s as f32 / i16::MAX as f32;
                     for (i, ch) in frame.iter_mut().enumerate() {
                         *ch = if i < 2 { f } else { 0.0 };
