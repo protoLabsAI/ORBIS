@@ -248,6 +248,13 @@ def _resolve_skill_llm(skill) -> dict:
     # on content_model. Both None → single-model behavior unchanged.
     router_model = skill_llm.get("router_model") or os.environ.get("LLM_ROUTER_MODEL") or None
     content_model = skill_llm.get("content_model") or os.environ.get("LLM_CONTENT_MODEL") or None
+    # Dedicated micro-task model (fillers, backchannels, proactive
+    # announcements). Served at the same gateway URL/key — only the model
+    # name differs. Defaults to the persona model; point it at a smaller
+    # tier via persona.llm.micro_model or LLM_MICRO_MODEL.
+    micro_model = (
+        skill_llm.get("micro_model") or os.environ.get("LLM_MICRO_MODEL") or model
+    )
     return {
         "url": url,
         "model": model,
@@ -257,6 +264,7 @@ def _resolve_skill_llm(skill) -> dict:
         "provider": skill_llm.get("provider"),
         "router_model": router_model,
         "content_model": content_model,
+        "micro_model": micro_model,
     }
 
 
@@ -526,7 +534,7 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
         llm_cfg = _resolve_skill_llm(_active_skill(user_id))
         state.filler_generator = FillerGenerator(
             llm_url=llm_cfg["url"],
-            model=llm_cfg["model"],
+            model=llm_cfg["micro_model"],  # dedicated micro-task tier
             api_key=llm_cfg["api_key"],
             settings=state.filler_settings,
         )
