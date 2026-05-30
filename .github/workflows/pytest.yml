@@ -35,6 +35,13 @@ jobs:
       - name: Install package + test extra
         run: |
           python -m pip install --upgrade pip
+          # pyproject force-includes web/dist into the wheel (the SPA the
+          # desktop sidecar serves). hatchling >=1.27 validates that path at
+          # metadata-prep time, so an editable install fails if it is absent.
+          # The Python tests don't exercise the bundled SPA, so an empty dir
+          # satisfies the force-include (and app.py's StaticFiles mount)
+          # without a frontend build here.
+          mkdir -p web/dist
           # mlx-lm is darwin/arm64-gated in pyproject, so this is a no-op
           # on Ubuntu. Whisper remains installed in the native fork because
           # Mac desktop local STT is still the default path.
