@@ -148,6 +148,43 @@ def latency_for(tool_name: str) -> Latency:
     return spec.latency if spec else Latency.MEDIUM
 
 
+def capabilities_block(tools_schema) -> str:
+    """Generate the 'what you can do' system-prompt section directly from
+    the tools actually registered for this session — so it never drifts
+    from the code the way a hand-maintained list would.
+
+    A small/fast model will happily *say* it'll do something (set a
+    reminder, hand off a task) without invoking the tool, so the result
+    never happens. This block names every available action and tells the
+    model to call the tool rather than narrate it. The full per-tool schema
+    still rides in the request; this is the reinforcement that makes a weak
+    model reach for it."""
+    tools = getattr(tools_schema, "standard_tools", None) or []
+    lines: list[str] = []
+    for t in tools:
+        name = getattr(t, "name", None)
+        if not name:
+            continue
+        desc = (getattr(t, "description", "") or "").strip()
+        # First sentence / first line as the concise trigger hint.
+        first = re.split(r"(?<=[.!?])\s|\n", desc, maxsplit=1)[0].strip().rstrip(".")
+        if len(first) > 130:
+            first = first[:127].rstrip() + "…"
+        lines.append(f"- `{name}` — {first}." if first else f"- `{name}`")
+    if not lines:
+        return ""
+    listing = "\n".join(lines)
+    return (
+        "## WHAT YOU CAN DO — call the tool, don't just say it\n\n"
+        "You have tools that take real action. When the user asks for "
+        "something one of these does, actually CALL the tool. Promising to do "
+        "it WITHOUT calling the tool means it never happens — a reminder you "
+        "said you'd set but didn't, a task you said you'd hand off but didn't. "
+        "Match the request to the right tool:\n\n"
+        f"{listing}"
+    )
+
+
 class _AsyncToolNames:
     """Derived view on the registry for `name in ASYNC_TOOL_NAMES` checks."""
     def __contains__(self, name: str) -> bool:

@@ -140,6 +140,7 @@ from agent.session_store import (
 from agent.tools import (
     ASYNC_TOOL_NAMES,
     build_text_tool_schemas,
+    capabilities_block,
     latency_for,
     register_tools,
     run_text_tool,
@@ -650,6 +651,7 @@ def _fleet_block(delegates) -> str:
 
 def _effective_prompt(
     skill, tts_backend: str, *, verbosity, user_id: str, delegates=None,
+    tools_schema=None,
 ) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
@@ -695,6 +697,10 @@ def _effective_prompt(
         + tool_use_block(verbosity, tts_backend)
         + "\n\n"
         + tool_response_block(verbosity)
+        # Code-driven capability list — generated from the tools actually
+        # registered this session, so it never drifts from the code. Tells a
+        # small/fast model to CALL the tool rather than just promise to.
+        + (("\n\n" + _caps) if (_caps := capabilities_block(tools_schema)) else "")
         + "\n\n"
         + _fleet_block(delegates)
         + (("\n\n" + plan) if plan else "")
@@ -1241,6 +1247,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 verbosity=user_state.filler_settings.verbosity,
                 user_id=user_id,
                 delegates=session_delegates,
+                tools_schema=tools_schema,
             ),
         }],
         tools=tools_schema,
