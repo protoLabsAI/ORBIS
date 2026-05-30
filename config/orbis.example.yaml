@@ -98,6 +98,23 @@ voice:
 #   # llm:
 #   #   url: http://127.0.0.1:8100/v1
 #   #   model: Qwen/Qwen3.5-4B
+#
+#   # Failover backup (optional) — when the primary LLM errors (e.g. the
+#   # cloud gateway is unreachable), the voice pipeline automatically
+#   # switches to this backup for the rest of the session so the orb keeps
+#   # talking. Same fields as the primary llm block. Leave unset for the
+#   # single-LLM default (no failover, no overhead). The natural backup is
+#   # a local model so you're resilient to losing the network:
+#   llm:
+#     url: https://api.proto-labs.ai/v1     # primary: cloud gateway
+#     model: protolabs/fast
+#     api_key_env: GATEWAY_API_KEY
+#     fallback:                              # backup: native Apple-Silicon MLX
+#       url: mlx://mlx-community/gemma-3n-E2B-it-4bit
+#   # Backup can also be set via env without touching config — the runtime
+#   # .env tuning loop picks these up on restart:
+#   #   LLM_FALLBACK_URL=mlx://mlx-community/gemma-3n-E2B-it-4bit
+#   #   LLM_FALLBACK_MODEL=...   LLM_FALLBACK_API_KEY_ENV=...   LLM_FALLBACK_PROVIDER=...
 
 orb:
   # Starter orb viz — picked at first-run via the setup wizard.
