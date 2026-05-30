@@ -138,3 +138,66 @@ async def test_schedule_reminder_tool_rejects_bad_args(mem: Memory, monkeypatch)
     await schedule_reminder_handler(p)  # type: ignore[arg-type]
     assert mem.reminders.pending() == []
     assert "need" in p.results[0].lower()
+
+
+# --- recurring reminders (C2 / orbis-2t6) ----------------------------------
+
+
+def test_dal_add_rejects_nonpositive_repeat(mem: Memory) -> None:
+    with pytest.raises(ValueError):
+        mem.reminders.add(
+            text="x", fire_at=_iso(datetime.now(timezone.utc)), repeat_secs=0
+        )
+
+
+@pytest.mark.asyncio
+async def test_recurring_reminder_reschedules_not_fired(mem: Memory) -> None:
+    now = datetime.now(timezone.utc)
+    rid = mem.reminders.add(
+        text="drink water",
+        fire_at=_iso(now - timedelta(seconds=5)),
+        repeat_secs=3600,  # hourly
+    )
+    fake = FakeDelivery()
+    sched = ReminderScheduler(memory_provider=lambda: mem, delivery_provider=lambda: fake)
+
+    n = await sched.fire_due(now=now)
+    assert n == 1
+    assert len(fake.calls) == 1
+    # NOT retired — still pending, with fire_at rolled ~1h forward from now.
+    pending = mem.reminders.pending()
+    assert len(pending) == 1 and pending[0]["id"] == rid
+    next_fire = datetime.fromisoformat(pending[0]["fire_at"])
+    delta = (next_fire - now).total_seconds()
+    assert 3590 < delta < 3610
+    assert mem.reminders.due(_iso(now)) == []  # not due again yet
+
+
+@pytest.mark.asyncio
+async def test_stale_recurring_rolls_forward_without_speaking(mem: Memory) -> None:
+    now = datetime.now(timezone.utc)
+    mem.reminders.add(
+        text="stretch", fire_at=_iso(now - timedelta(hours=30)), repeat_secs=1800
+    )
+    fake = FakeDelivery()
+    sched = ReminderScheduler(memory_provider=lambda: mem, delivery_provider=lambda: fake)
+
+    n = await sched.fire_due(now=now)
+    assert n == 0
+    assert fake.calls == []                 # stale occurrence not spoken
+    # but rescheduled forward, still active (not retired)
+    pending = mem.reminders.pending()
+    assert len(pending) == 1
+    assert datetime.fromisoformat(pending[0]["fire_at"]) > now
+
+
+@pytest.mark.asyncio
+async def test_tool_repeat_minutes_stores_repeat_secs(mem: Memory, monkeypatch) -> None:
+    from agent.tools import schedule_reminder_handler
+    monkeypatch.setattr(app_module, "get_memory", lambda: mem)
+    p = FakeParams({"in_minutes": 60, "text": "drink water", "repeat_minutes": 60})
+    await schedule_reminder_handler(p)  # type: ignore[arg-type]
+    pending = mem.reminders.pending()
+    assert len(pending) == 1
+    assert pending[0]["repeat_secs"] == 3600
+    assert "every" in p.results[0].lower()

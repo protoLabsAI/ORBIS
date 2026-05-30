@@ -328,25 +328,42 @@ def _humanize_minutes(m: float) -> str:
     return f"in about {round(m / (24 * 60))} day(s)"
 
 
+def _humanize_every(m: float) -> str:
+    if m < 1.5:
+        return "every minute"
+    if m < 60:
+        return f"every {round(m)} minutes"
+    if m < 90:
+        return "every hour"
+    if m < 24 * 60:
+        return f"every {round(m / 60)} hours"
+    return f"every {round(m / (24 * 60))} day(s)"
+
+
 @tool(
     "schedule_reminder",
     (
-        "Schedule a spoken reminder for later. Use when the user asks to be "
-        "reminded ('remind me in 10 minutes to take the cookies out', 'in an "
-        "hour tell me to call mom', 'remind me tomorrow morning'). Work out "
-        "`in_minutes` from their phrasing (10, 60, 1440 for a day) and pass "
-        "the reminder `text` phrased the way you'd say it back to them. The "
-        "orb speaks it at that time, at a natural pause — you don't have to "
-        "do anything else. Confirm briefly."
+        "Schedule a spoken reminder. Use when the user asks to be reminded "
+        "('remind me in 10 minutes to take the cookies out', 'in an hour tell "
+        "me to call mom', 'every hour remind me to drink water'). Work out "
+        "`in_minutes` (when the FIRST one fires: 10, 60, 1440 = a day) and the "
+        "`text` phrased the way you'd say it back. For a RECURRING reminder "
+        "('every hour', 'every 30 minutes'), also pass `repeat_minutes` (the "
+        "interval); leave it out for a one-time reminder. The orb speaks it at "
+        "the right time, at a natural pause. Confirm briefly."
     ),
     parameters={
         "in_minutes": {
             "type": "number",
-            "description": "Minutes from now to fire (10, 60, 1440 = a day).",
+            "description": "Minutes from now until the first fire (10, 60, 1440 = a day).",
         },
         "text": {
             "type": "string",
             "description": "What to remind the user, phrased as you'd speak it.",
+        },
+        "repeat_minutes": {
+            "type": "number",
+            "description": "Optional. If set, repeat every this-many minutes (60 = hourly).",
         },
     },
     required=["in_minutes", "text"],
@@ -358,6 +375,15 @@ async def schedule_reminder_handler(params: FunctionCallParams) -> None:
         in_minutes = float(params.arguments.get("in_minutes"))
     except (TypeError, ValueError):
         in_minutes = 0.0
+    repeat_minutes_raw = params.arguments.get("repeat_minutes")
+    repeat_secs: int | None = None
+    if repeat_minutes_raw not in (None, "", 0):
+        try:
+            rm = float(repeat_minutes_raw)
+            if rm > 0:
+                repeat_secs = int(rm * 60)
+        except (TypeError, ValueError):
+            repeat_secs = None
     if not text or in_minutes <= 0:
         await params.result_callback(
             "I need both a time and what to remind you about."
@@ -369,13 +395,23 @@ async def schedule_reminder_handler(params: FunctionCallParams) -> None:
     ).isoformat()
     try:
         from app import get_memory  # type: ignore  # lazy: avoid import cycle
-        get_memory().reminders.add(text=text, fire_at=fire_at)
+        get_memory().reminders.add(text=text, fire_at=fire_at, repeat_secs=repeat_secs)
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"[schedule_reminder] store failed: {exc}")
         await params.result_callback("I couldn't set that reminder, sorry.")
         return
-    logger.info(f"[schedule_reminder] +{in_minutes}m: {text[:48]!r}")
-    await params.result_callback(f"Got it — I'll remind you {_humanize_minutes(in_minutes)}.")
+    logger.info(
+        f"[schedule_reminder] +{in_minutes}m repeat={repeat_secs}s: {text[:48]!r}"
+    )
+    if repeat_secs:
+        await params.result_callback(
+            f"Got it — I'll remind you {_humanize_minutes(in_minutes)}, then "
+            f"{_humanize_every(repeat_secs / 60)}."
+        )
+    else:
+        await params.result_callback(
+            f"Got it — I'll remind you {_humanize_minutes(in_minutes)}."
+        )
 
 
 # ---------------------------------------------------------------------------
