@@ -621,6 +621,10 @@ def _delegate_async_handler(
     through the DeliveryController (TIME_SENSITIVE → spoken at the next
     natural pause) when the delegate finishes."""
     bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
+    # Proactive follow-up (orbis-29q): if a hand-off runs longer than this,
+    # nudge the user once so a slow delegate doesn't feel forgotten. Cancelled
+    # the moment the result lands. 0 disables.
+    nudge_secs = float(os.environ.get("DELEGATE_NUDGE_SECS", "90"))
 
     async def _handler(params: FunctionCallParams) -> None:
         target = (params.arguments.get("target") or "").strip()
@@ -641,6 +645,25 @@ def _delegate_async_handler(
         logger.info(f"[delegate_async] target={target} query={query!r} (background)")
 
         async def _run_and_deliver() -> None:
+            done = asyncio.Event()
+
+            async def _nudge_if_slow() -> None:
+                # One proactive status nudge if the delegate is taking a while.
+                if nudge_secs <= 0:
+                    return
+                try:
+                    await asyncio.sleep(nudge_secs)
+                    if not done.is_set():
+                        await delivery.deliver(
+                            f"still waiting to hear back from {target} on that",
+                            priority=Priority.TIME_SENSITIVE, source=target,
+                            kind="delegate",
+                            cooldown_key=f"delegate-nudge:{target}:{query[:40]}",
+                        )
+                except asyncio.CancelledError:
+                    pass
+
+            nudge = asyncio.create_task(_nudge_if_slow())
             try:
                 result = await delegate_dispatch(
                     delegate, query,
@@ -664,6 +687,9 @@ def _delegate_async_handler(
                     f"that thing I handed off to {target} errored out.",
                     priority=Priority.TIME_SENSITIVE, source=target,
                 )
+            finally:
+                done.set()
+                nudge.cancel()
 
         task = asyncio.create_task(_run_and_deliver())
         _BG_DELEGATE_TASKS.add(task)
