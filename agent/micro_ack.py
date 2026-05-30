@@ -81,17 +81,24 @@ logger = logging.getLogger(__name__)
 # Fish consumes `[softly]` as prosody control — quiet delivery so the ack
 # doesn't compete with the upcoming real answer.
 _FISH_ACKS: tuple[str, ...] = (
-    "[softly] mm",
-    "[softly] mhm",
-    "[softly] hm",
-    "[softly] okay",
+    "[softly] mm", "[softly] mhm", "[softly] hm", "[softly] okay",
+    "[softly] yeah", "[softly] right", "[softly] sure", "[softly] got it",
+    "[softly] one sec", "[softly] hold on", "[softly] let me see",
+    "[softly] hang on", "[softly] hmm",
 )
 # Kokoro's neural TTS mangles unvoiced interjections ("mm", "hm", "mhm")
 # — they fall outside its training distribution and come out stilted or
-# robotic. Real short words render cleanly, so the kokoro pool is
-# limited to natural acknowledgements.
-_KOKORO_ACKS: tuple[str, ...] = ("yeah", "got it", "right", "okay")
-_PLAIN_ACKS: tuple[str, ...] = ("mm", "mhm", "hm", "okay")
+# robotic. Real short words render cleanly, so the kokoro pool is real
+# words / micro-phrases only. Kept varied so the ack never feels canned.
+_KOKORO_ACKS: tuple[str, ...] = (
+    "yeah", "right", "okay", "sure", "got it", "okay so", "alright",
+    "one sec", "hold on", "hang on", "let me see", "let me think",
+    "let's see", "good question",
+)
+_PLAIN_ACKS: tuple[str, ...] = (
+    "mm", "mhm", "hm", "okay", "uh-huh", "yeah", "right", "sure",
+    "got it", "one sec", "hold on", "let me see", "hmm", "let me think",
+)
 
 
 def _phrases_for_backend(tts_backend: str) -> tuple[str, ...]:
@@ -142,6 +149,7 @@ class MicroAckInjector(FrameProcessor):
     ) -> None:
         super().__init__()
         self._phrases: Sequence[str] = _phrases_for_backend(tts_backend)
+        self._last_phrase: str | None = None  # avoid back-to-back repeats
         self._trigger_s = trigger_ms / 1000.0
         self._min_interval = min_interval_secs
         self._enabled = enabled
@@ -263,7 +271,7 @@ class MicroAckInjector(FrameProcessor):
                     verbosity = None
                 if verbosity is Verbosity.SILENT:
                     return
-            phrase = random.choice(self._phrases)
+            phrase = self._pick()
             self._last_ack_at = time.monotonic()
             with tracing.span("filler.micro_ack") as sp:
                 sp.update(output=phrase)
@@ -274,6 +282,21 @@ class MicroAckInjector(FrameProcessor):
                 )
         except asyncio.CancelledError:
             pass
+
+    def _pick(self) -> str:
+        """Pick a random ack, avoiding an immediate repeat so it never
+        lands 'okay, okay' back-to-back."""
+        phrases = self._phrases
+        if not phrases:
+            return "mm"
+        if len(phrases) == 1:
+            self._last_phrase = phrases[0]
+            return phrases[0]
+        choice = random.choice(phrases)
+        if choice == self._last_phrase:
+            choice = random.choice([p for p in phrases if p != self._last_phrase])
+        self._last_phrase = choice
+        return choice
 
     def _cancel_timer(self) -> None:
         if self._timer and not self._timer.done():
