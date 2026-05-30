@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import time
 from collections.abc import Callable, Sequence
@@ -146,10 +147,18 @@ class MicroAckInjector(FrameProcessor):
         # None = no gate (back-compat for tests + callers that don't
         # have a UserState handy).
         verbosity_getter: Callable[[], Verbosity] | None = None,
+        # Optional micro-LLM generator (FillerGenerator). When present, a
+        # MICRO_ACK_LLM_CHANCE fraction of acks are LLM-generated for variety
+        # instead of drawn from the canned pool (orbis-29e). Tight timeout +
+        # fallback to the pool, so it never delays the ack.
+        generator: object | None = None,
     ) -> None:
         super().__init__()
+        self._tts_backend = tts_backend
         self._phrases: Sequence[str] = _phrases_for_backend(tts_backend)
         self._last_phrase: str | None = None  # avoid back-to-back repeats
+        self._generator = generator
+        self._llm_chance = float(os.environ.get("MICRO_ACK_LLM_CHANCE", "0.25"))
         self._trigger_s = trigger_ms / 1000.0
         self._min_interval = min_interval_secs
         self._enabled = enabled
@@ -271,7 +280,7 @@ class MicroAckInjector(FrameProcessor):
                     verbosity = None
                 if verbosity is Verbosity.SILENT:
                     return
-            phrase = self._pick()
+            phrase = await self._choose()
             self._last_ack_at = time.monotonic()
             with tracing.span("filler.micro_ack") as sp:
                 sp.update(output=phrase)
@@ -282,6 +291,25 @@ class MicroAckInjector(FrameProcessor):
                 )
         except asyncio.CancelledError:
             pass
+
+    async def _choose(self) -> str:
+        """Occasionally generate the ack via the micro LLM for variety
+        (orbis-29e); otherwise draw from the canned pool. Always falls back
+        to the pool on miss / failure, so the ack never stalls."""
+        if (
+            self._generator is not None
+            and self._llm_chance > 0
+            and random.random() < self._llm_chance
+        ):
+            try:
+                phrase = await self._generator.micro_ack(tts_backend=self._tts_backend)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[micro-ack] llm gen failed: {e}")
+                phrase = None
+            if phrase:
+                self._last_phrase = phrase
+                return phrase
+        return self._pick()
 
     def _pick(self) -> str:
         """Pick a random ack, avoiding an immediate repeat so it never

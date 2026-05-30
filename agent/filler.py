@@ -389,6 +389,36 @@ class FillerGenerator:
         self._recent.remember(phrase)
         return phrase
 
+    async def micro_ack(self, *, tts_backend: str) -> str | None:
+        """ONE tiny natural 'taking a beat' ack — the agent heard the user
+        and is about to answer ('one sec', 'let me see', 'hmm'). For the
+        occasional LLM-generated micro-ack (orbis-29e) instead of a canned
+        one. Returns None on failure or if the model over-produces, so the
+        caller falls back to the fixed pool."""
+        if self._settings.verbosity is Verbosity.SILENT:
+            return None
+        system = (
+            "You generate ONE tiny spoken acknowledgement for a voice agent "
+            "that just heard the user and is taking a beat before it answers. "
+            "1 to 3 words, natural and low-key — like 'one sec', 'let me see', "
+            "'hmm', 'right', 'okay so', 'hang on'. Not a question, not a "
+            "sentence, no promise about what you'll do. Output only the words."
+        )
+        user = "\n".join([
+            _backend_style(tts_backend).strip(),
+            self._recent.hint() or "",
+            "Output the tiny ack and nothing else.",
+        ])
+        phrase = await self._complete(
+            kind="micro_ack", system=system, user=user, tts_backend=tts_backend,
+        )
+        if not phrase or len(phrase.split()) > 4:
+            return None  # guard against the model rambling
+        if tts_backend == "fish" and not phrase.startswith("["):
+            phrase = f"[softly] {phrase}"
+        self._recent.remember(phrase)
+        return phrase
+
     async def _generate(
         self,
         *,
