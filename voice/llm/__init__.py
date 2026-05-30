@@ -78,6 +78,8 @@ def make_llm(
     settings: Any,
     provider: str | None = None,
     using_custom_url: bool = False,
+    router_model: str | None = None,
+    content_model: str | None = None,
 ) -> OpenAILLMService:
     """Construct the pipecat LLMService matching the configured backend.
 
@@ -148,6 +150,31 @@ def make_llm(
             think=think,
             settings=settings,
         )
+
+    # Two-model routing (orbis-3it) — only on the OpenAI-compat path
+    # (the gateway serves both protolabs/smart and protolabs/fast at one
+    # URL). Active only when a router/content split is actually requested;
+    # otherwise we build the plain single-model service below. MLX/Ollama
+    # are single local models, so the split doesn't apply there (those
+    # branches returned above).
+    _rm = router_model or model
+    _cm = content_model or model
+    if _rm != _cm:
+        from .two_model import TwoModelOpenAILLMService
+        logger.info(
+            f"[llm-factory] two-model routing for {base_url}: "
+            f"router={_rm} content={_cm}"
+        )
+        svc = TwoModelOpenAILLMService(
+            api_key=api_key,
+            base_url=base_url,
+            settings=settings,
+            router_model=_rm,
+            content_model=_cm,
+        )
+        if not using_custom_url:
+            svc.supports_developer_role = False
+        return svc
 
     logger.info(f"[llm-factory] using OpenAI-compat adapter for {base_url} model={model}")
     svc = OpenAILLMService(

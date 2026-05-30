@@ -115,6 +115,21 @@ voice:
 #   # .env tuning loop picks these up on restart:
 #   #   LLM_FALLBACK_URL=mlx://mlx-community/gemma-3n-E2B-it-4bit
 #   #   LLM_FALLBACK_MODEL=...   LLM_FALLBACK_API_KEY_ENV=...   LLM_FALLBACK_PROVIDER=...
+#
+#   # Two-model routing (optional) — use a stronger model for the
+#   # tool-decision turn and a faster one for the post-tool narration
+#   # turn. The narration turn (after a tool/delegate returns) runs on
+#   # content_model; everything else (incl. plain chat) runs on
+#   # router_model. Both must be served at the same `url`. Leave unset for
+#   # single-model behavior. OpenAI-compat gateways only (not MLX/Ollama).
+#   llm:
+#     url: https://api.proto-labs.ai/v1
+#     model: protolabs/fast                  # base/default
+#     api_key_env: GATEWAY_API_KEY
+#     router_model: protolabs/smart          # tool-decision + plain turns
+#     content_model: protolabs/fast          # post-tool narration turns
+#   # Or via the runtime .env (A/B without a rebuild):
+#   #   LLM_ROUTER_MODEL=protolabs/smart   LLM_CONTENT_MODEL=protolabs/fast
 
 orb:
   # Starter orb viz — picked at first-run via the setup wizard.

@@ -241,6 +241,12 @@ def _resolve_skill_llm(skill) -> dict:
         extra_body = None
     else:
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    # Two-model routing (orbis-3it): optional smart/fast split. When set,
+    # make_llm builds a TwoModelOpenAILLMService that runs the
+    # tool-decision turn on router_model and the post-tool narration turn
+    # on content_model. Both None → single-model behavior unchanged.
+    router_model = skill_llm.get("router_model") or os.environ.get("LLM_ROUTER_MODEL") or None
+    content_model = skill_llm.get("content_model") or os.environ.get("LLM_CONTENT_MODEL") or None
     return {
         "url": url,
         "model": model,
@@ -248,6 +254,8 @@ def _resolve_skill_llm(skill) -> dict:
         "extra_body": extra_body,
         "using_custom_url": using_custom_url,
         "provider": skill_llm.get("provider"),
+        "router_model": router_model,
+        "content_model": content_model,
     }
 
 
@@ -1067,6 +1075,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         settings=OpenAILLMService.Settings(**settings_kwargs),
         provider=llm_cfg["provider"],
         using_custom_url=using_custom_llm,
+        router_model=llm_cfg["router_model"],
+        content_model=llm_cfg["content_model"],
     )
 
     # Optional failover backup (orbis-1dd). When a fallback LLM is
