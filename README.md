@@ -232,7 +232,12 @@ scripts/check-macos-release-config.py
 
 ## Project docs
 
-All in-repo; read in this order on a cold pickup:
+📚 **[docs/](./docs/README.md)** is organised by [Diátaxis](https://diataxis.fr)
+— tutorials, how-to guides, reference, and explanation. Start there to *use*
+or *understand* ORBIS (e.g. [getting started](./docs/tutorials/getting-started.md)).
+
+The docs below are for *picking up the codebase*, read in this order on a cold
+pickup:
 
 1. **[STATUS.md](./STATUS.md)** — current snapshot. Where the
    codebase is, module map, what's shipped vs still pending.
