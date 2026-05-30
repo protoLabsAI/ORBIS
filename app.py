@@ -102,6 +102,7 @@ from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.micro_ack import MicroAckInjector
+from agent.stall_watchdog import StallWatchdog
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -1464,6 +1465,15 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # micro generator the fillers + announcer use.
             generator=_filler_gen_for(user_id),
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
+        ),
+        # Stall watchdog (E2) — if the agent produces no sign of work within
+        # STALL_SECS of the user's turn ending (frozen LLM/TTS), speak one
+        # canned recovery line so the user isn't left in dead air. Coarse +
+        # once-per-turn; the micro-ack covers the normal sub-3s gap.
+        StallWatchdog(
+            stall_secs=float(os.environ.get("STALL_SECS", "8")),
+            enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
+            tts_backend=tts_backend,
         ),
         # Both placed after the gate — they need TranscriptionFrames and
         # VAD frames produced by the aggregator. Push downstream into TTS.
