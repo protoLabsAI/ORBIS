@@ -200,7 +200,7 @@ log "building pyapp sidecar (cargo install pyapp)…"
 PYAPP_PROJECT_NAME="orbis" \
 PYAPP_PROJECT_VERSION="${VERSION}" \
 PYAPP_PROJECT_PATH="${SDIST}" \
-PYAPP_PROJECT_FEATURES="parakeet" \
+PYAPP_PROJECT_FEATURES="parakeet,smart-turn" \
 PYAPP_PYTHON_VERSION="3.11" \
 PYAPP_EXEC_SPEC="app:main" \
 PYAPP_FULL_ISOLATION="1" \

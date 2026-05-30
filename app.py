@@ -41,6 +41,15 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
     load_dotenv()
+    # Runtime tuning override: an optional .env in the user-config dir
+    # (next to orbis.yaml) lets us flip env knobs — VAD windows, echo
+    # guard, SMART_TURN, micro-ack — with a 5-second app restart instead
+    # of an 80-second sidecar rebuild. override=True so it wins over the
+    # values the Tauri shell injects when it spawns the sidecar.
+    from pathlib import Path as _RTPath
+    _rt_env = _RTPath.home() / "Library/Application Support/studio.protolabs.orbis/.env"
+    if _rt_env.is_file():
+        load_dotenv(_rt_env, override=True)
 except ImportError:
     # Missing dotenv shouldn't crash boot — secrets just have to come
     # from the shell env in that case.
@@ -141,6 +150,13 @@ from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("orbis")
+
+# Quiet the per-inference noise that floods the sidecar log and buries the
+# signal we tune against (STT/LLM/TTS timings, turn events). torch + kokoro
+# emit a UserWarning on every istft call; phonemizer warns per line.
+import warnings as _warnings  # noqa: E402
+_warnings.filterwarnings("ignore", category=UserWarning)
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
 PORT = int(os.environ.get("PORT", "7866"))
 LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1")
@@ -1084,12 +1100,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     )
 
     _turn_strategies = _build_user_turn_strategies()
+    # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
+    # the runtime .env). stop_secs is the dominant fixed per-turn delay;
+    # Smart Turn (SMART_TURN=local) lets it drop without clipping pauses.
+    _vad_stop = float(os.environ.get("VAD_STOP_SECS", "0.4"))
+    logger.info(
+        "[tuning] vad stop_secs=%s start_secs=%s min_volume=%s | echo_guard=%sms | smart_turn=%s",
+        _vad_stop, os.environ.get("VAD_START_SECS", "0.2"),
+        os.environ.get("VAD_MIN_VOLUME", "0.2"),
+        os.environ.get("NATIVE_ECHO_GUARD_MS", "800"), SMART_TURN,
+    )
     _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.7,    # default 0.7
-            start_secs=0.2,    # default 0.2
-            stop_secs=0.4,     # default 0.2 — longer pause before cutting
-            min_volume=0.2,    # default 0.6 — lowered for native desktop audio.
+            confidence=float(os.environ.get("VAD_CONFIDENCE", "0.7")),
+            start_secs=float(os.environ.get("VAD_START_SECS", "0.2")),
+            stop_secs=_vad_stop,  # default 0.4 — longer pause before cutting
+            min_volume=float(os.environ.get("VAD_MIN_VOLUME", "0.2")),  # native desktop audio
                                # The legacy CPAL input path applies MIC_GAIN in
                                # voice/local_transport.py; the macOS voice-processing
                                # path defaults to unity gain because Apple AGC is
