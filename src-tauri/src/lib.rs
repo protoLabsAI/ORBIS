@@ -666,12 +666,16 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     seed_default_config(&app, &config_path);
     let start_vllm = std::env::var("START_VLLM").unwrap_or_else(|_| "0".to_string());
     let starter_orbs_path = resolve_starter_orbs_path(&app);
+    let delegates_path = resolve_delegates_path(&app);
     log::info!(
         "sidecar env: ORBIS_CONFIG={} START_VLLM={start_vllm}",
         config_path.display()
     );
     if let Some(p) = starter_orbs_path.as_ref() {
         log::info!("sidecar env: ORBIS_STARTER_ORBS={}", p.display());
+    }
+    if let Some(p) = delegates_path.as_ref() {
+        log::info!("sidecar env: DELEGATES_YAML={}", p.display());
     }
 
     // --- Native audio engine ---
@@ -762,6 +766,13 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // "No starters configured on the server."
     if let Some(p) = starter_orbs_path.as_ref() {
         command = command.env("ORBIS_STARTER_ORBS", p);
+    }
+    // Point the sidecar at the bundled delegates YAML. Without this, the
+    // DelegateRegistry + /api/delegates fall back to a cwd-relative
+    // "config/delegates.yaml" that doesn't exist in the installed app, so
+    // `delegate_to` is never registered and there's nothing to delegate to.
+    if let Some(p) = delegates_path.as_ref() {
+        command = command.env("DELEGATES_YAML", p);
     }
     // Pass AUDIO_TRANSPORT=native + socket path to Python. Python reads
     // both to activate the native socket pipeline and to report the
@@ -904,6 +915,35 @@ fn resolve_starter_orbs_path(app: &AppHandle) -> Option<PathBuf> {
         }
         Err(e) => {
             log::warn!("starter_orbs resource resolve failed: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve the bundled `config/delegates.yaml` Resource path so we can
+/// point the sidecar's `DELEGATES_YAML` env var at it. Without this, both
+/// the voice agent's DelegateRegistry (`_DELEGATES` in app.py) and the
+/// `/api/delegates` store fall back to a cwd-relative
+/// `config/delegates.yaml` that doesn't exist in the installed app — so
+/// `delegate_to` is never registered and the orb has nothing to delegate
+/// to (the bug behind "can you delegate to agents?" doing nothing).
+/// Returns None on resolve failure / missing resource; the Python loader
+/// degrades to an empty registry rather than crashing.
+fn resolve_delegates_path(app: &AppHandle) -> Option<PathBuf> {
+    match app
+        .path()
+        .resolve("config/delegates.yaml", BaseDirectory::Resource)
+    {
+        Ok(p) if p.exists() => Some(p),
+        Ok(p) => {
+            log::warn!(
+                "delegates resource resolved to {} but doesn't exist",
+                p.display()
+            );
+            None
+        }
+        Err(e) => {
+            log::warn!("delegates resource resolve failed: {e}");
             None
         }
     }
