@@ -1,4 +1,5 @@
 import { Drawer } from '@/components/Drawer';
+import { BootStatus } from '@/components/BootStatus';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -29,6 +30,7 @@ function App() {
         <Slot name="overlay-bottom" />
         <Drawer />
       </div>
+      <BootStatus />
     </>
   );
 }

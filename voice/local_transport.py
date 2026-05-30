@@ -47,6 +47,12 @@ CTRL_TTS_END: int = 0x0002
 HEADER_FMT = "<4H"   # 4 × u16 LE = 8 bytes
 HEADER_LEN = struct.calcsize(HEADER_FMT)  # 8
 
+# num_samples is a u16 in the wire header (max 65535). A single TTS
+# utterance from Kokoro can exceed that, so output PCM is split into
+# chunks under the cap. Mic input frames are tiny (320 samples) and
+# never hit this.
+_MAX_FRAME_SAMPLES = 32_000
+
 TTS_SAMPLE_RATE = 24_000
 MIC_SAMPLE_RATE = 16_000
 
@@ -306,20 +312,31 @@ class LocalAudioTransport(BaseTransport):
     # --- Write helpers ---
 
     async def _send_pcm(self, audio_bytes: bytes, sample_rate: int) -> None:
-        """Write a TTS PCM frame to the socket (direction=0x0002)."""
+        """Write TTS PCM to the socket (direction=0x0002).
+
+        Split into chunks whose sample count fits the u16 wire header
+        (<= 65535). A single Kokoro utterance routinely exceeds that and
+        would otherwise raise ``ushort format requires 0 <= number <=
+        65535`` in struct.pack — dropping the whole frame and leaving the
+        bot silent.
+        """
         if not self._writer:
             return
-        frame = _encode_pcm_frame(audio_bytes, sample_rate)
+        max_bytes = _MAX_FRAME_SAMPLES * 2  # 2 bytes per i16 sample
         try:
-            self._writer.write(frame)
-            await self._writer.drain()
-            self._speaker_frames_sent += 1
-            if self._speaker_frames_sent == 1:
-                logger.info(
-                    "[local_transport] first speaker frame: sample_rate=%s samples=%s",
-                    sample_rate,
-                    len(audio_bytes) // 2,
-                )
+            for off in range(0, len(audio_bytes), max_bytes):
+                chunk = audio_bytes[off:off + max_bytes]
+                if not chunk:
+                    continue
+                self._writer.write(_encode_pcm_frame(chunk, sample_rate))
+                await self._writer.drain()
+                self._speaker_frames_sent += 1
+                if self._speaker_frames_sent == 1:
+                    logger.info(
+                        "[local_transport] first speaker frame: sample_rate=%s samples=%s",
+                        sample_rate,
+                        len(chunk) // 2,
+                    )
         except Exception as e:
             logger.error(f"[local_transport] write error: {e}")
 

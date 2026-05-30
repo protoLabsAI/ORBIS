@@ -35,6 +35,12 @@ pub const DIR_MIC_TO_PYTHON: u16 = 0x0001;
 pub const DIR_PYTHON_TO_SPEAKER: u16 = 0x0002;
 pub const DIR_CONTROL: u16 = 0x0010;
 
+/// Half-duplex echo-guard window (ms). Mic frames are dropped while real
+/// TTS audio is playing and for this long after the last played sample —
+/// covering the buffered playback tail so her own voice (which bleeds
+/// into the laptop mic acoustically) never reaches STT.
+const ECHO_GUARD_MS: u64 = 400;
+
 // Control codes.
 pub const CTRL_BARGE_IN: u16 = 0x0001;
 pub const CTRL_TTS_END: u16 = 0x0002;
@@ -131,11 +137,22 @@ impl SocketServer {
 
         let (mut reader, mut writer) = stream.into_split();
 
+        // Mic gate: push-to-talk (set_mic_listening) + half-duplex echo
+        // guard. Frames are still drained from the channel but dropped
+        // (not forwarded) when muted OR while she's speaking — so the
+        // sidecar never hears her own TTS (which bleeds into the laptop
+        // mic acoustically → would feed back as a user turn) or
+        // hallucinates on silence.
+        let eng = Arc::clone(&engine);
+
         // Writer task: take mic frames from the channel and send to Python.
         let write_task = tokio::spawn(async move {
             while let Some(msg) = mic_rx.recv().await {
                 match msg {
                     AudioMsg::MicFrame(samples) => {
+                        if !eng.is_listening() || eng.echo_guard_active(ECHO_GUARD_MS) {
+                            continue; // muted, or she's speaking — drop the frame
+                        }
                         let frame = encode_frame(DIR_MIC_TO_PYTHON, MIC_SAMPLE_RATE, &samples);
                         if writer.write_all(&frame).await.is_err() {
                             break;

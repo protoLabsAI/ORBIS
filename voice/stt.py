@@ -146,7 +146,11 @@ def _get_local_pipe():
     _local_pipe = hf_pipeline(
         "automatic-speech-recognition",
         model=WHISPER_MODEL,
-        torch_dtype=_WHISPER_DTYPE,
+        # Use the canonical `dtype` arg, not the deprecated `torch_dtype`.
+        # transformers >=4.46 routes `torch_dtype` through an internal
+        # dtype path that conflicts with model_kwargs ("use only one"),
+        # which surfaced as intermittent "STT inference failed" errors.
+        dtype=_WHISPER_DTYPE,
         device=DEVICE,
         model_kwargs=_WHISPER_MODEL_KWARGS,
     )
@@ -280,6 +284,13 @@ def make_stt(
         from voice.stt_sensevoice import SenseVoiceSTT
         logger.info("STT backend: sensevoice (FunAudioLLM/SenseVoiceSmall)")
         return SenseVoiceSTT()
+    if chosen_backend == "parakeet":
+        # Lazy import keeps parakeet-mlx in the [parakeet] optional extra.
+        # NVIDIA Parakeet-TDT on MLX — faster + far fewer silence
+        # hallucinations than Whisper.
+        from voice.stt_parakeet import ParakeetMLXSTT
+        logger.info("STT backend: parakeet (NVIDIA Parakeet-TDT via MLX)")
+        return ParakeetMLXSTT()
     if chosen_backend != "local":
         logger.warning(f"Unknown STT backend={chosen_backend!r}; falling back to local")
     if whisper_model and whisper_model != WHISPER_MODEL:
@@ -301,6 +312,10 @@ def prewarm() -> None:
     if STT_BACKEND == "sensevoice":
         from voice.stt_sensevoice import prewarm as prewarm_sensevoice
         prewarm_sensevoice()
+        return
+    if STT_BACKEND == "parakeet":
+        from voice.stt_parakeet import prewarm as prewarm_parakeet
+        prewarm_parakeet()
         return
     _get_local_pipe()
 

@@ -45,6 +45,7 @@ impl AecProcessor {
         for _ in 0..delay_samples {
             reference_buf.push_back(0i16);
         }
+        log::info!("[aec] init alpha={alpha} delay_ms={delay_ms} (alpha=0 means disabled)");
         Self {
             reference_buf,
             delay_samples,
@@ -53,6 +54,16 @@ impl AecProcessor {
     }
 
     /// Build from environment variables, with defaults.
+    ///
+    /// `AEC_ALPHA` defaults to **0.0 (disabled)**. This delay-and-subtract
+    /// AEC assumes the mic actually contains the acoustic echo — true only
+    /// for speaker setups. On headphones (or any setup where the mic does
+    /// NOT pick up playback) the subtraction has nothing to cancel and
+    /// instead *injects* `-alpha × reference` (her own TTS, inverted) into
+    /// the mic frames, which STT then transcribes as a user turn → she
+    /// answers herself. Echo on speaker setups is handled by the
+    /// half-duplex mic gate (socket writer) instead. Set AEC_ALPHA>0 only
+    /// with a known-good delay on a speaker rig.
     pub fn from_env() -> Self {
         let delay_ms = std::env::var("AEC_DELAY_MS")
             .ok()
@@ -61,7 +72,7 @@ impl AecProcessor {
         let alpha = std::env::var("AEC_ALPHA")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.85)
+            .unwrap_or(0.0)
             .clamp(0.0, 1.0);
         Self::new(delay_ms, alpha)
     }

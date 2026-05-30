@@ -46,6 +46,7 @@
 //!   linger. Tauri's shell plugin handles the cleanup if we drop the
 //!   CommandChild — we just make sure the guard drops.
 
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -61,7 +62,7 @@ mod audio;
 
 use serde::Serialize;
 use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 #[cfg(target_os = "macos")]
@@ -236,6 +237,60 @@ fn get_audio_level(state: tauri::State<AudioEngineState>) -> f32 {
         .unwrap_or(0.0)
 }
 
+/// Mic + TTS-playback levels (0..1) for the orb's audio-reactivity.
+#[cfg(feature = "native-audio")]
+#[derive(Serialize, Default)]
+struct AudioLevels {
+    mic: f32,
+    playback: f32,
+}
+
+/// The mic level is gated to 0 while muted or during the half-duplex echo
+/// window, so her own voice bleeding into the mic doesn't read as the
+/// user talking. `playback` is her live TTS level.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn get_audio_levels(state: tauri::State<AudioEngineState>) -> AudioLevels {
+    state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|g| {
+            g.as_ref().map(|e| AudioLevels {
+                mic: if e.is_listening() && !e.echo_guard_active(400) {
+                    e.current_rms()
+                } else {
+                    0.0
+                },
+                playback: e.playback_level(),
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Push-to-talk toggle (double-click the orb). Mic is muted by default
+/// so the sidecar gets no audio until the user opts into a conversation.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_mic_listening(on: bool, state: tauri::State<AudioEngineState>) {
+    if let Ok(g) = state.engine.lock() {
+        if let Some(e) = g.as_ref() {
+            e.set_listening(on);
+        }
+    }
+}
+
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn mic_listening(state: tauri::State<AudioEngineState>) -> bool {
+    state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|e| e.is_listening()))
+        .unwrap_or(false)
+}
+
 /// Clear the WKWebView's storage (cookies, IndexedDB, localStorage,
 /// service-worker registrations, fetch cache). Use when stale frontend
 /// state is suspected — typically a rebuilt sidecar is being served by
@@ -283,6 +338,164 @@ impl Sidecar {
     }
 }
 
+/// Sidecar loopback base URL, populated once the Python backend prints
+/// its `ORBIS_READY` line. Exposed to the bundled UI via `backend_url`.
+#[derive(Default)]
+struct BackendUrl(Mutex<Option<String>>);
+
+/// Returns the sidecar's loopback base URL once ready (else `None`). The
+/// bundled UI (loaded from tauri://localhost) calls this to resolve
+/// `/api/*` fetch + SSE targets without navigating the webview.
+#[tauri::command]
+fn backend_url(state: tauri::State<BackendUrl>) -> Option<String> {
+    state.0.lock().ok().and_then(|g| g.clone())
+}
+
+/// Latest sidecar boot-progress marker (raw JSON: {stage, detail}).
+/// Empty until the first `ORBIS_BOOT` line. The UI loading gate queries
+/// this on mount (to catch markers emitted before it subscribed) and
+/// then listens for `orbis-boot` events.
+#[derive(Default)]
+struct BootState(Mutex<String>);
+
+#[tauri::command]
+fn boot_status(state: tauri::State<BootState>) -> String {
+    state.0.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Inject the backend URL into the already-loaded bundled UI and notify
+/// it. Replaces the old navigate-to-sidecar flow, which dropped the
+/// WKWebView's keyboard first-responder on macOS (tao#208 / wry#637) and
+/// froze the setup wizard's inputs.
+fn inject_backend_url(app: &AppHandle, url: &str) {
+    if let Some(win) = app.get_webview_window("main") {
+        let script = format!(
+            "window.__ORBIS_BACKEND__ = {url:?}; \
+             window.dispatchEvent(new Event('orbis-backend-ready'));"
+        );
+        if let Err(e) = win.eval(&script) {
+            log::warn!("failed to inject backend url: {e}");
+        }
+    }
+    log::info!("injected backend url {url}");
+}
+
+/// Response returned by `api_request` to the bundled UI.
+#[derive(Serialize)]
+struct ApiResponse {
+    status: u16,
+    body: String,
+}
+
+/// Proxy a frontend API call to the sidecar over reqwest (Rust) instead
+/// of WKWebView's fetch. Tahoe's WKWebView drops/hangs HTTP request and
+/// response bodies, so the bundled UI routes every /api/* request through
+/// this command (tauri-apps/tauri#11854/#13166/#13878 and friends).
+#[tauri::command]
+async fn api_request(
+    method: String,
+    path: String,
+    body: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    state: tauri::State<'_, BackendUrl>,
+) -> Result<ApiResponse, String> {
+    let base = state
+        .0
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .ok_or_else(|| "backend not ready".to_string())?;
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let m = reqwest::Method::from_bytes(method.as_bytes())
+        .map_err(|e| format!("bad method {method}: {e}"))?;
+    let mut req = reqwest::Client::new().request(m, &url);
+    if let Some(h) = headers {
+        for (k, v) in h {
+            req = req.header(k, v);
+        }
+    }
+    if let Some(b) = body {
+        req = req
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(b);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("request {method} {path} failed: {e}"))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body {path} failed: {e}"))?;
+    Ok(ApiResponse { status, body })
+}
+
+/// Payload for the `orbis-sse` Tauri event mirroring one SSE message.
+#[derive(Clone, Serialize)]
+struct SsePayload {
+    event: String,
+    data: String,
+}
+
+/// Parse an SSE block ("event: X\ndata: Y") → (event, data). Returns
+/// None for comment/heartbeat-only blocks.
+fn parse_sse_block(raw: &str) -> Option<(String, String)> {
+    let mut event: Option<String> = None;
+    let mut data: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        if let Some(v) = line.strip_prefix("event:") {
+            event = Some(v.trim().to_string());
+        } else if let Some(v) = line.strip_prefix("data:") {
+            data.push(v.trim().to_string());
+        }
+    }
+    event.map(|e| (e, data.join("\n")))
+}
+
+/// Bridge the sidecar's /api/events SSE stream to the frontend as Tauri
+/// `orbis-sse` events. WKWebView won't stream a cross-origin EventSource
+/// on Tahoe, so Rust (reqwest) consumes the stream and re-emits each
+/// event; the frontend listens instead of opening its own EventSource.
+async fn bridge_sse(app: AppHandle, base: String) {
+    let url = format!("{}/api/events", base.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    loop {
+        match client.get(&url).send().await {
+            Ok(mut resp) => {
+                let _ = app.emit(
+                    "orbis-sse",
+                    SsePayload {
+                        event: "__connected".into(),
+                        data: "{}".into(),
+                    },
+                );
+                let mut buf = String::new();
+                loop {
+                    match resp.chunk().await {
+                        Ok(Some(bytes)) => {
+                            buf.push_str(&String::from_utf8_lossy(&bytes));
+                            while let Some(idx) = buf.find("\n\n") {
+                                let block: String = buf.drain(..idx + 2).collect();
+                                if let Some((event, data)) = parse_sse_block(&block) {
+                                    let _ = app.emit("orbis-sse", SsePayload { event, data });
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            log::warn!("[sse-bridge] stream error: {e}");
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(e) => log::warn!("[sse-bridge] connect failed: {e}"),
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         // tauri-plugin-log: unifies Rust + sidecar stdio into a
@@ -319,17 +532,40 @@ pub fn run() {
         // `fetch` from `@tauri-apps/plugin-http`. Origin allow-list
         // is in capabilities/default.json.
         .plugin(tauri_plugin_http::init())
+        // macOS WKWebView drops keyboard first-responder when the
+        // webview navigates to a new origin (startup splash -> the
+        // sidecar backend URL). Until focus is restored the setup
+        // wizard's inputs and buttons receive no clicks or keystrokes.
+        // Re-focus once each navigation has *finished* loading — an
+        // immediate set_focus right after navigate() races the async
+        // load and gets reset to nil when the new document commits.
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                // Focus the webview itself (not just the window): on macOS
+                // this makes the WKWebView the first responder, which a
+                // window-level set_focus does not reliably do.
+                if let Err(e) = webview.set_focus() {
+                    log::warn!("webview set_focus on page-load finished failed: {e}");
+                }
+            }
+        })
         .invoke_handler({
             #[cfg(feature = "native-audio")]
             {
                 tauri::generate_handler![
                     list_audio_inputs,
                     get_audio_level,
+                    get_audio_levels,
                     get_audio_input_mode,
                     get_microphone_permission_status,
                     request_microphone_permission,
                     open_microphone_settings,
-                    clear_browsing_data
+                    clear_browsing_data,
+                    backend_url,
+                    set_mic_listening,
+                    mic_listening,
+                    api_request,
+                    boot_status
                 ]
             }
             #[cfg(not(feature = "native-audio"))]
@@ -339,11 +575,16 @@ pub fn run() {
                     request_microphone_permission,
                     open_microphone_settings,
                     get_audio_input_mode,
-                    clear_browsing_data
+                    clear_browsing_data,
+                    backend_url,
+                    api_request,
+                    boot_status
                 ]
             }
         })
         .manage(Sidecar::new())
+        .manage(BackendUrl::default())
+        .manage(BootState::default())
         .setup(|app| {
             // Register native audio engine state. Must be done in setup()
             // so it's available before supervise_sidecar runs.
@@ -493,6 +734,10 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("couldn't find sidecar binary: {e}"))?
         .args(["--host", "127.0.0.1", "--port", "0"])
         .env("ORBIS_CONFIG", &config_path)
+        // Default STT to Parakeet (MLX) on the native build — far fewer
+        // silence-hallucinations than Whisper. Only the default: a
+        // `stt.backend` in config (Settings → STT) overrides it.
+        .env("STT_BACKEND", "parakeet")
         .env("START_VLLM", &start_vllm);
     // Point the sidecar at the bundled starter-orbs YAML. Without this,
     // agent/starter_orbs.py falls back to a cwd-relative
@@ -561,11 +806,35 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                     let _ = writeln!(f, "{line}");
                 }
 
+                // Parse `ORBIS_BOOT {json}` progress markers and forward
+                // them to the UI loading gate. Read off the pipe here so
+                // progress flows even while the sidecar's event loop is
+                // GIL-stalled loading models.
+                if let Some(rest) = line.strip_prefix("ORBIS_BOOT ") {
+                    if let Some(state) = app.try_state::<BootState>() {
+                        if let Ok(mut g) = state.0.lock() {
+                            *g = rest.to_string();
+                        }
+                    }
+                    let _ = app.emit("orbis-boot", rest.to_string());
+                }
+
                 // Parse `ORBIS_READY http://<host>:<port>` — the
                 // contract added in #20 (agent/paths.py + app.py main).
                 if !ready {
                     if let Some(url) = parse_ready(&line) {
-                        navigate_webview(&app, &url)?;
+                        // Bundled UI: do NOT navigate (navigating to the
+                        // sidecar origin dropped WKWebView first-responder,
+                        // tao#208 / wry#637, freezing wizard inputs). Store
+                        // + inject the sidecar URL so the frontend resolves
+                        // /api/* fetches and the SSE stream against it.
+                        if let Some(state) = app.try_state::<BackendUrl>() {
+                            if let Ok(mut g) = state.0.lock() {
+                                *g = Some(url.clone());
+                            }
+                        }
+                        inject_backend_url(&app, &url);
+                        tauri::async_runtime::spawn(bridge_sse(app.clone(), url.clone()));
                         ready = true;
                     }
                 }
@@ -754,6 +1023,7 @@ fn parse_ready(line: &str) -> Option<String> {
 /// Point the main webview at the sidecar's ready URL. During `tauri
 /// dev` the splash page at `../splash/index.html` was loaded first;
 /// here we swap it for the running backend.
+#[allow(dead_code)] // retained for reference; bundled UI no longer navigates
 fn navigate_webview(app: &AppHandle, url: &str) -> Result<(), String> {
     let parsed = tauri::Url::parse(url).map_err(|e| format!("invalid url {url}: {e}"))?;
     let window = app
@@ -763,6 +1033,14 @@ fn navigate_webview(app: &AppHandle, url: &str) -> Result<(), String> {
         .navigate(parsed)
         .map_err(|e| format!("navigate failed: {e}"))?;
     log::info!("navigated main webview to {url}");
+    // Restore keyboard first-responder after the splash→backend
+    // navigation. On macOS, navigating the WKWebView to a new origin
+    // drops first-responder, so form inputs (e.g. the setup wizard's
+    // name fields) silently receive no keystrokes until the user forces
+    // focus some other way. Re-focusing the window re-keys the webview.
+    if let Err(e) = window.set_focus() {
+        log::warn!("set_focus after navigate failed: {e}");
+    }
     Ok(())
 }
 

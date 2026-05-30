@@ -1,28 +1,84 @@
 /**
  * Typed fetch wrappers for ORBIS's /api/* endpoints.
  *
- * Routes through `@tauri-apps/plugin-http` — the Rust-backed fetch —
- * because native `window.fetch` POSTs silently drop their body / hang
- * forever in WKWebView on macOS arm64 production builds (open Tauri
- * issues #11854, #13166, #13878 — labeled `status: upstream`, the bug
- * is in WebKit's networking subprocess). Routing through Rust uses
- * reqwest under the hood and works reliably.
+ * Routes through the Rust `api_request` IPC command (reqwest) rather
+ * than WKWebView's fetch. On macOS (and especially Tahoe) WKWebView
+ * silently drops POST bodies and hangs reading response bodies (open
+ * Tauri issues #11854, #13166, #13878 — the bug is in WebKit's
+ * networking subprocess). Doing the HTTP in Rust sidesteps WebKit's
+ * network stack entirely and works reliably.
  *
- * The base URL is set to the document origin (the Python sidecar's
- * loopback HTTP origin after Tauri navigates to it) so existing
- * `/api/*` paths resolve the same way relative URLs would have.
+ * The base URL is the sidecar's loopback origin, injected by the Rust
+ * shell once the backend is ready (the bundled UI loads from
+ * tauri://localhost and never navigates) — see `backendBase()`.
  *
  * Auth: the owner API key (when configured) is attached as
  * ``X-API-Key``. Single-user fallback omits it.
  */
 
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
+import { invoke } from '@tauri-apps/api/core';
 import { authHeaders } from '@/auth/apiKey';
 import { logBus } from '@/shared/logBus';
 
-/** Resolve a relative API path against the document origin. */
-function url(path: string): string {
-  return new URL(path, window.location.href).toString();
+/**
+ * Resolve the sidecar's loopback base URL.
+ *
+ * The bundled native UI loads from the Tauri custom scheme
+ * (tauri://localhost) and never navigates — so `window.location` is NOT
+ * the backend. The Rust shell injects `window.__ORBIS_BACKEND__` (and
+ * fires `orbis-backend-ready`) once the Python sidecar prints its ready
+ * line. In plain http(s) dev contexts the page origin is the backend.
+ *
+ * Callers `await backendBase()`, so API/SSE calls issued before the
+ * sidecar is ready queue until the URL arrives instead of resolving
+ * against the wrong (tauri://) origin.
+ */
+let _backendBase: string | null = resolveInitialBase();
+const _baseWaiters: Array<(b: string) => void> = [];
+
+function resolveInitialBase(): string | null {
+  const injected = (window as unknown as { __ORBIS_BACKEND__?: string }).__ORBIS_BACKEND__;
+  if (typeof injected === 'string' && injected) return injected;
+  const proto = window.location.protocol;
+  if (proto === 'http:' || proto === 'https:') return window.location.origin;
+  return null;
+}
+
+function setBackendBase(b: string): void {
+  _backendBase = b;
+  while (_baseWaiters.length) _baseWaiters.shift()!(b);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('orbis-backend-ready', () => {
+    const injected = (window as unknown as { __ORBIS_BACKEND__?: string }).__ORBIS_BACKEND__;
+    if (typeof injected === 'string' && injected) setBackendBase(injected);
+  });
+}
+
+/** Synchronous peek at the sidecar base URL — null until the backend is ready. */
+export function backendBaseSync(): string | null {
+  return _backendBase;
+}
+
+/** Awaitable sidecar base URL — resolves once the backend is ready. */
+export async function backendBase(): Promise<string> {
+  if (_backendBase) return _backendBase;
+  try {
+    const fromShell = await invoke<string | null>('backend_url');
+    if (fromShell) {
+      setBackendBase(fromShell);
+      return fromShell;
+    }
+  } catch {
+    // `backend_url` command unavailable (e.g. plain browser dev) — fall
+    // through and wait for the injection event instead.
+  }
+  return new Promise<string>((resolve) => {
+    // Re-check: the injection event may have fired during the await above.
+    if (_backendBase) resolve(_backendBase);
+    else _baseWaiters.push(resolve);
+  });
 }
 
 export type Verbosity = 'silent' | 'brief' | 'narrated' | 'chatty';
@@ -73,7 +129,7 @@ export type OrbisConfig = {
     extra_body?: Record<string, unknown> | null;
   };
   stt?: {
-    backend?: 'local' | 'openai' | 'sensevoice';
+    backend?: 'local' | 'openai' | 'sensevoice' | 'parakeet';
     // HF model id used by the local Whisper backend. Honored at boot
     // only; runtime changes warn and no-op until restart.
     whisper_model?: string;
@@ -214,14 +270,20 @@ async function sendJSON<T>(method: string, path: string, body?: unknown): Promis
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const t0 = performance.now();
-  let r: Awaited<ReturnType<typeof tauriFetch>>;
+  // Gate until the sidecar URL is known (the Rust proxy needs it). Calls
+  // issued during the ~20s sidecar boot queue here instead of erroring.
+  await backendBase();
+  let res: { status: number; body: string };
   try {
-    r = await tauriFetch(url(path), {
+    // Route through the Rust IPC proxy rather than WKWebView fetch —
+    // Tahoe's WKWebView drops/hangs HTTP bodies (see backendBase docs).
+    res = await invoke<{ status: number; body: string }>('api_request', {
       method,
+      path,
+      body: body === undefined ? null : JSON.stringify(body),
       headers: body === undefined
         ? authHeaders()
         : authHeaders({ 'Content-Type': 'application/json' }),
-      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
     const elapsed = Math.round(performance.now() - t0);
@@ -233,23 +295,24 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw e;
   }
   const elapsed = Math.round(performance.now() - t0);
+  const ok = res.status >= 200 && res.status < 300;
   logBus.push({
     source: 'api',
-    level: r.ok ? 'info' : 'warn',
-    message: `${method} ${path} -> ${r.status} (${elapsed}ms)`,
+    level: ok ? 'info' : 'warn',
+    message: `${method} ${path} -> ${res.status} (${elapsed}ms)`,
   });
-  if (r.status === 401) throw new UnauthorizedError(path);
-  if (!r.ok) {
-    let detail = `HTTP ${r.status}`;
+  if (res.status === 401) throw new UnauthorizedError(path);
+  if (!ok) {
+    let detail = `HTTP ${res.status}`;
     try {
-      const parsed = await r.json();
+      const parsed = JSON.parse(res.body);
       if (parsed?.error) detail = String(parsed.error);
     } catch {
       // Keep generic status detail.
     }
-    throw new ApiError(`${path} → ${detail}`, r.status);
+    throw new ApiError(`${path} → ${detail}`, res.status);
   }
-  return r.json() as Promise<T>;
+  return JSON.parse(res.body) as T;
 }
 
 export const api = {

@@ -6,6 +6,8 @@ import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
 import { useOrbState } from './useOrbState';
 import { pushStatusTransient } from '../status-pill/store';
+import { invoke } from '@tauri-apps/api/core';
+import { voiceStore } from '@/voice/state';
 import type { FractalPreset } from './variants/fractal/presets';
 // Side-effect imports — variants register themselves on import.
 import './variants';
@@ -28,10 +30,16 @@ export function OrbStage() {
   const botStream = useMemo<MediaStream | null>(() => null, []);
   const localStream = useMemo<MediaStream | null>(() => null, []);
 
-  // Double-click / double-tap shows a transient "listening…" hint —
-  // the pipeline is always live, so there's nothing to "connect".
+  // Double-click / double-tap toggles push-to-talk. The mic is muted by
+  // default (privacy + no Whisper hallucinations on silence); the user
+  // opts into a conversation by double-clicking the orb, and again to mute.
   const onDoubleClick = () => {
-    pushStatusTransient('listening…', 1500);
+    const next = !voiceStore.getSnapshot().micListening;
+    voiceStore.update({ micListening: next });
+    pushStatusTransient(next ? 'listening…' : 'muted', 1800);
+    invoke('set_mic_listening', { on: next }).catch(() => {
+      // Command unavailable (e.g. non-native dev build) — keep local UI state.
+    });
   };
 
   if (!variant) {

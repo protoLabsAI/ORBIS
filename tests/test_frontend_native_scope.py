@@ -136,11 +136,16 @@ def test_frontend_dist_scaffold_stays_packageable_from_fresh_clone():
 
 
 def test_api_client_stays_tauri_native_not_split_deployment_browser_fetch():
-    """Mac native builds route API traffic through Tauri's Rust HTTP plugin."""
+    """Mac native builds route API traffic through Tauri IPC (Rust reqwest).
+
+    macOS Tahoe's WKWebView drops/hangs HTTP bodies even via plugin-http,
+    so api.ts now invokes the `api_request` command rather than fetch.
+    """
     api_source = (WEB / "src/lib/api.ts").read_text(encoding="utf-8")
 
-    assert "@tauri-apps/plugin-http" in api_source
-    assert "tauriFetch(" in api_source
+    assert "@tauri-apps/api/core" in api_source
+    assert "invoke" in api_source
+    assert "api_request" in api_source
 
     forbidden_files = (
         WEB / "src/lib/backend.ts",
@@ -198,18 +203,21 @@ def test_native_frontend_audio_and_settings_artifacts_stay_present():
 
 
 def test_native_voice_bridge_stays_sse_eventsource_based():
-    """Native voice UI state comes from /api/events, not browser RTVI hooks."""
+    """Native voice UI state comes from the sidecar SSE stream, bridged to
+    the frontend as Tauri `orbis-sse` events (WKWebView won't stream a
+    cross-origin EventSource on Tahoe; Rust consumes /api/events instead).
+    """
     bridge_hook = (WEB / "src/voice/useVoiceBridge.ts").read_text(encoding="utf-8")
     bridge_mount = (WEB / "src/voice/VoiceStateBridge.tsx").read_text(encoding="utf-8")
     logs_collector = (WEB / "src/plugins/logs-panel/LogsCollector.tsx").read_text(
         encoding="utf-8",
     )
 
-    assert "new EventSource('/api/events')" in bridge_hook
+    assert "@tauri-apps/api/event" in bridge_hook
+    assert "listen<" in bridge_hook or "listen(" in bridge_hook
+    assert "orbis-sse" in bridge_hook
     for event in ("bot-state", "transcript", "session", "tool-call", "delegation-progress"):
-        assert f"addEventListener('{event}'" in bridge_hook
-    assert "MIN_BACKOFF_MS" in bridge_hook
-    assert "MAX_BACKOFF_MS" in bridge_hook
+        assert f"'{event}'" in bridge_hook
     assert "useVoiceBridge();" in bridge_mount
     assert "source: 'sse'" in logs_collector
     assert "source: 'voice'" in logs_collector

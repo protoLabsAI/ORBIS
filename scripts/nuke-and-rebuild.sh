@@ -200,10 +200,14 @@ log "building pyapp sidecar (cargo install pyapp)…"
 PYAPP_PROJECT_NAME="orbis" \
 PYAPP_PROJECT_VERSION="${VERSION}" \
 PYAPP_PROJECT_PATH="${SDIST}" \
+PYAPP_PROJECT_FEATURES="parakeet" \
 PYAPP_PYTHON_VERSION="3.11" \
 PYAPP_EXEC_SPEC="app:main" \
 PYAPP_FULL_ISOLATION="1" \
   cargo install pyapp --root /tmp/pyapp-build-fix --locked --force >/dev/null
+# Bundles the Parakeet STT backend (parakeet-mlx) so STT_BACKEND=parakeet
+# works. It enlarges the sidecar; drop PYAPP_PROJECT_FEATURES to ship a
+# Whisper-only build.
 [ -x /tmp/pyapp-build-fix/bin/pyapp ] || { echo "pyapp build produced no bin" >&2; exit 3; }
 mkdir -p "${ROOT}/src-tauri/binaries"
 cp /tmp/pyapp-build-fix/bin/pyapp "${ROOT}/src-tauri/binaries/orbis-${TARGET}"

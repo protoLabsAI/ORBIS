@@ -31,6 +31,11 @@ tauri-plugin-dialog = "2"
 # uses reqwest under the hood. Allowed origins are scoped to localhost
 # in capabilities/default.json.
 tauri-plugin-http = "2"
+# Rust HTTP client for the IPC API proxy + SSE bridge. macOS Tahoe's
+# WKWebView can't reliably stream/read HTTP bodies, so all sidecar
+# traffic is routed through `api_request` / `bridge_sse` over reqwest
+# instead of the webview's fetch + EventSource.
+reqwest = "0.12"
 url = "2"
 log = "0.4"
 tauri-plugin-log = "2"
@@ -38,7 +43,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal   = { version = "0.17", optional = true }
 rubato = { version = "0.15", optional = true }
-tokio  = { version = "1",   optional = true, features = ["net", "io-util", "sync", "rt"] }
+tokio  = { version = "1", features = ["net", "io-util", "sync", "rt", "time"] }
 
 # Apple voice-processing IO via AVAudioEngine. Replaces the CPAL input
 # path on macOS with Apple-tuned AEC + AGC + NS (per WWDC23-10235).
@@ -72,7 +77,7 @@ optional = true
 # Gate all native audio code behind this feature. Production macOS
 # builds enable this together with `voice-processing`; once compiled,
 # native audio is the desktop app's required transport.
-native-audio = ["dep:cpal", "dep:rubato", "dep:tokio"]
+native-audio = ["dep:cpal", "dep:rubato"]
 # Apple AVAudioEngine voice-processing input (AEC + AGC + NS). Implies
 # native-audio and is required for production macOS desktop builds:
 #   cargo tauri build --features native-audio,voice-processing

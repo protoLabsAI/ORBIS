@@ -31,8 +31,8 @@ import {
   requestMicrophonePermission,
   type MicrophonePermissionStatus,
 } from '@/shared/audio/microphonePermission';
-import { OrbPreviewModal } from './OrbPreviewModal';
-import { paletteColors } from './paletteColors';
+import { OrbPreview } from '@/plugins/orb/OrbPreview';
+import { orbStore } from '@/plugins/orb/store';
 
 // A stable default for the LLM step — explicit id lookup so the
 // default doesn't drift if the preset ordering changes. Ollama is
@@ -771,10 +771,12 @@ function detectOS(): OSKind {
 
 function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const [starters, setStarters] = useState<StarterOrb[] | null>(null);
-  const [chosen, setChosen] = useState<string | null>(null);
-  const [previewing, setPreviewing] = useState<StarterOrb | null>(null);
+  const [index, setIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const dragXRef = useRef<number | null>(null);
+  const snapRef = useRef<{ variantId: string; palette: string; params: Record<string, unknown> } | null>(null);
+  const committedRef = useRef(false);
 
   useEffect(() => {
     api.starterOrbs()
@@ -782,18 +784,55 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
       .catch((e) => setError(String((e as Error).message ?? e)));
   }, []);
 
-  const commitPick = async (slug: string) => {
+  const current = starters && starters.length > 0 ? starters[index] : null;
+
+  // Snapshot the orb store on mount; restore on unmount unless the user
+  // committed a pick (Continue) — so backing out of this step doesn't
+  // leave the background orb stuck on the last-browsed (un-chosen) look.
+  useEffect(() => {
+    const snap = orbStore.get().getSnapshot();
+    snapRef.current = {
+      variantId: snap.variantId,
+      palette: snap.palette,
+      params: { ...snap.params },
+    };
+    return () => {
+      const prev = snapRef.current;
+      if (committedRef.current || !prev) return;
+      const r = orbStore.get();
+      r.setVariant(prev.variantId);
+      r.setPreset(prev.palette);
+      for (const [k, v] of Object.entries(prev.params)) r.setParam(k, v);
+    };
+  }, []);
+
+  // Live preview: drive the shared orb store to the focused starter so
+  // <OrbPreview/> renders the real shader — not a swatch. This is the
+  // carousel: the orb you see IS the orb you'd pick.
+  useEffect(() => {
+    if (!current) return;
+    const s = orbStore.get();
+    s.setVariant(current.variant);
+    s.setPreset(current.palette);
+    for (const [k, v] of Object.entries(current.params ?? {})) s.setParam(k, v);
+  }, [current]);
+
+  const go = (dir: number) => {
+    if (!starters || starters.length === 0) return;
+    setIndex((i) => (i + dir + starters.length) % starters.length);
+  };
+
+  const onConfirm = async () => {
+    if (!current) return;
     setCommitting(true);
     setError(null);
     try {
-      const res = await api.selectStarter(slug);
-      // Server-side write to config/orbis.yaml is necessary but not
-      // sufficient — the orb store reads variant + palette from
-      // localStorage on first mount and never re-syncs afterward, so
-      // without this push the rendered orb stays on whatever's in
-      // localStorage (defaults to fractal + Aurora) regardless of the
-      // user's pick. Push immediately so the hatch animation and the
-      // rest of the app reflect the selection.
+      const res = await api.selectStarter(current.slug);
+      // Push the pick into the orb store + backend so the hatch and the
+      // rest of the app reflect it (the store reads localStorage once on
+      // mount and never re-syncs). committedRef keeps the unmount cleanup
+      // above from reverting it.
+      committedRef.current = true;
       setVariant(res.starter.variant);
       applyPreset(res.starter.palette);
       onNext();
@@ -803,18 +842,13 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
     }
   };
 
-  const onConfirm = async () => {
-    if (!chosen) return;
-    commitPick(chosen);
-  };
-
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Pick your orb</h2>
         <p className="text-sm text-zinc-500 max-w-md mx-auto">
-          This is your starter. Tap a card to pick, or open a preview
-          to see it live and drag to rotate.
+          Swipe or use the arrows to browse — this is the real thing,
+          live. Drag the orb to rotate it.
         </p>
       </div>
 
@@ -827,92 +861,74 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
           No starters configured on the server.
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {starters.map((s) => (
-            <StarterCard
-              key={s.slug}
-              starter={s}
-              selected={chosen === s.slug}
-              onSelect={() => setChosen(s.slug)}
-              onPreview={() => setPreviewing(s)}
-            />
-          ))}
+        <div className="flex flex-col items-center gap-3">
+          <div className="relative flex w-full items-center justify-center">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              aria-label="Previous orb"
+              className="absolute left-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-zinc-800 bg-zinc-900/70 text-lg text-zinc-300 hover:bg-zinc-800"
+            >‹</button>
+
+            {/* The live orb. The variant handles drag-to-rotate itself;
+                a deliberate horizontal flick (≥60px) flips starters. */}
+            <div
+              className="relative aspect-square w-56 overflow-hidden rounded-xl border border-zinc-800 bg-black"
+              onPointerDown={(e) => { dragXRef.current = e.clientX; }}
+              onPointerUp={(e) => {
+                if (dragXRef.current === null) return;
+                const dx = e.clientX - dragXRef.current;
+                dragXRef.current = null;
+                if (dx <= -60) go(1);
+                else if (dx >= 60) go(-1);
+              }}
+            >
+              <OrbPreview />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => go(1)}
+              aria-label="Next orb"
+              className="absolute right-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-zinc-800 bg-zinc-900/70 text-lg text-zinc-300 hover:bg-zinc-800"
+            >›</button>
+          </div>
+
+          <div className="min-h-[2.75rem] text-center">
+            <div className="font-mono text-sm uppercase tracking-wider text-zinc-300">
+              {current?.name}
+            </div>
+            <div className="mx-auto mt-0.5 max-w-xs text-xs text-zinc-500">
+              {current?.description}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-center gap-1.5">
+            {starters.map((s, i) => (
+              <button
+                key={s.slug}
+                type="button"
+                aria-label={`Show ${s.name}`}
+                onClick={() => setIndex(i)}
+                className={
+                  'h-1.5 rounded-full transition-all ' +
+                  (i === index ? 'w-5 bg-amber-400' : 'w-1.5 bg-zinc-700 hover:bg-zinc-600')
+                }
+              />
+            ))}
+          </div>
         </div>
       )}
 
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onConfirm} disabled={!chosen || committing}>
-          {committing ? 'Saving…' : 'Continue'}
+        <Button onClick={onConfirm} disabled={!current || committing}>
+          {committing ? 'Saving…' : 'Use this orb'}
         </Button>
       </div>
-
-      {previewing && (
-        <OrbPreviewModal
-          starter={previewing}
-          onClose={() => setPreviewing(null)}
-          onConfirm={() => {
-            setPreviewing(null);
-            commitPick(previewing.slug);
-          }}
-        />
-      )}
     </div>
   );
 }
-
-function StarterCard({
-  starter, selected, onSelect, onPreview,
-}: {
-  starter: StarterOrb;
-  selected: boolean;
-  onSelect: () => void;
-  onPreview: () => void;
-}) {
-  const { primary, secondary } = paletteColors(starter.variant, starter.palette);
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
-      className={
-        'relative flex flex-col items-start text-left p-3 rounded-lg border transition-colors cursor-pointer ' +
-        (selected
-          ? 'border-amber-500/60 bg-amber-500/5'
-          : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
-      }
-    >
-      {/* Gradient swatch derived from the palette's primary/secondary
-          energy colors. Cheap visual hint — the actual shader is one
-          click away via the preview button. Decorative but contains
-          the focusable Preview button, so no aria-hidden. */}
-      <div
-        className="relative w-full aspect-square rounded-md mb-3 overflow-hidden border border-zinc-800/60"
-        style={{
-          background: `radial-gradient(circle at 35% 35%, ${primary} 0%, ${secondary} 55%, #0a0a0a 100%)`,
-        }}
-      >
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onPreview(); }}
-          className="absolute bottom-1.5 right-1.5 h-7 px-2 text-[10px] uppercase tracking-wider rounded-md bg-black/60 hover:bg-black/80 text-zinc-200 backdrop-blur-sm border border-white/10 transition-colors"
-          aria-label={`Preview ${starter.name}`}
-        >
-          Preview
-        </button>
-      </div>
-      <div className="text-sm text-zinc-200">{starter.name}</div>
-      <div className="text-[11px] text-zinc-500 mt-1 line-clamp-2">
-        {starter.description}
-      </div>
-      <div className="text-[10px] text-zinc-600 mt-2 uppercase tracking-wider">
-        {starter.variant} · {starter.palette}
-      </div>
-    </div>
-  );
-}
-
 
 function MicStep({
   onNext,

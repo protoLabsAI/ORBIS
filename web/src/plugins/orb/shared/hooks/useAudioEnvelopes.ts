@@ -1,8 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { invoke } from '@tauri-apps/api/core';
 import { Envelope, rmsFromAnalyser } from '../envelope';
 import { lerp } from '../math';
 import { DISP_ALPHA, ENV_BOT, ENV_USER } from '../constants';
+
+// Gain applied to the native (Rust) RMS levels before the envelope
+// follower. The raw RMS is small (~0.05–0.2 for TTS, ~0.03–0.1 for
+// speech), so lift it into a punchy [0, 1] reactive range.
+const NATIVE_BOT_GAIN = 4.0;
+const NATIVE_USER_GAIN = 6.0;
 
 type Bundle = { analyser: AnalyserNode; source: MediaStreamAudioSourceNode; buf: Uint8Array };
 
@@ -23,6 +30,30 @@ export function useAudioEnvelopes({
 }) {
   const dBotRef = useRef(0);
   const dUserRef = useRef(0);
+
+  // Native audio levels (Tauri). The native app has no browser
+  // MediaStreams, so poll the Rust engine for mic + TTS-playback levels
+  // and feed them through the same envelope followers below — the orb
+  // pulses to her voice while she speaks and to yours while listening.
+  const nativeRef = useRef({ mic: 0, playback: 0 });
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const lv = await invoke<{ mic: number; playback: number }>('get_audio_levels');
+        if (lv) nativeRef.current = lv;
+      } catch {
+        // Command unavailable (plain browser dev) — leave at 0.
+      }
+      if (active) timer = setTimeout(poll, 33); // ~30 Hz
+    };
+    poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
 
   const stateRef = useRef<{
     ctx: AudioContext | null;
@@ -70,14 +101,18 @@ export function useAudioEnvelopes({
 
   useFrame(() => {
     const s = stateRef.current;
+    const nat = nativeRef.current;
     let bot = 0, user = 0;
     if (s.bot) {
-      const raw = rmsFromAnalyser(s.bot.analyser, s.bot.buf);
-      bot = s.envBot.update(raw);
+      bot = s.envBot.update(rmsFromAnalyser(s.bot.analyser, s.bot.buf));
+    } else {
+      // Native fallback: her live TTS level, gained into a punchy range.
+      bot = s.envBot.update(Math.min(1, nat.playback * NATIVE_BOT_GAIN));
     }
     if (s.user) {
-      const raw = rmsFromAnalyser(s.user.analyser, s.user.buf);
-      user = s.envUser.update(raw);
+      user = s.envUser.update(rmsFromAnalyser(s.user.analyser, s.user.buf));
+    } else {
+      user = s.envUser.update(Math.min(1, nat.mic * NATIVE_USER_GAIN));
     }
     dBotRef.current = lerp(dBotRef.current, bot, DISP_ALPHA);
     dUserRef.current = lerp(dUserRef.current, user, DISP_ALPHA);

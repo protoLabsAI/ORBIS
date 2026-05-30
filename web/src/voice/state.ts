@@ -11,6 +11,8 @@ export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 export interface VoiceSnapshot {
   state: VoiceState;
+  /** Push-to-talk: true when the mic is forwarding audio (double-click the orb to toggle). */
+  micListening: boolean;
   /** True once the SSE bridge has received its first event from the sidecar. */
   connected: boolean;
   lastUserTranscript: string | null;
@@ -26,6 +28,7 @@ export interface VoiceSnapshot {
 
 const INITIAL: VoiceSnapshot = {
   state: 'idle',
+  micListening: false,
   connected: false,
   lastUserTranscript: null,
   lastBotText: null,

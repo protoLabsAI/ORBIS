@@ -1515,11 +1515,44 @@ def prewarm_llm() -> None:
         logger.warning(f"LLM prewarm skipped: {e}")
 
 
+def _emit_boot(stage: str, detail: str) -> None:
+    """Print a boot-progress marker for the Rust shell to parse and
+    forward to the UI loading gate. Written to stdout because the shell
+    reads the sidecar pipe even while Python's event loop is GIL-stalled
+    by model loads (so progress keeps flowing during the slow steps)."""
+    import json as _json
+
+    try:
+        print(f"ORBIS_BOOT {_json.dumps({'stage': stage, 'detail': detail})}", flush=True)
+    except Exception:
+        pass
+
+
 def prewarm_all() -> None:
     logger.info(f"Prewarming (tts_backend={TTS_BACKEND})")
-    prewarm_stt()
-    prewarm_tts()
-    prewarm_llm()
+    # Real boot stages — each marker is emitted as that component begins
+    # loading, so the UI loading screen reflects actual work, not a timer.
+    # Each step is guarded so a failure never strands the loading gate
+    # (which releases on the final "ready" marker).
+    stt_detail = {
+        "parakeet": "Loading Parakeet speech model…",
+        "sensevoice": "Loading SenseVoice speech model…",
+        "openai": "Connecting speech recognition…",
+    }.get(STT_BACKEND, "Loading Whisper speech model…")
+    tts_detail = (
+        "Loading Kokoro voice…" if TTS_BACKEND == "kokoro" else "Loading speech synthesis…"
+    )
+    for stage, detail, fn in (
+        ("stt", stt_detail, prewarm_stt),
+        ("tts", tts_detail, prewarm_tts),
+        ("llm", "Warming up the language model…", prewarm_llm),
+    ):
+        _emit_boot(stage, detail)
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"prewarm {stage} failed: {e}")
+    _emit_boot("ready", "Ready")
 
 
 # ---------------------------------------------------------------------------
@@ -2035,10 +2068,23 @@ async def llm_test(body: dict):
     are what's really being validated here, not their ORBIS auth.
     """
     from agent.llm_probe import ping_endpoint
+    url = str(body.get("url") or "")
+    api_key = str(body.get("api_key") or "")
+    # "Leave blank to keep the saved key" must apply to the test too —
+    # otherwise a blank field reports a false 'auth rejected' even when a
+    # valid key is saved. Fall back to the resolved key, but only for the
+    # already-configured URL so we never leak it to a different provider.
+    if not api_key:
+        try:
+            saved = _resolve_skill_llm(get_active_persona())
+            if not url or url == saved.get("url"):
+                api_key = saved.get("api_key") or ""
+        except Exception:
+            pass
     return await ping_endpoint(
-        url=str(body.get("url") or ""),
+        url=url,
         model=str(body.get("model") or ""),
-        api_key=str(body.get("api_key") or ""),
+        api_key=api_key,
     )
 
 
@@ -2050,10 +2096,17 @@ async def llm_models(body: dict):
     Unauth, same rationale as /api/llm/test.
     """
     from agent.llm_probe import list_models
-    return await list_models(
-        url=str(body.get("url") or ""),
-        api_key=str(body.get("api_key") or ""),
-    )
+    url = str(body.get("url") or "")
+    api_key = str(body.get("api_key") or "")
+    # Same "leave blank to keep" fallback as /api/llm/test (see there).
+    if not api_key:
+        try:
+            saved = _resolve_skill_llm(get_active_persona())
+            if not url or url == saved.get("url"):
+                api_key = saved.get("api_key") or ""
+        except Exception:
+            pass
+    return await list_models(url=url, api_key=api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -2474,7 +2527,19 @@ async def get_config(user: User = Depends(require_user)):
     """Return the current config/orbis.yaml as a dict. Drawer UI
     consumes this to populate the settings form."""
     from agent.config_store import read_config
-    return {"config": read_config()}
+    cfg = read_config()
+    # Surface the *effective* STT backend so Settings reflects what's
+    # actually running. The native build defaults the backend via the
+    # STT_BACKEND env (parakeet); if the user hasn't explicitly set
+    # stt.backend in config, fill it in so the UI doesn't show a stale
+    # default ("Whisper") while Parakeet is the live backend.
+    stt = cfg.get("stt")
+    if not isinstance(stt, dict):
+        stt = {}
+    if not stt.get("backend"):
+        stt["backend"] = STT_BACKEND
+        cfg["stt"] = stt
+    return {"config": cfg}
 
 
 @app.get("/api/personality")

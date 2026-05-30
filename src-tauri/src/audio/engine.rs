@@ -18,7 +18,7 @@
 #![allow(deprecated)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -62,6 +62,21 @@ pub struct AudioEngine {
     /// path is active.
     /// Stored as f32 bits in an AtomicU32 for lock-free reads from the UI.
     rms: Arc<AtomicU32>,
+    /// Push-to-talk gate. When false (default) the socket writer drops
+    /// mic frames so the sidecar receives no audio — this prevents the
+    /// always-listening behavior and Whisper hallucinations on silence.
+    /// Toggled by double-clicking the orb via `set_mic_listening`.
+    pub listening: Arc<AtomicBool>,
+    /// Monotonic-ms timestamp of the last real TTS audio frame sent to the
+    /// speaker. Half-duplex echo guard: the socket writer drops mic frames
+    /// while (and just after) she's speaking. Confirmed needed by mic-diag
+    /// — the laptop mic picks up her TTS acoustically (~88 RMS) even on
+    /// headphones, which STT would otherwise transcribe as a user turn.
+    pub last_play_ms: Arc<AtomicU64>,
+    /// Current TTS playback level (0.0–1.0), updated by the output
+    /// callback. Drives the orb's audio-reactivity (she pulses to her
+    /// own voice). Stored as f32 bits in an AtomicU32 for lock-free reads.
+    playback_rms: Arc<AtomicU32>,
     // Keep streams alive — they stop when dropped.
     // CPAL input is gated off when the voice-processing feature is on;
     // AVAudioEngine takes its place as the input source.
@@ -101,8 +116,16 @@ impl AudioEngine {
         let aec = Arc::new(Mutex::new(AecProcessor::from_env()));
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
         let rms = Arc::new(AtomicU32::new(0));
+        let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: muted by default
+        let last_play_ms = Arc::new(AtomicU64::new(0)); // half-duplex echo guard
+        let playback_rms = Arc::new(AtomicU32::new(0)); // TTS level for orb reactivity
 
-        let output_stream = build_output_stream(&output_device, Arc::clone(&playback_ring))?;
+        let output_stream = build_output_stream(
+            &output_device,
+            Arc::clone(&playback_ring),
+            Arc::clone(&last_play_ms),
+            Arc::clone(&playback_rms),
+        )?;
         output_stream
             .play()
             .map_err(|e| format!("output stream play: {e}"))?;
@@ -147,6 +170,9 @@ impl AudioEngine {
             playback_ring,
             aec,
             rms,
+            listening,
+            last_play_ms,
+            playback_rms,
             #[cfg(not(feature = "voice-processing"))]
             _input_stream,
             _output_stream: output_stream,
@@ -158,6 +184,30 @@ impl AudioEngine {
     /// Current microphone RMS level (0.0–1.0), updated every mic frame.
     pub fn current_rms(&self) -> f32 {
         f32::from_bits(self.rms.load(Ordering::Relaxed))
+    }
+
+    /// Toggle push-to-talk. When off, mic frames are dropped before
+    /// reaching the sidecar.
+    pub fn set_listening(&self, on: bool) {
+        self.listening.store(on, Ordering::Relaxed);
+        log::info!("[audio] mic listening = {on}");
+    }
+
+    /// Whether the mic is currently forwarding audio to the sidecar.
+    pub fn is_listening(&self) -> bool {
+        self.listening.load(Ordering::Relaxed)
+    }
+
+    /// Half-duplex echo guard: true if real TTS audio played within the
+    /// last `guard_ms`, so the mic should stay muted (her voice bleeds
+    /// into the mic acoustically and would otherwise be transcribed).
+    pub fn echo_guard_active(&self, guard_ms: u64) -> bool {
+        now_ms().saturating_sub(self.last_play_ms.load(Ordering::Relaxed)) < guard_ms
+    }
+
+    /// Current TTS playback level (0.0–1.0) for orb audio-reactivity.
+    pub fn playback_level(&self) -> f32 {
+        f32::from_bits(self.playback_rms.load(Ordering::Relaxed))
     }
 
     /// Enqueue TTS PCM samples for playback.
@@ -191,9 +241,20 @@ impl AudioEngine {
     /// List all available CPAL input device names.
     pub fn list_input_devices() -> Vec<String> {
         let host = cpal::default_host();
-        host.input_devices()
+        let mut names: Vec<String> = host
+            .input_devices()
             .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // macOS (hardened runtime / Tahoe) sometimes returns an empty
+        // input_devices() enumeration even when a usable default input
+        // exists — which left the mic picker blank. Always surface the
+        // default device so the list is never empty.
+        if let Some(default_name) = host.default_input_device().and_then(|d| d.name().ok()) {
+            if !names.iter().any(|n| n == &default_name) {
+                names.insert(0, default_name);
+            }
+        }
+        names
     }
 }
 
@@ -273,7 +334,9 @@ fn build_input_stream(
                         while acc.len() >= MIC_FRAME_SAMPLES {
                             let frame: Vec<i16> = acc.drain(..MIC_FRAME_SAMPLES).collect();
 
-                            // AEC: subtract delayed reference.
+                            // AEC: subtract delayed reference (disabled by
+                            // default — alpha=0 — so this is a passthrough;
+                            // echo is handled by the half-duplex mic gate).
                             let frame = if let Ok(mut a) = aec.lock() {
                                 a.process_mic(&frame)
                             } else {
@@ -293,9 +356,25 @@ fn build_input_stream(
     Ok(stream)
 }
 
+/// Monotonic milliseconds since the audio subsystem first started — used
+/// by the half-duplex echo guard.
+fn now_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
 /// Build the CPAL output stream. Drains from `playback_ring` into the
-/// hardware buffer; outputs silence when the ring is empty.
-fn build_output_stream(device: &Device, playback_ring: PlaybackRing) -> Result<Stream, String> {
+/// hardware buffer; outputs silence when the ring is empty. Stamps
+/// `last_play_ms` whenever real audio is played so the mic writer can run
+/// half-duplex (mute the mic while, and just after, she's speaking).
+fn build_output_stream(
+    device: &Device,
+    playback_ring: PlaybackRing,
+    last_play_ms: Arc<AtomicU64>,
+    playback_rms: Arc<AtomicU32>,
+) -> Result<Stream, String> {
     let config = preferred_output_config(device)?;
     log::info!(
         "[audio] output config: {:?} {}ch {}Hz",
@@ -323,35 +402,43 @@ fn build_output_stream(device: &Device, playback_ring: PlaybackRing) -> Result<S
                 let mut pcm_16: Vec<i16> = Vec::with_capacity(ring_samples_needed);
                 if let Ok(mut ring) = playback_ring.lock() {
                     let take = ring_samples_needed.min(ring.len());
+                    if take > 0 {
+                        // Real TTS audio is going out the speaker now.
+                        last_play_ms.store(now_ms(), Ordering::Relaxed);
+                    }
                     pcm_16.extend(ring.drain(..take));
                 }
                 // Pad with silence if ring ran dry.
                 pcm_16.resize(ring_samples_needed, 0i16);
 
+                // Playback level (0..1 RMS) for orb audio-reactivity — she
+                // pulses to her own voice while speaking.
+                let pb = if pcm_16.is_empty() {
+                    0.0
+                } else {
+                    let sum_sq: f64 = pcm_16.iter().map(|&s| (s as f64).powi(2)).sum();
+                    ((sum_sq / pcm_16.len() as f64).sqrt() / 32768.0) as f32
+                };
+                playback_rms.store(pb.to_bits(), Ordering::Relaxed);
+
                 // Resample to native device rate if needed.
                 let resampled = if native_rate != TTS_SAMPLE_RATE {
-                    resample_linear(&pcm_16, TTS_SAMPLE_RATE, native_rate)
+                    resample_cubic(&pcm_16, TTS_SAMPLE_RATE, native_rate)
                 } else {
                     pcm_16
                 };
 
-                // Convert i16 → f32, write mono signal to channel 0
-                // and zero the rest. Multi-channel devices (Rodecaster /
-                // CASTER-class USB interfaces, virtual aggregates, pro
-                // interfaces with monitor + USB returns) expose 8/16/20+
-                // output channels — broadcasting the same signal to all
-                // of them routes audio to channel strips the user isn't
-                // listening through and bleeds into auxiliary buses.
-                // Mono-to-channel-0 is the conventional CPAL pattern;
-                // user can route channel 0 from their device's mixer.
+                // Convert i16 → f32 and write the mono signal to the
+                // first TWO channels (L+R) so ordinary stereo headphones
+                // get sound in both ears. Channels beyond the first two
+                // (pro/multi-out interfaces — Rodecaster, aggregates,
+                // monitor + USB returns) stay silent so we don't bleed
+                // into auxiliary buses the user isn't monitoring.
                 for (frame_idx, frame) in data.chunks_mut(channels).enumerate() {
                     let s = resampled.get(frame_idx).copied().unwrap_or(0);
                     let f = s as f32 / i16::MAX as f32;
-                    if let Some((first, rest)) = frame.split_first_mut() {
-                        *first = f;
-                        for ch in rest.iter_mut() {
-                            *ch = 0.0;
-                        }
+                    for (i, ch) in frame.iter_mut().enumerate() {
+                        *ch = if i < 2 { f } else { 0.0 };
                     }
                 }
             },
@@ -433,6 +520,35 @@ fn resample_linear(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
                 .round()
                 .clamp(i16::MIN as f64, i16::MAX as f64) as i16,
         );
+    }
+    out
+}
+
+/// Resample using Catmull-Rom cubic interpolation. Used for the
+/// TTS → speaker playback path, where linear upsampling (24k→48k) aliased
+/// audibly ("crackle"/buzz). Stateless, low-risk improvement over linear;
+/// a full band-limited (rubato) resampler is a later option if needed.
+fn resample_cubic(input: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
+    if from_rate == to_rate || input.is_empty() {
+        return input.to_vec();
+    }
+    let ratio = from_rate as f64 / to_rate as f64;
+    let out_len = ((input.len() as f64) / ratio).ceil() as usize;
+    let n = input.len() as i64;
+    let at = |idx: i64| -> f64 { input[idx.clamp(0, n - 1) as usize] as f64 };
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let src_pos = i as f64 * ratio;
+        let i0 = src_pos.floor() as i64;
+        let t = src_pos - i0 as f64;
+        let (p0, p1, p2, p3) = (at(i0 - 1), at(i0), at(i0 + 1), at(i0 + 2));
+        // Catmull-Rom spline through p1..p2.
+        let val = 0.5
+            * ((2.0 * p1)
+                + (-p0 + p2) * t
+                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t);
+        out.push(val.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16);
     }
     out
 }

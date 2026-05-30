@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "identifier": "studio.protolabs.orbis",
   "build": {
-    "frontendDist": "../splash"
+    "frontendDist": "../web/dist"
   },
   "app": {
     "windows": [
