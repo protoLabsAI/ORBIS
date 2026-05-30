@@ -243,7 +243,11 @@ All in-repo; read in this order on a cold pickup:
 3. **[HANDOFF.md](./HANDOFF.md)** — QA checklist, known open
    questions, and ordered next steps. Written for a teammate (or
    tomorrow-you) picking ORBIS up fresh.
-4. **[docs/orb-visualizer.md](./docs/orb-visualizer.md)** —
+4. **[docs/proactive-companion.md](./docs/proactive-companion.md)** —
+   **user-facing guide**: what ORBIS can do as a proactive companion
+   (reminders, hand-offs to your agents, external pings), how to drive
+   it by voice, and the full config-knob reference.
+5. **[docs/orb-visualizer.md](./docs/orb-visualizer.md)** —
    engineering reference for the orb plugin system inherited from
    protoVoice (variant registry, shared signal bus, palette system,
    field types).
