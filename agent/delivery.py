@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 # matter which asyncio context calls controller.deliver().
 FrameEmitter = Callable[[Frame], Awaitable[None]]
 MessageEmitter = Callable[[dict], Awaitable[None]]
+# (content, kind, source) -> natural spoken line, or None to fall back to raw.
+AnnouncerFn = Callable[[str, "str | None", "str | None"], Awaitable["str | None"]]
 
 
 class DeliveryPolicy(str, Enum):
@@ -80,11 +82,17 @@ _PRIORITY_TO_POLICY: dict[Priority, DeliveryPolicy] = {
 
 @dataclass
 class _Pending:
-    phrase: str
+    phrase: str                       # attributed, ready-to-speak fallback
     policy: DeliveryPolicy
     priority: Priority = Priority.ACTIVE
     keywords: tuple[str, ...] = ()
     enqueued_at: float = field(default_factory=time.time)
+    # Un-attributed content + metadata for natural phrasing at speak time
+    # (orbis-2mh). When an announcer is wired, these drive the micro-LLM
+    # lead-in; `phrase` is the fallback if the announcer is absent/slow.
+    raw: str | None = None
+    source: str | None = None
+    kind: str | None = None
 
 
 import os as _os
@@ -204,9 +212,17 @@ class DeliveryController(FrameProcessor):
         # can reference them in conversation. Fillers/bids/storm-notice are
         # NOT recorded (they'd reopen the append_to_context riffing tripwire).
         self._context = None
+        # Optional async announcer (orbis-2mh): (content, kind, source) ->
+        # natural spoken line | None. When set, real proactive deliveries are
+        # phrased in-character by the micro LLM instead of spoken verbatim;
+        # None/timeout falls back to the raw (attributed) text.
+        self._announcer: AnnouncerFn | None = None
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
+
+    def set_announcer(self, announcer: "AnnouncerFn | None") -> None:
+        self._announcer = announcer
 
     def set_message_emitter(self, emitter: MessageEmitter) -> None:
         self._message_emitter = emitter
@@ -303,6 +319,7 @@ class DeliveryController(FrameProcessor):
         source: str | None = None,
         cooldown_key: str | None = None,
         cooldown_secs: float | None = None,
+        kind: str | None = None,
     ) -> None:
         """Deliver `phrase` according to its urgency.
 
@@ -363,10 +380,13 @@ class DeliveryController(FrameProcessor):
             f"{f' source={source}' if source else ''}: {attributed[:60]!r}"
         )
         if effective_policy is DeliveryPolicy.NOW:
-            await self._emit(attributed, record_to_context=True)
+            await self._emit_content(raw=phrase, source=source, kind=kind, fallback=attributed)
             return
         self._pending.append(
-            _Pending(phrase=attributed, policy=effective_policy, priority=priority, keywords=keywords)
+            _Pending(
+                phrase=attributed, policy=effective_policy, priority=priority,
+                keywords=keywords, raw=phrase, source=source, kind=kind,
+            )
         )
         # Kick the watchdog if it's not already running. Handles
         # NEXT_SILENCE fallbacks + WHEN_ASKED TTLs.
@@ -396,6 +416,20 @@ class DeliveryController(FrameProcessor):
                 "[delivery] no emitter wired; falling back to push_frame"
             )
             await self.push_frame(frame)
+
+    async def _emit_content(
+        self, *, raw: str | None, source: str | None, kind: str | None, fallback: str,
+    ) -> None:
+        """Speak a real proactive delivery — phrased naturally by the micro
+        LLM when an announcer is wired, else the raw (attributed) `fallback`.
+        Always records the actually-spoken line to context (orbis-3ta)."""
+        spoken: str | None = None
+        if self._announcer is not None and raw:
+            try:
+                spoken = await self._announcer(raw, kind, source)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[delivery] announcer failed, using raw: {e}")
+        await self._emit(spoken or fallback, record_to_context=True)
 
     async def _storm_ok(self) -> bool:
         """Drop-storm circuit breaker (B3). Records this delivery in a
@@ -462,11 +496,15 @@ class DeliveryController(FrameProcessor):
                     # urgent items. High-urgency fall through and emit.
                     remaining.append(item)
                     continue
-                await self._emit(item.phrase, record_to_context=True)
+                await self._emit_content(
+                    raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
+                )
                 continue
             if item.policy is DeliveryPolicy.WHEN_ASKED:
                 if new_transcript and _keyword_match(new_transcript, item.keywords):
-                    await self._emit(item.phrase, record_to_context=True)
+                    await self._emit_content(
+                    raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
+                )
                     continue
                 remaining.append(item)
                 continue
@@ -557,7 +595,9 @@ class DeliveryController(FrameProcessor):
                     )
                     if item in self._pending:
                         self._pending.remove(item)
-                        await self._emit(item.phrase, record_to_context=True)
+                        await self._emit_content(
+                    raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
+                )
                 # WHEN_ASKED TTL — silently drop items that aged out.
                 expired = [
                     p for p in self._pending

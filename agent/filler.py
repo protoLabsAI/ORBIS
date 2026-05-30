@@ -418,7 +418,14 @@ class FillerGenerator:
         user_parts.append("")
         user_parts.append(f"Output the {kind} line and nothing else.")
         user = "\n".join(user_parts)
+        return await self._complete(kind=kind, system=system, user=user, tts_backend=tts_backend)
 
+    async def _complete(
+        self, *, kind: str, system: str, user: str, tts_backend: str,
+    ) -> str | None:
+        """One micro-LLM generation: bounded by the filler timeout, cleaned
+        up for speech, None on any failure. Shared by the filler kinds and
+        the proactive announcer."""
         try:
             r = await asyncio.wait_for(
                 self._client.chat.completions.create(
@@ -449,3 +456,52 @@ class FillerGenerator:
             import re
             text = re.sub(r"\[[^\]]+\]", "", text).strip(" ,.;:")
         return text or None
+
+    async def announce(
+        self,
+        content: str,
+        *,
+        kind: str = "update",
+        source: str | None = None,
+        tts_backend: str = "kokoro",
+    ) -> str | None:
+        """Phrase a proactive delivery (reminder, ping, delegate result) as
+        ONE natural in-character line that BRINGS IT UP — 'oh hey, quick
+        reminder —' then the thing — instead of speaking the raw text. The
+        content is preserved; the orb just surfaces it in its own voice.
+
+        Returns None on timeout/failure so the caller falls back to the raw
+        text — a flaky micro-LLM must never block or delay a delivery. Higher
+        max_tokens than a filler since this carries real content."""
+        content = (content or "").strip()
+        if not content:
+            return None
+        what = {
+            "reminder": "a reminder the user earlier asked you to give them",
+            "delegate": f"a reply that just came back{f' from {source}' if source else ''}",
+            "ping": "a heads-up that just came in",
+        }.get(kind, "an update that just came in")
+        system = (
+            "You are a warm voice companion mid-conversation. Something just "
+            "arrived for the user and you're gently bringing it up. Write ONE "
+            "short, natural spoken line that surfaces it in your own voice — a "
+            "brief lead-in ('oh hey —', 'quick reminder —', 'heads up —') then "
+            "the thing. KEEP the actual content; do NOT invent facts, numbers, "
+            "names, or details that aren't given. No quotes, no markdown. "
+            "Output only the line."
+        )
+        user = "\n".join([
+            f"What arrived: {what}.",
+            f"Content: {content[:400]}",
+            "",
+            _backend_style(tts_backend).strip(),
+            "",
+            "Output the one spoken line and nothing else.",
+        ])
+        # Allow a bit more room than a tiny filler — this carries content.
+        line = await self._complete(
+            kind="announce", system=system, user=user, tts_backend=tts_backend,
+        )
+        if line:
+            self._recent.remember(line)
+        return line
