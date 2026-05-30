@@ -1821,6 +1821,20 @@ async def lifespan(app: FastAPI):
 
     curator_task = asyncio.create_task(_curator_loop(), name="orbis-curator")
 
+    # Reminder scheduler (orbis-2a0) — the orb's first proactive-initiation
+    # surface. Polls the reminders table and speaks due reminders at the next
+    # natural pause via the live DeliveryController (TIME_SENSITIVE +
+    # cooldown_key, so B1 keeps it from double-firing). Stale reminders past
+    # the staleness window are dropped silently rather than vocalised late.
+    from agent.scheduler import ReminderScheduler
+    _reminder_scheduler = ReminderScheduler(
+        memory_provider=get_memory,
+        delivery_provider=lambda: user_state_for(_A2A_USER_ID).active_delivery,
+    )
+    reminder_task = asyncio.create_task(
+        _reminder_scheduler.run(), name="orbis-reminders"
+    )
+
     # Entitlement refresh — re-query Stripe for the owner's latest
     # payment and extend the local cache. Runs once at boot, then
     # every REFRESH_INTERVAL_HOURS (default 24). Runs even when Stripe
@@ -1874,7 +1888,7 @@ async def lifespan(app: FastAPI):
                 pass
         _native_pipeline_task = None
         _native_transport = None
-        for t in (curator_task, entitlement_task, delegate_health_task):
+        for t in (curator_task, reminder_task, entitlement_task, delegate_health_task):
             t.cancel()
             try:
                 await t

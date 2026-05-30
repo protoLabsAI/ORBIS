@@ -184,6 +184,21 @@ CREATE INDEX IF NOT EXISTS idx_inbox_undelivered ON inbox(delivered_at) WHERE de
 -- inbox table predates the priority column don't trip on a missing
 -- column reference here. Fresh installs hit it through migration too
 -- (current=0 → SCHEMA_VERSION).
+
+-- Reminders — time-based proactive prompts the agent fires itself
+-- ("remind me in 10 min to X"). The scheduler (agent/scheduler.py)
+-- polls `fired_at IS NULL AND fire_at <= now` and delivers via the
+-- DeliveryController. See orbis-2a0.
+CREATE TABLE IF NOT EXISTS reminders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  TEXT NOT NULL,        -- UTC ISO8601 of scheduling
+    fire_at     TEXT NOT NULL,        -- UTC ISO8601 when it should fire
+    text        TEXT NOT NULL,        -- what to say
+    source      TEXT,                 -- optional attribution
+    fired_at    TEXT                  -- nullable; set when delivered/dropped
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_pending
+    ON reminders(fire_at) WHERE fired_at IS NULL;
 """
 
 
@@ -295,12 +310,14 @@ class Memory:
         from .personality import PersonalityDAL
         from .entitlement import EntitlementDAL
         from .inbox import InboxDAL
+        from .reminders import RemindersDAL
 
         self.sessions = SessionsDAL(self.conn)
         self.facts = FactsDAL(self.conn)
         self.personality = PersonalityDAL(self.conn)
         self.entitlement = EntitlementDAL(self.conn)
         self.inbox = InboxDAL(self.conn)
+        self.reminders = RemindersDAL(self.conn)
 
     def close(self) -> None:
         self.conn.close()
