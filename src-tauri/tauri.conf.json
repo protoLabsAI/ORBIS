@@ -37,7 +37,8 @@
     "resources": {
       "../config/orbis.example.yaml": "config/orbis.example.yaml",
       "../config/persona.md": "config/persona.md",
-      "../config/starter_orbs.yaml": "config/starter_orbs.yaml"
+      "../config/starter_orbs.yaml": "config/starter_orbs.yaml",
+      "../config/delegates.yaml": "config/delegates.yaml"
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
