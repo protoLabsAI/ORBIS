@@ -146,3 +146,48 @@ def test_registered_only_when_delivery_present() -> None:
     register_tools(without, delegates=registry, delivery=None)
     assert "delegate_to" in without.registered
     assert "delegate_async" not in without.registered
+
+
+# --- proactive follow-up nudge on slow delegations (orbis-29q) --------------
+
+
+@pytest.mark.asyncio
+async def test_slow_delegation_nudges_then_delivers(monkeypatch) -> None:
+    import asyncio
+    monkeypatch.setenv("DELEGATE_NUDGE_SECS", "0.05")
+    registry = FakeRegistry(_delegate())
+    delivery = FakeDelivery()
+
+    async def slow(d, query, *, timeout, **kw):
+        await asyncio.sleep(0.2)  # longer than the nudge window
+        return "all done"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", slow)
+    handler = _delegate_async_handler(registry, delivery=delivery)
+    await handler(FakeParams({"target": "ava", "query": "the big job"}))
+    await asyncio.gather(*list(_BG_DELEGATE_TASKS))
+
+    phrases = [c[0] for c in delivery.delivered]
+    assert any("still waiting" in p for p in phrases)   # the nudge fired
+    assert any("all done" in p for p in phrases)        # then the real result
+
+
+@pytest.mark.asyncio
+async def test_fast_delegation_does_not_nudge(monkeypatch) -> None:
+    import asyncio
+    monkeypatch.setenv("DELEGATE_NUDGE_SECS", "0.3")
+    registry = FakeRegistry(_delegate())
+    delivery = FakeDelivery()
+
+    async def fast(d, query, *, timeout, **kw):
+        return "quick result"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fast)
+    handler = _delegate_async_handler(registry, delivery=delivery)
+    await handler(FakeParams({"target": "ava", "query": "x"}))
+    await asyncio.gather(*list(_BG_DELEGATE_TASKS))
+    await asyncio.sleep(0.05)  # let any stray nudge settle (it shouldn't fire)
+
+    phrases = [c[0] for c in delivery.delivered]
+    assert not any("still waiting" in p for p in phrases)  # nudge was cancelled
+    assert phrases == ["quick result"]

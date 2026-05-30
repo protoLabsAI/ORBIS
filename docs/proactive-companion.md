@@ -40,7 +40,9 @@ ORBIS routes the heavy lifting to the agents you've configured (see
 - **Longer job** ("ask Ava to research X and get back to me") → it
   **acknowledges immediately** ("on it — I'll let you know"), works in the
   background, and **speaks the result when it lands**, attributed ("Ava got
-  back to me — …"). You keep talking in the meantime.
+  back to me — …"). You keep talking in the meantime. If it's taking a while,
+  the orb gives one "still waiting on Ava for that" update so it doesn't feel
+  forgotten.
 
 ### Get pinged from outside — `POST /api/say`
 
@@ -112,6 +114,7 @@ applied on app restart) or in `config/orbis.yaml`. See
 | --- | --- | --- |
 | `NATURALIZE_DELIVERIES` | `1` | Phrase proactive deliveries in-character via the micro model. `0` = speak them verbatim. |
 | `DELEGATE_ASYNC_TIMEOUT` | `300` | Seconds a background hand-off may run before it reports back with a timeout. |
+| `DELEGATE_NUDGE_SECS` | `90` | If a background hand-off runs longer than this, the orb gives one "still waiting on …" status update so a slow agent doesn't feel forgotten (cancelled the moment the result lands). `0` disables. |
 | `DELIVERY_DEDUP_SECS` | `12` | Drop an identical delivery repeated within this window. |
 | `DELIVERY_STORM_THRESHOLD` / `DELIVERY_STORM_WINDOW_SECS` | `8` / `60` | If more than N deliveries clear the gate within the window, say one "I'm getting a lot of updates" notice then suppress until it subsides. `0` disables. |
 
