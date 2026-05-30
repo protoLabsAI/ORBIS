@@ -135,19 +135,32 @@ async def test_verbosity_getter_exception_does_not_crash_timer(injector_factory)
 
 @pytest.mark.asyncio
 async def test_phrases_match_backend(injector_factory) -> None:
-    """Fish backend gets the [softly]-prefixed acks; others plain."""
+    """Fish backend gets the [softly]-prefixed acks; others plain. Assert
+    against the module's pools so expanding them never breaks this test."""
+    from agent.micro_ack import _FISH_ACKS, _KOKORO_ACKS, _PLAIN_ACKS
+
     fish = injector_factory(tts_backend="fish")
     await fish._fire_after_delay()
     assert fish._pushed_frames[0].text.startswith("[softly]")
+    assert fish._pushed_frames[0].text in set(_FISH_ACKS)
 
     kokoro = injector_factory(tts_backend="kokoro")
     await kokoro._fire_after_delay()
     assert not kokoro._pushed_frames[0].text.startswith("[")
-    assert kokoro._pushed_frames[0].text in {"yeah", "got it", "right", "okay"}
+    assert kokoro._pushed_frames[0].text in set(_KOKORO_ACKS)
 
     openai = injector_factory(tts_backend="openai")
     await openai._fire_after_delay()
-    assert openai._pushed_frames[0].text in {"mm", "mhm", "hm", "okay"}
+    assert openai._pushed_frames[0].text in set(_PLAIN_ACKS)
+
+
+@pytest.mark.asyncio
+async def test_pick_avoids_immediate_repeats(injector_factory) -> None:
+    inj = injector_factory(tts_backend="kokoro")
+    picks = [inj._pick() for _ in range(60)]
+    repeats = sum(1 for i in range(1, len(picks)) if picks[i] == picks[i - 1])
+    assert repeats == 0  # never the same ack twice in a row
+    assert len(set(picks)) >= 5  # genuine variety from the pool
 
 
 @pytest.mark.asyncio
