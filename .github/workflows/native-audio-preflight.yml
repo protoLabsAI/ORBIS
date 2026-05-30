@@ -37,6 +37,7 @@ jobs:
             build-essential \
             curl \
             file \
+            libasound2-dev \
             libayatana-appindicator3-dev \
             libssl-dev \
             librsvg2-dev \
@@ -74,7 +75,10 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install 'pipecat-ai>=1.0' numpy pytest pytest-asyncio
+          # Use the declared [test] extra (same as pytest.yml) rather than a
+          # hand-rolled minimal set — test_healthz_native_audio.py imports
+          # app.py, which needs fastapi and the rest of the app's runtime.
+          pip install -e ".[test]"
           python -m pytest \
             tests/test_local_transport.py \
             tests/test_healthz_native_audio.py
@@ -118,3 +122,10 @@ jobs:
           trap 'rm -f "${sidecar}"; rmdir src-tauri/binaries 2>/dev/null || true' EXIT
 
           cargo test --manifest-path src-tauri/Cargo.toml --features native-audio,voice-processing
+
+      - name: Release config guardrails (post-build capability drift)
+        # Re-run after the compile above has generated
+        # src-tauri/gen/schemas/capabilities.json, so the generated-vs-source
+        # capability drift guard actually executes (it is skipped on the
+        # pre-build run and on host-only jobs, where no artifact exists).
+        run: scripts/check-macos-release-config.py

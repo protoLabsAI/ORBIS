@@ -15,12 +15,11 @@ Placement: added to the native desktop PipelineTask observers list.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import weakref
 from typing import TYPE_CHECKING
 
-from pipecat.frames.frames import BotStoppedSpeakingFrame, CancelFrame, EndFrame
+from pipecat.frames.frames import BotStoppedSpeakingFrame, CancelFrame
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
 if TYPE_CHECKING:

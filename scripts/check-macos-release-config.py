@@ -83,7 +83,6 @@ def check_tauri_cargo_manifest() -> None:
 
 def check_tauri_capabilities() -> None:
     capability = json.loads(read(TAURI / "capabilities" / "default.json"))
-    generated = json.loads(read(TAURI / "gen" / "schemas" / "capabilities.json"))
     permissions = capability["permissions"]
 
     require(capability["windows"] == ["main"], "default capability must target only the main window")
@@ -132,11 +131,23 @@ def check_tauri_capabilities() -> None:
     require("shell:default" not in permissions, "default capability must not allow shell:default")
     require("shell:allow-open" not in permissions, "default capability must not allow broad shell open")
 
-    normalized_capability = {k: v for k, v in capability.items() if k != "$schema"}
-    require(
-        generated.get("default") == normalized_capability,
-        "generated Tauri capabilities must match src-tauri/capabilities/default.json",
-    )
+    # Drift guard: the build-generated capabilities must match the committed
+    # source. gen/schemas/capabilities.json is a Tauri build artifact (it is
+    # gitignored and only written by a compile), so this sub-check runs only
+    # once a build has produced it. That keeps the rest of this script
+    # host-portable and runnable before any compile — its stated design —
+    # instead of hard-failing on a missing artifact. CI still exercises the
+    # drift guard via a post-build invocation in the macOS native-audio job.
+    generated_path = TAURI / "gen" / "schemas" / "capabilities.json"
+    if generated_path.exists():
+        generated = json.loads(read(generated_path))
+        normalized_capability = {k: v for k, v in capability.items() if k != "$schema"}
+        require(
+            generated.get("default") == normalized_capability,
+            "generated Tauri capabilities must match src-tauri/capabilities/default.json",
+        )
+    else:
+        print("note: skipping generated-capabilities drift check (no build artifact yet)")
 
 
 def check_plists() -> None:
@@ -475,8 +486,8 @@ def check_workflow() -> None:
     )
     require_contains(
         preflight,
-        "pipecat-ai>=1.0",
-        "preflight workflow must install the minimal Pipecat dependency for transport tests",
+        'pip install -e ".[test]"',
+        "preflight workflow must install the declared [test] extra so app-import tests can collect",
     )
     require_contains(
         preflight,

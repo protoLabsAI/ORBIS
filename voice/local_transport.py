@@ -21,7 +21,6 @@ import asyncio
 import logging
 import os
 import struct
-from typing import Callable
 
 from pipecat.frames.frames import (
     CancelFrame,
