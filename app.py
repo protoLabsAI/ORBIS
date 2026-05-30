@@ -69,7 +69,9 @@ from fastapi.staticfiles import StaticFiles
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
@@ -245,6 +247,67 @@ def _resolve_skill_llm(skill) -> dict:
         "extra_body": extra_body,
         "using_custom_url": using_custom_url,
         "provider": skill_llm.get("provider"),
+    }
+
+
+def _resolve_fallback_llm(skill) -> dict | None:
+    """Resolve an OPTIONAL backup LLM for failover (orbis-1dd).
+
+    Returns ``None`` when no fallback is configured — in which case the
+    voice pipeline runs the single-LLM path unchanged (no LLMSwitcher,
+    zero behavior or resource cost). Configure a backup to get automatic
+    failover when the primary LLM errors (e.g. the cloud gateway is
+    unreachable → fall through to a local MLX model so the orb still
+    talks).
+
+    Resolution precedence (first present wins):
+      1. ``persona.llm.fallback`` — a dict with the same shape as
+         ``persona.llm`` (``url`` / ``model`` / ``api_key`` /
+         ``api_key_env`` / ``provider`` / ``extra_body``).
+      2. ``LLM_FALLBACK_URL`` env (+ ``LLM_FALLBACK_MODEL``,
+         ``LLM_FALLBACK_API_KEY`` or ``LLM_FALLBACK_API_KEY_ENV``,
+         ``LLM_FALLBACK_PROVIDER``). The runtime ``.env`` tuning loop can
+         flip this on without a rebuild.
+
+    A bare ``mlx://`` URL (no model) resolves the model from
+    ``LLM_FALLBACK_MODEL`` or the primary model — ``make_llm`` translates
+    it through the ``mlx-community/`` org. Returns the same dict shape as
+    ``_resolve_skill_llm`` so the caller builds it identically.
+    """
+    fb = (skill.llm.get("fallback") if skill and skill.llm else None) or {}
+    if not fb:
+        env_url = os.environ.get("LLM_FALLBACK_URL")
+        if not env_url:
+            return None
+        fb = {
+            "url": env_url,
+            "model": os.environ.get("LLM_FALLBACK_MODEL"),
+            "api_key": os.environ.get("LLM_FALLBACK_API_KEY"),
+            "api_key_env": os.environ.get("LLM_FALLBACK_API_KEY_ENV"),
+            "provider": os.environ.get("LLM_FALLBACK_PROVIDER"),
+        }
+    url = fb.get("url")
+    if not url:
+        return None
+    using_custom_url = True  # a fallback is always an explicit, user-chosen URL
+    model = str(fb.get("model") or LLM_SERVED_NAME)
+    if fb.get("api_key"):
+        api_key = str(fb["api_key"])
+    elif fb.get("api_key_env"):
+        api_key = os.environ.get(str(fb["api_key_env"]), LLM_API_KEY)
+    else:
+        api_key = LLM_API_KEY
+    # Mirror the custom-URL extra_body kill-switch: a user-supplied
+    # fallback endpoint may be a LiteLLM/vLLM that 400s on
+    # chat_template_kwargs, so default it off unless explicitly set.
+    extra_body = fb["extra_body"] or None if "extra_body" in fb else None
+    return {
+        "url": str(url),
+        "model": model,
+        "api_key": api_key,
+        "extra_body": extra_body,
+        "using_custom_url": using_custom_url,
+        "provider": fb.get("provider"),
     }
 
 
@@ -1005,6 +1068,36 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         using_custom_url=using_custom_llm,
     )
 
+    # Optional failover backup (orbis-1dd). When a fallback LLM is
+    # configured (persona.llm.fallback or LLM_FALLBACK_URL), wrap primary
+    # + backup in a pipecat LLMSwitcher with the failover strategy: a
+    # non-fatal ErrorFrame from the active LLM (e.g. the cloud gateway is
+    # down) automatically switches to the next member for the rest of the
+    # session. When unconfigured, `_llm_members == [llm]` and the pipeline
+    # uses the bare `llm` — byte-for-byte the single-LLM path as before.
+    _fallback_cfg = _resolve_fallback_llm(skill)
+    _llm_members = [llm]
+    if _fallback_cfg is not None:
+        _fb_settings = dict(settings_kwargs)
+        _fb_settings["model"] = _fallback_cfg["model"]
+        if _fallback_cfg["extra_body"] is not None:
+            _fb_settings["extra"] = {"extra_body": _fallback_cfg["extra_body"]}
+        else:
+            _fb_settings.pop("extra", None)
+        llm_fallback = make_llm(
+            base_url=_fallback_cfg["url"],
+            model=_fallback_cfg["model"],
+            api_key=_fallback_cfg["api_key"],
+            settings=OpenAILLMService.Settings(**_fb_settings),
+            provider=_fallback_cfg["provider"],
+            using_custom_url=_fallback_cfg["using_custom_url"],
+        )
+        _llm_members.append(llm_fallback)
+        logger.info(
+            "[llm] failover enabled: primary=%s (%s) → backup=%s (%s)",
+            llm_url, llm_model, _fallback_cfg["url"], _fallback_cfg["model"],
+        )
+
     # Per-skill delegate filter. Empty list / None = all delegates exposed.
     session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
     tts_kwargs: dict = {"backend": tts_backend}
@@ -1084,14 +1177,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # config is omitted and outbound A2A is stream-only.
     _push_url = os.environ.get("A2A_PUSH_URL") or None
     _push_token = os.environ.get("A2A_PUSH_TOKEN") or None
-    tools_schema = register_tools(
-        llm,
-        on_finish=_cancel_progress,
-        delivery=delivery,
-        delegates=session_delegates,
-        push_notification_url=_push_url,
-        push_notification_token=_push_token,
-    )
+    # Register handlers on every failover member — whichever LLM is
+    # active must be able to invoke the tools. The returned schema is
+    # identical per member (derived from the same registry), so we keep
+    # the primary's for the LLMContext below.
+    tools_schema = None
+    for _member in _llm_members:
+        _schema = register_tools(
+            _member,
+            on_finish=_cancel_progress,
+            delivery=delivery,
+            delegates=session_delegates,
+            push_notification_url=_push_url,
+            push_notification_token=_push_token,
+        )
+        if tools_schema is None:
+            tools_schema = _schema
 
     # Per-skill tool restriction. If skill.tools is non-empty, scope the
     # ToolsSchema down to that allow-list — the LLM only SEES (and so
@@ -1248,6 +1349,27 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # the WebRTC client path is removed (DECISIONS.md amendment 2026-04-28).
     _output_node = transport.output()
 
+    # Failover wrapper (orbis-1dd). With a single member this stays the
+    # bare LLMService — no LLMSwitcher overhead on the default path. With
+    # a configured backup, the switcher routes frames to the active LLM
+    # and fails over to the next on a non-fatal ErrorFrame.
+    if len(_llm_members) == 1:
+        pipeline_llm = llm
+    else:
+        pipeline_llm = LLMSwitcher(
+            llms=_llm_members,
+            strategy_type=ServiceSwitcherStrategyFailover,
+        )
+
+        @pipeline_llm.strategy.event_handler("on_service_switched")
+        async def _on_llm_failover(_strategy, service):
+            # Surface failover so a dropped primary is visible, not silent.
+            idx = _llm_members.index(service) if service in _llm_members else -1
+            role = "primary" if idx == 0 else f"backup#{idx}"
+            logger.warning("[llm] failover → now using %s (%s)", role, service.name)
+            _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
+            await sse_bus.publish("llm", {"event": "failover", "active": role})
+
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
@@ -1305,7 +1427,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # VAD frames produced by the aggregator. Push downstream into TTS.
         backchannel,
         delivery,
-        llm,
+        pipeline_llm,
         # Non-Fish TTS services strip tags at the service level via their
         # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
@@ -1432,35 +1554,43 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         except asyncio.CancelledError:
             pass
 
-    @llm.event_handler("on_function_calls_started")
-    async def _on_tool_start(_svc, function_calls):
-        names = [fc.function_name for fc in function_calls]
-        tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
-        any_async = any(n in ASYNC_TOOL_NAMES for n in names)
-        logger.info(
-            f"[tool] {','.join(names)} tier={tier.value} async={any_async}"
-        )
-        _METRICS["tool_calls_total"] += len(names)
-        for n in names:
-            _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
-        first = function_calls[0] if function_calls else None
-        args = getattr(first, "arguments", None) if first is not None else None
-        await sse_bus.publish(
-            "tool-call",
-            {"event": "start", "name": names[0] if names else "", "args": args},
-        )
+    # Attach the function-call lifecycle handlers to every failover member
+    # (orbis-1dd): the progress-narration loop + tool-call SSE events must
+    # fire whichever LLM is active. On the default single-LLM path this is
+    # just `llm`.
+    def _wire_llm_callbacks(_member):
+        @_member.event_handler("on_function_calls_started")
+        async def _on_tool_start(_svc, function_calls):
+            names = [fc.function_name for fc in function_calls]
+            tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
+            any_async = any(n in ASYNC_TOOL_NAMES for n in names)
+            logger.info(
+                f"[tool] {','.join(names)} tier={tier.value} async={any_async}"
+            )
+            _METRICS["tool_calls_total"] += len(names)
+            for n in names:
+                _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
+            first = function_calls[0] if function_calls else None
+            args = getattr(first, "arguments", None) if first is not None else None
+            await sse_bus.publish(
+                "tool-call",
+                {"event": "start", "name": names[0] if names else "", "args": args},
+            )
 
-        # Only SLOW sync tools get the progress narration loop. The opening
-        # acknowledgement is handled inline by the LLM via the TOOL USE
-        # prompt block. Async tools narrate themselves via DeliveryController.
-        if tier is Latency.SLOW and not any_async:
-            progress_tasks.add(asyncio.create_task(_progress_loop(names[0])))
+            # Only SLOW sync tools get the progress narration loop. The opening
+            # acknowledgement is handled inline by the LLM via the TOOL USE
+            # prompt block. Async tools narrate themselves via DeliveryController.
+            if tier is Latency.SLOW and not any_async:
+                progress_tasks.add(asyncio.create_task(_progress_loop(names[0])))
 
-    @llm.event_handler("on_function_calls_cancelled")
-    async def _on_tool_cancel(_svc, _calls):
-        logger.info("[filler] tool cancelled (barge-in)")
-        _cancel_progress(publish_end=False)
-        await sse_bus.publish("tool-call", {"event": "end", "outcome": "error"})
+        @_member.event_handler("on_function_calls_cancelled")
+        async def _on_tool_cancel(_svc, _calls):
+            logger.info("[filler] tool cancelled (barge-in)")
+            _cancel_progress(publish_end=False)
+            await sse_bus.publish("tool-call", {"event": "end", "outcome": "error"})
+
+    for _member in _llm_members:
+        _wire_llm_callbacks(_member)
 
     @transport.event_handler("on_client_connected")
     async def _on_connect(_t, _c):
