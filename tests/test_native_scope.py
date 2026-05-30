@@ -217,7 +217,7 @@ def test_native_backend_sse_event_bridge_stays_wired():
         "SseBusObserver(rtvi)",
         "delivery.set_message_emitter(",
         "lambda payload: sse_bus.publish(\"delegation-progress\", payload)",
-        "await sse_bus.publish(\n            \"tool-call\",",
+        "await sse_bus.publish(\n                \"tool-call\",",
         "await sse_bus.publish(\"tool-call\", {\"event\": \"end\", \"outcome\": \"error\"})",
         "await sse_bus.publish(\"session\", {\"event\": \"start\", \"session_id\": sid})",
         "await sse_bus.publish(\"session\", {\"event\": \"end\"})",
