@@ -525,8 +525,8 @@ ONNX config is ~1.4× slower TTFA; int8 (the only small model) is ~4× slower
 (quantized ops aren't accelerated on Apple); CoreML EP is slower than plain CPU
 because only ~1060/2476 graph nodes map to CoreML and the partition transfers
 cost more than they save. A swap would also add a 169–310 MB model file plus
-`onnxruntime` and an espeak-ng phonemizer to the bundle — net regression on our
-only first-class platform.
+`onnxruntime` and an espeak-ng phonemizer to the bundle — net regression on the
+Mac, our primary target.
 
 **Implication:** "adopt Pipecat's official service" is not automatically the
 right call when Pipecat's service wraps a backend that is slower on our target
