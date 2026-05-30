@@ -114,6 +114,18 @@ _WHEN_ASKED_TTL_SECS = float(
 # proactive producers (scheduler, alerts) come online. Set to 0 to disable.
 _DEDUP_SECS = float(_os.environ.get("DELIVERY_DEDUP_SECS", "12"))
 
+# Drop-storm circuit breaker (orbis-1gw B3). If more than _STORM_THRESHOLD
+# proactive deliveries clear the dedup gate within _STORM_WINDOW_SECS, a
+# producer has gone haywire (a misconfigured recurring reminder, a webhook
+# flood). Speak ONE "I'm getting hammered — holding the rest" notice, then
+# suppress further deliveries until the rate subsides — so a runaway loop
+# can never turn the orb into a chatterbox. Set threshold to 0 to disable.
+_STORM_THRESHOLD = int(_os.environ.get("DELIVERY_STORM_THRESHOLD", "8"))
+_STORM_WINDOW_SECS = float(_os.environ.get("DELIVERY_STORM_WINDOW_SECS", "60"))
+_STORM_NOTICE = (
+    "I'm getting a lot of updates at once — I'll hold the rest for a moment."
+)
+
 # How often the watchdog ticks to check fallback timers + TTLs.
 _WATCHDOG_TICK_SECS = 1.0
 
@@ -178,6 +190,10 @@ class DeliveryController(FrameProcessor):
         # Cooldown/dedup chokepoint (orbis-1gw B1): key → monotonic time of
         # last delivery. deliver() drops repeats within the cooldown window.
         self._last_delivered: dict[str, float] = {}
+        # Drop-storm circuit breaker (B3): monotonic times of recent
+        # deliveries + whether we're currently muting a storm.
+        self._delivery_window: list[float] = []
+        self._storm_muted = False
         # Set by app.py after PipelineTask exists. Required for correct
         # out-of-band emission (push_frame from another coroutine context
         # is unsafe).
@@ -323,6 +339,13 @@ class DeliveryController(FrameProcessor):
                 self._last_delivered = {
                     k: t for k, t in self._last_delivered.items() if t >= cutoff
                 }
+
+        # Drop-storm circuit breaker (orbis-1gw B3) — counts deliveries that
+        # cleared the dedup gate; if a producer floods us, speak one notice
+        # then suppress until the rate subsides.
+        if _STORM_THRESHOLD > 0 and not (await self._storm_ok()):
+            return
+
         effective_policy = DeliveryPolicy(policy) if policy is not None else _PRIORITY_TO_POLICY[priority]
         attributed = _attribute(phrase, source)
         logger.info(
@@ -357,6 +380,34 @@ class DeliveryController(FrameProcessor):
                 "[delivery] no emitter wired; falling back to push_frame"
             )
             await self.push_frame(frame)
+
+    async def _storm_ok(self) -> bool:
+        """Drop-storm circuit breaker (B3). Records this delivery in a
+        sliding window; returns False (suppress) once a producer floods the
+        window, speaking a single notice on the way into the muted state and
+        clearing it once the rate subsides. The notice is emitted directly,
+        so it never feeds the storm it's reporting."""
+        now = time.monotonic()
+        self._delivery_window = [
+            t for t in self._delivery_window if now - t < _STORM_WINDOW_SECS
+        ]
+        if len(self._delivery_window) >= _STORM_THRESHOLD:
+            if not self._storm_muted:
+                self._storm_muted = True
+                logger.warning(
+                    f"[delivery] drop-storm: {len(self._delivery_window)} "
+                    f"deliveries in {_STORM_WINDOW_SECS:.0f}s — muting "
+                    f"(one notice, then silence until it subsides)"
+                )
+                await self._emit(_STORM_NOTICE)
+            else:
+                logger.info("[delivery] drop-storm: delivery suppressed")
+            return False
+        if self._storm_muted:
+            self._storm_muted = False
+            logger.info("[delivery] drop-storm cleared — deliveries resumed")
+        self._delivery_window.append(now)
+        return True
 
     async def _drain_eligible(self, *, new_transcript: str | None) -> None:
         """Pop + emit any pending entries whose policy conditions are met.
