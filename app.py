@@ -1163,6 +1163,21 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # None keeps the default (naive VAD endpointing).
         _user_agg_kwargs["user_turn_strategies"] = _turn_strategies
 
+    # Incomplete-turn filtering (pipecat-native — fixes orbis-ioz queued-intent
+    # staggering): the LLM emits a turn-completion marker (✓/○/◐) and the
+    # aggregator SUPPRESSES the response to an incomplete fragment ("hey, so I
+    # uh…") instead of firing a premature reply, re-prompting on timeout. The
+    # default UserTurnCompletionConfig() supplies the marker prompt. Off by
+    # default (changes LLM behavior + relies on the model emitting the marker);
+    # flip FILTER_INCOMPLETE_TURNS=1 in the runtime .env to A/B it. The
+    # user-turn coalescing window is tunable via USER_TURN_STOP_TIMEOUT.
+    if os.environ.get("FILTER_INCOMPLETE_TURNS", "0") == "1":
+        _user_agg_kwargs["filter_incomplete_user_turns"] = True
+        logger.info("[tuning] filter_incomplete_user_turns=ON")
+    _uts = os.environ.get("USER_TURN_STOP_TIMEOUT")
+    if _uts:
+        _user_agg_kwargs["user_turn_stop_timeout"] = float(_uts)
+
     # Pipecat's built-in LLMContextSummarizer lives inside the assistant
     # aggregator. It auto-compresses once token/message thresholds hit;
     # emits SummaryAppliedEvent when done. Thresholds map cleanly onto
