@@ -124,6 +124,7 @@ async def test_schedule_reminder_tool_stores(mem: Memory, monkeypatch) -> None:
     pending = mem.reminders.pending()
     assert len(pending) == 1
     assert pending[0]["text"] == "take the cookies out"
+    assert pending[0]["repeat_secs"] is None  # schedule_reminder is ONE-TIME
     # fire_at ~10 min out
     fire_at = datetime.fromisoformat(pending[0]["fire_at"])
     delta = (fire_at - datetime.now(timezone.utc)).total_seconds()
@@ -192,12 +193,36 @@ async def test_stale_recurring_rolls_forward_without_speaking(mem: Memory) -> No
 
 
 @pytest.mark.asyncio
-async def test_tool_repeat_minutes_stores_repeat_secs(mem: Memory, monkeypatch) -> None:
-    from agent.tools import schedule_reminder_handler
+async def test_recurring_tool_stores_repeat_secs(mem: Memory, monkeypatch) -> None:
+    from agent.tools import schedule_recurring_reminder_handler
     monkeypatch.setattr(app_module, "get_memory", lambda: mem)
-    p = FakeParams({"in_minutes": 60, "text": "drink water", "repeat_minutes": 60})
-    await schedule_reminder_handler(p)  # type: ignore[arg-type]
+    p = FakeParams({"every_minutes": 60, "text": "drink water"})
+    await schedule_recurring_reminder_handler(p)  # type: ignore[arg-type]
     pending = mem.reminders.pending()
     assert len(pending) == 1
     assert pending[0]["repeat_secs"] == 3600
+    # first fire defaults to one interval out (~60 min)
+    delta = (datetime.fromisoformat(pending[0]["fire_at"]) - datetime.now(timezone.utc)).total_seconds()
+    assert 59 * 60 < delta < 61 * 60
     assert "every" in p.results[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_recurring_tool_first_in_minutes_override(mem: Memory, monkeypatch) -> None:
+    from agent.tools import schedule_recurring_reminder_handler
+    monkeypatch.setattr(app_module, "get_memory", lambda: mem)
+    p = FakeParams({"every_minutes": 60, "text": "stretch", "first_in_minutes": 5})
+    await schedule_recurring_reminder_handler(p)  # type: ignore[arg-type]
+    pending = mem.reminders.pending()
+    assert pending[0]["repeat_secs"] == 3600
+    delta = (datetime.fromisoformat(pending[0]["fire_at"]) - datetime.now(timezone.utc)).total_seconds()
+    assert 4 * 60 < delta < 6 * 60  # first fire honored the override
+
+
+@pytest.mark.asyncio
+async def test_recurring_tool_rejects_missing_interval(mem: Memory, monkeypatch) -> None:
+    from agent.tools import schedule_recurring_reminder_handler
+    monkeypatch.setattr(app_module, "get_memory", lambda: mem)
+    p = FakeParams({"every_minutes": 0, "text": "x"})
+    await schedule_recurring_reminder_handler(p)  # type: ignore[arg-type]
+    assert mem.reminders.pending() == []
