@@ -52,6 +52,7 @@ def check_tauri_config() -> None:
             "../config/orbis.example.yaml": "config/orbis.example.yaml",
             "../config/persona.md": "config/persona.md",
             "../config/starter_orbs.yaml": "config/starter_orbs.yaml",
+            "../config/delegates.yaml": "config/delegates.yaml",
         },
         "first-run config resources must stay bundled",
     )
