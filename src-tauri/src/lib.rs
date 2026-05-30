@@ -682,44 +682,60 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     #[cfg(feature = "native-audio")]
     let native_audio_sock: Option<std::path::PathBuf> = {
         if true {
-            #[cfg(target_os = "macos")]
-            {
-                let status = ensure_microphone_permission();
-                if status != MicrophonePermissionStatus::Authorized {
-                    return Err(format!(
-                        "microphone permission is {status:?}; ORBIS needs microphone access before native audio can start. Enable it in System Settings → Privacy & Security → Microphone, then reopen ORBIS."
-                    ));
-                }
-            }
-
+            // Bind the socket synchronously (no mic permission needed) so the
+            // sidecar can be spawned and connect right away. DEFER the mic
+            // permission request + AVAudioEngine start to a background thread.
+            //
+            // Requesting permission here in the setup hook blocked the main
+            // thread before the app run loop was up, so the macOS TCC dialog
+            // could not present — first launch failed with a "system input"
+            // error and only a restart (now already-Authorized) worked. Off
+            // the main thread the dialog presents normally once the app is
+            // active. The mic is push-to-talk-muted by default, so nothing
+            // needs it until the user opts into a conversation; the unix
+            // socket's listen backlog holds the sidecar's connection until the
+            // accept loop comes online after the grant.
             let (mic_tx, mic_rx) =
                 tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
-            match audio::engine::AudioEngine::new(None, mic_tx) {
-                Ok(engine) => {
-                    let engine = Arc::new(engine);
-                    if let Some(state) = app.try_state::<AudioEngineState>() {
-                        state.store(Arc::clone(&engine));
+            let sock_server = match audio::socket::SocketServer::bind() {
+                Ok(s) => s,
+                Err(e) => return Err(format!("native audio socket bind failed: {e}")),
+            };
+            let sock_path = sock_server.path().clone();
+            log::info!("orbis_audio_sock={}", sock_path.display());
+
+            let app_handle = app.app_handle().clone();
+            std::thread::spawn(move || {
+                #[cfg(target_os = "macos")]
+                {
+                    let status = ensure_microphone_permission();
+                    if status != MicrophonePermissionStatus::Authorized {
+                        log::warn!(
+                            "[audio] microphone permission {status:?} — native audio stays offline until granted (System Settings → Privacy & Security → Microphone)"
+                        );
+                        return;
                     }
-                    let sock_server = match audio::socket::SocketServer::bind() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            return Err(format!("native audio socket bind failed: {e}"));
-                        }
-                    };
-                    let sock_path = sock_server.path().clone();
-                    log::info!("orbis_audio_sock={}", sock_path.display());
-                    // Accept loop runs in a background task.
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = sock_server.accept_and_run(engine, mic_rx).await {
-                            log::error!("[audio/socket] accept_and_run failed: {e}");
-                        }
-                    });
-                    Some(sock_path)
                 }
-                Err(e) => {
-                    return Err(format!("native audio engine failed to start: {e}"));
+                match audio::engine::AudioEngine::new(None, mic_tx) {
+                    Ok(engine) => {
+                        let engine = Arc::new(engine);
+                        if let Some(state) = app_handle.try_state::<AudioEngineState>() {
+                            state.store(Arc::clone(&engine));
+                        }
+                        log::info!("[audio] native engine online");
+                        // Accept loop runs in a background task.
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = sock_server.accept_and_run(engine, mic_rx).await {
+                                log::error!("[audio/socket] accept_and_run failed: {e}");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("[audio] native engine failed to start: {e}");
+                    }
                 }
-            }
+            });
+            Some(sock_path)
         } else {
             None
         }
