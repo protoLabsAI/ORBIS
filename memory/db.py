@@ -59,7 +59,7 @@ def __getattr__(name: str) -> str:
     if name == "DEFAULT_DB_PATH":
         return _default_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,8 @@ CREATE TABLE IF NOT EXISTS reminders (
     fire_at     TEXT NOT NULL,        -- UTC ISO8601 when it should fire
     text        TEXT NOT NULL,        -- what to say
     source      TEXT,                 -- optional attribution
-    fired_at    TEXT                  -- nullable; set when delivered/dropped
+    repeat_secs INTEGER,              -- nullable; if set, reschedules each fire (recurring)
+    fired_at    TEXT                  -- nullable; set when a one-shot fires/drops
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_pending
     ON reminders(fire_at) WHERE fired_at IS NULL;
@@ -290,6 +291,16 @@ def _migrate(conn: sqlite3.Connection, *, from_version: int, to_version: int) ->
             "CREATE INDEX IF NOT EXISTS idx_inbox_priority "
             "ON inbox(priority, delivered_at)"
         )
+
+    if from_version < 3:
+        # v3 adds reminders.repeat_secs (recurring reminders, orbis-2t6).
+        # The reminders table is created by IF NOT EXISTS in _SCHEMA; this
+        # adds the column to a DB that created reminders before recurrence
+        # existed (an interim build between C1 and C2).
+        cur = conn.execute("PRAGMA table_info(reminders)")
+        cols = {row["name"] for row in cur.fetchall()}
+        if cols and "repeat_secs" not in cols:
+            conn.execute("ALTER TABLE reminders ADD COLUMN repeat_secs INTEGER")
 
 
 # ---------------------------------------------------------------------------

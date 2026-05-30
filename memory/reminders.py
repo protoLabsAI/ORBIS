@@ -34,27 +34,40 @@ class RemindersDAL:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
 
-    def add(self, *, text: str, fire_at: str, source: str | None = None) -> int:
-        """Schedule a reminder. ``fire_at`` is a UTC ISO8601 string. Returns
-        the new row id."""
+    def add(
+        self,
+        *,
+        text: str,
+        fire_at: str,
+        source: str | None = None,
+        repeat_secs: int | None = None,
+    ) -> int:
+        """Schedule a reminder. ``fire_at`` is a UTC ISO8601 string.
+        ``repeat_secs`` (optional) makes it recurring — the scheduler
+        reschedules the next occurrence instead of marking it fired.
+        Returns the new row id."""
         text = (text or "").strip()
         if not text:
             raise ValueError("reminder text is required")
         if not fire_at:
             raise ValueError("fire_at is required")
+        if repeat_secs is not None and repeat_secs <= 0:
+            raise ValueError("repeat_secs must be positive when set")
         cur = self.conn.execute(
-            "INSERT INTO reminders (created_at, fire_at, text, source) "
-            "VALUES (?, ?, ?, ?)",
-            (_now_iso(), fire_at, text, source),
+            "INSERT INTO reminders (created_at, fire_at, text, source, repeat_secs) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (_now_iso(), fire_at, text, source, repeat_secs),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    _COLS = "id, created_at, fire_at, text, source, repeat_secs"
 
     def due(self, now_iso: str | None = None) -> list[dict]:
         """Unfired reminders whose fire_at has arrived, oldest-first."""
         now_iso = now_iso or _now_iso()
         rows = self.conn.execute(
-            "SELECT id, created_at, fire_at, text, source FROM reminders "
+            f"SELECT {self._COLS} FROM reminders "
             "WHERE fired_at IS NULL AND fire_at <= ? ORDER BY fire_at ASC",
             (now_iso,),
         ).fetchall()
@@ -63,14 +76,24 @@ class RemindersDAL:
     def pending(self) -> list[dict]:
         """All not-yet-fired reminders, soonest-first."""
         rows = self.conn.execute(
-            "SELECT id, created_at, fire_at, text, source FROM reminders "
+            f"SELECT {self._COLS} FROM reminders "
             "WHERE fired_at IS NULL ORDER BY fire_at ASC",
         ).fetchall()
         return [dict(r) for r in rows]
 
     def mark_fired(self, reminder_id: int, *, fired_at: str | None = None) -> None:
+        """Retire a one-shot reminder (or permanently stop a recurring one)."""
         self.conn.execute(
             "UPDATE reminders SET fired_at = ? WHERE id = ?",
             (fired_at or _now_iso(), reminder_id),
+        )
+        self.conn.commit()
+
+    def reschedule(self, reminder_id: int, fire_at: str) -> None:
+        """Move a recurring reminder's next fire forward — keeps fired_at
+        NULL so it stays in the active pool."""
+        self.conn.execute(
+            "UPDATE reminders SET fire_at = ? WHERE id = ?",
+            (fire_at, reminder_id),
         )
         self.conn.commit()

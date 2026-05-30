@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from .delivery import DeliveryController, Priority
@@ -70,27 +70,42 @@ class ReminderScheduler:
                 # Unparseable row — drop it so it can't wedge the loop.
                 mem.reminders.mark_fired(r["id"])
                 continue
+            repeat = r.get("repeat_secs")
+
+            def _advance() -> None:
+                """Retire a one-shot, or roll a recurring one to its next
+                occurrence (from now, so a long sleep doesn't queue a burst)."""
+                if repeat:
+                    nxt = now + timedelta(seconds=repeat)
+                    mem.reminders.reschedule(r["id"], nxt.isoformat())
+                else:
+                    mem.reminders.mark_fired(r["id"])
+
             overdue = (now - fire_at).total_seconds()
             if overdue > self._max_stale_secs:
                 logger.info(
-                    f"[scheduler] dropping stale reminder #{r['id']} "
-                    f"({overdue / 3600:.1f}h overdue): {r['text'][:48]!r}"
+                    f"[scheduler] skipping stale reminder #{r['id']} "
+                    f"({overdue / 3600:.1f}h overdue, repeat={bool(repeat)}): "
+                    f"{r['text'][:48]!r}"
                 )
-                mem.reminders.mark_fired(r["id"])
+                _advance()
                 continue
             delivery = self._delivery_provider()
             if delivery is None:
                 # No live session — leave unfired; retry next tick so it
                 # lands when the user reconnects.
                 continue
-            logger.info(f"[scheduler] firing reminder #{r['id']}: {r['text'][:48]!r}")
+            logger.info(
+                f"[scheduler] firing reminder #{r['id']} "
+                f"(repeat={bool(repeat)}): {r['text'][:48]!r}"
+            )
             await delivery.deliver(
                 r["text"],
                 priority=Priority.TIME_SENSITIVE,
                 source=r.get("source") or None,
                 cooldown_key=f"reminder:{r['id']}",
             )
-            mem.reminders.mark_fired(r["id"])
+            _advance()
             spoken += 1
         return spoken
 
