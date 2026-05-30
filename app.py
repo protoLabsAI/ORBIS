@@ -545,8 +545,38 @@ def _resolve_behavior_block(raw) -> dict:
     return {"enabled": True}
 
 
+def _fleet_block(delegates) -> str:
+    """Dynamic roster of the agents THIS session can actually reach via
+    delegate_to — the single source of truth so the LLM never invents or
+    denies the wrong fleet. Built from the live (post-filter) registry, so
+    it always matches the delegate_to tool's real targets instead of a
+    hard-coded guess in the persona prompt."""
+    try:
+        items = list(delegates.all()) if delegates is not None else []
+    except Exception:
+        items = []
+    if not items:
+        return (
+            "## YOUR FLEET\n\n"
+            "No agents are wired up right now, so you cannot hand work off. "
+            "Answer everything yourself; never offer to delegate or claim to "
+            "reach another agent."
+        )
+    roster = "\n".join(
+        f"- {d.name} — {' '.join((d.description or '').split())}" for d in items
+    )
+    return (
+        "## YOUR FLEET\n\n"
+        "These are the ONLY agents you can reach, via the delegate_to tool. "
+        "When a request clearly fits one, hand it off; otherwise just answer "
+        "yourself. Never claim to reach an agent that is not on this list, and "
+        "do not invent capabilities beyond what each line says:\n\n"
+        f"{roster}"
+    )
+
+
 def _effective_prompt(
-    skill, tts_backend: str, *, verbosity, user_id: str,
+    skill, tts_backend: str, *, verbosity, user_id: str, delegates=None,
 ) -> str:
     """Compose the system prompt = persona + TOOL USE block.
 
@@ -592,6 +622,8 @@ def _effective_prompt(
         + tool_use_block(verbosity, tts_backend)
         + "\n\n"
         + tool_response_block(verbosity)
+        + "\n\n"
+        + _fleet_block(delegates)
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
@@ -716,6 +748,7 @@ async def text_agent(message: str, session_id: str) -> str:
                 skill, TTS_BACKEND,
                 verbosity=state.filler_settings.verbosity,
                 user_id=user_id,
+                delegates=session_delegates,
             ),
         },
         *history[-(_A2A_MAX_TURNS * 2):],
@@ -1094,6 +1127,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 tts_backend,
                 verbosity=user_state.filler_settings.verbosity,
                 user_id=user_id,
+                delegates=session_delegates,
             ),
         }],
         tools=tools_schema,
