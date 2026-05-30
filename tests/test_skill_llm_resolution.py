@@ -161,3 +161,28 @@ def test_empty_string_url_does_not_count_as_custom(helper) -> None:
     assert cfg["url"] == "http://env-default:8100/v1"
     assert cfg["using_custom_url"] is False
     assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+# --- micro-task model (orbis-3au) -----------------------------------------
+
+
+def test_micro_model_defaults_to_model(helper) -> None:
+    cfg = helper(_skill())
+    assert cfg["micro_model"] == cfg["model"]  # default = persona model
+
+
+def test_micro_model_from_persona(helper) -> None:
+    cfg = helper(_skill(model="protolabs/fast", micro_model="protolabs/micro"))
+    assert cfg["micro_model"] == "protolabs/micro"
+
+
+def test_micro_model_from_env(helper, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MICRO_MODEL", "tiny-1")
+    cfg = helper(_skill())
+    assert cfg["micro_model"] == "tiny-1"
+
+
+def test_persona_micro_model_beats_env(helper, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MICRO_MODEL", "tiny-env")
+    cfg = helper(_skill(micro_model="tiny-persona"))
+    assert cfg["micro_model"] == "tiny-persona"

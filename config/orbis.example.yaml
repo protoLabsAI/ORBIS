@@ -130,6 +130,14 @@ voice:
 #     content_model: protolabs/fast          # post-tool narration turns
 #   # Or via the runtime .env (A/B without a rebuild):
 #   #   LLM_ROUTER_MODEL=protolabs/smart   LLM_CONTENT_MODEL=protolabs/fast
+#
+#   # Micro-task model (optional) — the cheap/fast tier used for throwaway
+#   # generation: fillers, backchannels, micro-acks, and natural phrasing of
+#   # proactive announcements. Served at the same `url`; defaults to `model`.
+#   # Point it at a smaller tier to make all the micro stuff cheaper at once.
+#   llm:
+#     micro_model: protolabs/fast            # or a smaller tier when available
+#   # Or via env: LLM_MICRO_MODEL=protolabs/fast
 
 orb:
   # Starter orb viz — picked at first-run via the setup wizard.
