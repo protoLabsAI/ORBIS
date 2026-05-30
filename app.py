@@ -1536,6 +1536,19 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Record real proactive deliveries into conversation history (orbis-3ta)
     # so the orb remembers saying them and can reference them in talk.
     delivery.set_context(context)
+    # Naturalize proactive deliveries via the micro LLM (orbis-2mh): phrase
+    # reminders/pings/results in-character instead of speaking raw text. Falls
+    # back to the raw line on timeout, so a slow micro-LLM never blocks a
+    # delivery. Default on; NATURALIZE_DELIVERIES=0 speaks them verbatim.
+    if os.environ.get("NATURALIZE_DELIVERIES", "1") == "1":
+        _announce_gen = _filler_gen_for(user_id)
+
+        async def _announce(content, kind, source):
+            return await _announce_gen.announce(
+                content, kind=kind or "update", source=source, tts_backend=tts_backend,
+            )
+
+        delivery.set_announcer(_announce)
     delivery.set_message_emitter(
         lambda payload: sse_bus.publish("delegation-progress", payload)
     )
@@ -2495,7 +2508,7 @@ async def post_say(body: dict, request: Request):
         })
         return {"ok": True, "delivered": False, "stashed": True}
 
-    await delivery.deliver(text, priority=priority, source=source)
+    await delivery.deliver(text, priority=priority, source=source, kind="ping")
     return {"ok": True, "delivered": True}
 
 

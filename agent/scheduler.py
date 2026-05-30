@@ -104,6 +104,7 @@ class ReminderScheduler:
                 priority=Priority.TIME_SENSITIVE,
                 source=r.get("source") or None,
                 cooldown_key=f"reminder:{r['id']}",
+                kind="reminder",
             )
             _advance()
             spoken += 1

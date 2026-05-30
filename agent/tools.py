@@ -650,7 +650,7 @@ def _delegate_async_handler(
                 )
                 await delivery.deliver(
                     _strip_markdown_for_speech(result),
-                    priority=Priority.TIME_SENSITIVE, source=target,
+                    priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
                 )
             except DelegateError as e:
                 logger.warning(f"[delegate_async] {target} failed: {e}")
