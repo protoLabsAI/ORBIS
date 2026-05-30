@@ -76,6 +76,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMAssistantAggregatorParams,
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
+    UserTurnCompletionConfig,
 )
 from pipecat.processors.frameworks.rtvi import (
     RTVIObserver,
@@ -1166,14 +1167,27 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Incomplete-turn filtering (pipecat-native — fixes orbis-ioz queued-intent
     # staggering): the LLM emits a turn-completion marker (✓/○/◐) and the
     # aggregator SUPPRESSES the response to an incomplete fragment ("hey, so I
-    # uh…") instead of firing a premature reply, re-prompting on timeout. The
-    # default UserTurnCompletionConfig() supplies the marker prompt. Off by
+    # uh…") instead of firing a premature reply, re-prompting on timeout. Off by
     # default (changes LLM behavior + relies on the model emitting the marker);
     # flip FILTER_INCOMPLETE_TURNS=1 in the runtime .env to A/B it. The
     # user-turn coalescing window is tunable via USER_TURN_STOP_TIMEOUT.
     if os.environ.get("FILTER_INCOMPLETE_TURNS", "0") == "1":
         _user_agg_kwargs["filter_incomplete_user_turns"] = True
-        logger.info("[tuning] filter_incomplete_user_turns=ON")
+        # orbis-3ss: pipecat's UserTurnCompletionConfig defaults the
+        # re-prompt timeouts to 10s (◐ long) / 5s (○ short). When the model
+        # MIS-marks a complete turn as incomplete, those defaults become a
+        # 10-second silent hang. Default them far lower so a misclassification
+        # self-heals in a couple seconds; both env-tunable for A/B.
+        _long_to = float(os.environ.get("INCOMPLETE_LONG_TIMEOUT", "3.0"))
+        _short_to = float(os.environ.get("INCOMPLETE_SHORT_TIMEOUT", "2.0"))
+        _user_agg_kwargs["user_turn_completion_config"] = UserTurnCompletionConfig(
+            incomplete_long_timeout=_long_to,
+            incomplete_short_timeout=_short_to,
+        )
+        logger.info(
+            "[tuning] filter_incomplete_user_turns=ON (reprompt long=%ss short=%ss)",
+            _long_to, _short_to,
+        )
     _uts = os.environ.get("USER_TURN_STOP_TIMEOUT")
     if _uts:
         _user_agg_kwargs["user_turn_stop_timeout"] = float(_uts)
