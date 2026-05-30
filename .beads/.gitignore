@@ -1,11 +1,9 @@
-# Database
-*.db
-*.db-shm
-*.db-wal
-
-# Lock files
-*.lock
-
-# Temporary
-last-touched
-*.tmp
+# Beads — allowlist form: track ONLY the canonical export + config; every-
+# thing else under .beads/ is local scratch (the SQLite db + WAL, the
+# .br_history/ auto-snapshots, locks, temp, last-touched). New scratch file
+# types are ignored automatically.
+*
+!.gitignore
+!issues.jsonl
+!config.yaml
+!metadata.json
