@@ -156,6 +156,7 @@ logger = logging.getLogger("orbis")
 # emit a UserWarning on every istft call; phonemizer warns per line.
 import warnings as _warnings  # noqa: E402
 _warnings.filterwarnings("ignore", category=UserWarning)
+_warnings.filterwarnings("ignore", category=FutureWarning)  # torch weight_norm etc.
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
 PORT = int(os.environ.get("PORT", "7866"))
@@ -1572,7 +1573,10 @@ def prewarm_llm() -> None:
         )
         logger.info("LLM warm")
     except Exception as e:
-        logger.warning(f"LLM prewarm skipped: {e}")
+        # Expected when the configured LLM is a remote gateway that doesn't
+        # need (or want) a boot-time warmup ping, or a local vLLM that isn't
+        # up. Not warning-worthy — the LLM still works at request time.
+        logger.info(f"LLM prewarm skipped ({type(e).__name__})")
 
 
 def _emit_boot(stage: str, detail: str) -> None:

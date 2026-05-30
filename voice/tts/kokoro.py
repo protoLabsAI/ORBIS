@@ -135,7 +135,9 @@ def _get_pipe(lang: str = KOKORO_LANG):
         # the library default (CPU); pass the detected accelerator
         # explicitly when we have one so KModel's weights land on it
         # instead of CPU.
-        kpipe_kwargs: dict = {"lang_code": lang}
+        # Pin repo_id explicitly — KPipeline warns "Defaulting repo_id to
+        # hexgrad/Kokoro-82M" on every init otherwise.
+        kpipe_kwargs: dict = {"lang_code": lang, "repo_id": "hexgrad/Kokoro-82M"}
         if KOKORO_DEVICE is not None:
             kpipe_kwargs["device"] = KOKORO_DEVICE
         _pipe = KPipeline(**kpipe_kwargs)
