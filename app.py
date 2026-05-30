@@ -1995,11 +1995,11 @@ async def list_delegates_endpoint(user: User = Depends(require_user)):
         read_delegates,
     )
     try:
-        # Read the EXACT file the live registry loaded from, not the
-        # config-store default — the two resolve differently in the bundle,
-        # which left the UI showing zero delegates while ava was loaded and
-        # healthy.
-        entries = read_delegates(_DELEGATES_YAML)
+        # Uses the config-store DEFAULT_PATH, now unified to resolve the same
+        # way the live registry does (DELEGATES_YAML) so it reads the file the
+        # registry loaded. The registry fallback below covers any residual
+        # path divergence in the bundle.
+        entries = read_delegates()
     except DelegateValidationError as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
