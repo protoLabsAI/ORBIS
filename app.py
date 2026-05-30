@@ -1518,6 +1518,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # now that the task exists. queue_frame is the only safe way to inject
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
+    # Record real proactive deliveries into conversation history (orbis-3ta)
+    # so the orb remembers saying them and can reference them in talk.
+    delivery.set_context(context)
     delivery.set_message_emitter(
         lambda payload: sse_bus.publish("delegation-progress", payload)
     )

@@ -199,12 +199,22 @@ class DeliveryController(FrameProcessor):
         # is unsafe).
         self._emitter: FrameEmitter | None = None
         self._message_emitter: MessageEmitter | None = None
+        # Shared LLMContext (orbis-3ta). When set, real proactive deliveries
+        # are recorded as assistant turns so the orb remembers saying them and
+        # can reference them in conversation. Fillers/bids/storm-notice are
+        # NOT recorded (they'd reopen the append_to_context riffing tripwire).
+        self._context = None
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
 
     def set_message_emitter(self, emitter: MessageEmitter) -> None:
         self._message_emitter = emitter
+
+    def set_context(self, context) -> None:
+        """Give the controller the live LLMContext so proactive deliveries
+        can be recorded into conversation history (orbis-3ta)."""
+        self._context = context
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending
@@ -353,7 +363,7 @@ class DeliveryController(FrameProcessor):
             f"{f' source={source}' if source else ''}: {attributed[:60]!r}"
         )
         if effective_policy is DeliveryPolicy.NOW:
-            await self._emit(attributed)
+            await self._emit(attributed, record_to_context=True)
             return
         self._pending.append(
             _Pending(phrase=attributed, policy=effective_policy, priority=priority, keywords=keywords)
@@ -366,12 +376,18 @@ class DeliveryController(FrameProcessor):
         if not self._user_speaking:
             await self._drain_eligible(new_transcript=None)
 
-    async def _emit(self, phrase: str) -> None:
+    async def _emit(self, phrase: str, *, record_to_context: bool = False) -> None:
         logger.info(f"[delivery] emit {phrase[:60]!r}")
-        # append_to_context=False — push deliveries are spoken directly;
-        # they shouldn't show up as part of the assistant's LLM history
-        # (the underlying tool already injected its result via the proper
-        # channel — see app.py llm.supports_developer_role=False).
+        # append_to_context=False — the TTS frame itself never feeds the LLM
+        # history (that path makes the model riff on its own fillers). For
+        # REAL proactive deliveries we instead record an assistant turn
+        # directly into the shared context (orbis-3ta) so the orb remembers
+        # saying it without the riffing side-effect.
+        if record_to_context and self._context is not None:
+            try:
+                self._context.add_message({"role": "assistant", "content": phrase})
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[delivery] context record failed: {e}")
         frame = TTSSpeakFrame(phrase, append_to_context=False)
         if self._emitter is not None:
             await self._emitter(frame)
@@ -446,11 +462,11 @@ class DeliveryController(FrameProcessor):
                     # urgent items. High-urgency fall through and emit.
                     remaining.append(item)
                     continue
-                await self._emit(item.phrase)
+                await self._emit(item.phrase, record_to_context=True)
                 continue
             if item.policy is DeliveryPolicy.WHEN_ASKED:
                 if new_transcript and _keyword_match(new_transcript, item.keywords):
-                    await self._emit(item.phrase)
+                    await self._emit(item.phrase, record_to_context=True)
                     continue
                 remaining.append(item)
                 continue
@@ -541,7 +557,7 @@ class DeliveryController(FrameProcessor):
                     )
                     if item in self._pending:
                         self._pending.remove(item)
-                        await self._emit(item.phrase)
+                        await self._emit(item.phrase, record_to_context=True)
                 # WHEN_ASKED TTL — silently drop items that aged out.
                 expired = [
                     p for p in self._pending
