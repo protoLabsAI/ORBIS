@@ -1995,12 +1995,25 @@ async def list_delegates_endpoint(user: User = Depends(require_user)):
         read_delegates,
     )
     try:
-        entries = read_delegates()
+        # Read the EXACT file the live registry loaded from, not the
+        # config-store default — the two resolve differently in the bundle,
+        # which left the UI showing zero delegates while ava was loaded and
+        # healthy.
+        entries = read_delegates(_DELEGATES_YAML)
     except DelegateValidationError as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     parsed_names = set(_DELEGATES.names())
     parsed_by_name = {d.name: d for d in _DELEGATES.all()}
+
+    # Belt-and-suspenders: if the file read produced nothing but the live
+    # registry has delegates, surface those so the UI reflects reality.
+    if not entries and parsed_by_name:
+        entries = [
+            {"name": d.name, "type": d.type, "url": d.url,
+             "description": d.description}
+            for d in _DELEGATES.all()
+        ]
 
     def _decorate(entry: dict) -> dict:
         name = entry.get("name")

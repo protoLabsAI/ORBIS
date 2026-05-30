@@ -28,7 +28,15 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PATH = os.environ.get("ORBIS_DELEGATES_CONFIG", "config/delegates.yaml")
+# Resolve the SAME way the live DelegateRegistry does (app.py reads
+# DELEGATES_YAML) so the /api/delegates read/write endpoints touch the exact
+# file the registry loads — otherwise the UI shows zero delegates while the
+# registry has them. ORBIS_DELEGATES_CONFIG still wins if explicitly set.
+DEFAULT_PATH = (
+    os.environ.get("ORBIS_DELEGATES_CONFIG")
+    or os.environ.get("DELEGATES_YAML")
+    or "config/delegates.yaml"
+)
 
 # Allowed top-level keys per delegate type. Anything outside the union
 # is dropped on write with a log message — keeps the UI from injecting
