@@ -107,7 +107,7 @@ from agent.echo_guard import (
     EchoGuardSuppressor,
 )
 from agent.audio_tags import make_audio_tags_tap
-from agent.delivery import DeliveryController
+from agent.delivery import DeliveryController, Priority
 from agent.paths import get_voiceprint_path
 from agent.speaker_gate import (
     SpeakerGate,
@@ -2255,6 +2255,62 @@ async def post_inbox(body: dict, request: Request):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, "id": msg_id}
+
+
+_SAY_URGENCY_TO_PRIORITY = {
+    "urgent": Priority.CRITICAL,       # interrupt now, even mid-speech
+    "normal": Priority.TIME_SENSITIVE, # speak at the next natural pause
+    "low": Priority.ACTIVE,            # surface when the topic comes up
+}
+
+
+@app.post("/api/say")
+async def post_say(body: dict, request: Request):
+    """Make the orb speak an externally-supplied message (orbis-wox).
+
+    The external "ping ORBIS to speak / inhabit / message" primitive. Same
+    auth as /api/inbox (owner key or ingest token). Unlike /api/inbox —
+    which is pull-only and never proactively spoken — this routes straight
+    into the DeliveryController so the orb actually voices it: immediately
+    if a session is live (urgency-gated), else stashed and spoken on next
+    connect.
+
+    Body:
+      text     — what to say (required)
+      urgency  — urgent | normal (default) | low
+      source   — optional attribution; if set, spoken as "<source> says — …",
+                 if omitted the orb speaks it in its own voice (inhabit).
+    """
+    if not _inbox_writer_ok(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    urgency = (body.get("urgency") or "normal").strip().lower()
+    if urgency not in _SAY_URGENCY_TO_PRIORITY:
+        raise HTTPException(
+            status_code=400,
+            detail=f"urgency must be urgent|normal|low (got {urgency!r})",
+        )
+    priority = _SAY_URGENCY_TO_PRIORITY[urgency]
+    source = (body.get("source") or "").strip() or None
+
+    delivery = user_state_for(_A2A_USER_ID).active_delivery
+    if delivery is None:
+        # No live voice session — stash for replay on next connect (mirrors
+        # the /a2a/push path: pre-attribute since replay passes source=None).
+        from agent.session_store import stash_delivery
+        attributed = f"{source} says — {text}" if source else text
+        stash_delivery(_A2A_USER_ID, {
+            "phrase": attributed,
+            "policy": "now" if priority is Priority.CRITICAL else "next_silence",
+            "priority": priority.value,
+            "keywords": [],
+        })
+        return {"ok": True, "delivered": False, "stashed": True}
+
+    await delivery.deliver(text, priority=priority, source=source)
+    return {"ok": True, "delivered": True}
 
 
 @app.get("/api/inbox")
