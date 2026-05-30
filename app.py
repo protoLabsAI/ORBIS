@@ -1460,6 +1460,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # a session reconnect. Closure captures user_state, which
             # is the same object the API mutates.
             verbosity_getter=lambda: user_state.filler_settings.verbosity,
+            # Occasional LLM-generated acks for variety (orbis-29e) — same
+            # micro generator the fillers + announcer use.
+            generator=_filler_gen_for(user_id),
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
         # Both placed after the gate — they need TranscriptionFrames and

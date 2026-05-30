@@ -244,3 +244,57 @@ async def test_post_bot_grace_suppresses_echo_retrigger(injector_factory) -> Non
     await inj.process_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
 
     assert inj._timer is None
+
+
+# --- occasional LLM-generated acks (orbis-29e) -----------------------------
+
+
+class _FakeGen:
+    def __init__(self, result):
+        self._result = result
+        self.calls = 0
+
+    async def micro_ack(self, *, tts_backend):
+        self.calls += 1
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+@pytest.mark.asyncio
+async def test_choose_uses_llm_when_chance_hits() -> None:
+    from agent.micro_ack import MicroAckInjector
+    gen = _FakeGen("let me see")
+    inj = MicroAckInjector(tts_backend="kokoro", enabled=True, generator=gen)
+    inj._llm_chance = 1.0  # force the LLM path
+    assert await inj._choose() == "let me see"
+    assert gen.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_choose_falls_back_when_llm_returns_none() -> None:
+    from agent.micro_ack import _KOKORO_ACKS, MicroAckInjector
+    gen = _FakeGen(None)
+    inj = MicroAckInjector(tts_backend="kokoro", enabled=True, generator=gen)
+    inj._llm_chance = 1.0
+    assert await inj._choose() in set(_KOKORO_ACKS)  # canned fallback
+    assert gen.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_choose_falls_back_when_llm_raises() -> None:
+    from agent.micro_ack import _KOKORO_ACKS, MicroAckInjector
+    gen = _FakeGen(RuntimeError("down"))
+    inj = MicroAckInjector(tts_backend="kokoro", enabled=True, generator=gen)
+    inj._llm_chance = 1.0
+    assert await inj._choose() in set(_KOKORO_ACKS)
+
+
+@pytest.mark.asyncio
+async def test_choose_never_calls_llm_at_zero_chance() -> None:
+    from agent.micro_ack import _KOKORO_ACKS, MicroAckInjector
+    gen = _FakeGen("nope")
+    inj = MicroAckInjector(tts_backend="kokoro", enabled=True, generator=gen)
+    inj._llm_chance = 0.0
+    assert await inj._choose() in set(_KOKORO_ACKS)
+    assert gen.calls == 0
