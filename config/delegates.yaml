@@ -12,18 +12,13 @@
 
 delegates:
   # ─── Ava — chief of staff on workstacean ────────────────────────────
-  # A2A flip (F7) is code-ready: a2a/client.py sends messageId and is
-  # spec-tolerant (falls back to status.message when artifacts is empty).
-  # Held on type=openai because of two bugs on protoWorkstacean's /a2a:
-  #   1. message/send routes to protoBot instead of ava
-  #   2. message/stream intermittently returns an upstream "Cannot POST /"
-  #      404 as the reply text
-  # Tracked: https://github.com/protoLabsAI/protoWorkstacean/issues/471
-  # When both land, swap the block below:
-  #
-  #   type: a2a
-  #   url: https://ava.proto-labs.ai/a2a
-  #   auth: { scheme: apiKey, credentialsEnv: WORKSTACEAN_API_KEY }
+  # Native A2A. The two bugs that held this on type=openai (protoWorkstacean
+  # #471: message/send → protoBot; message/stream "Cannot POST /" 404) are
+  # CLOSED. Verified 2026-05-29: POST https://ava.proto-labs.ai/a2a message/send
+  # with no explicit target defaults to Ava and returns her output (the a2a
+  # server defaults targets=[ava]; she's the helm). a2a/client.py is
+  # spec-tolerant and falls back to status.message when artifacts is empty —
+  # which is exactly what Ava's in-process agent returns.
   - name: ava
     description: >-
       Chief of staff for the protoLabs fleet. Best for project status
@@ -31,10 +26,9 @@ delegates:
       feature, bug triage, and anything that needs a wider look across
       the board, CI, and incidents. Has her own sub-agents and
       delegation authority.
-    type: openai
-    url: https://ava.proto-labs.ai/v1
-    model: ava
-    api_key_env: WORKSTACEAN_API_KEY
+    type: a2a
+    url: https://ava.proto-labs.ai/a2a
+    auth: { scheme: apiKey, credentialsEnv: WORKSTACEAN_API_KEY }
 
   # ─── Add more delegates here as you wire them up ────────────────────
   # Example — a heavy reasoning model through the LiteLLM gateway:
