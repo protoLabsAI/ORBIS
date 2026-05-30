@@ -110,3 +110,36 @@ async def test_drain_path_naturalizes() -> None:
     await c.deliver("ava wrapped it up", priority=Priority.TIME_SENSITIVE,
                     source="ava", kind="delegate")
     assert any("got something for you — ava wrapped it up" == e for e in cap.emitted)
+
+
+# --- barge-in awareness for the out-of-band path (orbis-1c4 E1) -------------
+
+
+@pytest.mark.asyncio
+async def test_barge_in_during_announce_defers_and_requeues() -> None:
+    c, cap, _ = _ctrl()
+
+    async def ann(content, kind, source):
+        c._user_speaking = True  # user starts talking DURING the announce call
+        return f"natural — {content}"
+
+    c.set_announcer(ann)
+    # TIME_SENSITIVE → NEXT_SILENCE; not speaking at enqueue → drains, but the
+    # announce window catches a fresh barge-in → defer, don't speak over them.
+    await c.deliver("ava finished", priority=Priority.TIME_SENSITIVE, kind="delegate")
+    assert cap.emitted == []                 # not spoken over the user
+    assert len(c._pending) == 1              # re-queued for the next pause
+
+
+@pytest.mark.asyncio
+async def test_critical_speaks_through_barge_in() -> None:
+    c, cap, _ = _ctrl()
+
+    async def ann(content, kind, source):
+        c._user_speaking = True
+        return f"URGENT — {content}"
+
+    c.set_announcer(ann)
+    # CRITICAL → NOW → interruptible=False — it interrupts on purpose.
+    await c.deliver("the house is on fire", priority=Priority.CRITICAL)
+    assert cap.emitted == ["URGENT — the house is on fire"]

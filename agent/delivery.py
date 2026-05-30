@@ -380,7 +380,11 @@ class DeliveryController(FrameProcessor):
             f"{f' source={source}' if source else ''}: {attributed[:60]!r}"
         )
         if effective_policy is DeliveryPolicy.NOW:
-            await self._emit_content(raw=phrase, source=source, kind=kind, fallback=attributed)
+            # NOW = CRITICAL — it interrupts on purpose; not deferred.
+            await self._emit_content(
+                raw=phrase, source=source, kind=kind, fallback=attributed,
+                interruptible=False,
+            )
             return
         self._pending.append(
             _Pending(
@@ -418,18 +422,34 @@ class DeliveryController(FrameProcessor):
             await self.push_frame(frame)
 
     async def _emit_content(
-        self, *, raw: str | None, source: str | None, kind: str | None, fallback: str,
-    ) -> None:
+        self,
+        *,
+        raw: str | None,
+        source: str | None,
+        kind: str | None,
+        fallback: str,
+        interruptible: bool = True,
+    ) -> bool:
         """Speak a real proactive delivery — phrased naturally by the micro
         LLM when an announcer is wired, else the raw (attributed) `fallback`.
-        Always records the actually-spoken line to context (orbis-3ta)."""
+        Records the spoken line to context (orbis-3ta).
+
+        Returns False (deferred) if the user started speaking during the
+        announce await and this delivery is `interruptible` — barge-in
+        awareness for the out-of-band path (orbis-1c4 E1). The caller
+        re-queues so it lands at the next pause instead of over the user.
+        CRITICAL/NOW deliveries pass interruptible=False — they interrupt."""
         spoken: str | None = None
         if self._announcer is not None and raw:
             try:
                 spoken = await self._announcer(raw, kind, source)
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[delivery] announcer failed, using raw: {e}")
+        if interruptible and self._user_speaking:
+            logger.info("[delivery] barge-in during announce — deferring delivery")
+            return False
         await self._emit(spoken or fallback, record_to_context=True)
+        return True
 
     async def _storm_ok(self) -> bool:
         """Drop-storm circuit breaker (B3). Records this delivery in a
@@ -496,15 +516,18 @@ class DeliveryController(FrameProcessor):
                     # urgent items. High-urgency fall through and emit.
                     remaining.append(item)
                     continue
-                await self._emit_content(
+                if not await self._emit_content(
                     raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
-                )
+                ):
+                    remaining.append(item)  # barge-in mid-announce — try next pause
                 continue
             if item.policy is DeliveryPolicy.WHEN_ASKED:
                 if new_transcript and _keyword_match(new_transcript, item.keywords):
-                    await self._emit_content(
-                    raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
-                )
+                    if not await self._emit_content(
+                        raw=item.raw, source=item.source, kind=item.kind,
+                        fallback=item.phrase,
+                    ):
+                        remaining.append(item)
                     continue
                 remaining.append(item)
                 continue
