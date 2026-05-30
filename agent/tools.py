@@ -377,30 +377,40 @@ def _humanize_every(m: float) -> str:
     return f"every {round(m / (24 * 60))} day(s)"
 
 
+def _store_reminder(text: str, in_minutes: float, repeat_secs: int | None) -> bool:
+    """Persist a reminder. Returns True on success. Shared by the one-time
+    and recurring tools so they can't drift apart."""
+    from datetime import datetime, timedelta, timezone
+    fire_at = (datetime.now(timezone.utc) + timedelta(minutes=in_minutes)).isoformat()
+    try:
+        from app import get_memory  # type: ignore  # lazy: avoid import cycle
+        get_memory().reminders.add(text=text, fire_at=fire_at, repeat_secs=repeat_secs)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[reminder] store failed: {exc}")
+        return False
+    logger.info(f"[reminder] +{in_minutes}m repeat={repeat_secs}s: {text[:48]!r}")
+    return True
+
+
 @tool(
     "schedule_reminder",
     (
-        "Schedule a spoken reminder. Use when the user asks to be reminded "
-        "('remind me in 10 minutes to take the cookies out', 'in an hour tell "
-        "me to call mom', 'every hour remind me to drink water'). Work out "
-        "`in_minutes` (when the FIRST one fires: 10, 60, 1440 = a day) and the "
-        "`text` phrased the way you'd say it back. For a RECURRING reminder "
-        "('every hour', 'every 30 minutes'), also pass `repeat_minutes` (the "
-        "interval); leave it out for a one-time reminder. The orb speaks it at "
-        "the right time, at a natural pause. Confirm briefly."
+        "Schedule a ONE-TIME spoken reminder — fires once, then it's done. "
+        "Use for 'remind me in 10 minutes to take the cookies out', 'in an "
+        "hour tell me to call mom', 'remind me at 3 to leave'. Work out "
+        "`in_minutes` (minutes from now: 10, 60, 1440 = a day) and the `text` "
+        "phrased the way you'd say it back. If — and only if — the user wants "
+        "it to REPEAT ('every hour', 'each morning'), use "
+        "schedule_recurring_reminder instead, not this one."
     ),
     parameters={
         "in_minutes": {
             "type": "number",
-            "description": "Minutes from now until the first fire (10, 60, 1440 = a day).",
+            "description": "Minutes from now until it fires (10, 60, 1440 = a day).",
         },
         "text": {
             "type": "string",
             "description": "What to remind the user, phrased as you'd speak it.",
-        },
-        "repeat_minutes": {
-            "type": "number",
-            "description": "Optional. If set, repeat every this-many minutes (60 = hourly).",
         },
     },
     required=["in_minutes", "text"],
@@ -412,43 +422,66 @@ async def schedule_reminder_handler(params: FunctionCallParams) -> None:
         in_minutes = float(params.arguments.get("in_minutes"))
     except (TypeError, ValueError):
         in_minutes = 0.0
-    repeat_minutes_raw = params.arguments.get("repeat_minutes")
-    repeat_secs: int | None = None
-    if repeat_minutes_raw not in (None, "", 0):
-        try:
-            rm = float(repeat_minutes_raw)
-            if rm > 0:
-                repeat_secs = int(rm * 60)
-        except (TypeError, ValueError):
-            repeat_secs = None
     if not text or in_minutes <= 0:
-        await params.result_callback(
-            "I need both a time and what to remind you about."
-        )
+        await params.result_callback("I need both a time and what to remind you about.")
         return
-    from datetime import datetime, timedelta, timezone
-    fire_at = (
-        datetime.now(timezone.utc) + timedelta(minutes=in_minutes)
-    ).isoformat()
-    try:
-        from app import get_memory  # type: ignore  # lazy: avoid import cycle
-        get_memory().reminders.add(text=text, fire_at=fire_at, repeat_secs=repeat_secs)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(f"[schedule_reminder] store failed: {exc}")
+    if not _store_reminder(text, in_minutes, None):
         await params.result_callback("I couldn't set that reminder, sorry.")
         return
-    logger.info(
-        f"[schedule_reminder] +{in_minutes}m repeat={repeat_secs}s: {text[:48]!r}"
+    await params.result_callback(f"Got it — I'll remind you {_humanize_minutes(in_minutes)}.")
+
+
+@tool(
+    "schedule_recurring_reminder",
+    (
+        "Schedule a RECURRING spoken reminder that repeats on an interval. "
+        "Use ONLY when the user explicitly wants it to repeat ('every hour "
+        "remind me to drink water', 'every 30 minutes tell me to look away'). "
+        "For a single 'remind me in/at X' use schedule_reminder instead. Pass "
+        "`every_minutes` (the interval: 60 = hourly) and `text`. By default "
+        "the first one fires after one interval; pass `first_in_minutes` to "
+        "start sooner (e.g. 0 to begin right away)."
+    ),
+    parameters={
+        "every_minutes": {
+            "type": "number",
+            "description": "Repeat interval in minutes (60 = hourly, 30 = half-hourly).",
+        },
+        "text": {
+            "type": "string",
+            "description": "What to remind the user, phrased as you'd speak it.",
+        },
+        "first_in_minutes": {
+            "type": "number",
+            "description": "Optional. Minutes until the FIRST fire; defaults to every_minutes.",
+        },
+    },
+    required=["every_minutes", "text"],
+    latency=Latency.FAST,
+)
+async def schedule_recurring_reminder_handler(params: FunctionCallParams) -> None:
+    text = (params.arguments.get("text") or "").strip()
+    try:
+        every_minutes = float(params.arguments.get("every_minutes"))
+    except (TypeError, ValueError):
+        every_minutes = 0.0
+    first_raw = params.arguments.get("first_in_minutes")
+    try:
+        first_in = float(first_raw) if first_raw not in (None, "") else every_minutes
+    except (TypeError, ValueError):
+        first_in = every_minutes
+    if not text or every_minutes <= 0:
+        await params.result_callback("I need an interval and what to remind you about.")
+        return
+    if first_in <= 0:
+        first_in = 0.01  # store needs a positive first fire; ~immediate
+    if not _store_reminder(text, first_in, int(every_minutes * 60)):
+        await params.result_callback("I couldn't set that recurring reminder, sorry.")
+        return
+    await params.result_callback(
+        f"Got it — {_humanize_every(every_minutes)}, starting "
+        f"{_humanize_minutes(first_in)}."
     )
-    if repeat_secs:
-        await params.result_callback(
-            f"Got it — I'll remind you {_humanize_minutes(in_minutes)}, then "
-            f"{_humanize_every(repeat_secs / 60)}."
-        )
-    else:
-        await params.result_callback(
-            f"Got it — I'll remind you {_humanize_minutes(in_minutes)}."
-        )
 
 
 # ---------------------------------------------------------------------------

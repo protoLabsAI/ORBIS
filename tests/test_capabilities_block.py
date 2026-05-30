@@ -65,7 +65,7 @@ def test_empty_or_none_schema_is_empty() -> None:
 
 def test_hint_is_a_concise_first_sentence() -> None:
     block = capabilities_block(_schema())
-    # schedule_reminder's description starts "Schedule a spoken reminder…"
+    # schedule_reminder's description starts "Schedule a ONE-TIME spoken reminder…"
     line = next(ln for ln in block.splitlines() if "`schedule_reminder`" in ln)
-    assert "Schedule a spoken reminder" in line
+    assert "Schedule a ONE-TIME spoken reminder" in line
     assert len(line) < 160  # trimmed, not the whole multi-paragraph description
