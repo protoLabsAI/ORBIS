@@ -106,6 +106,14 @@ _WHEN_ASKED_TTL_SECS = float(
     _os.environ.get("DELIVERY_WHEN_ASKED_TTL_SECS", "600")
 )
 
+# Dedup/cooldown window (orbis-1gw B1). deliver() drops a phrase that
+# repeats within this window — keyed by an explicit cooldown_key when the
+# caller supplies one, else by the phrase text itself. This is the single
+# chokepoint that stops the orb double-speaking when a stimulus fires twice
+# (a webhook retrying, two events describing one thing) — load-bearing as
+# proactive producers (scheduler, alerts) come online. Set to 0 to disable.
+_DEDUP_SECS = float(_os.environ.get("DELIVERY_DEDUP_SECS", "12"))
+
 # How often the watchdog ticks to check fallback timers + TTLs.
 _WATCHDOG_TICK_SECS = 1.0
 
@@ -167,6 +175,9 @@ class DeliveryController(FrameProcessor):
         # the user affirms or declines. Suppresses further NEXT_SILENCE
         # drains while awaiting response.
         self._bid_issued = False
+        # Cooldown/dedup chokepoint (orbis-1gw B1): key → monotonic time of
+        # last delivery. deliver() drops repeats within the cooldown window.
+        self._last_delivered: dict[str, float] = {}
         # Set by app.py after PipelineTask exists. Required for correct
         # out-of-band emission (push_frame from another coroutine context
         # is unsafe).
@@ -247,7 +258,13 @@ class DeliveryController(FrameProcessor):
             except Exception as e:
                 logger.warning(f"[delivery] skipping malformed stashed item: {e}")
                 continue
-            await self.deliver(phrase, priority=priority, policy=policy, keywords=keywords)
+            # cooldown_secs=0: replayed items already passed the gate when
+            # first delivered (or were stashed across a session boundary), so
+            # don't re-drop them as dupes here.
+            await self.deliver(
+                phrase, priority=priority, policy=policy, keywords=keywords,
+                cooldown_secs=0,
+            )
 
     # Public API — tool handlers call this to schedule a push delivery.
     async def deliver(
@@ -258,6 +275,8 @@ class DeliveryController(FrameProcessor):
         policy: DeliveryPolicy | None = None,
         keywords: tuple[str, ...] = (),
         source: str | None = None,
+        cooldown_key: str | None = None,
+        cooldown_secs: float | None = None,
     ) -> None:
         """Deliver `phrase` according to its urgency.
 
@@ -274,8 +293,36 @@ class DeliveryController(FrameProcessor):
         prefixed with an attribution ("ava says — …"). CHI '23 data: voice
         attribution boosts trust after errors and makes delegated replies
         feel less like ours to own.
+
+        `cooldown_key` / `cooldown_secs` (orbis-1gw B1) — drop this delivery
+        if the same key was delivered within the window. Defaults: key is
+        the phrase text (dedups identical messages), window is
+        `_DEDUP_SECS`. Pass an explicit key + larger secs for per-topic
+        rate-limiting (e.g. a recurring alert). Pass `cooldown_secs=0` to
+        bypass entirely (used by cross-session replay).
         """
         priority = Priority(priority)
+        # Cooldown/dedup chokepoint — the one place all deliveries funnel
+        # through, so a stimulus that fires twice can't double-speak.
+        window = _DEDUP_SECS if cooldown_secs is None else cooldown_secs
+        if window > 0:
+            key = cooldown_key if cooldown_key is not None else phrase
+            now = time.monotonic()
+            last = self._last_delivered.get(key)
+            if last is not None and (now - last) < window:
+                logger.info(
+                    f"[delivery] cooldown drop ({now - last:.1f}s < {window}s) "
+                    f"key={key[:48]!r}"
+                )
+                return
+            self._last_delivered[key] = now
+            # Bound the dict — evict entries older than the longest plausible
+            # window so it can't grow unbounded over a long-lived session.
+            if len(self._last_delivered) > 256:
+                cutoff = now - max(window, _WHEN_ASKED_TTL_SECS)
+                self._last_delivered = {
+                    k: t for k, t in self._last_delivered.items() if t >= cutoff
+                }
         effective_policy = DeliveryPolicy(policy) if policy is not None else _PRIORITY_TO_POLICY[priority]
         attributed = _attribute(phrase, source)
         logger.info(
