@@ -499,6 +499,44 @@ scope unless explicitly redesigned for Tauri IPC and the local sidecar.
 
 ---
 
+## Amendment — 2026-05-30: Keep torch-MPS KPipeline for Kokoro; reject kokoro-onnx swap
+
+**Context:** `orbis-3kw` proposed swapping our in-process Kokoro TTS
+(`voice/tts/kokoro.py`, the `kokoro`/`KPipeline` PyTorch package on MPS) to
+Pipecat's official `KokoroTTSService`, which is built on `kokoro-onnx`
+(ONNX Runtime), on the assumption that ONNX / CoreML is faster on Apple Silicon.
+
+**Measured on the M1 Pro dev machine** (af_heart, two conversational sentences,
+streaming first-chunk TTFA + wall/audio RTF, warm):
+
+| Path | TTFA | RTF | Model |
+| --- | --- | --- | --- |
+| **torch KPipeline (MPS)** — current | **574 ms** | **0.137** | base dep |
+| onnx fp16 CPU (best onnx config) | 780 ms | 0.209 | 169 MB |
+| onnx fp32 CPU | 946 ms | 0.257 | 310 MB |
+| onnx fp16 CoreML | 931 ms | 0.249 | 169 MB |
+| onnx fp32 CoreML | 1088 ms | 0.294 | 310 MB |
+| onnx int8 CPU | 2330 ms | 0.637 | 88 MB |
+| onnx int8 CoreML | 2517 ms | 0.685 | 88 MB |
+
+**Decision: do not swap.** The torch-MPS path we already ship beats every
+kokoro-onnx configuration on both time-to-first-audio and throughput. The best
+ONNX config is ~1.4× slower TTFA; int8 (the only small model) is ~4× slower
+(quantized ops aren't accelerated on Apple); CoreML EP is slower than plain CPU
+because only ~1060/2476 graph nodes map to CoreML and the partition transfers
+cost more than they save. A swap would also add a 169–310 MB model file plus
+`onnxruntime` and an espeak-ng phonemizer to the bundle — net regression on our
+only first-class platform.
+
+**Implication:** "adopt Pipecat's official service" is not automatically the
+right call when Pipecat's service wraps a backend that is slower on our target
+hardware. We keep `LocalKokoroTTS` (torch/MPS, misaki g2p — no espeak dep).
+kokoro-onnx is **not** bundled. Revisit only if (a) a materially faster Apple
+path appears (e.g. an MLX Kokoro port that beats MPS), or (b) we add a non-Apple
+desktop target where torch-MPS is unavailable and ONNX-CPU is the floor.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:
@@ -511,5 +549,8 @@ These were considered and rejected during the design conversation:
 - Multi-tenant roster with per-user `allowed_skills` (rejected — we're single-user)
 - Skills-as-personas catalog (rejected — one orb per install)
 - Fish TTS as default (rejected — broader hardware support via kokoro)
+- kokoro-onnx / Pipecat `KokoroTTSService` as the Kokoro backend (rejected
+  2026-05-30 — measured ~1.4–4× slower than torch-MPS on Apple Silicon; see
+  amendment above)
 - Web / PWA / browser as a supported runtime (rejected 2026-04-28)
 - Linux / Windows desktop builds in the Mac hardening pass (deferred 2026-05-29 until the Mac native-audio release path is proven)
