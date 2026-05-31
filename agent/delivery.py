@@ -211,6 +211,8 @@ class DeliveryController(FrameProcessor):
         # Optional factory: voice id -> frame the TTS honours for one utterance
         # (KokoroVoiceFrame). Wired by app.py for the kokoro backend.
         self._voice_framer: "Callable[[str], object] | None" = None
+        # Most recent delegate status line (visual rail), for grounding fillers.
+        self._last_progress: str | None = None
         # Shared LLMContext (orbis-3ta). When set, real proactive deliveries
         # are recorded as assistant turns so the orb remembers saying them and
         # can reference them in conversation. Fillers/bids/storm-notice are
@@ -243,6 +245,37 @@ class DeliveryController(FrameProcessor):
         """Give the controller the live LLMContext so proactive deliveries
         can be recorded into conversation history (orbis-3ta)."""
         self._context = context
+
+    async def note_progress(self, text: str, *, source: str | None = None) -> None:
+        """Surface an intermediate status on the VISUAL rail only — the
+        ``delegation-progress`` SSE event the StatusPill renders — WITHOUT
+        speaking it. For a delegate's streamed status updates: the user sees
+        what's happening (e.g. "Ava: checking the incident log") next to the
+        tool indicator, and the orb stays quiet instead of narrating every
+        line. The latest is accumulated so the sparse spoken fillers can
+        optionally ground a check-in in what's actually happening (vs a
+        generic "still working")."""
+        text = (text or "").strip()
+        if not text:
+            return
+        self._last_progress = text
+        if self._message_emitter is not None:
+            try:
+                await self._message_emitter({
+                    "type": "delegation-progress",
+                    "source": source,
+                    "text": text,
+                })
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[delivery] message emitter failed: {e}")
+
+    @property
+    def last_progress(self) -> str | None:
+        """The most recent delegate status line (for grounding spoken fillers)."""
+        return self._last_progress
+
+    def clear_progress(self) -> None:
+        self._last_progress = None
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending
