@@ -11,6 +11,13 @@ It is deliberately coarse: a long threshold (the micro-ack already covers
 the normal ~2.5s "thinking" gap) and a single fire per turn, re-armed only
 on the next ``UserStoppedSpeakingFrame``. The recovery line is canned (no
 LLM call) — the whole point is that the LLM may be the thing that's stuck.
+
+**Placement matters: this MUST sit downstream of the LLM service.** It arms
+on ``UserStoppedSpeakingFrame`` (which flows downstream to any position) and
+cancels on the LLM's own output (``LLMFullResponseStartFrame`` /
+``LLMTextFrame`` / ``FunctionCallsStartedFrame``), which only flow downstream
+from the LLM. Placed *before* the LLM it never sees those cancel frames and
+fires on every turn.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     Frame,
     FunctionCallsStartedFrame,
+    LLMFullResponseStartFrame,
     LLMTextFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
@@ -68,9 +76,16 @@ class StallWatchdog(FrameProcessor):
             self._responding = False
             self._arm()
         elif isinstance(
-            frame, (LLMTextFrame, BotStartedSpeakingFrame, FunctionCallsStartedFrame)
+            frame,
+            (
+                LLMFullResponseStartFrame,
+                LLMTextFrame,
+                BotStartedSpeakingFrame,
+                FunctionCallsStartedFrame,
+            ),
         ):
             # The agent is clearly working — cancel the watchdog this turn.
+            # Placed after the LLM, these all flow downstream to here.
             self._responding = True
             self._cancel()
         elif isinstance(frame, UserStartedSpeakingFrame):
