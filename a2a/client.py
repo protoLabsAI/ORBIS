@@ -188,60 +188,77 @@ async def dispatch_message_stream(
                 raise A2ADispatchError(
                     f"HTTP {resp.status_code} from {url} — {body_text[:200]}"
                 )
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if not data or data == "[DONE]":
-                    continue
-                try:
-                    event = json.loads(data)
-                except Exception as e:
-                    logger.warning(f"[a2a/stream] unparseable SSE line: {e}")
-                    continue
-                if "error" in event:
-                    raise A2ADispatchError(f"{event['error']}")
-                result = event.get("result") or {}
-                kind = result.get("kind") or result.get("type") or ""
+            try:
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(data)
+                    except Exception as e:
+                        logger.warning(f"[a2a/stream] unparseable SSE line: {e}")
+                        continue
+                    if "error" in event:
+                        raise A2ADispatchError(f"{event['error']}")
+                    result = event.get("result") or {}
+                    kind = result.get("kind") or result.get("type") or ""
 
-                # Status update — narrate mid-task text as progress; on a
-                # terminal update, treat `status.message` as the final reply
-                # if no artifact has been streamed (A2A spec allows either).
-                if kind in ("task-status-update", "taskStatusUpdate", "status-update"):
-                    msg = _status_message_text(result)
-                    terminal = result.get("final") or _is_terminal(result.get("status") or {})
-                    if msg:
+                    # Status update — surface mid-task text as progress; on a
+                    # terminal update, treat `status.message` as the final reply
+                    # if no artifact has been streamed (A2A spec allows either).
+                    if kind in ("task-status-update", "taskStatusUpdate", "status-update"):
+                        msg = _status_message_text(result)
+                        terminal = result.get("final") or _is_terminal(result.get("status") or {})
+                        if msg:
+                            if terminal:
+                                if not final_text:
+                                    final_text = msg
+                            elif progress_callback:
+                                try:
+                                    await progress_callback(msg)
+                                except Exception as e:
+                                    logger.warning(f"[a2a/stream] progress_callback raised: {e}")
                         if terminal:
-                            if not final_text:
-                                final_text = msg
-                        elif progress_callback:
-                            try:
-                                await progress_callback(msg)
-                            except Exception as e:
-                                logger.warning(f"[a2a/stream] progress_callback raised: {e}")
-                    if terminal:
-                        break
-                    continue
+                            break
+                        continue
 
-                # Artifact chunk — accumulate text.
-                if kind in ("task-artifact-update", "taskArtifactUpdate", "artifact-update"):
-                    text = _artifact_text(result)
-                    if text:
-                        final_text = (final_text or "") + text
-                    continue
+                    # Artifact chunk — accumulate text.
+                    if kind in ("task-artifact-update", "taskArtifactUpdate", "artifact-update"):
+                        text = _artifact_text(result)
+                        if text:
+                            final_text = (final_text or "") + text
+                        continue
 
-                # Full Task snapshot — extract artifact text, or fall back
-                # to status.message if artifacts are empty.
-                if kind == "task":
-                    text = _first_task_artifact_text(result) or _status_message_text(result)
-                    if text:
-                        final_text = text
-                    if _is_terminal(result.get("status") or {}):
-                        break
-                    continue
+                    # Full Task snapshot — extract artifact text, or fall back
+                    # to status.message if artifacts are empty.
+                    if kind == "task":
+                        text = _first_task_artifact_text(result) or _status_message_text(result)
+                        if text:
+                            final_text = text
+                        if _is_terminal(result.get("status") or {}):
+                            break
+                        continue
 
-                # Unknown kind — log at debug, keep going.
-                logger.debug(f"[a2a/stream] unknown event kind: {kind!r}")
+                    # Unknown kind — log at debug, keep going.
+                    logger.debug(f"[a2a/stream] unknown event kind: {kind!r}")
+            except httpx.HTTPError as e:
+                # The stream dropped mid-read — e.g. the agent closes the
+                # chunked transfer abruptly after the final event
+                # (RemoteProtocolError "incomplete chunked read"). If we already
+                # captured the answer, the unclean close is harmless — fall
+                # through and use it. If not, surface a dispatch error so the
+                # caller can fall back to a synchronous message/send rather than
+                # letting the raw httpx error reach the user as a spoken "it
+                # errored". (A2ADispatchError raised inside the loop, e.g. for a
+                # JSON-RPC error event, is NOT httpx.HTTPError and propagates.)
+                if not final_text:
+                    raise A2ADispatchError(f"stream from {url} dropped: {e}") from e
+                logger.warning(
+                    f"[a2a/stream] {url} closed early after the answer "
+                    f"({type(e).__name__}) — using captured reply"
+                )
 
     if final_text:
         return final_text
@@ -408,10 +425,23 @@ class A2AClient:
         self._context_id = context_id or str(uuid.uuid4())
         self._card: dict | None = None
         self._card_fetched = False
+        # Set once a stream attempt drops/fails — we then prefer sync for the
+        # rest of this client's life (avoids wasting a ~10s stream attempt on a
+        # delegate whose SSE is cut by an idle proxy or never emits status).
+        self._stream_unreliable = False
 
     @property
     def context_id(self) -> str:
         return self._context_id
+
+    def mark_stream_unreliable(self) -> None:
+        """Record that this delegate's SSE stream dropped — skip streaming for
+        the rest of the session and use synchronous ``message/send`` instead."""
+        if not self._stream_unreliable:
+            logger.info(
+                f"[a2a] {self.name} stream marked unreliable — using sync henceforth"
+            )
+        self._stream_unreliable = True
 
     async def agent_card(self, *, timeout: float = 5.0) -> dict | None:
         """Lazily GET + cache ``{card_origin}/.well-known/agent-card.json``.
@@ -439,6 +469,8 @@ class A2AClient:
         return (card or {}).get("capabilities") or {}
 
     async def supports_streaming(self) -> bool:
+        if self._stream_unreliable:
+            return False
         return bool((await self._capabilities()).get("streaming"))
 
     async def preferred_transport(self) -> A2ATransport:
