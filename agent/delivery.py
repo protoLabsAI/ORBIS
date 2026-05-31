@@ -93,6 +93,7 @@ class _Pending:
     raw: str | None = None
     source: str | None = None
     kind: str | None = None
+    voice: str | None = None  # one-shot TTS voice for this delivery only
 
 
 import os as _os
@@ -207,6 +208,9 @@ class DeliveryController(FrameProcessor):
         # is unsafe).
         self._emitter: FrameEmitter | None = None
         self._message_emitter: MessageEmitter | None = None
+        # Optional factory: voice id -> frame the TTS honours for one utterance
+        # (KokoroVoiceFrame). Wired by app.py for the kokoro backend.
+        self._voice_framer: "Callable[[str], object] | None" = None
         # Shared LLMContext (orbis-3ta). When set, real proactive deliveries
         # are recorded as assistant turns so the orb remembers saying them and
         # can reference them in conversation. Fillers/bids/storm-notice are
@@ -220,6 +224,14 @@ class DeliveryController(FrameProcessor):
 
     def set_emitter(self, emitter: FrameEmitter) -> None:
         self._emitter = emitter
+
+    def set_voice_framer(self, framer: "Callable[[str], object] | None") -> None:
+        """Wire a factory that turns a voice id into a frame the TTS honours
+        for one utterance (KokoroVoiceFrame). When set, ``deliver(voice=...)``
+        speaks that one delivery in the given voice and reverts after — used
+        for notifications attributed to different agents (X in one voice, Y in
+        another) without changing the orb's own voice. None = ignore voice."""
+        self._voice_framer = framer
 
     def set_announcer(self, announcer: "AnnouncerFn | None") -> None:
         self._announcer = announcer
@@ -320,6 +332,7 @@ class DeliveryController(FrameProcessor):
         cooldown_key: str | None = None,
         cooldown_secs: float | None = None,
         kind: str | None = None,
+        voice: str | None = None,
     ) -> None:
         """Deliver `phrase` according to its urgency.
 
@@ -383,13 +396,14 @@ class DeliveryController(FrameProcessor):
             # NOW = CRITICAL — it interrupts on purpose; not deferred.
             await self._emit_content(
                 raw=phrase, source=source, kind=kind, fallback=attributed,
-                interruptible=False,
+                interruptible=False, voice=voice,
             )
             return
         self._pending.append(
             _Pending(
                 phrase=attributed, policy=effective_policy, priority=priority,
                 keywords=keywords, raw=phrase, source=source, kind=kind,
+                voice=voice,
             )
         )
         # Kick the watchdog if it's not already running. Handles
@@ -400,8 +414,13 @@ class DeliveryController(FrameProcessor):
         if not self._user_speaking:
             await self._drain_eligible(new_transcript=None)
 
-    async def _emit(self, phrase: str, *, record_to_context: bool = False) -> None:
-        logger.info(f"[delivery] emit {phrase[:60]!r}")
+    async def _emit(
+        self, phrase: str, *, record_to_context: bool = False,
+        voice: str | None = None,
+    ) -> None:
+        logger.info(
+            f"[delivery] emit {phrase[:60]!r}" + (f" voice={voice}" if voice else "")
+        )
         # append_to_context=False — the TTS frame itself never feeds the LLM
         # history (that path makes the model riff on its own fillers). For
         # REAL proactive deliveries we instead record an assistant turn
@@ -414,6 +433,14 @@ class DeliveryController(FrameProcessor):
                 logger.debug(f"[delivery] context record failed: {e}")
         frame = TTSSpeakFrame(phrase, append_to_context=False)
         if self._emitter is not None:
+            # One-shot voice override (e.g. a notification in another agent's
+            # voice): push the voice frame first so the TTS picks it up for
+            # exactly this utterance, then reverts.
+            if voice and self._voice_framer is not None:
+                try:
+                    await self._emitter(self._voice_framer(voice))
+                except Exception as e:  # noqa: BLE001 — voice is best-effort
+                    logger.debug(f"[delivery] voice framer failed: {e}")
             await self._emitter(frame)
         else:
             logger.warning(
@@ -429,6 +456,7 @@ class DeliveryController(FrameProcessor):
         kind: str | None,
         fallback: str,
         interruptible: bool = True,
+        voice: str | None = None,
     ) -> bool:
         """Speak a real proactive delivery — phrased naturally by the micro
         LLM when an announcer is wired, else the raw (attributed) `fallback`.
@@ -448,7 +476,7 @@ class DeliveryController(FrameProcessor):
         if interruptible and self._user_speaking:
             logger.info("[delivery] barge-in during announce — deferring delivery")
             return False
-        await self._emit(spoken or fallback, record_to_context=True)
+        await self._emit(spoken or fallback, record_to_context=True, voice=voice)
         return True
 
     async def _storm_ok(self) -> bool:
@@ -517,7 +545,8 @@ class DeliveryController(FrameProcessor):
                     remaining.append(item)
                     continue
                 if not await self._emit_content(
-                    raw=item.raw, source=item.source, kind=item.kind, fallback=item.phrase,
+                    raw=item.raw, source=item.source, kind=item.kind,
+                    fallback=item.phrase, voice=item.voice,
                 ):
                     remaining.append(item)  # barge-in mid-announce — try next pause
                 continue
@@ -525,7 +554,7 @@ class DeliveryController(FrameProcessor):
                 if new_transcript and _keyword_match(new_transcript, item.keywords):
                     if not await self._emit_content(
                         raw=item.raw, source=item.source, kind=item.kind,
-                        fallback=item.phrase,
+                        fallback=item.phrase, voice=item.voice,
                     ):
                         remaining.append(item)
                     continue

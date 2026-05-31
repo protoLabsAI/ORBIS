@@ -25,6 +25,7 @@ import asyncio
 import collections
 import logging
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -41,6 +42,35 @@ except Exception:  # pragma: no cover — catch any langfuse import wobble
     from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
+
+# Sentinel: distinguishes "extra_body not passed" (use gateway default) from
+# "extra_body explicitly None" (local micro endpoint — send nothing).
+_UNSET = object()
+
+# Emoji / pictographs / dingbats / symbols / arrows / variation selectors —
+# a small micro model (or any model) sometimes sprinkles these in, and Kokoro
+# mangles them. Strip before TTS. (Fish handles its own [bracketed] prosody
+# tags, so those are only stripped for non-fish backends.)
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # emoji & supplemental symbols/pictographs
+    "\U00002600-\U000027BF"  # misc symbols + dingbats
+    "\U0001F1E6-\U0001F1FF"  # regional indicators
+    "\U00002190-\U000021FF"  # arrows
+    "\U00002B00-\U00002BFF"  # misc symbols & arrows
+    "️‍"           # variation selector, ZWJ
+    "]+"
+)
+
+
+def _clean_for_tts(text: str, tts_backend: str) -> str:
+    """Make a generated micro-line safe to speak: strip emoji/symbols, and
+    (for non-fish) markdown ``[brackets]``; collapse whitespace."""
+    text = _EMOJI_RE.sub("", text)
+    if tts_backend != "fish" and "[" in text:
+        text = re.sub(r"\[[^\]]+\]", "", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:—-")
+    return text
 
 
 class Verbosity(str, Enum):
@@ -275,9 +305,13 @@ the action never happens.
 # ---------------------------------------------------------------------------
 
 _PROGRESS_STYLE = (
-    "Even shorter and softer than a normal acknowledgement — 2 to 5 words. "
-    "Feels like an under-breath continuation, not a new announcement. "
-    "Never repeat any previous progress line."
+    "A quick, natural 'still on it' check-in while you wait for something to "
+    "come back — 3 to 7 words, warm and low-key, the way a person fills a "
+    "pause. Nod to what they're waiting on in your own words when you can "
+    "('still pulling that fleet status', 'Ava's still digging into it', "
+    "'hang tight, almost there'). NEVER state the answer or a fact you don't "
+    "have yet. Sound human and a little different each time — never a scripted "
+    "'still working on that'. Never repeat a previous progress line."
 )
 
 _BACKCHANNEL_STYLE = (
@@ -291,13 +325,15 @@ _BACKCHANNEL_STYLE = (
 @dataclass
 class Settings:
     verbosity: Verbosity = DEFAULT_VERBOSITY
-    # Two-tier progress cadence (Alexa pattern + arXiv 2507.22352 data):
-    # first ack around ~2 s so the user knows we're still here; second
-    # ~6 s later so a long tool doesn't feel broken; then silence. Research
-    # shows >4 s unfilled silence degrades QoE, but over-narrating past
-    # ~8 s reads as performative.
-    progress_first_secs: float = 2.0
-    progress_second_secs: float = 6.0
+    # Progress cadence, AFTER the opening ack (which now reliably fires at
+    # ~1 s with a contextual line). The opening covers "I heard you", so the
+    # progress loop must NOT pile on right behind it — first line waits ~6 s
+    # (a comfortable gap, ~5 s after the opening), so a typical 8-15 s delegate
+    # gets just opening + one "still working" line. A second only fires for
+    # genuinely long waits (~6 s sleep ON TOP, i.e. ~12 s in). Over-narrating
+    # back-to-back reads as spam (arXiv 2507.22352); under it is dead air.
+    progress_first_secs: float = 6.0
+    progress_second_secs: float = 12.0
     recency_window: int = 6
     max_gen_tokens: int = 30
     temperature: float = 0.9
@@ -329,10 +365,19 @@ class FillerGenerator:
         llm_url: str,
         model: str,
         api_key: str = "not-needed",
+        extra_body: dict | None | object = _UNSET,
         settings: Settings | None = None,
     ):
         self._client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
         self._model = model
+        # extra_body for the micro endpoint. The gateway wants
+        # chat_template_kwargs={enable_thinking:False}; a local Ollama/MLX
+        # endpoint rejects it, so the caller passes None to send nothing.
+        # Unset (the sentinel) keeps the gateway default for back-compat.
+        self._extra_body = (
+            {"chat_template_kwargs": {"enable_thinking": False}}
+            if extra_body is _UNSET else extra_body
+        )
         self._settings = settings or Settings()
         self._recent = _Recent(self._settings.recency_window)
 
@@ -347,8 +392,15 @@ class FillerGenerator:
         user_utterance: str | None,
         tts_backend: str,
     ) -> str | None:
-        """Periodic 'still working' line for a SLOW in-flight tool."""
-        if self._settings.verbosity in (Verbosity.SILENT, Verbosity.BRIEF):
+        """Periodic 'still working' line for a SLOW in-flight tool.
+
+        Fires at every verbosity except SILENT. A multi-second tool wait
+        (a slow delegate can take 15-60s) left unfilled is *dead air* — far
+        worse than a brief "still working" line — so this is not gated to the
+        chatty tiers the way conversational length is; only a fully SILENT
+        persona suppresses it. The line itself is already tiny (_PROGRESS_STYLE
+        = 2-5 words)."""
+        if self._settings.verbosity is Verbosity.SILENT:
             return None
         phrase = await self._generate(
             kind="progress",
@@ -423,20 +475,25 @@ class FillerGenerator:
         if self._settings.verbosity is Verbosity.SILENT:
             return None
         system = (
-            "You generate ONE tiny spoken acknowledgement for a voice agent "
-            "that just heard the user and is ABOUT to go do something (look "
-            "something up, run a tool, hand off a task). 2 to 5 words, natural "
-            "and warm — like 'on it', 'ooh, let me dig in', 'sure, one sec', "
-            "'let me find out', 'alright, checking'. You may nod to the topic "
-            "abstractly but NEVER state a fact, number, name, date, or the "
-            "answer — you haven't done it yet. Not a question, no promise about "
-            "what you'll find. Output only the words."
+            "You are a warm, quick-witted voice companion. The user just asked "
+            "for something and you're about to go do it (look it up, hand it to "
+            "another agent, run a tool). React in the moment with ONE short, "
+            "natural opener — 3 to 8 words — the way a sharp friend would. "
+            "REACT TO WHAT THEY ACTUALLY ASKED, in your own words: 'okay, let me "
+            "pull up the fleet status', 'sure — checking with Ava on that', "
+            "'ooh, good one, give me a sec'. \n"
+            "Hard rules: never state a fact, number, name you'd only know AFTER "
+            "doing it, or the answer itself — you haven't done it yet. Not a "
+            "question. Sound spontaneous, never scripted. AVOID the tired stock "
+            "fillers: no 'on it', no 'let me see', no 'one moment', no 'just a "
+            "sec', no 'let me check that for you'. Output only the spoken words."
         )
         user = "\n".join([
-            f"User said: {user_utterance.strip()[:200]}" if user_utterance else "",
+            f"They asked: {user_utterance.strip()[:200]}" if user_utterance
+            else "(you didn't catch the exact words — keep it generic but fresh)",
             _backend_style(tts_backend).strip(),
             self._recent.hint() or "",
-            "Output the tiny opening ack and nothing else.",
+            "Give one fresh opener, different from anything above. Words only.",
         ])
         phrase = await self._complete(
             kind="opening", system=system, user=user, tts_backend=tts_backend,
@@ -486,17 +543,19 @@ class FillerGenerator:
         up for speech, None on any failure. Shared by the filler kinds and
         the proactive announcer."""
         try:
+            create_kwargs: dict = {
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "max_tokens": self._settings.max_gen_tokens,
+                "temperature": self._settings.temperature,
+            }
+            if self._extra_body:
+                create_kwargs["extra_body"] = self._extra_body
             r = await asyncio.wait_for(
-                self._client.chat.completions.create(
-                    model=self._model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    max_tokens=self._settings.max_gen_tokens,
-                    temperature=self._settings.temperature,
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-                ),
+                self._client.chat.completions.create(**create_kwargs),
                 timeout=self._settings.timeout_secs,
             )
         except asyncio.TimeoutError:
@@ -511,9 +570,7 @@ class FillerGenerator:
             text = text[1:-1].strip()
         if not text:
             return None
-        if tts_backend != "fish" and "[" in text:
-            import re
-            text = re.sub(r"\[[^\]]+\]", "", text).strip(" ,.;:")
+        text = _clean_for_tts(text, tts_backend)
         return text or None
 
     async def announce(
