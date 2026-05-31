@@ -101,7 +101,7 @@ from a2a.server import register_a2a_routes
 from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
-from agent.micro_ack import MicroAckInjector
+from agent.micro_ack import MicroAckInjector, opening_ack_line
 from agent.stall_watchdog import StallWatchdog
 from agent.echo_guard import (
     ECHO_GUARD_MS,
@@ -1585,6 +1585,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     #     We synthesize "still working" lines via _FILLER_GEN.progress().
     #   - Backchannels during the user's turn: see BackchannelController.
     progress_tasks: set[asyncio.Task] = set()
+    # No-repeat state for the instant opening ack (router-first D1 Phase 2).
+    _opening_ack = {"last": None}
 
     def _last_user_text() -> str | None:
         for m in reversed(context.messages):
@@ -1651,9 +1653,25 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 {"event": "start", "name": names[0] if names else "", "args": args},
             )
 
-            # Only SLOW sync tools get the progress narration loop. The opening
-            # acknowledgement is handled inline by the LLM via the TOOL USE
-            # prompt block. Async tools narrate themselves via DeliveryController.
+            # Instant opening acknowledgement (router-first D1 Phase 2).
+            # Phase 1 removed the inline LLM preamble that used to cover this
+            # moment, so a tool turn would otherwise be silent until the
+            # result. Speak ONE short ack the instant the call starts —
+            # decoupled from the LLM (fired here, not narrated, so it can't
+            # re-break tool emission) and AEC-safe because it triggers on a
+            # definite tool-start signal, not VAD. Honours verbosity=silent.
+            # `append_to_context=False` keeps it out of the LLM context.
+            if user_state.filler_settings.verbosity is not Verbosity.SILENT:
+                line = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
+                _opening_ack["last"] = line
+                logger.info(f"[filler:opening] {line!r}")
+                await task.queue_frame(
+                    TTSSpeakFrame(line, append_to_context=False)
+                )
+
+            # SLOW sync tools additionally get the progress narration loop
+            # (~2 s / ~6 s "still working" lines). Async tools narrate
+            # themselves via DeliveryController, so they skip the loop.
             if tier is Latency.SLOW and not any_async:
                 progress_tasks.add(asyncio.create_task(_progress_loop(names[0])))
 

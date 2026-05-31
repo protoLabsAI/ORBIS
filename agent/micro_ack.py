@@ -110,6 +110,44 @@ def _phrases_for_backend(tts_backend: str) -> tuple[str, ...]:
     return _PLAIN_ACKS
 
 
+# Opening acknowledgements — spoken the INSTANT a tool call starts (fired by
+# app.py on `on_function_calls_started`, not by the LLM). Router-first D1
+# Phase 1 removed the inline LLM preamble that used to cover this moment;
+# this restores the "I heard you, on it" without re-coupling the spoken line
+# to tool emission (which is what made the fast model drop the call). These
+# are tool-flavoured ("on it", "let me check") rather than the between-turn
+# "thinking" acks above. Kokoro pool is real words only (its TTS mangles
+# unvoiced interjections — see _KOKORO_ACKS).
+_FISH_OPENING: tuple[str, ...] = (
+    "[softly] on it", "[softly] let me check", "[softly] one sec",
+    "[softly] let me look", "[softly] checking now", "[softly] hang on",
+    "[softly] okay, on it", "[softly] let me see", "[softly] give me a sec",
+    "[softly] looking now", "[softly] right, on it", "[softly] let me pull that up",
+)
+_KOKORO_OPENING: tuple[str, ...] = (
+    "on it", "let me check", "one sec", "let me look", "checking now",
+    "hang on", "okay, on it", "let me see", "give me a sec", "looking now",
+    "right, on it", "let me pull that up", "okay, checking", "on it now",
+)
+_PLAIN_OPENING = _KOKORO_OPENING
+
+
+def opening_ack_line(tts_backend: str, *, exclude: str | None = None) -> str:
+    """Pick one short opening acknowledgement for a starting tool call,
+    avoiding an immediate repeat. Pure/stateless — the caller passes the
+    last line as ``exclude`` to keep variety across consecutive tools."""
+    if tts_backend == "fish":
+        pool = _FISH_OPENING
+    elif tts_backend == "kokoro":
+        pool = _KOKORO_OPENING
+    else:
+        pool = _PLAIN_OPENING
+    choice = random.choice(pool)
+    if choice == exclude and len(pool) > 1:
+        choice = random.choice([p for p in pool if p != exclude])
+    return choice
+
+
 # Grace window after the bot finishes speaking. The bot's own audio
 # leaking back through (echo, mic-self-reception, residual VAD trail)
 # can briefly retrigger UserStarted→UserStopped; without this gate the
