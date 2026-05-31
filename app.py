@@ -700,17 +700,21 @@ def _effective_prompt(
     recall = _recall_block(user_id)
     neglect_nudge = ""
     inbox_block = ""
+    personality = ""
     try:
         mem = get_memory()
-        # Run the neglect computation BEFORE rendering the personality
-        # block — it adjusts mood, and render_personality_block reads
-        # mood. So the session's opening vibe reflects the gap.
-        _days, neglect_nudge = apply_soft_neglect(mem)
-        personality = render_personality_block(mem)
+        # Emotional/companion layer (personality mood + soft-neglect drift) is
+        # PAUSED by default — set ORBIS_EMOTIONAL_LAYER=1 to re-enable. The
+        # current focus is ORBIS as a capable AGENT; the neglect mood was
+        # making it act guarded/sulky, which got in the way. Recall, inbox, and
+        # the user-name block stay (they're agent-useful, not mood).
+        if os.environ.get("ORBIS_EMOTIONAL_LAYER", "0") == "1":
+            # Neglect adjusts mood; render reads mood — so neglect runs first.
+            _days, neglect_nudge = apply_soft_neglect(mem)
+            personality = render_personality_block(mem)
         inbox_block = _render_inbox_pending_block(mem)
     except Exception as e:
         logger.warning(f"[personality] render failed: {e}")
-        personality = ""
 
     # User-addressing block — tells the orb who the user is by name
     # so greetings / recall feel personal. Empty user_name = no block.
@@ -1749,8 +1753,15 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # definite tool-start signal, not VAD. Usually canned+instant;
             # occasionally micro-LLM-generated for variety (see
             # _emit_opening_ack). Fire-and-forget so it never delays the tool;
-            # honours verbosity=silent.
-            if user_state.filler_settings.verbosity is not Verbosity.SILENT:
+            # honours verbosity=silent. SKIP fast tools: their result returns
+            # almost immediately, so the opening ack (fire-and-forget, may await
+            # the micro-LLM) loses the race and queues BEHIND the response in
+            # TTS order — the user hears the answer, then a pointless "on it".
+            # A fast tool's own result is the acknowledgement.
+            if (
+                user_state.filler_settings.verbosity is not Verbosity.SILENT
+                and tier is not Latency.FAST
+            ):
                 _t = asyncio.create_task(_emit_opening_ack(tier))
                 ack_tasks.add(_t)
                 _t.add_done_callback(ack_tasks.discard)
