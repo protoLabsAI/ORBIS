@@ -347,8 +347,15 @@ class FillerGenerator:
         user_utterance: str | None,
         tts_backend: str,
     ) -> str | None:
-        """Periodic 'still working' line for a SLOW in-flight tool."""
-        if self._settings.verbosity in (Verbosity.SILENT, Verbosity.BRIEF):
+        """Periodic 'still working' line for a SLOW in-flight tool.
+
+        Fires at every verbosity except SILENT. A multi-second tool wait
+        (a slow delegate can take 15-60s) left unfilled is *dead air* — far
+        worse than a brief "still working" line — so this is not gated to the
+        chatty tiers the way conversational length is; only a fully SILENT
+        persona suppresses it. The line itself is already tiny (_PROGRESS_STYLE
+        = 2-5 words)."""
+        if self._settings.verbosity is Verbosity.SILENT:
             return None
         phrase = await self._generate(
             kind="progress",
