@@ -1799,6 +1799,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
         state.active_session_id = sid
         current_session_id.set(sid)
+        # Record session activity NOW, not just on a clean disconnect. The dev
+        # loop hard-kills the app (pkill -9), so the disconnect handler often
+        # never runs and no session gets persisted — which made soft-neglect
+        # read a weeks-old timestamp and wrongly turn the persona guarded/sulky
+        # every session. INSERT OR REPLACE keeps it one row; the disconnect
+        # handler fills in the real transcript later. (orbis neglect-freshness)
+        if sid:
+            try:
+                from datetime import datetime, timezone
+                _now_iso = datetime.now(timezone.utc).isoformat()
+                get_memory().sessions.add(
+                    session_id=sid, started_at=_now_iso, ended_at=_now_iso,
+                    messages=[],
+                )
+            except Exception as e:  # noqa: BLE001 — best-effort presence touch
+                logger.debug(f"[session] connect-touch failed: {e}")
         _tracing.set_active_tracer(turn_tracer, user_id=user_id)
         _tracing.start_session(sid)
         _METRICS["sessions_total"] += 1
