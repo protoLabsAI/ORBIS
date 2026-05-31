@@ -1470,16 +1470,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # STALL_SECS of the user's turn ending (frozen LLM/TTS), speak one
         # canned recovery line so the user isn't left in dead air. Coarse +
         # once-per-turn; the micro-ack covers the normal sub-3s gap.
-        StallWatchdog(
-            stall_secs=float(os.environ.get("STALL_SECS", "8")),
-            enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
-            tts_backend=tts_backend,
-        ),
         # Both placed after the gate — they need TranscriptionFrames and
         # VAD frames produced by the aggregator. Push downstream into TTS.
         backchannel,
         delivery,
         pipeline_llm,
+        # Stall watchdog (E2) sits AFTER the LLM: it arms on UserStopped
+        # (which flows downstream to here) and cancels the moment the LLM
+        # emits text / a tool call (LLMTextFrame / FunctionCallsStartedFrame
+        # flow downstream from pipeline_llm to here). Placed BEFORE the LLM it
+        # never saw those cancel frames and fired on every turn. Pushes its
+        # recovery line downstream into TTS.
+        StallWatchdog(
+            stall_secs=float(os.environ.get("STALL_SECS", "8")),
+            enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
+            tts_backend=tts_backend,
+        ),
         # Non-Fish TTS services strip tags at the service level via their
         # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
