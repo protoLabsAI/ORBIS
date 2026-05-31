@@ -459,7 +459,7 @@ async def _dispatch_a2a(
                 timeout=bound,
             )
             return res.text
-        except (A2ADispatchError, asyncio.TimeoutError, httpx.TimeoutException) as e:
+        except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
             logger.warning(
                 f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
                 "falling back to message/send"
