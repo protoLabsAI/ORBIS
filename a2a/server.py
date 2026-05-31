@@ -366,7 +366,7 @@ def register_a2a_routes(
             state = (status.get("state") or "").lower()
             if state in ("input-required", "auth-required"):
                 priority = Priority.CRITICAL
-            elif state in ("completed", "failed", "cancelled", "rejected"):
+            elif state in ("completed", "failed", "canceled", "cancelled", "rejected"):
                 priority = Priority.TIME_SENSITIVE
         elif kind in ("task-artifact-update", "taskartifactupdate", "artifact-update"):
             artifact = result.get("artifact") or {}

@@ -135,6 +135,41 @@ concurrently with a decision branch.
    bounded ReAct engine, DeliveryController ack/progress/result.
 4. **D2 guards.** Goal/stall/fail-safe-done on the loop (`orbis-2lx`).
 
+## First-class A2A client (the orchestration substrate)
+
+D1's orchestrate loop needs to hold a *conversation* with a delegate across
+steps, not fire one-shot messages. That requires elevating `a2a/client.py` from
+stateless functions to a first-class **`A2AClient`** (per delegate):
+
+- **Agent-card discovery + cache** — lazily GETs `/.well-known/agent-card.json`
+  and reads `capabilities` (streaming, pushNotifications) + `preferredTransport`.
+- **Transport seam** — the wire transport is chosen from the card's
+  `preferredTransport`. **JSON-RPC is implemented**; gRPC / REST are recognised
+  and rejected clearly (no delegate advertises them today) so they can drop in
+  behind the same `send()` later. (Decision 2026-05-30: JSON-RPC now, gRPC seam.)
+- **Persistent `contextId`** — a sticky context per client instance gives the
+  delegate cross-turn memory. The one-shot `delegate_to`/`delegate_async` path
+  passes a *fresh* contextId per call (no multi-turn intent); the orchestrate
+  loop constructs one client per delegate **per run** so contexts never cross
+  between goals.
+- **`A2AResult`** — `send()` returns `text` + task `state` / `task_id` /
+  `context_id` / `input_required`, so the loop can detect when a delegate paused
+  to ask *us* something and continue the same task (PR-2).
+- **Terminal-state fix** — the spec spells it `canceled`; we now accept both
+  spellings (was a latent bug in `client.py` + `server.py`).
+
+**Localhost / Tailscale reality.** A cloud delegate cannot POST back to ORBIS's
+`127.0.0.1` webhook, so the orchestrate loop **holds the stream or polls** as
+the source of truth — it never depends on a push callback to complete a step.
+Once **Tailscale** is live, delegates on the tailnet *can* reach the webhook and
+push becomes a real accelerator; the receiver hardening + outbound
+`pushNotificationConfig` registration are **deferred until then** (tested against
+a reachable peer). Only the terminal-state fix ships now.
+
+Build order: PR-1 `A2AClient` foundation → PR-2 task lifecycle (input-required
+continuation, `tasks/get`/`cancel`) → PR-4 the `orchestrate(goal)` tool. Push
+hardening (PR-3) and gRPC land when the tailnet is live / a gRPC delegate exists.
+
 ## Open questions
 
 - Force `tool_choice` (vs `auto`) on the decision turn when intent is clearly
