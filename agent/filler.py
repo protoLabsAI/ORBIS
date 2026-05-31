@@ -305,13 +305,16 @@ the action never happens.
 # ---------------------------------------------------------------------------
 
 _PROGRESS_STYLE = (
-    "A quick, natural 'still on it' check-in while you wait for something to "
-    "come back — 3 to 7 words, warm and low-key, the way a person fills a "
-    "pause. Nod to what they're waiting on in your own words when you can "
-    "('still pulling that fleet status', 'Ava's still digging into it', "
-    "'hang tight, almost there'). NEVER state the answer or a fact you don't "
-    "have yet. Sound human and a little different each time — never a scripted "
-    "'still working on that'. Never repeat a previous progress line."
+    "A quick, warm check-in while you WAIT for someone else to get back to "
+    "you — 3 to 7 words. You're waiting on them, not doing it yourself; name "
+    "who or what you're waiting on when you can. Examples of the feel:\n"
+    "  'still waiting to hear back from Ava'\n"
+    "  'Ava's still looking into that'\n"
+    "  'hang on, she's still digging'\n"
+    "  'still checking on those incidents'\n"
+    "Keep each one about the waiting, warm and a little different. It's fine "
+    "that it's taking a moment — just acknowledge you're still on it; you "
+    "don't have the answer yet."
 )
 
 _BACKCHANNEL_STYLE = (
@@ -482,18 +485,20 @@ class FillerGenerator:
         if self._settings.verbosity is Verbosity.SILENT:
             return None
         system = (
-            "You are a warm, quick-witted voice companion. The user just asked "
-            "for something and you're about to go do it (look it up, hand it to "
-            "another agent, run a tool). React in the moment with ONE short, "
-            "natural opener — 3 to 8 words — the way a sharp friend would. "
-            "REACT TO WHAT THEY ACTUALLY ASKED, in your own words: 'okay, let me "
-            "pull up the fleet status', 'sure — checking with Ava on that', "
-            "'ooh, good one, give me a sec'. \n"
-            "Hard rules: never state a fact, number, name you'd only know AFTER "
-            "doing it, or the answer itself — you haven't done it yet. Not a "
-            "question. Sound spontaneous, never scripted. AVOID the tired stock "
-            "fillers: no 'on it', no 'let me see', no 'one moment', no 'just a "
-            "sec', no 'let me check that for you'. Output only the spoken words."
+            "You're a warm, quick-witted voice companion. The user just asked "
+            "for something and you're about to go do it — look it up, hand it "
+            "to another agent, run a tool. Say ONE short spoken opener (3 to 8 "
+            "words) that reacts to THEIR specific request in your own fresh "
+            "words, the way a sharp friend would. Notice how each example names "
+            "what they actually asked and sounds different:\n"
+            "  'okay, pulling up the fleet status now'\n"
+            "  'sure, let me ask Ava about those incidents'\n"
+            "  'good question — digging into that repo'\n"
+            "  'alright, tracking that down for you'\n"
+            "  'ooh, give me a sec on that one'\n"
+            "Make yours specific to their ask and fresh. You haven't done it "
+            "yet, so leave out any result, number, or name you'd only know "
+            "after. Output only the words you'd say."
         )
         user = "\n".join([
             f"They asked: {user_utterance.strip()[:200]}" if user_utterance
@@ -505,8 +510,10 @@ class FillerGenerator:
         phrase = await self._complete(
             kind="opening", system=system, user=user, tts_backend=tts_backend,
         )
-        if not phrase or len(phrase.split()) > 6:
-            return None  # guard against the model rambling / over-promising
+        # Allow up to ~9 words (the prompt asks for 3-8); reject only true
+        # rambling so a normal 7-8 word opener isn't dropped to the canned pool.
+        if not phrase or len(phrase.split()) > 9:
+            return None
         if tts_backend == "fish" and not phrase.startswith("["):
             phrase = f"[softly] {phrase}"
         self._recent.remember(phrase)

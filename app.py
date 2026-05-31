@@ -1759,7 +1759,21 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # (~2 s / ~6 s "still working" lines). Async tools narrate
             # themselves via DeliveryController, so they skip the loop.
             if tier is Latency.SLOW and not any_async:
-                progress_tasks.add(asyncio.create_task(_progress_loop(names[0])))
+                # Tell the filler WHO it's waiting on (the delegate target) so
+                # the check-in is "still waiting on Ava", not a generic/
+                # self-action line.
+                waiting_on = names[0]
+                if names[0] == "delegate_to":
+                    _a = args
+                    if isinstance(_a, str):
+                        try:
+                            import json as _json
+                            _a = _json.loads(_a)
+                        except Exception:
+                            _a = {}
+                    if isinstance(_a, dict) and _a.get("target"):
+                        waiting_on = str(_a["target"]).strip() or names[0]
+                progress_tasks.add(asyncio.create_task(_progress_loop(waiting_on)))
 
         @_member.event_handler("on_function_calls_cancelled")
         async def _on_tool_cancel(_svc, _calls):
