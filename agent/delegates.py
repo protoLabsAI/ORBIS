@@ -36,6 +36,7 @@ import os
 import random
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,10 +44,9 @@ import httpx
 import yaml
 
 from a2a.client import (
+    A2AClient,
     A2ADispatchError,
     ProgressCallback,
-    dispatch_message as _a2a_dispatch,
-    dispatch_message_stream as _a2a_stream,
 )
 from agent.tracing import active_trace, propagation_headers
 
@@ -381,6 +381,28 @@ async def dispatch(
     raise DelegateError(f"unknown delegate type {delegate.type!r}")
 
 
+# Per-delegate A2AClient cache — reused across dispatches so the Agent Card
+# is fetched once. Keyed by (url, sorted auth headers) so an auth/url change
+# yields a fresh client. The dispatch path passes a FRESH contextId per call
+# (one-shot delegate_to/delegate_async have no multi-turn intent); the D1
+# orchestrate loop constructs its own per-run clients for sticky context.
+_a2a_clients: dict[tuple, A2AClient] = {}
+
+
+def _client_for(delegate: Delegate) -> A2AClient:
+    key = (delegate.url, tuple(sorted(delegate.auth_headers().items())))
+    client = _a2a_clients.get(key)
+    if client is None:
+        client = A2AClient(
+            delegate.url,
+            headers=delegate.auth_headers(),
+            card_origin=delegate.origin(),
+            name=delegate.name,
+        )
+        _a2a_clients[key] = client
+    return client
+
+
 async def _dispatch_a2a(
     delegate: Delegate,
     query: str,
@@ -395,40 +417,44 @@ async def _dispatch_a2a(
 
     Streaming HANGS against servers that send their reply but never emit a
     recognized terminal SSE event (no ``final: true`` / terminal status) —
-    the client waits for more lines until the httpx read timeout (was 120s),
-    and that ``TimeoutException`` isn't an ``A2ADispatchError`` so the old
-    fallback never fired and delegate_to looked dead. A2A push-back can't
-    reach a 127.0.0.1 desktop app either, so the streaming path buys little
-    here. Default to sync; bound the opt-in stream with ``asyncio.wait_for``
+    the client waits for more lines until the httpx read timeout, and that
+    ``TimeoutException`` isn't an ``A2ADispatchError`` so the fallback never
+    fired and delegate_to looked dead. A2A push-back can't reach a 127.0.0.1
+    desktop app either, so the streaming path buys little here. Default to
+    sync; bound the opt-in stream with ``asyncio.wait_for``
     (``A2A_STREAM_TIMEOUT``, default 20s) and fall back to sync on any
     failure or timeout.
+
+    Streaming stays gated on the ``A2A_STREAM`` env flag (not the delegate's
+    card capability) to preserve that deliberate distrust of localhost
+    streaming; the card-driven auto-negotiation in ``A2AClient.send`` is for
+    the orchestrate loop, not this back-compat one-shot path.
     """
+    client = _client_for(delegate)
+    ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
     if os.environ.get("A2A_STREAM", "0") == "1":
         stream_timeout = float(os.environ.get("A2A_STREAM_TIMEOUT", "20"))
         try:
-            return await asyncio.wait_for(
-                _a2a_stream(
-                    url=delegate.url,
-                    headers=delegate.auth_headers(),
-                    user_text=query,
-                    timeout=timeout,
+            res = await asyncio.wait_for(
+                client.send(
+                    query,
+                    context_id=ctx,
                     progress_callback=progress_callback,
+                    prefer_stream=True,
+                    timeout=timeout,
                     push_notification_url=push_notification_url,
                     push_notification_token=push_notification_token,
                 ),
                 timeout=stream_timeout,
             )
+            return res.text
         except (A2ADispatchError, asyncio.TimeoutError, httpx.TimeoutException) as e:
             logger.warning(
                 f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
                 "falling back to message/send"
             )
-    return await _a2a_dispatch(
-        url=delegate.url,
-        headers=delegate.auth_headers(),
-        user_text=query,
-        timeout=timeout,
-    )
+    res = await client.send(query, context_id=ctx, prefer_stream=False, timeout=timeout)
+    return res.text
 
 
 async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) -> str:
