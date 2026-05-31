@@ -43,6 +43,13 @@ ORBIS routes the heavy lifting to the agents you've configured (see
   back to me — …"). You keep talking in the meantime. If it's taking a while,
   the orb gives one "still waiting on Ava for that" update so it doesn't feel
   forgotten.
+- **Multi-step goal** ("ask Ava for the fleet status, then have her dig into
+  any active incident" / "get an answer from Ava and a second opinion from
+  Max") → the orb **orchestrates**: it acknowledges, then in the background
+  chains several hand-offs toward the goal — each agent remembers the earlier
+  steps in that run — narrates the odd progress note, and speaks **one
+  synthesized answer** at the end. The heavy thinking stays in your agents; the
+  orb just decides who to ask, in what order, and weaves it together.
 
 ### Get pinged from outside — `POST /api/say`
 
@@ -115,6 +122,8 @@ applied on app restart) or in `config/orbis.yaml`. See
 | `NATURALIZE_DELIVERIES` | `1` | Phrase proactive deliveries in-character via the micro model. `0` = speak them verbatim. |
 | `DELEGATE_ASYNC_TIMEOUT` | `300` | Seconds a background hand-off may run before it reports back with a timeout. |
 | `DELEGATE_NUDGE_SECS` | `90` | If a background hand-off runs longer than this, the orb gives one "still waiting on …" status update so a slow agent doesn't feel forgotten (cancelled the moment the result lands). `0` disables. |
+| `ORCHESTRATE_MAX_ITER` | `6` | Max steps in a multi-step `orchestrate` goal before it stops and reports what it has. Bounds a runaway plan. |
+| `ORCHESTRATE_STEP_TIMEOUT` | `120` | Seconds any single hand-off inside an orchestration may run before that step is treated as failed (the run continues). |
 | `DELIVERY_DEDUP_SECS` | `12` | Drop an identical delivery repeated within this window. |
 | `DELIVERY_STORM_THRESHOLD` / `DELIVERY_STORM_WINDOW_SECS` | `8` / `60` | If more than N deliveries clear the gate within the window, say one "I'm getting a lot of updates" notice then suppress until it subsides. `0` disables. |
 

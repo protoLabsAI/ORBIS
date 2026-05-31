@@ -139,6 +139,7 @@ from agent.session_store import (
     save_summary,
     stash_delivery,
 )
+from agent.orchestrate import run_orchestration
 from agent.tools import (
     ASYNC_TOOL_NAMES,
     build_text_tool_schemas,
@@ -1208,6 +1209,26 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # active must be able to invoke the tools. The returned schema is
     # identical per member (derived from the same registry), so we keep
     # the primary's for the LLMContext below.
+    # D1 orchestrate runner — the bounded multi-step delegation loop, closed
+    # over the session's text LLM client. Built once and shared across failover
+    # members. Only when delegates + a DeliveryController exist (the synthesis
+    # has to be speakable). See agent/orchestrate.py.
+    _orch_runner = None
+    if session_delegates and session_delegates.names() and delivery is not None:
+        _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
+
+        async def _orch_runner(goal: str, *, progress=None) -> str:
+            return await run_orchestration(
+                goal,
+                delegates=session_delegates,
+                client=_orch_client,
+                model=llm_cfg["model"],
+                extra_body=llm_cfg["extra_body"],
+                max_tokens=skill.max_tokens,
+                temperature=skill.temperature,
+                progress=progress,
+            )
+
     tools_schema = None
     for _member in _llm_members:
         _schema = register_tools(
@@ -1217,6 +1238,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             delegates=session_delegates,
             push_notification_url=_push_url,
             push_notification_token=_push_token,
+            orchestrate_runner=_orch_runner,
         )
         if tools_schema is None:
             tools_schema = _schema
