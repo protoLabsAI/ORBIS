@@ -325,13 +325,15 @@ _BACKCHANNEL_STYLE = (
 @dataclass
 class Settings:
     verbosity: Verbosity = DEFAULT_VERBOSITY
-    # Two-tier progress cadence (Alexa pattern + arXiv 2507.22352 data):
-    # first ack around ~2 s so the user knows we're still here; second
-    # ~6 s later so a long tool doesn't feel broken; then silence. Research
-    # shows >4 s unfilled silence degrades QoE, but over-narrating past
-    # ~8 s reads as performative.
-    progress_first_secs: float = 2.0
-    progress_second_secs: float = 6.0
+    # Progress cadence, AFTER the opening ack (which now reliably fires at
+    # ~1 s with a contextual line). The opening covers "I heard you", so the
+    # progress loop must NOT pile on right behind it — first line waits ~6 s
+    # (a comfortable gap, ~5 s after the opening), so a typical 8-15 s delegate
+    # gets just opening + one "still working" line. A second only fires for
+    # genuinely long waits (~6 s sleep ON TOP, i.e. ~12 s in). Over-narrating
+    # back-to-back reads as spam (arXiv 2507.22352); under it is dead air.
+    progress_first_secs: float = 6.0
+    progress_second_secs: float = 12.0
     recency_window: int = 6
     max_gen_tokens: int = 30
     temperature: float = 0.9
