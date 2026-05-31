@@ -315,8 +315,21 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return JSON.parse(res.body) as T;
 }
 
+export interface ReminderItem {
+  id: number;
+  text: string;
+  fire_at: string;
+  recurring: boolean;
+  repeat_secs: number | null;
+}
+
 export const api = {
   whoami: () => get<Whoami>('/api/whoami'),
+  reminders: {
+    list: () => get<{ ok: boolean; reminders: ReminderItem[] }>('/api/reminders'),
+    cancel: (body: { id?: number; match?: string; all?: boolean }) =>
+      postJSON<{ ok: boolean; cancelled: number }>('/api/reminders/cancel', body),
+  },
   verbosity: () => get<VerbosityResponse>('/api/verbosity'),
   setVerbosity: (level: Verbosity) =>
     postJSON<{ verbosity?: Verbosity; error?: string }>('/api/verbosity', { level }),
