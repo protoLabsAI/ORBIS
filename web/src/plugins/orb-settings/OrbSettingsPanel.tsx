@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Panel } from '@/components/ui/panel';
+import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
 import { FieldSlider } from './FieldSlider';
 import { FieldColor } from './FieldColor';
 import { FieldDeltaSlider } from './FieldDeltaSlider';
@@ -193,7 +193,8 @@ export function OrbSettingsPanel() {
   };
 
   return (
-    <div className="space-y-5">
+    <CollapsiblePanelProvider storageKey="orbis.orbPanel">
+      <div className="space-y-5">
       <VariantPicker />
       <PresetControls
         palette={palette}
@@ -247,7 +248,8 @@ export function OrbSettingsPanel() {
           </button>
         </div>
       )}
-    </div>
+      </div>
+    </CollapsiblePanelProvider>
   );
 }
 

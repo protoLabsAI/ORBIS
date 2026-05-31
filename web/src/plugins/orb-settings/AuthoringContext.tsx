@@ -21,7 +21,9 @@ export type AuthoringContext =
   | { kind: 'mood'; dim: MoodDim };
 
 const STATES: VoiceState[] = ['idle', 'listening', 'thinking', 'speaking'];
-const DIMS: MoodDim[] = ['valence', 'arousal', 'guardedness'];
+// DIMS drove the Mood-overrides authoring chips, commented out while the
+// emotional layer is paused (ORBIS_EMOTIONAL_LAYER=0). Restore together.
+// const DIMS: MoodDim[] = ['valence', 'arousal', 'guardedness'];
 
 export function isBase(c: AuthoringContext): boolean {
   return c.kind === 'base';
@@ -112,6 +114,10 @@ export function AuthoringContextPicker({
           </div>
         </div>
 
+        {/* Mood overrides — per-mood orb-visual deltas. Commented out while the
+            emotional/companion layer is paused (ORBIS_EMOTIONAL_LAYER=0); the
+            orb doesn't drift moods right now, so these authoring buckets have
+            nothing to drive. Restore alongside the emotion layer.
         <div>
           <div
             id="authoring-section-mood"
@@ -134,6 +140,7 @@ export function AuthoringContextPicker({
             ))}
           </div>
         </div>
+        */}
 
         {!isBase(ctx) && (
           <div className="flex items-center justify-between pt-1">
