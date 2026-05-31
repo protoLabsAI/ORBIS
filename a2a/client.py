@@ -25,8 +25,10 @@ in-flight. Falls back to sync on SSE errors. Delegate configuration in
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -455,6 +457,7 @@ class A2AClient:
         text: str,
         *,
         context_id: str | None = None,
+        task_id: str | None = None,
         progress_callback: ProgressCallback | None = None,
         prefer_stream: bool | None = None,
         timeout: float = 60.0,
@@ -467,7 +470,13 @@ class A2AClient:
         unsupported transport raises rather than mis-dispatching). Streaming is
         used when the card advertises ``capabilities.streaming`` unless
         ``prefer_stream`` overrides; a stream error falls back to sync. The
-        sticky ``context_id`` is threaded unless an explicit one is passed."""
+        sticky ``context_id`` is threaded unless an explicit one is passed.
+
+        Pass ``task_id`` to **continue an existing task** (e.g. answering an
+        ``input-required`` prompt): the message is sent with the same
+        ``taskId`` + ``contextId`` per spec §3.4.3. Continuations always go
+        over the sync transport (a short follow-up doesn't need streaming and
+        the stream primitive doesn't thread ``taskId``)."""
         transport = await self.preferred_transport()
         if transport is not A2ATransport.JSONRPC:
             raise A2ADispatchError(
@@ -479,6 +488,8 @@ class A2AClient:
             prefer_stream if prefer_stream is not None
             else await self.supports_streaming()
         )
+        if task_id:
+            want_stream = False  # continuations go sync
 
         if want_stream:
             try:
@@ -500,21 +511,84 @@ class A2AClient:
                     f"[a2a] {self.name} stream failed ({e}); falling back to message/send"
                 )
 
-        result = await _post_jsonrpc(
-            self.url,
-            "message/send",
-            {
-                "contextId": ctx,
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": text}],
-                },
+        params: dict = {
+            "contextId": ctx,
+            "message": {
+                "messageId": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [{"kind": "text", "text": text}],
             },
-            headers=self._headers,
-            timeout=timeout,
+        }
+        if task_id:
+            # Continue an existing task. Spec places taskId/contextId on the
+            # Message; ORBIS's wire (client + server) keys them at the params
+            # level, consistent with how contextId is sent above.
+            params["taskId"] = task_id
+            params["message"]["taskId"] = task_id
+            params["message"]["contextId"] = ctx
+        result = await _post_jsonrpc(
+            self.url, "message/send", params,
+            headers=self._headers, timeout=timeout,
         )
         parsed = _parse_result_object(result, fallback_context_id=ctx)
         if not parsed.text and not parsed.input_required:
             raise A2ADispatchError(f"response from {self.url} had no text reply")
         return parsed
+
+    async def continue_task(
+        self, prior: A2AResult, text: str, *, timeout: float = 60.0,
+    ) -> A2AResult:
+        """Answer an ``input-required`` (or otherwise continue a task) by
+        re-sending with the prior result's ``task_id`` + ``context_id``."""
+        return await self.send(
+            text,
+            context_id=prior.context_id,
+            task_id=prior.task_id,
+            timeout=timeout,
+        )
+
+    async def get_task(
+        self, task_id: str, *, history_length: int | None = None, timeout: float = 30.0,
+    ) -> A2AResult:
+        """`tasks/get` — fetch the current Task snapshot (poll a long task)."""
+        params: dict = {"id": task_id}
+        if history_length is not None:
+            params["historyLength"] = history_length
+        result = await _post_jsonrpc(
+            self.url, "tasks/get", params, headers=self._headers, timeout=timeout,
+        )
+        return _parse_result_object(result, fallback_context_id=self._context_id)
+
+    async def cancel_task(self, task_id: str, *, timeout: float = 30.0) -> A2AResult:
+        """`tasks/cancel` — request cancellation of an in-flight task."""
+        result = await _post_jsonrpc(
+            self.url, "tasks/cancel", {"id": task_id},
+            headers=self._headers, timeout=timeout,
+        )
+        return _parse_result_object(result, fallback_context_id=self._context_id)
+
+    async def poll_until_terminal(
+        self,
+        task_id: str,
+        *,
+        interval: float = 2.0,
+        max_wait: float = 120.0,
+        timeout: float = 30.0,
+    ) -> A2AResult:
+        """Poll `tasks/get` until the task reaches a terminal state, pauses for
+        input (``input-required``/``auth-required``), or ``max_wait`` elapses.
+        For non-streaming long tasks where the delegate can't push back (the
+        localhost reality). Returns the last observed ``A2AResult``; the caller
+        checks ``is_terminal`` / ``input_required``."""
+        deadline = time.monotonic() + max_wait
+        last = await self.get_task(task_id, timeout=timeout)
+        while not last.is_terminal and not last.input_required:
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    f"[a2a] {self.name} task {task_id} still {last.state!r} "
+                    f"after {max_wait}s — giving up the poll"
+                )
+                break
+            await asyncio.sleep(interval)
+            last = await self.get_task(task_id, timeout=timeout)
+        return last
