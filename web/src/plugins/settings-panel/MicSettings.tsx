@@ -202,7 +202,7 @@ export function MicSettings() {
           </p>
         )}
 
-        <p className="text-[11px] text-zinc-600 leading-relaxed">
+        <p className="text-xs text-zinc-600 leading-relaxed">
           {selectableInput
             ? 'Device selection is passed to the native audio engine. Changes take effect on the next voice session.'
             : 'Voice processing follows the current macOS system input.'}

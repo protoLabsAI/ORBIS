@@ -39,7 +39,7 @@ export function Diagnostics() {
   return (
     <Panel title="Diagnostics">
       <div className="space-y-2">
-        <p className="text-xs text-zinc-500 leading-relaxed">
+        <p className="text-sm text-zinc-400 leading-relaxed">
           Wipe the WKWebView's storage (cookies, localStorage, IndexedDB, service-worker
           registrations, fetch cache). Use if /api fetches start failing with "Load failed"
           or if the wizard reappears unexpectedly. The page reloads automatically.

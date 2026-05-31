@@ -153,7 +153,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
   return (
     <div className="text-center space-y-6">
       <h1 className="font-mono text-3xl tracking-wider text-zinc-200">ORBIS</h1>
-      <p className="text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
+      <p className="text-base text-zinc-400 max-w-sm mx-auto leading-relaxed">
         A voice companion. It talks back in real time, remembers you
         across sessions, and can route the heavy lifting to the agents
         you've configured.
@@ -193,7 +193,7 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Introductions</h2>
-        <p className="text-sm text-zinc-500 max-w-md mx-auto">
+        <p className="text-base text-zinc-400 max-w-md mx-auto">
           Both fields are optional — the orb will still work without
           them, just more generically.
         </p>
@@ -226,7 +226,7 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             autoComplete="off"
             spellCheck={false}
           />
-          <div className="text-[11px] text-zinc-600 mt-1">
+          <div className="text-xs text-zinc-600 mt-1">
             Defaults to ORBIS. Rename to whatever suits.
           </div>
         </div>
@@ -378,7 +378,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Router brain</h2>
-        <p className="text-sm text-zinc-500 max-w-md mx-auto">
+        <p className="text-base text-zinc-400 max-w-md mx-auto">
           Small + fast is the right pick — this LLM handles conversation
           + routing decisions. Heavy reasoning delegates out.
         </p>
@@ -452,7 +452,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             }
           >
             <div className="text-sm text-zinc-200">{p.label}</div>
-            <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">
+            <div className="text-xs text-zinc-500 mt-0.5 line-clamp-2">
               {p.blurb}
             </div>
           </button>
@@ -463,7 +463,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         <button
           type="button"
           onClick={() => setShowAllProviders(true)}
-          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
         >
           Show {hiddenCount} more providers ▾
         </button>
@@ -472,7 +472,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         <button
           type="button"
           onClick={() => setShowAllProviders(false)}
-          className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
         >
           Show fewer ▴
         </button>
@@ -496,7 +496,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             <button
               type="button"
               onClick={onFetchModels}
-              className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+              className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
             >
               Fetch list
             </button>
@@ -515,7 +515,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             </datalist>
           )}
           {availableModels.length > 0 && (
-            <div className="text-[11px] text-zinc-600 mt-1">
+            <div className="text-xs text-zinc-600 mt-1">
               {availableModels.length} models available — type to filter.
             </div>
           )}
@@ -533,7 +533,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
               autoComplete="off"
               spellCheck={false}
             />
-            <div className="text-[11px] text-zinc-600 mt-1">
+            <div className="text-xs text-zinc-600 mt-1">
               Stored in <code>config/orbis.yaml</code> on your machine.
               Never sent to protoLabsAI.
             </div>
@@ -601,7 +601,7 @@ function OllamaInstallHelper() {
       <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
         Recommended — Install Ollama
       </div>
-      <p className="text-[13px] text-zinc-400 mb-3">
+      <p className="text-sm text-zinc-400 mb-3">
         ORBIS works best with a local LLM. Ollama is the fastest way to
         get one running; it's free, open-source, and auto-detected once
         installed.
@@ -621,16 +621,16 @@ function OllamaInstallHelper() {
                   : 'bg-zinc-900/40 border border-zinc-800')
               }
             >
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500 w-14 shrink-0">
+              <span className="text-[11px] uppercase tracking-wider text-zinc-500 w-14 shrink-0">
                 {label}
               </span>
-              <code className="flex-1 font-mono text-[11px] text-zinc-200 truncate">
+              <code className="flex-1 font-mono text-xs text-zinc-200 truncate">
                 {cmd}
               </code>
               <button
                 type="button"
                 onClick={() => onCopy(key, cmd)}
-                className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-zinc-200 transition-colors shrink-0"
+                className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-200 transition-colors shrink-0"
               >
                 {copied === key ? 'Copied' : 'Copy'}
               </button>
@@ -638,7 +638,7 @@ function OllamaInstallHelper() {
           );
         })}
       </div>
-      <div className="text-[11px] text-zinc-500 mt-2">
+      <div className="text-xs text-zinc-500 mt-2">
         After install, reopen this step — we'll detect Ollama and offer
         to pull the recommended <code>gemma3n:e2b</code> model
         automatically.
@@ -719,14 +719,14 @@ function ModelPullCallout({
       <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
         {source === 'mlx' ? 'Built-in model — first run' : 'Recommended model not installed'}
       </div>
-      <p className="text-[13px] text-zinc-400 mb-3">
+      <p className="text-sm text-zinc-400 mb-3">
         {source === 'mlx'
           ? <>Download <code className="text-zinc-200">{modelName}</code> from HuggingFace (~2-5 GB). One-time; cached locally for every future session.</>
           : <>Pull <code className="text-zinc-200">{modelName}</code> for the fastest local voice loop on this machine. ~5.6 GB; takes a few minutes on a normal connection.</>}
       </p>
       {!pulling && !done && (
         <div className="flex items-center justify-between gap-3">
-          <div className="text-[11px] text-zinc-500">
+          <div className="text-xs text-zinc-500">
             {error ? <span className="text-rose-400">{error}</span> : 'One-time download.'}
           </div>
           <Button onClick={start}>Pull {modelName}</Button>
@@ -734,7 +734,7 @@ function ModelPullCallout({
       )}
       {pulling && (
         <div className="space-y-2">
-          <div className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center justify-between text-xs">
             <span className="text-zinc-400 truncate pr-2">{status}</span>
             <span className="text-zinc-500 tabular-nums shrink-0">
               {total > 0 ? `${mb(completed)} / ${mb(total)} MB · ${pct}%` : '…'}
@@ -846,7 +846,7 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Pick your orb</h2>
-        <p className="text-sm text-zinc-500 max-w-md mx-auto">
+        <p className="text-base text-zinc-400 max-w-md mx-auto">
           Swipe or use the arrows to browse — this is the real thing,
           live. Drag the orb to rotate it.
         </p>
@@ -1038,7 +1038,7 @@ function MicStep({
     <div className="space-y-6">
       <div className="text-center space-y-2">
         <h2 className="text-lg text-zinc-200">Microphone</h2>
-        <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+        <p className="text-base text-zinc-400 max-w-sm mx-auto">
           ORBIS needs microphone access before the native audio engine starts.
         </p>
       </div>
@@ -1123,7 +1123,7 @@ function DoneStep({ onFinish }: { onFinish: () => void }) {
   return (
     <div className="text-center space-y-6">
       <h2 className="text-lg text-zinc-200">Ready.</h2>
-      <p className="text-sm text-zinc-500 max-w-sm mx-auto">
+      <p className="text-base text-zinc-400 max-w-sm mx-auto">
         Press Start in the main view to meet the orb. You can tweak
         anything from the settings drawer — voice, memory, access,
         profile.

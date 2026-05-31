@@ -271,13 +271,13 @@ export function TTSSettings() {
   return (
     <Panel title="Voice">
       <div className="space-y-3">
-        <p className="text-xs text-zinc-500 -mt-1">
+        <p className="text-sm text-zinc-400 -mt-1">
           How the orb speaks. Provider credentials stay env-only —
           see <code>.env.example</code>.
         </p>
 
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
             Backend
           </label>
           <Select value={backend} onValueChange={(v) => setBackend(v as TTSBackend)}>
@@ -291,13 +291,13 @@ export function TTSSettings() {
               <SelectItem value="fish">Fish S2-Pro (sidecar)</SelectItem>
             </SelectContent>
           </Select>
-          <div className="text-[10px] text-zinc-600 mt-1">
+          <div className="text-[11px] text-zinc-600 mt-1">
             {BACKEND_BLURB[backend]}
           </div>
         </div>
 
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
             {backend === 'fish' ? 'Reference ID' : 'Voice'}
           </label>
           {VOICE_UI[backend] === 'select' && voices.length > 0 ? (
@@ -352,7 +352,7 @@ export function TTSSettings() {
               voice's local cache state, fallback errors, etc. Kept
               compact so the panel doesn't grow vertically per voice. */}
           {VOICE_UI[backend] === 'select' && voices.length > 0 && download.kind === 'idle' && (
-            <div className="text-[10px] text-zinc-500 mt-1">
+            <div className="text-[11px] text-zinc-500 mt-1">
               {selectedVoice?.cached === false
                 ? 'Not yet downloaded — first synthesis will fetch it.'
                 : selectedVoice?.cached === true
@@ -361,18 +361,18 @@ export function TTSSettings() {
             </div>
           )}
           {VOICE_UI[backend] === 'datalist' && (
-            <div className="text-[10px] text-zinc-500 mt-1">
+            <div className="text-[11px] text-zinc-500 mt-1">
               Suggestions are OpenAI's canonical 6 — type any voice your
               gateway accepts (e.g. <code>protolabs/fish</code>).
             </div>
           )}
           {download.kind === 'error' && (
-            <div className="text-[10px] text-red-400 mt-1">
+            <div className="text-[11px] text-red-400 mt-1">
               Download failed: {download.message}
             </div>
           )}
           {VOICE_UI[backend] === 'select' && voices.length === 0 && !voicesLoading && (
-            <div className="text-[10px] text-amber-500/80 mt-1">
+            <div className="text-[11px] text-amber-500/80 mt-1">
               {backend === 'fish'
                 ? 'No Fish references found — is the sidecar running on the configured URL?'
                 : `No ${backend} voices available.`}
@@ -401,12 +401,12 @@ export function TTSSettings() {
                   }
                 >
                   <div className="text-xs text-zinc-200">{p.label}</div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
                 </button>
               ))}
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 URL
               </label>
               <input
@@ -418,7 +418,7 @@ export function TTSSettings() {
               />
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 Model
               </label>
               <input
@@ -430,7 +430,7 @@ export function TTSSettings() {
               />
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 API key
               </label>
               <input
@@ -446,7 +446,7 @@ export function TTSSettings() {
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[10px] text-zinc-600 mt-1">
+              <div className="text-[11px] text-zinc-600 mt-1">
                 {ttsKeyIsSet
                   ? 'A key is saved in config/orbis.yaml. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -460,17 +460,17 @@ export function TTSSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {save.kind === 'saved' && (
-            <span className="text-[11px] text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-emerald-400">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-[11px] text-red-400 truncate">
+            <span className="text-xs text-red-400 truncate">
               ✗ {save.message}
             </span>
           )}
         </div>
 
         {loadError && (
-          <div className="text-[11px] text-red-400">
+          <div className="text-xs text-red-400">
             Failed to load current config: {loadError}
           </div>
         )}

@@ -153,13 +153,13 @@ export function STTSettings() {
   return (
     <Panel title="STT">
       <div className="space-y-3">
-        <p className="text-xs text-zinc-500 -mt-1">
+        <p className="text-sm text-zinc-400 -mt-1">
           Speech to text. The backend below decides whether the loop is
           segmented (Whisper / OpenAI) or streaming (future providers).
         </p>
 
         <div>
-          <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
             Backend
           </label>
           <Select value={backend} onValueChange={(v) => setBackend(v as STTBackend)}>
@@ -172,14 +172,14 @@ export function STTSettings() {
               <SelectItem value="openai">OpenAI-compatible</SelectItem>
             </SelectContent>
           </Select>
-          <div className="text-[10px] text-zinc-600 mt-1">
+          <div className="text-[11px] text-zinc-600 mt-1">
             {BACKEND_BLURB[backend]}
           </div>
         </div>
 
         {backend === 'local' && (
           <div>
-            <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
               Whisper model (HF id)
             </label>
             <input
@@ -189,7 +189,7 @@ export function STTSettings() {
               className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
               spellCheck={false}
             />
-            <div className="text-[10px] text-amber-500/70 mt-1">
+            <div className="text-[11px] text-amber-500/70 mt-1">
               Model loads at server boot — restart the sidecar after
               changing.
             </div>
@@ -212,12 +212,12 @@ export function STTSettings() {
                   }
                 >
                   <div className="text-xs text-zinc-200">{p.label}</div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
                 </button>
               ))}
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 URL
               </label>
               <input
@@ -229,7 +229,7 @@ export function STTSettings() {
               />
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 Model
               </label>
               <input
@@ -241,7 +241,7 @@ export function STTSettings() {
               />
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 API key
               </label>
               <input
@@ -257,7 +257,7 @@ export function STTSettings() {
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[10px] text-zinc-600 mt-1">
+              <div className="text-[11px] text-zinc-600 mt-1">
                 {keyIsSet
                   ? 'A key is saved in config/orbis.yaml. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -271,17 +271,17 @@ export function STTSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {save.kind === 'saved' && (
-            <span className="text-[11px] text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-emerald-400">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-[11px] text-red-400 truncate">
+            <span className="text-xs text-red-400 truncate">
               ✗ {save.message}
             </span>
           )}
         </div>
 
         {loadError && (
-          <div className="text-[11px] text-red-400">
+          <div className="text-xs text-red-400">
             Failed to load current config: {loadError}
           </div>
         )}

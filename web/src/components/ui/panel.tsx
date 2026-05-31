@@ -67,7 +67,7 @@ export function Panel({
         >
           <ChevronRight
             className={cn(
-              'h-3 w-3 text-zinc-600 transition-transform',
+              'h-4 w-4 text-zinc-500 transition-transform',
               open && 'rotate-90',
             )}
             aria-hidden="true"
@@ -83,7 +83,7 @@ export function Panel({
 
 export function PanelHeading({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+    <div className="text-[11px] font-mono uppercase tracking-wider text-zinc-400">
       {children}
     </div>
   );

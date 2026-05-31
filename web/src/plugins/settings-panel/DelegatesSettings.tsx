@@ -77,7 +77,7 @@ export function DelegatesSettings() {
   return (
     <Panel title="Delegates">
       <div className="space-y-3">
-        <p className="text-xs text-zinc-500 -mt-1">
+        <p className="text-sm text-zinc-400 -mt-1">
           Sub-agents the orb can route to. The LLM picks one based on
           its description when it decides delegation is the right call.
         </p>
@@ -107,14 +107,14 @@ export function DelegatesSettings() {
                     <TypeBadge type={entry.type} />
                     {!entry.configured && (
                       <span
-                        className="text-[10px] uppercase tracking-wider text-amber-400"
+                        className="text-[11px] uppercase tracking-wider text-amber-400"
                         title="Runtime registry rejected this entry — fix the config or it won't be available to the LLM."
                       >
                         ⚠ unconfigured
                       </span>
                     )}
                   </div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">
+                  <div className="text-xs text-zinc-500 mt-0.5 line-clamp-2">
                     {entry.description}
                   </div>
                 </div>
@@ -254,13 +254,13 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
   return (
     <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] uppercase tracking-wider text-amber-300/80">
+        <span className="text-xs uppercase tracking-wider text-amber-300/80">
           {isEdit ? `Edit ${state.original.name}` : 'New delegate'}
         </span>
         <button
           type="button"
           onClick={onCancel}
-          className="text-[11px] text-zinc-500 hover:text-zinc-200"
+          className="text-xs text-zinc-500 hover:text-zinc-200"
         >
           Cancel
         </button>
@@ -352,11 +352,11 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
         </Button>
         {test && test !== 'checking' && (
           test.ok ? (
-            <span className="text-[11px] text-emerald-400">
+            <span className="text-xs text-emerald-400">
               ✓ Reachable{test.latency_ms !== undefined && ` (${test.latency_ms} ms)`}
             </span>
           ) : (
-            <span className="text-[11px] text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-red-400 truncate max-w-[55%]">
               ✗ {test.error ?? 'unknown error'}
             </span>
           )
@@ -489,11 +489,11 @@ function Field({
 }) {
   return (
     <div>
-      <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+      <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
         {label}
       </label>
       {children}
-      {hint && <div className="text-[10px] text-zinc-600 mt-1">{hint}</div>}
+      {hint && <div className="text-[11px] text-zinc-600 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -501,7 +501,7 @@ function Field({
 function TypeBadge({ type }: { type: 'a2a' | 'openai' }) {
   const label = type === 'a2a' ? 'A2A' : 'OpenAI';
   return (
-    <span className="text-[10px] uppercase tracking-wider text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">
+    <span className="text-[11px] uppercase tracking-wider text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">
       {label}
     </span>
   );
@@ -527,7 +527,7 @@ function TypeTile({
       }
     >
       <div className="text-xs text-zinc-200">{label}</div>
-      <div className="text-[10px] text-zinc-500 mt-0.5">{blurb}</div>
+      <div className="text-[11px] text-zinc-500 mt-0.5">{blurb}</div>
     </button>
   );
 }
