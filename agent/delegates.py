@@ -464,9 +464,6 @@ async def _dispatch_a2a(
                 f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
                 "falling back to message/send"
             )
-            # Don't keep paying the stream attempt on a delegate whose SSE is
-            # unreliable (idle-cut proxy, no status emitted) — sync from now on.
-            client.mark_stream_unreliable()
     res = await client.send(query, context_id=ctx, prefer_stream=False, timeout=timeout)
     return res.text
 

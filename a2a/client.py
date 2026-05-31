@@ -425,23 +425,10 @@ class A2AClient:
         self._context_id = context_id or str(uuid.uuid4())
         self._card: dict | None = None
         self._card_fetched = False
-        # Set once a stream attempt drops/fails — we then prefer sync for the
-        # rest of this client's life (avoids wasting a ~10s stream attempt on a
-        # delegate whose SSE is cut by an idle proxy or never emits status).
-        self._stream_unreliable = False
 
     @property
     def context_id(self) -> str:
         return self._context_id
-
-    def mark_stream_unreliable(self) -> None:
-        """Record that this delegate's SSE stream dropped — skip streaming for
-        the rest of the session and use synchronous ``message/send`` instead."""
-        if not self._stream_unreliable:
-            logger.info(
-                f"[a2a] {self.name} stream marked unreliable — using sync henceforth"
-            )
-        self._stream_unreliable = True
 
     async def agent_card(self, *, timeout: float = 5.0) -> dict | None:
         """Lazily GET + cache ``{card_origin}/.well-known/agent-card.json``.
@@ -469,8 +456,6 @@ class A2AClient:
         return (card or {}).get("capabilities") or {}
 
     async def supports_streaming(self) -> bool:
-        if self._stream_unreliable:
-            return False
         return bool((await self._capabilities()).get("streaming"))
 
     async def preferred_transport(self) -> A2ATransport:
