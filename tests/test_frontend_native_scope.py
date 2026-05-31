@@ -182,7 +182,9 @@ def test_native_frontend_audio_and_settings_artifacts_stay_present():
     mic_settings = (WEB / "src/plugins/settings-panel/MicSettings.tsx").read_text(
         encoding="utf-8",
     )
-    settings_panel = (WEB / "src/plugins/settings-panel/SettingsPanel.tsx").read_text(
+    # The old single SettingsPanel was split into Voice/Agent/System tabs;
+    # ApiKeyField + Diagnostics now live in the System tab.
+    settings_panel = (WEB / "src/plugins/settings-panel/SystemPanel.tsx").read_text(
         encoding="utf-8",
     )
     voice_bridge = (WEB / "src/voice/VoiceStateBridge.tsx").read_text(encoding="utf-8")
