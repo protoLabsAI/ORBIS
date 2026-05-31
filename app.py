@@ -1674,6 +1674,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                             tool_name=tool_name,
                             user_utterance=_last_user_text(),
                             tts_backend=tts_backend,
+                            # Ground the spoken check-in in the delegate's real
+                            # latest streamed status (visual rail) when we have
+                            # one — paraphrased, not narrated verbatim.
+                            status_hint=delivery.last_progress,
                         )
                     except Exception as e:
                         sp.update(level="WARNING", status_message=str(e))
@@ -1720,6 +1724,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             names = [fc.function_name for fc in function_calls]
             tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
             any_async = any(n in ASYNC_TOOL_NAMES for n in names)
+            # Fresh status accumulator per tool turn so a delegate's spoken
+            # check-in never grounds in the previous turn's leftover status.
+            delivery.clear_progress()
             logger.info(
                 f"[tool] {','.join(names)} tier={tier.value} async={any_async}"
             )

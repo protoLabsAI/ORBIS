@@ -391,6 +391,7 @@ class FillerGenerator:
         tool_name: str,
         user_utterance: str | None,
         tts_backend: str,
+        status_hint: str | None = None,
     ) -> str | None:
         """Periodic 'still working' line for a SLOW in-flight tool.
 
@@ -399,7 +400,12 @@ class FillerGenerator:
         worse than a brief "still working" line — so this is not gated to the
         chatty tiers the way conversational length is; only a fully SILENT
         persona suppresses it. The line itself is already tiny (_PROGRESS_STYLE
-        = 2-5 words)."""
+        = 2-5 words).
+
+        ``status_hint`` (optional) is the delegate's latest *real* streamed
+        status — when present the check-in is grounded in what's actually
+        happening ("sounds like Ava's deep in the incident log") instead of a
+        generic line."""
         if self._settings.verbosity is Verbosity.SILENT:
             return None
         phrase = await self._generate(
@@ -408,6 +414,7 @@ class FillerGenerator:
             tool_name=tool_name,
             user_utterance=user_utterance,
             tts_backend=tts_backend,
+            status_hint=status_hint,
         )
         if phrase:
             self._recent.remember(phrase)
@@ -513,6 +520,7 @@ class FillerGenerator:
         tool_name: str,
         user_utterance: str | None,
         tts_backend: str,
+        status_hint: str | None = None,
     ) -> str | None:
         system = (
             f"You generate ONE '{kind}' line for a voice agent. The line "
@@ -525,6 +533,11 @@ class FillerGenerator:
             "",
             _backend_style(tts_backend).strip(),
         ]
+        if status_hint:
+            # The delegate's real latest status — ground the check-in in it
+            # ("sounds like they're still digging through the logs") rather
+            # than narrating it verbatim. Paraphrase, stay short.
+            user_parts.insert(1, f"What's actually happening now: {status_hint.strip()[:200]}")
         if user_utterance:
             user_parts.insert(1, f"User said: {user_utterance.strip()[:200]}")
         recent = self._recent.hint()

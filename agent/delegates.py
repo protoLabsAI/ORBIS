@@ -425,15 +425,26 @@ async def _dispatch_a2a(
     (``A2A_STREAM_TIMEOUT``, default 20s) and fall back to sync on any
     failure or timeout.
 
-    Streaming stays gated on the ``A2A_STREAM`` env flag (not the delegate's
-    card capability) to preserve that deliberate distrust of localhost
-    streaming; the card-driven auto-negotiation in ``A2AClient.send`` is for
-    the orchestrate loop, not this back-compat one-shot path.
+    Streaming is used when EITHER ``A2A_STREAM=1`` (manual opt-in) OR a
+    ``progress_callback`` is supplied AND the delegate's card advertises
+    ``streaming`` — so a caller that wants the delegate's intermediate status
+    (for the visual rail) gets it when the agent actually supports it. The
+    hang-guard differs: the manual env path keeps the short ``A2A_STREAM_TIMEOUT``
+    distrust bound; a card-advertised status stream is trusted up to the full
+    request ``timeout`` (a slow-but-streaming agent like Ava is not a hang).
+    Any stream error/timeout falls back to one synchronous ``message/send``.
     """
     client = _client_for(delegate)
     ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
-    if os.environ.get("A2A_STREAM", "0") == "1":
-        stream_timeout = float(os.environ.get("A2A_STREAM_TIMEOUT", "20"))
+    env_stream = os.environ.get("A2A_STREAM", "0") == "1"
+    want_status = progress_callback is not None and await client.supports_streaming()
+    if env_stream or want_status:
+        # Trust a card-advertised status stream up to the full timeout; keep
+        # the short distrust bound only for the manual A2A_STREAM opt-in.
+        bound = (
+            float(os.environ.get("A2A_STREAM_TIMEOUT", "20")) if env_stream
+            else timeout
+        )
         try:
             res = await asyncio.wait_for(
                 client.send(
@@ -445,7 +456,7 @@ async def _dispatch_a2a(
                     push_notification_url=push_notification_url,
                     push_notification_token=push_notification_token,
                 ),
-                timeout=stream_timeout,
+                timeout=bound,
             )
             return res.text
         except (A2ADispatchError, asyncio.TimeoutError, httpx.TimeoutException) as e:

@@ -603,13 +603,15 @@ def _delegate_to_handler(
             return
         logger.info(f"[delegate_to] target={target} type={delegate.type} query={query!r}")
 
-        # Stream progress narration back through the voice pipeline when
-        # available. Only wired for A2A delegates (OpenAI delegates don't
-        # stream status updates the same way).
+        # Stream the delegate's intermediate status to the VISUAL rail (the
+        # StatusPill via delegation-progress SSE) — NOT spoken. The orb stays
+        # quiet while the user watches what the agent is doing; the sparse
+        # spoken fillers can ground a check-in in the accumulated status. Only
+        # A2A delegates stream status this way.
         progress_cb = None
         if delivery is not None and delegate.type == "a2a":
             async def _progress(msg: str) -> None:
-                await delivery.speak_now(msg, source=target)
+                await delivery.note_progress(msg, source=target)
             progress_cb = _progress
 
         try:
