@@ -10,17 +10,16 @@ import {
 } from '@/components/ui/select';
 import { api, type OrbisConfig } from '@/lib/api';
 
-type STTBackend = 'local' | 'openai' | 'sensevoice' | 'parakeet';
+type STTBackend = 'local' | 'openai' | 'parakeet';
 type STTPayload = NonNullable<OrbisConfig['stt']>;
 
-const VALID_BACKENDS: readonly STTBackend[] = ['local', 'openai', 'sensevoice', 'parakeet'] as const;
+const VALID_BACKENDS: readonly STTBackend[] = ['local', 'openai', 'parakeet'] as const;
 const isValidBackend = (v: unknown): v is STTBackend =>
   typeof v === 'string' && (VALID_BACKENDS as readonly string[]).includes(v);
 
 const BACKEND_BLURB: Record<STTBackend, string> = {
   local: 'In-process Whisper on Apple Silicon (MPS). Segmented per VAD turn, no streaming.',
   openai: 'OpenAI-compatible /v1/audio/transcriptions — point at OpenAI proper, the protoLabs gateway, LocalAI, etc.',
-  sensevoice: 'FunAudioLLM SenseVoice (opt-in via [sensevoice] extra). Transcription + emotion + audio events in one pass.',
   parakeet: 'NVIDIA Parakeet-TDT via Apple MLX (opt-in via [parakeet] extra). Faster and far fewer silence-hallucinations than Whisper. ~600MB model on first use. Restart to apply.',
 };
 
@@ -171,7 +170,6 @@ export function STTSettings() {
               <SelectItem value="local">Local Whisper (MPS)</SelectItem>
               <SelectItem value="parakeet">Parakeet (MLX)</SelectItem>
               <SelectItem value="openai">OpenAI-compatible</SelectItem>
-              <SelectItem value="sensevoice">SenseVoice</SelectItem>
             </SelectContent>
           </Select>
           <div className="text-[10px] text-zinc-600 mt-1">
@@ -266,14 +264,6 @@ export function STTSettings() {
               </div>
             </div>
           </>
-        )}
-
-        {backend === 'sensevoice' && (
-          <div className="text-[10px] text-zinc-500">
-            SenseVoice runs in-process via funasr. Install with{' '}
-            <code className="text-zinc-400">pip install -e ".[sensevoice]"</code>{' '}
-            and restart the sidecar.
-          </div>
         )}
 
         <div className="flex items-center gap-2 pt-1">

@@ -16,8 +16,8 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'orb' | 'settings' | 'dev';
-const ALL_TABS: readonly TabName[] = ['orb', 'settings', 'dev'];
+type TabName = 'orb' | 'voice' | 'agent' | 'system' | 'dev';
+const ALL_TABS: readonly TabName[] = ['orb', 'voice', 'agent', 'system', 'dev'];
 const isTabName = (value: string): value is TabName =>
   (ALL_TABS as readonly string[]).includes(value);
 
@@ -32,9 +32,9 @@ export function Drawer() {
     } catch {
       // localStorage can be unavailable in restricted webviews.
     }
-    return 'settings';
+    return 'agent';
   });
-  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'settings' : tab;
+  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'agent' : tab;
 
   useEffect(() => {
     try {
@@ -101,16 +101,24 @@ export function Drawer() {
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-3' : 'grid-cols-2')}>
+          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-5' : 'grid-cols-4')}>
             <TabsTrigger value="orb">Orb</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+            <TabsTrigger value="voice">Voice</TabsTrigger>
+            <TabsTrigger value="agent">Agent</TabsTrigger>
+            <TabsTrigger value="system">System</TabsTrigger>
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
           <TabsContent value="orb" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-orb" />
           </TabsContent>
-          <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-            <Slot name="drawer-settings" />
+          <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-voice" />
+          </TabsContent>
+          <TabsContent value="agent" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-agent" />
+          </TabsContent>
+          <TabsContent value="system" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-system" />
           </TabsContent>
           {devMode && (
             <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
