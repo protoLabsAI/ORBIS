@@ -83,7 +83,7 @@ def _strip_markdown_for_speech(text: str) -> str:
 # later via the DeliveryController, so the progress-narration loop must NOT
 # run for them. ``_AsyncToolNames`` checks this set in addition to the
 # @tool registry.
-_HANDWIRED_ASYNC_NAMES = frozenset({"delegate_async"})
+_HANDWIRED_ASYNC_NAMES = frozenset({"delegate_async", "orchestrate"})
 
 # Strong refs to in-flight background delegation tasks so the event loop
 # can't GC them mid-flight (asyncio holds only weak refs to bare tasks).
@@ -705,6 +705,101 @@ def _delegate_async_handler(
 
 
 # ---------------------------------------------------------------------------
+# orchestrate — multi-step delegation loop (D1). Ack now, drive a bounded
+# loop chaining several delegate hand-offs toward a goal in the background,
+# deliver the synthesized result. The loop itself lives in agent/orchestrate.py
+# and is injected as `runner` so this module needn't know about the LLM client.
+# ---------------------------------------------------------------------------
+
+# runner(goal: str, *, progress) -> Awaitable[str]
+OrchestrateRunner = Any
+
+
+def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
+    items = registry.all()
+    target_lines = "\n".join(f"  - {d.name}: {d.description}" for d in items)
+    return FunctionSchema(
+        name="orchestrate",
+        description=(
+            "Drive a MULTI-STEP goal that needs several coordinated hand-offs "
+            "to your agents — research that builds on itself, 'find X then dig "
+            "into the result', or comparing answers from more than one agent. "
+            "Runs in the BACKGROUND: acknowledge you're on it and will report "
+            "back; do NOT wait or invent the result. ORBIS chains the steps and "
+            "speaks the synthesized answer when done.\n\n"
+            "Choose the right tool: `delegate_to` for a SINGLE quick question, "
+            "`delegate_async` for ONE longer hand-off, `orchestrate` only when "
+            "the goal genuinely needs MULTIPLE steps.\n\n"
+            f"Available agents:\n{target_lines}\n\n"
+            "Pass `goal` — the overall objective in plain language."
+        ),
+        properties={
+            "goal": {
+                "type": "string",
+                "description": "The multi-step objective, in plain language",
+            },
+        },
+        required=["goal"],
+    )
+
+
+def _orchestrate_handler(
+    registry: DelegateRegistry,
+    *,
+    delivery: DeliveryController,
+    runner: OrchestrateRunner,
+):
+    """Async tool: ack now, run the bounded orchestration loop in the
+    background, deliver the synthesized result via the DeliveryController."""
+
+    async def _handler(params: FunctionCallParams) -> None:
+        goal = (params.arguments.get("goal") or "").strip()
+        if not goal:
+            await params.result_callback("I need a goal to work toward.")
+            return
+
+        logger.info(f"[orchestrate] goal={goal!r} (background)")
+
+        async def _progress(text: str) -> None:
+            # One short "still working" style step note. The DeliveryController
+            # gates timing; the cooldown_key collapses identical step notes.
+            await delivery.deliver(
+                text,
+                priority=Priority.TIME_SENSITIVE,
+                source="orchestrator",
+                kind="orchestrate",
+                cooldown_key=f"orchestrate-step:{text[:40]}",
+            )
+
+        async def _run_and_deliver() -> None:
+            try:
+                result = await runner(goal, progress=_progress)
+                await delivery.deliver(
+                    _strip_markdown_for_speech(result),
+                    priority=Priority.TIME_SENSITIVE,
+                    source="orchestrator",
+                    kind="orchestrate",
+                )
+            except Exception as e:
+                logger.exception(f"[orchestrate] goal failed: {e}")
+                await delivery.deliver(
+                    "that multi-step thing I was working on ran into trouble.",
+                    priority=Priority.TIME_SENSITIVE,
+                    kind="orchestrate",
+                )
+
+        task = asyncio.create_task(_run_and_deliver())
+        _BG_DELEGATE_TASKS.add(task)
+        task.add_done_callback(_BG_DELEGATE_TASKS.discard)
+
+        await params.result_callback(
+            "On it — I'll work through that and let you know what I find."
+        )
+
+    return _handler
+
+
+# ---------------------------------------------------------------------------
 # Text-mode tool runner (A2A inbound ReAct) — unchanged interface.
 # ---------------------------------------------------------------------------
 
@@ -778,6 +873,7 @@ def register_tools(
     delegates: DelegateRegistry | None = None,
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
+    orchestrate_runner: OrchestrateRunner | None = None,
 ) -> ToolsSchema:
     """Attach handlers + return the schema for the LLMContext.
 
@@ -843,5 +939,20 @@ def register_tools(
                 cancel_on_interruption=False,
             )
             standard.append(_delegate_async_schema(delegates))
+
+            # orchestrate — multi-step delegation loop (D1). Needs both a
+            # DeliveryController (to speak the synthesis) and the injected
+            # runner (the loop + LLM client, built in app.py).
+            if orchestrate_runner is not None:
+                llm.register_function(
+                    "orchestrate",
+                    _wrap_sync(_orchestrate_handler(
+                        delegates,
+                        delivery=delivery,
+                        runner=orchestrate_runner,
+                    )),
+                    cancel_on_interruption=False,
+                )
+                standard.append(_orchestrate_schema(delegates))
 
     return ToolsSchema(standard_tools=standard)
