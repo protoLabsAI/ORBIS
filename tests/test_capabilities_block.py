@@ -45,7 +45,7 @@ def _schema():
 def test_lists_registered_action_tools() -> None:
     block = capabilities_block(_schema())
     # the @tool surface
-    for name in ("schedule_reminder", "adjust_personality", "check_inbox"):
+    for name in ("schedule_reminder", "cancel_reminder", "check_inbox"):
         assert f"`{name}`" in block
     # the dynamic delegate tools
     assert "`delegate_to`" in block

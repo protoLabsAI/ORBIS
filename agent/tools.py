@@ -10,8 +10,9 @@ ORBIS's tool surface is deliberately narrow:
     work: acks immediately, dispatches in the background, and speaks the
     answer via the DeliveryController when the delegate finishes. Only
     registered when a DeliveryController is available.
-  - ``adjust_personality`` — shift a personality axis in response to an
-    explicit user request ("be more playful", "be less sarcastic").
+  - ``schedule_reminder`` / ``schedule_recurring_reminder`` /
+    ``list_reminders`` / ``cancel_reminder`` — set, review, and cancel
+    time-based spoken reminders (one-time and recurring).
 
 Orb visual control (variant, palette, params, presets) is handled by
 other processes outside the LLM tool surface.
@@ -224,57 +225,6 @@ def _schema_for(spec: ToolSpec) -> FunctionSchema:
         properties=spec.parameters,
         required=spec.required,
     )
-
-
-@tool(
-    "adjust_personality",
-    (
-        "Apply a small, explicit personality shift in response to the user "
-        "asking you to ('be more playful', 'be less sarcastic', 'be warmer'). "
-        "Use SPARINGLY — only when the user directs a change. Deltas are "
-        "small by design; the persistent personality drifts naturally over "
-        "many sessions and shouldn't lurch. Axis slugs: playful_serious, "
-        "warm_guarded, sarcastic_sincere, verbose_terse, hopeful_cynical, "
-        "grandiose_grounded, probing_incurious, philosophical_pragmatic, "
-        "independent_clingy, curious_bored. Positive delta shifts toward "
-        "the second adjective; negative toward the first."
-    ),
-    parameters={
-        "axis": {
-            "type": "string",
-            "description": "Axis slug (see list above)",
-        },
-        "delta": {
-            "type": "number",
-            "description": "Shift in [-0.2, +0.2]. Typical is 0.1.",
-        },
-    },
-    required=["axis", "delta"],
-    latency=Latency.FAST,
-)
-async def adjust_personality_handler(params: FunctionCallParams) -> None:
-    axis = (params.arguments.get("axis") or "").strip()
-    try:
-        delta = float(params.arguments.get("delta", 0.0))
-    except (TypeError, ValueError):
-        delta = 0.0
-    if not axis or abs(delta) < 0.01:
-        await params.result_callback("I didn't catch a clear personality axis + delta.")
-        return
-    # Clamp to the directable-range; the DAL clamps again at |0.3|.
-    delta = max(-0.2, min(0.2, delta))
-
-    # Import here to avoid module-load cycles.
-    try:
-        from app import get_memory  # type: ignore
-        get_memory().personality.drift(axis, delta, reason="user directive")
-    except Exception as exc:
-        logger.info(f"[orb] adjust_personality memory write failed: {exc}")
-        # Fall through — still confirm verbally so the user hears the intent.
-
-    direction = "more" if delta > 0 else "less"
-    logger.info(f"[personality] adjust_personality axis={axis} delta={delta:+.2f}")
-    await params.result_callback(f"Okay — dialing {axis} {direction}.")
 
 
 @tool(
@@ -494,6 +444,102 @@ async def schedule_recurring_reminder_handler(params: FunctionCallParams) -> Non
         f"Got it — {_humanize_every(every_minutes)}, starting "
         f"{_humanize_minutes(first_in)}."
     )
+
+
+def _humanize_reminder(r: dict) -> str:
+    """One spoken-friendly line describing a pending reminder."""
+    from datetime import datetime, timezone
+    text = (r.get("text") or "").rstrip(".")
+    repeat = r.get("repeat_secs")
+    try:
+        fa = datetime.fromisoformat(r["fire_at"])
+        mins = (fa - datetime.now(timezone.utc)).total_seconds() / 60
+        when = _humanize_minutes(mins) if mins > 0 else "any moment now"
+    except Exception:
+        when = "soon"
+    if repeat:
+        return f"{text} — {_humanize_every(repeat / 60)} (next {when})"
+    return f"{text} — {when}"
+
+
+@tool(
+    "list_reminders",
+    (
+        "List the reminders the user currently has scheduled (one-time and "
+        "recurring). Use when they ask what reminders or timers are set, or "
+        "before cancelling one so you know what's there."
+    ),
+    parameters={},
+    required=[],
+    latency=Latency.FAST,
+)
+async def list_reminders_handler(params: FunctionCallParams) -> None:
+    try:
+        from app import get_memory  # lazy: avoid import cycle
+        pend = get_memory().reminders.pending()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[reminder] list failed: {exc}")
+        await params.result_callback("I couldn't check your reminders just now.")
+        return
+    if not pend:
+        await params.result_callback("You don't have any reminders set right now.")
+        return
+    lines = "; ".join(_humanize_reminder(r) for r in pend)
+    n = len(pend)
+    await params.result_callback(
+        f"You have {n} reminder{'s' if n != 1 else ''}: {lines}."
+    )
+
+
+@tool(
+    "cancel_reminder",
+    (
+        "Cancel a scheduled reminder. Pass `which`: a few words from the "
+        "reminder to match (e.g. 'water' cancels 'drink water'), or 'all' to "
+        "clear every reminder. Cancels recurring reminders too so they stop "
+        "repeating. Call list_reminders first if you're unsure what's set."
+    ),
+    parameters={
+        "which": {
+            "type": "string",
+            "description": "Words to match the reminder text, or 'all'.",
+        },
+    },
+    required=["which"],
+    latency=Latency.FAST,
+)
+async def cancel_reminder_handler(params: FunctionCallParams) -> None:
+    which = (params.arguments.get("which") or "").strip()
+    if not which:
+        await params.result_callback("Which reminder should I cancel?")
+        return
+    try:
+        from app import get_memory  # lazy: avoid import cycle
+        dal = get_memory().reminders
+        if which.lower() in ("all", "everything", "every reminder", "them all"):
+            n = dal.cancel_all()
+            await params.result_callback(
+                f"Cleared all {n} reminder{'s' if n != 1 else ''}."
+                if n else "There were no reminders to cancel."
+            )
+            return
+        cancelled = dal.cancel_matching(which)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[reminder] cancel failed: {exc}")
+        await params.result_callback("I couldn't cancel that, sorry.")
+        return
+    if not cancelled:
+        await params.result_callback(
+            f"I didn't find a reminder matching '{which}'."
+        )
+    elif len(cancelled) == 1:
+        await params.result_callback(
+            f"Done — cancelled the reminder to {cancelled[0]['text'].rstrip('.').lower()}."
+        )
+    else:
+        await params.result_callback(
+            f"Cancelled {len(cancelled)} reminders matching '{which}'."
+        )
 
 
 # ---------------------------------------------------------------------------
