@@ -410,6 +410,44 @@ class FillerGenerator:
         self._recent.remember(phrase)
         return phrase
 
+    async def opening(
+        self, *, user_utterance: str | None, tts_backend: str,
+    ) -> str | None:
+        """ONE short opening acknowledgement for a tool that's ABOUT to run —
+        the occasional LLM-generated 'surprise' alternative to the canned
+        opening pool (router-first D1). Said the instant a tool call starts,
+        so it must NOT promise a result or state any fact/number/name — the
+        work hasn't happened yet. May nod to the user's topic abstractly
+        ('ooh, let me dig into that'). Returns None on failure / over-produce
+        so the caller falls back to the canned pool."""
+        if self._settings.verbosity is Verbosity.SILENT:
+            return None
+        system = (
+            "You generate ONE tiny spoken acknowledgement for a voice agent "
+            "that just heard the user and is ABOUT to go do something (look "
+            "something up, run a tool, hand off a task). 2 to 5 words, natural "
+            "and warm — like 'on it', 'ooh, let me dig in', 'sure, one sec', "
+            "'let me find out', 'alright, checking'. You may nod to the topic "
+            "abstractly but NEVER state a fact, number, name, date, or the "
+            "answer — you haven't done it yet. Not a question, no promise about "
+            "what you'll find. Output only the words."
+        )
+        user = "\n".join([
+            f"User said: {user_utterance.strip()[:200]}" if user_utterance else "",
+            _backend_style(tts_backend).strip(),
+            self._recent.hint() or "",
+            "Output the tiny opening ack and nothing else.",
+        ])
+        phrase = await self._complete(
+            kind="opening", system=system, user=user, tts_backend=tts_backend,
+        )
+        if not phrase or len(phrase.split()) > 6:
+            return None  # guard against the model rambling / over-promising
+        if tts_backend == "fish" and not phrase.startswith("["):
+            phrase = f"[softly] {phrase}"
+        self._recent.remember(phrase)
+        return phrase
+
     async def _generate(
         self,
         *,
