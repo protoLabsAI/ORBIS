@@ -93,15 +93,11 @@ def _backend_style(tts_backend: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Verbosity → preamble length / tone in the system prompt
+# Verbosity → spoken response length in the system prompt
 # ---------------------------------------------------------------------------
-
-_PREAMBLE_LENGTH_BY_VERBOSITY: dict[Verbosity, str | None] = {
-    Verbosity.SILENT: None,  # no preamble at all
-    Verbosity.BRIEF: "2 to 4 words. Casual, low energy. Like 'one sec' or 'let me see'.",
-    Verbosity.NARRATED: "4 to 8 words. Warm, natural. May reference the topic abstractly ('let me look that up').",
-    Verbosity.CHATTY: "Up to 12 words. Slightly expressive. May add a tiny acknowledgement of the topic.",
-}
+# (The per-tool spoken *preamble* was removed in the router-first decouple —
+# see tool_use_block. Verbosity now shapes the post-tool / plain response
+# length only; acknowledgement is the ack-layer's job, not the prompt's.)
 
 # CHI 2025 (Kim et al.): optimal spoken summary is 18-25 words; past 40
 # words, users barge in or skip 3× more often. Lead with the top fact,
@@ -239,43 +235,38 @@ SHORT and voice-first:
 
 def tool_use_block(verbosity: Verbosity, tts_backend: str) -> str:
     """Returns the TOOL USE section appended to every persona's system
-    prompt. Encodes the inline preamble pattern: speak briefly BEFORE
-    every tool call, in the same response. Pipecat streams those tokens
-    to TTS before running the tool."""
-    if verbosity is Verbosity.SILENT:
-        return (
-            "## TOOL USE\n"
-            "When you call a tool, do NOT say anything before the call. "
-            "Make the tool call silently. Speak only the answer once the "
-            "tool returns."
-        )
-    length = _PREAMBLE_LENGTH_BY_VERBOSITY[verbosity]
-    style = _backend_style(tts_backend).strip()
-    return f"""\
-## TOOL USE — speak BEFORE every tool call
+    prompt.
 
-Whenever you call a tool, emit one short preamble line in the response
-FIRST, then call the tool. The preamble is spoken aloud immediately so
-the user knows you heard them and are working.
+    **Router-first (D1, 2026-05-30):** the tool *decision* turn is
+    preamble-free. We used to instruct "emit a short preamble line FIRST,
+    then call the tool" — but asking one streamed completion from a fast
+    model to (1) narrate, then (2) emit a ``tool_calls`` block reliably
+    ends the turn after step 1 (``finish_reason=stop``, no tool call). The
+    spoken sentence reads, to the model, as a complete answer, so the
+    action silently never happens. Decoupling the acknowledgement from the
+    decision is the fix: the tool call goes out clean, and the "I heard
+    you" lives in the separate ack / progress-narration layer (which fires
+    on user-stop / during a slow tool, not gated on tool emission). See
+    ``docs/duplex-orchestration-direction.md``.
 
-Preamble length / tone: {length}
+    The ``tts_backend`` arg is retained for signature stability (callers
+    pass it); the block is now backend-agnostic since it no longer carries
+    a spoken preamble to style."""
+    del tts_backend  # no spoken preamble here anymore → nothing to style
+    return """\
+## TOOL USE — call the tool, don't narrate first
 
-REQUIRED:
-  - Every preamble you write must be different from the last one. Never
-    fall into a catch-phrase. If you said something filler-ish last
-    turn, pick a fresh shape this turn.
-  - Use the user's own wording when natural ("checking the weather in
-    Paris" is better than "checking that"). Stay abstract otherwise.
+When the user asks for something a tool does, CALL THE TOOL. Do not speak
+a preamble, a filler line, or "let me check that" before the call — just
+make the call. Saying you'll do it without emitting the tool call means
+the action never happens.
 
-FORBIDDEN:
-  - Never include a fact, name, number, date, or detail from the
-    actual answer — that comes AFTER the tool returns.
-  - Never restate the user's question.
-  - Never claim what you found or will find.
-  - Never speak the words "let me check that for you" or any close
-    paraphrase; pick something else.
-
-{style}
+  - Call the tool directly, with no spoken text before it.
+  - A brief acknowledgement is handled for you separately — you do not
+    need to voice one.
+  - Speak only AFTER the tool returns, describing the actual result.
+  - Need several tools? Call the first; you'll be invoked again with its
+    result to decide the next. Don't narrate the chain up front.
 """
 
 
@@ -414,6 +405,44 @@ class FillerGenerator:
         )
         if not phrase or len(phrase.split()) > 4:
             return None  # guard against the model rambling
+        if tts_backend == "fish" and not phrase.startswith("["):
+            phrase = f"[softly] {phrase}"
+        self._recent.remember(phrase)
+        return phrase
+
+    async def opening(
+        self, *, user_utterance: str | None, tts_backend: str,
+    ) -> str | None:
+        """ONE short opening acknowledgement for a tool that's ABOUT to run —
+        the occasional LLM-generated 'surprise' alternative to the canned
+        opening pool (router-first D1). Said the instant a tool call starts,
+        so it must NOT promise a result or state any fact/number/name — the
+        work hasn't happened yet. May nod to the user's topic abstractly
+        ('ooh, let me dig into that'). Returns None on failure / over-produce
+        so the caller falls back to the canned pool."""
+        if self._settings.verbosity is Verbosity.SILENT:
+            return None
+        system = (
+            "You generate ONE tiny spoken acknowledgement for a voice agent "
+            "that just heard the user and is ABOUT to go do something (look "
+            "something up, run a tool, hand off a task). 2 to 5 words, natural "
+            "and warm — like 'on it', 'ooh, let me dig in', 'sure, one sec', "
+            "'let me find out', 'alright, checking'. You may nod to the topic "
+            "abstractly but NEVER state a fact, number, name, date, or the "
+            "answer — you haven't done it yet. Not a question, no promise about "
+            "what you'll find. Output only the words."
+        )
+        user = "\n".join([
+            f"User said: {user_utterance.strip()[:200]}" if user_utterance else "",
+            _backend_style(tts_backend).strip(),
+            self._recent.hint() or "",
+            "Output the tiny opening ack and nothing else.",
+        ])
+        phrase = await self._complete(
+            kind="opening", system=system, user=user, tts_backend=tts_backend,
+        )
+        if not phrase or len(phrase.split()) > 6:
+            return None  # guard against the model rambling / over-promising
         if tts_backend == "fish" and not phrase.startswith("["):
             phrase = f"[softly] {phrase}"
         self._recent.remember(phrase)
