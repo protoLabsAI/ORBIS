@@ -2704,6 +2704,45 @@ async def post_inbox_deliver(body: dict, user: User = Depends(require_user)):
     return {"ok": True, "delivered": n}
 
 
+@app.get("/api/reminders")
+async def get_reminders(user: User = Depends(require_user)):
+    """List the user's pending reminders (one-time + recurring), soonest
+    first. Powers the reminders UI and lets scripts inspect what's scheduled."""
+    pend = get_memory().reminders.pending()
+    return {"ok": True, "reminders": [
+        {
+            "id": r["id"],
+            "text": r["text"],
+            "fire_at": r["fire_at"],
+            "recurring": bool(r.get("repeat_secs")),
+            "repeat_secs": r.get("repeat_secs"),
+        }
+        for r in pend
+    ]}
+
+
+@app.post("/api/reminders/cancel")
+async def cancel_reminders(body: dict, user: User = Depends(require_user)):
+    """Cancel reminders. Body: ``{"id": 3}`` | ``{"match": "water"}`` |
+    ``{"all": true}``. Cancelling stops recurring reminders too."""
+    dal = get_memory().reminders
+    if body.get("all"):
+        return {"ok": True, "cancelled": dal.cancel_all()}
+    if body.get("id") is not None:
+        try:
+            rid = int(body["id"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="id must be an integer")
+        ok = dal.cancel(rid)
+        return {"ok": ok, "cancelled": 1 if ok else 0}
+    match = (body.get("match") or "").strip()
+    if match:
+        cancelled = dal.cancel_matching(match)
+        return {"ok": True, "cancelled": len(cancelled),
+                "items": [{"id": r["id"], "text": r["text"]} for r in cancelled]}
+    raise HTTPException(status_code=400, detail="pass id, match, or all")
+
+
 def _ollama_url_is_safe(url: str) -> bool:
     """Reject non-local Ollama URLs to prevent the unauth ``/api/llm/pull``
     route from being weaponized as an SSRF gadget.

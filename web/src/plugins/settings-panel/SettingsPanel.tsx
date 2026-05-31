@@ -7,6 +7,7 @@ import { LLMSettings } from './LLMSettings';
 import { MicSettings } from './MicSettings';
 import { ApiKeyField } from './ApiKeyField';
 import { PersonalityPanel } from './PersonalityPanel';
+import { RemindersPanel } from './RemindersPanel';
 import { STTSettings } from './STTSettings';
 import { TTSSettings } from './TTSSettings';
 import { VerbositySelector } from './VerbositySelector';
@@ -30,6 +31,7 @@ export function SettingsPanel() {
         <Panel title="Agent">
           <VerbositySelector />
         </Panel>
+        <RemindersPanel />
         <DelegatesSettings />
         <PersonalityPanel />
         <Panel title="Access">

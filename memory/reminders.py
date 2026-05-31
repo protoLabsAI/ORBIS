@@ -97,3 +97,35 @@ class RemindersDAL:
             (fire_at, reminder_id),
         )
         self.conn.commit()
+
+    def cancel(self, reminder_id: int) -> bool:
+        """Cancel a pending reminder (one-time or recurring) by id. Sets
+        fired_at so it leaves the active pool and a recurring one stops
+        repeating. Returns True if a pending row was actually cancelled."""
+        cur = self.conn.execute(
+            "UPDATE reminders SET fired_at = ? WHERE id = ? AND fired_at IS NULL",
+            (_now_iso(), reminder_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def cancel_matching(self, needle: str) -> list[dict]:
+        """Cancel all pending reminders whose text contains ``needle``
+        (case-insensitive). Returns the cancelled rows. Empty needle cancels
+        nothing; use ``cancel_all`` to clear everything."""
+        needle = (needle or "").strip().lower()
+        if not needle:
+            return []
+        matches = [r for r in self.pending() if needle in r["text"].lower()]
+        for r in matches:
+            self.cancel(r["id"])
+        return matches
+
+    def cancel_all(self) -> int:
+        """Cancel every pending reminder. Returns how many were cancelled."""
+        cur = self.conn.execute(
+            "UPDATE reminders SET fired_at = ? WHERE fired_at IS NULL",
+            (_now_iso(),),
+        )
+        self.conn.commit()
+        return cur.rowcount
