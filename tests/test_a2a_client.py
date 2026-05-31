@@ -222,3 +222,114 @@ async def test_stream_error_falls_back_to_sync():
     ]
     res = await _client().send("go")
     assert res.text == "sync fallback"
+
+
+# ---------------------------------------------------------------------------
+# PR-2 — task lifecycle (continuation, get/cancel, poll)
+# ---------------------------------------------------------------------------
+
+def _rpc(request):
+    import json as _j
+    return _j.loads(request.content)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_continue_task_resends_same_task_and_context():
+    respx.get(CARD_URL).respond(json={"capabilities": {"streaming": False}})
+    captured = {}
+
+    def _capture(request):
+        body = _rpc(request)
+        captured.update(body["params"])
+        return httpx.Response(200, json=_send_result("done", task_id="t2", context_id="c2"))
+
+    respx.post(RPC_URL).mock(side_effect=_capture)
+    prior = A2AResult(text="which env?", state="input-required", task_id="t2",
+                      context_id="c2", input_required=True)
+    res = await _client().continue_task(prior, "production")
+    assert captured["taskId"] == "t2" and captured["contextId"] == "c2"
+    assert captured["message"]["taskId"] == "t2"  # also on the message
+    assert res.text == "done" and res.is_terminal
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_continuation_never_streams_even_if_card_supports_it():
+    # Card advertises streaming, but a taskId continuation must go sync.
+    respx.get(CARD_URL).respond(json={"capabilities": {"streaming": True}})
+    seen_methods = []
+
+    def _capture(request):
+        seen_methods.append(_rpc(request)["method"])
+        return httpx.Response(200, json=_send_result("ok"))
+
+    respx.post(RPC_URL).mock(side_effect=_capture)
+    await _client().send("answer", task_id="t9", context_id="c9")
+    assert seen_methods == ["message/send"]  # plain sync, not a stream
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_task_and_cancel_task():
+    respx.get(CARD_URL).respond(json={})
+    methods = []
+
+    def _capture(request):
+        body = _rpc(request)
+        methods.append((body["method"], body["params"].get("id")))
+        state = "canceled" if body["method"] == "tasks/cancel" else "working"
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {
+            "id": "t5", "contextId": "c5", "status": {"state": state}}})
+
+    respx.post(RPC_URL).mock(side_effect=_capture)
+    c = _client()
+    got = await c.get_task("t5")
+    assert got.task_id == "t5" and got.state == "working" and not got.is_terminal
+    canceled = await c.cancel_task("t5")
+    assert canceled.is_terminal and canceled.state == "canceled"
+    assert methods == [("tasks/get", "t5"), ("tasks/cancel", "t5")]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poll_until_terminal_polls_until_completed(monkeypatch):
+    respx.get(CARD_URL).respond(json={})
+    # working, working, completed
+    states = iter(["working", "working", "completed"])
+
+    def _capture(request):
+        st = next(states)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {
+            "id": "t7", "contextId": "c7", "status": {"state": st},
+            "artifacts": [{"parts": [{"kind": "text", "text": "final"}]}]}})
+
+    respx.post(RPC_URL).mock(side_effect=_capture)
+
+    async def _no_sleep(_):  # don't actually wait in the test
+        return None
+
+    monkeypatch.setattr("a2a.client.asyncio.sleep", _no_sleep)
+    res = await _client().poll_until_terminal("t7", interval=0.01, max_wait=5)
+    assert res.is_terminal and res.state == "completed" and res.text == "final"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poll_stops_on_input_required(monkeypatch):
+    respx.get(CARD_URL).respond(json={})
+    states = iter(["working", "input-required"])
+
+    def _capture(request):
+        st = next(states)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {
+            "id": "t8", "contextId": "c8", "status": {"state": st}}})
+
+    respx.post(RPC_URL).mock(side_effect=_capture)
+    monkeypatch.setattr("a2a.client.asyncio.sleep", lambda _: _async_none())
+    res = await _client().poll_until_terminal("t8", interval=0.01, max_wait=5)
+    assert res.input_required and not res.is_terminal
+
+
+async def _async_none():
+    return None
