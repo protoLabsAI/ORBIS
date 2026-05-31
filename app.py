@@ -1768,6 +1768,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         state = user_state_for(user_id)
         state.active_delivery = delivery
         state.active_tracer = turn_tracer
+        state.active_tts = tts  # for runtime voice switching via /api/tts/voice
         sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
         state.active_session_id = sid
         current_session_id.set(sid)
@@ -1853,6 +1854,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
         if state.active_delivery is delivery:
             state.active_delivery = None
+        if state.active_tts is tts:
+            state.active_tts = None
         if state.active_tracer is turn_tracer:
             state.active_tracer = None
             _tracing.set_active_tracer(None, user_id=user_id)
@@ -2594,12 +2597,21 @@ async def post_say(body: dict, request: Request):
       urgency  — urgent | normal (default) | low
       source   — optional attribution; if set, spoken as "<source> says — …",
                  if omitted the orb speaks it in its own voice (inhabit).
+      voice    — optional Kokoro voice id (e.g. "af_bella"); switches the live
+                 voice so this (and subsequent) speech uses it. Ignored if no
+                 live session or the backend can't switch voices.
     """
     if not _inbox_writer_ok(request):
         raise HTTPException(status_code=401, detail="unauthorized")
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+    voice = (body.get("voice") or "").strip()
+    voice_result = _switch_live_voice(voice) if voice else None
+    if voice_result and not voice_result.get("ok"):
+        # A bad/unknown voice shouldn't drop the message — speak it anyway in
+        # the current voice and report the voice failure alongside.
+        logger.warning(f"[say] voice switch failed: {voice_result.get('error')}")
     urgency = (body.get("urgency") or "normal").strip().lower()
     if urgency not in _SAY_URGENCY_TO_PRIORITY:
         raise HTTPException(
@@ -2624,7 +2636,10 @@ async def post_say(body: dict, request: Request):
         return {"ok": True, "delivered": False, "stashed": True}
 
     await delivery.deliver(text, priority=priority, source=source, kind="ping")
-    return {"ok": True, "delivered": True}
+    resp = {"ok": True, "delivered": True}
+    if voice_result is not None:
+        resp["voice"] = voice_result
+    return resp
 
 
 @app.get("/api/inbox")
@@ -2968,6 +2983,34 @@ async def tts_download_voice(
         from voice.tts.kokoro import download_voice
         return download_voice(voice)
     return {"ok": False, "error": f"{backend!r} backend has no downloadable voices"}
+
+
+def _switch_live_voice(voice_id: str, *, user_id: str | None = None) -> dict:
+    """Switch the voice on the LIVE TTS service so the next spoken line uses
+    it — no restart. Works for backends whose service exposes ``set_voice``
+    (Kokoro reads the voice per-utterance). Returns a status dict; never
+    raises so callers can surface the message."""
+    voice_id = (voice_id or "").strip()
+    if not voice_id:
+        return {"ok": False, "error": "voice is required"}
+    state = user_state_for(user_id or _A2A_USER_ID)
+    tts = state.active_tts
+    if tts is None:
+        return {"ok": False, "error": "no live voice session — connect first"}
+    setter = getattr(tts, "set_voice", None)
+    if not callable(setter):
+        return {
+            "ok": False,
+            "error": f"{type(tts).__name__} doesn't support live voice switching",
+        }
+    return setter(voice_id)
+
+
+@app.post("/api/tts/voice")
+async def tts_set_voice(payload: dict, user: User = Depends(require_user)):
+    """Switch the live TTS voice mid-session (no rebuild/reconnect). The next
+    spoken line uses it. Body: ``{voice: "af_bella"}``."""
+    return _switch_live_voice(payload.get("voice") or "")
 
 
 @app.get("/api/starter_orbs")

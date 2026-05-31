@@ -171,6 +171,28 @@ class LocalKokoroTTS(TTSService):
         self._lang = lang
         self._speed = speed
 
+    @property
+    def voice(self) -> str:
+        return self._voice
+
+    def set_voice(self, voice_id: str, *, warm: bool = True) -> dict:
+        """Switch the live voice. Kokoro reads ``self._voice`` per-utterance,
+        so the NEXT spoken line uses it — no restart. Validates against the
+        catalogue and (by default) pre-downloads the tensor so the first
+        utterance in the new voice doesn't stall on an HF fetch."""
+        if voice_id == self._voice:
+            return {"ok": True, "voice": voice_id, "unchanged": True}
+        if voice_id not in KOKORO_VOICES:
+            return {"ok": False, "error": f"unknown voice: {voice_id!r}"}
+        if warm:
+            dl = download_voice(voice_id)
+            if not dl.get("ok"):
+                return {"ok": False, "error": dl.get("error", "voice download failed")}
+        prev = self._voice
+        self._voice = voice_id
+        logger.info(f"[kokoro] voice switched live: {prev} → {voice_id}")
+        return {"ok": True, "voice": voice_id, "previous": prev}
+
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         if not text.strip():
             return
