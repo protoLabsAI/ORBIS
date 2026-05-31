@@ -39,8 +39,8 @@ export function Field({
         </div>
       )}
       {children}
-      {hint && <div className="text-[11px] text-zinc-500">{hint}</div>}
-      {error && <div className="text-[11px] text-red-400">{error}</div>}
+      {hint && <div className="text-xs text-zinc-500">{hint}</div>}
+      {error && <div className="text-xs text-red-400">{error}</div>}
     </div>
   );
 }

@@ -90,7 +90,7 @@ export function BootStatus() {
           style={{ width: `${Math.round(progress * 100)}%` }}
         />
       </div>
-      <div className="max-w-xs text-center text-xs text-zinc-600">
+      <div className="max-w-xs text-center text-sm text-zinc-500">
         First launch loads local speech + language models — this can take a
         minute or two. Later launches are quick.
       </div>

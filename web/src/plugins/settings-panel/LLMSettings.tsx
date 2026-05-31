@@ -191,7 +191,7 @@ export function LLMSettings() {
   return (
     <Panel title="LLM">
       <div className="space-y-4">
-        <p className="text-xs text-zinc-500 -mt-1">
+        <p className="text-sm text-zinc-400 -mt-1">
           Router brain. Pick a preset or type your own URL.
         </p>
 
@@ -209,7 +209,7 @@ export function LLMSettings() {
               }
             >
               <div className="text-xs text-zinc-200">{p.label}</div>
-              <div className="text-[10px] text-zinc-500 mt-0.5 line-clamp-2">
+              <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">
                 {p.blurb}
               </div>
             </button>
@@ -220,7 +220,7 @@ export function LLMSettings() {
           <button
             type="button"
             onClick={() => setShowAllProviders(true)}
-            className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             Show {hiddenCount} more providers
           </button>
@@ -229,7 +229,7 @@ export function LLMSettings() {
           <button
             type="button"
             onClick={() => setShowAllProviders(false)}
-            className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             Show fewer
           </button>
@@ -237,7 +237,7 @@ export function LLMSettings() {
 
         <div className="space-y-3">
           <div>
-            <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
               URL
             </label>
             <input
@@ -251,13 +251,13 @@ export function LLMSettings() {
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500">
+              <label className="text-xs uppercase tracking-wider text-zinc-500">
                 Model
               </label>
               <button
                 type="button"
                 onClick={onFetchModels}
-                className="text-[10px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+                className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
               >
                 Fetch list
               </button>
@@ -279,7 +279,7 @@ export function LLMSettings() {
 
           {current.needsKey && (
             <div>
-              <label className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
                 API key
               </label>
               <input
@@ -291,7 +291,7 @@ export function LLMSettings() {
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[10px] text-zinc-600 mt-1">
+              <div className="text-[11px] text-zinc-600 mt-1">
                 {keyIsSet
                   ? 'A key is saved on your machine. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -317,20 +317,20 @@ export function LLMSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {test.kind === 'ok' && (
-            <span className="text-[11px] text-emerald-400">
+            <span className="text-xs text-emerald-400">
               ✓ Connected ({test.latency} ms)
             </span>
           )}
           {test.kind === 'error' && (
-            <span className="text-[11px] text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-red-400 truncate max-w-[55%]">
               ✗ {test.message}
             </span>
           )}
           {save.kind === 'saved' && (
-            <span className="text-[11px] text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-emerald-400">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-[11px] text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-red-400 truncate max-w-[55%]">
               ✗ {save.message}
             </span>
           )}
