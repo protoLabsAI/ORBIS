@@ -140,12 +140,24 @@ def tool(
     return decorator
 
 
+# Hand-wired tools whose real latency the registry can't see. delegate_to is
+# a synchronous network round-trip to an external agent — it can take tens of
+# seconds (Ava ~60s observed) — so it's SLOW: that's what arms the progress-
+# narration loop ("still working on that…") so a slow delegate doesn't leave
+# the user in dead air after the opening ack.
+_HANDWIRED_SLOW_NAMES = frozenset({"delegate_to"})
+
+
 def latency_for(tool_name: str) -> Latency:
-    """Expected latency for a tool — reads the registry. Unknown tools
-    default to MEDIUM. ``delegate_to`` isn't in the registry (hand-wired)
-    so it also falls back to MEDIUM."""
+    """Expected latency for a tool — reads the registry. ``delegate_to`` is
+    hand-wired and SLOW (external round-trip). Other unknown tools default
+    to MEDIUM."""
     spec = _TOOL_REGISTRY.get(tool_name)
-    return spec.latency if spec else Latency.MEDIUM
+    if spec:
+        return spec.latency
+    if tool_name in _HANDWIRED_SLOW_NAMES:
+        return Latency.SLOW
+    return Latency.MEDIUM
 
 
 def capabilities_block(tools_schema) -> str:
