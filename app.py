@@ -1597,6 +1597,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # now that the task exists. queue_frame is the only safe way to inject
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
+    # Per-delivery voice override (kokoro): lets a delivery speak in another
+    # voice for one utterance then revert — e.g. notifications attributed to
+    # different agents in distinct voices. Only kokoro honours the frame.
+    if tts_backend == "kokoro":
+        from voice.tts.kokoro import KokoroVoiceFrame
+        delivery.set_voice_framer(lambda v: KokoroVoiceFrame(voice=v))
     # Record real proactive deliveries into conversation history (orbis-3ta)
     # so the orb remembers saying them and can reference them in talk.
     delivery.set_context(context)
@@ -2597,9 +2603,10 @@ async def post_say(body: dict, request: Request):
       urgency  — urgent | normal (default) | low
       source   — optional attribution; if set, spoken as "<source> says — …",
                  if omitted the orb speaks it in its own voice (inhabit).
-      voice    — optional Kokoro voice id (e.g. "af_bella"); switches the live
-                 voice so this (and subsequent) speech uses it. Ignored if no
-                 live session or the backend can't switch voices.
+      voice    — optional Kokoro voice id (e.g. "af_bella"); speaks THIS
+                 message in that voice and reverts after — so notifications
+                 from different agents can each have their own voice without
+                 changing the orb's own. Ignored if the voice is unknown.
     """
     if not _inbox_writer_ok(request):
         raise HTTPException(status_code=401, detail="unauthorized")
@@ -2607,11 +2614,15 @@ async def post_say(body: dict, request: Request):
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
     voice = (body.get("voice") or "").strip()
-    voice_result = _switch_live_voice(voice) if voice else None
-    if voice_result and not voice_result.get("ok"):
-        # A bad/unknown voice shouldn't drop the message — speak it anyway in
-        # the current voice and report the voice failure alongside.
-        logger.warning(f"[say] voice switch failed: {voice_result.get('error')}")
+    voice_err = None
+    if voice:
+        from voice.tts.kokoro import KOKORO_VOICES, download_voice
+        if voice not in KOKORO_VOICES:
+            voice_err = f"unknown voice: {voice!r}"
+            logger.warning(f"[say] {voice_err} — speaking in the current voice")
+            voice = ""
+        else:
+            download_voice(voice)  # warm the tensor so the line doesn't stall
     urgency = (body.get("urgency") or "normal").strip().lower()
     if urgency not in _SAY_URGENCY_TO_PRIORITY:
         raise HTTPException(
@@ -2635,10 +2646,15 @@ async def post_say(body: dict, request: Request):
         })
         return {"ok": True, "delivered": False, "stashed": True}
 
-    await delivery.deliver(text, priority=priority, source=source, kind="ping")
+    await delivery.deliver(
+        text, priority=priority, source=source, kind="ping",
+        voice=voice or None,
+    )
     resp = {"ok": True, "delivered": True}
-    if voice_result is not None:
-        resp["voice"] = voice_result
+    if voice:
+        resp["voice"] = voice
+    if voice_err:
+        resp["voice_error"] = voice_err
     return resp
 
 

@@ -4,15 +4,29 @@ import logging
 import os
 import time
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
 import numpy as np
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
 from agent.prosody import ProsodyTextFilter
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class KokoroVoiceFrame(Frame):
+    """Sets the voice for the NEXT utterance ONLY, then auto-reverts to the
+    persistent voice. Pushed just before a TTSSpeakFrame to speak a single
+    line in a different voice (e.g. a notification attributed to another
+    agent: X in af_bella, Y in am_echo), without changing the orb's own
+    voice. Race-free: ``run_tts`` consumes the pending voice atomically at
+    synthesis start, so the revert can't clip the in-flight utterance."""
+
+    voice: str = ""
 
 KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
 KOKORO_LANG = os.environ.get("KOKORO_LANG", "a")
@@ -170,10 +184,19 @@ class LocalKokoroTTS(TTSService):
         self._voice = voice
         self._lang = lang
         self._speed = speed
+        # One-shot voice override for the next utterance (KokoroVoiceFrame).
+        self._pending_voice: str | None = None
 
     @property
     def voice(self) -> str:
         return self._voice
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        # A KokoroVoiceFrame arrives just before the TTSSpeakFrame it modifies;
+        # stash the voice so the next run_tts uses it once, then reverts.
+        if isinstance(frame, KokoroVoiceFrame) and frame.voice:
+            self._pending_voice = frame.voice
+        await super().process_frame(frame, direction)
 
     def set_voice(self, voice_id: str, *, warm: bool = True) -> dict:
         """Switch the live voice. Kokoro reads ``self._voice`` per-utterance,
@@ -196,18 +219,25 @@ class LocalKokoroTTS(TTSService):
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         if not text.strip():
             return
+        # Consume a one-shot voice override atomically (then revert to the
+        # persistent voice). pipe() captures `voice` by value below, so even
+        # a concurrent revert can't affect this in-flight utterance.
+        voice = self._voice
+        if self._pending_voice is not None:
+            voice = self._pending_voice
+            self._pending_voice = None
         from agent import tracing
         tts_span = tracing.active_trace().start_observation(
             name="tts.kokoro",
             as_type="span",
             input={"text_len": len(text), "preview": text[:120]},
-            metadata={"backend": "kokoro", "voice": self._voice},
+            metadata={"backend": "kokoro", "voice": voice},
         )
         try:
             await self.start_tts_usage_metrics(text)
             pipe = _get_pipe(self._lang)
             got_first = False
-            for chunk in pipe(text, voice=self._voice, speed=self._speed):
+            for chunk in pipe(text, voice=voice, speed=self._speed):
                 # KPipeline yields tuples; audio is at index 2 as a float32 ndarray.
                 audio_f32 = chunk[2] if len(chunk) >= 3 else chunk
                 if audio_f32 is None:
