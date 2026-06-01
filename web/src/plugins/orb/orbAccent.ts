@@ -13,7 +13,7 @@ import { useOrbState } from '@/plugins/orb/useOrbState';
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const PREFERRED = ['primaryEnergy', 'colorBright', 'colorMid', 'secondaryEnergy'];
-const FALLBACK = '#f59e0b'; // amber fallback — matches --orb-accent default
+const FALLBACK = '#a78bfa'; // protoLabs brand lavender — matches --orb-accent default
 
 export function orbAccentFromParams(params: Record<string, unknown>): string {
   for (const key of PREFERRED) {
