@@ -244,7 +244,7 @@ export function LLMSettings() {
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://api.openai.com/v1"
-              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
               spellCheck={false}
             />
           </div>
@@ -267,7 +267,7 @@ export function LLMSettings() {
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder="gpt-4o-mini"
-              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
               spellCheck={false}
             />
             {availableModels.length > 0 && (
@@ -287,7 +287,7 @@ export function LLMSettings() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={keyPlaceholder}
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />

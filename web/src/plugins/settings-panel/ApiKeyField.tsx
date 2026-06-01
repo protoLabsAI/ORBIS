@@ -59,7 +59,7 @@ export function ApiKeyField() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="pv_ak_..."
-          className="flex-1 h-9 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint"
+          className="flex-1 h-9 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted"
           autoComplete="off"
           spellCheck={false}
         />

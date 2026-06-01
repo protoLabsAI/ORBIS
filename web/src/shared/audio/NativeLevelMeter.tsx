@@ -47,7 +47,7 @@ export function NativeLevelMeter({ deviceName }: { deviceName: string }) {
           );
         })}
       </div>
-      <p className="text-xs text-fg-faint text-center">
+      <p className="text-xs text-fg-muted text-center">
         Speak to test — level meter reflects live input
       </p>
     </div>
