@@ -3,6 +3,7 @@ import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
 import { devModeStore, useDevMode } from '@/shared/devMode';
 import { ApiKeyField } from './ApiKeyField';
 import { Diagnostics } from './Diagnostics';
+import { AboutPanel } from './AboutPanel';
 
 /**
  * System tab — operational/admin: owner API key (access), the WKWebView
@@ -31,6 +32,7 @@ export function SystemPanel() {
             </Button>
           </div>
         </Panel>
+        <AboutPanel />
       </div>
     </CollapsiblePanelProvider>
   );
