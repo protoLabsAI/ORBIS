@@ -66,7 +66,7 @@ export function SetupWizard() {
   if (!needsSetup) return null;
 
   return (
-    <div className="fixed inset-0 z-30 bg-base/95 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-30 bg-surface/95 backdrop-blur-sm overflow-y-auto">
         <WizardFlow
           onFinish={() => {
           try {
@@ -1044,7 +1044,7 @@ function MicStep({
       </div>
 
       {!authorized && (
-        <div className="rounded-lg border border-edge bg-base/60 p-4 space-y-3">
+        <div className="rounded-lg border border-edge bg-surface/60 p-4 space-y-3">
           <div>
             <div className="text-sm text-fg-body">Microphone access</div>
             <div className="text-xs text-fg-subtle mt-1">
@@ -1072,7 +1072,7 @@ function MicStep({
       )}
 
       {authorized && !selectableInput && (
-        <div className="rounded-lg border border-edge bg-base/60 p-4 text-sm text-fg-muted">
+        <div className="rounded-lg border border-edge bg-surface/60 p-4 text-sm text-fg-muted">
           Input source: macOS system input
         </div>
       )}
@@ -1098,7 +1098,7 @@ function MicStep({
       )}
 
       {authorized && selectableInput && devices.length === 0 && (
-        <div className="rounded-lg border border-edge bg-base/60 p-4 text-sm text-fg-muted">
+        <div className="rounded-lg border border-edge bg-surface/60 p-4 text-sm text-fg-muted">
           No microphone input device was found.
         </div>
       )}
@@ -1154,7 +1154,7 @@ function HatchAnimation({ onDone }: { onDone: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 bg-base flex items-center justify-center pointer-events-none orbis-hatch-fade"
+      className="fixed inset-0 bg-surface flex items-center justify-center pointer-events-none orbis-hatch-fade"
       aria-label="Hatching"
     >
       <div className="relative w-48 h-48">

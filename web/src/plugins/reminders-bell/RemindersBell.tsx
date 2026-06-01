@@ -150,7 +150,7 @@ export function RemindersBell() {
         {hasReminders && (
           <span
             aria-hidden="true"
-            className="absolute top-2 right-2 h-2 w-2 rounded-full bg-orb ring-1 ring-base shadow-[0_0_6px_var(--orb)]"
+            className="absolute top-2 right-2 h-2 w-2 rounded-full bg-orb ring-1 ring-surface shadow-[0_0_6px_var(--orb)]"
           />
         )}
       </button>
@@ -159,7 +159,7 @@ export function RemindersBell() {
         <div
           role="dialog"
           aria-label="Reminders"
-          className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-edge bg-base/95 p-3 shadow-xl backdrop-blur-sm"
+          className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-edge bg-surface/95 p-3 shadow-xl backdrop-blur-sm"
         >
           <div className="mb-2 flex items-center justify-between">
             <div className="font-mono text-helper uppercase tracking-wider text-fg-muted">

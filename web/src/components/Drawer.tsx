@@ -88,7 +88,7 @@ export function Drawer() {
         {/* Mobile: live orb preview in the top half. On desktop the main
             orb is visible behind the drawer, no preview needed. */}
         {isMobile && open && (
-          <div className="relative shrink-0 h-[50dvh] bg-base border-b border-edge">
+          <div className="relative shrink-0 h-[50dvh] bg-surface border-b border-edge">
             <OrbPreview />
           </div>
         )}

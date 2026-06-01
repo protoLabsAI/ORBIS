@@ -43,7 +43,7 @@ export function LogsPanel() {
           Clear
         </Button>
       </div>
-      <div className="max-h-[60vh] overflow-y-auto rounded-md border border-edge bg-base font-mono text-helper">
+      <div className="max-h-[60vh] overflow-y-auto rounded-md border border-edge bg-surface font-mono text-helper">
         {events.length === 0 ? (
           <div className="p-3 text-fg-faint">
             No events yet. Start a native voice session to see SSE and voice
