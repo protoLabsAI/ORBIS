@@ -50,13 +50,14 @@
      gradient (#a78bfa→#818cf8→#6366f1, docs/reference/foundation.md). Fixed
      chrome accent: boot, wizard, settings, tabs, rings. (Naming + exact
      shades are provisional — to be reconciled with the brand system.) */
-  --brand: #a78bfa;        /* lavender — primary */
-  --brand-light: #c4b5fd;  /* lighter lavender — hover */
-  --brand-deep: #818cf8;   /* indigo-lavender — active / deep */
+  --brand: #9b87f2;        /* lavender — primary / gradient start */
+  --brand-mid: #818cf8;    /* indigo-lavender — gradient middle */
+  --brand-deep: #6366f1;   /* indigo — gradient end / active */
+  --brand-gradient: linear-gradient(135deg, #9b87f2 0%, #818cf8 50%, #6366f1 100%);
   /* The live orb's current accent, published by OrbAccentBridge. Only the
      orb-tinted reminders dot reads this; it falls back to the brand lavender
      before any orb color exists. */
-  --orb-accent: #a78bfa;
+  --orb-accent: #9b87f2;
   --orb: var(--orb-accent, var(--brand));
 
   --sidebar: oklch(0.985 0 0);
@@ -143,7 +144,7 @@ html, body {
   --color-fg-subtle: var(--fg-subtle);
   --color-fg-faint: var(--fg-faint);
   --color-brand: var(--brand);
-  --color-brand-light: var(--brand-light);
+  --color-brand-mid: var(--brand-mid);
   --color-brand-deep: var(--brand-deep);
   --color-orb: var(--orb);
   --color-success: var(--success);
