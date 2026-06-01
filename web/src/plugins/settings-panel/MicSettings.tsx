@@ -135,7 +135,7 @@ export function MicSettings() {
     <Panel title="Microphone">
       <div className="space-y-3">
         {!authorized && (
-          <div className="rounded-lg border border-edge bg-base/60 p-3 space-y-3">
+          <div className="rounded-lg border border-edge bg-surface/60 p-3 space-y-3">
             <div>
               <div className="text-sm text-fg-body">Microphone access</div>
               <div className="text-xs text-fg-subtle mt-1">
@@ -163,7 +163,7 @@ export function MicSettings() {
         )}
 
         {authorized && !selectableInput && (
-          <div className="rounded-lg border border-edge bg-base/60 p-3 text-sm text-fg-muted">
+          <div className="rounded-lg border border-edge bg-surface/60 p-3 text-sm text-fg-muted">
             Input source: macOS system input
           </div>
         )}
@@ -189,7 +189,7 @@ export function MicSettings() {
         )}
 
         {authorized && selectableInput && devices.length === 0 && (
-          <div className="rounded-lg border border-edge bg-base/60 p-3 text-sm text-fg-muted">
+          <div className="rounded-lg border border-edge bg-surface/60 p-3 text-sm text-fg-muted">
             No microphone input device was found.
           </div>
         )}

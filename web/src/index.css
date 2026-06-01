@@ -36,7 +36,7 @@
      Real custom properties (not @theme-inline-only) so plain CSS can read
      them too. Dark-only constants — no light/dark split needed. The sweep
      migrates raw zinc, amber, and px utilities onto these. */
-  --base: #0a0a0a;        /* app background */
+  --surface: #0a0a0a;        /* app background */
   --raised: #18181b;      /* zinc-900 — cards/panels (use bg-raised/40) */
   --edge: #27272a;        /* zinc-800 — the ubiquitous border */
   --fg: #f4f4f5;          /* zinc-100 — strong / emphasis */
@@ -73,7 +73,7 @@
 html, body {
   margin: 0;
   min-height: 100svh;
-  background: var(--base);
+  background: var(--surface);
   color: var(--fg-body);
   font: 16px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -132,10 +132,10 @@ html, body {
   --radius-4xl: calc(var(--radius) * 2.6);
 
   /* ── ORBIS chrome tokens → Tailwind utilities ─────────────────────────
-     text-fg / bg-base / border-edge / text-brand / bg-brand/10 / etc.
+     text-fg / bg-surface / border-edge / text-brand / bg-brand/10 / etc.
      `inline` keeps the var() expression at the use-site, so changing
      --orb-accent at runtime re-tints every text-brand/bg-brand. */
-  --color-base: var(--base);
+  --color-surface: var(--surface);
   --color-raised: var(--raised);
   --color-edge: var(--edge);
   --color-fg: var(--fg);
@@ -198,7 +198,7 @@ html, body {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-base text-fg-body;
+    @apply bg-surface text-fg-body;
   }
   html {
     @apply font-sans;
