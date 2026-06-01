@@ -380,6 +380,57 @@ fn inject_backend_url(app: &AppHandle, url: &str) {
     log::info!("injected backend url {url}");
 }
 
+/// Bring the main window back to the foreground — used by the tray (click or
+/// "Show ORBIS") since in menu-bar-only mode there's no dock icon to click.
+fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+/// Build the macOS menu-bar (tray) item: the protoLabs robot mark (template,
+/// so the system tints it to the menu bar) with a Show / Quit menu. Left-click
+/// surfaces the window; the menu's Quit is the real exit path in menu-bar-only
+/// mode. Returns Err if the tray can't be created, so the caller can stay in
+/// the dock as a fallback rather than leave the app unreachable.
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(app, "show", "Show ORBIS", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit ORBIS", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-robot.png"))?;
+
+    TrayIconBuilder::with_id("orbis-tray")
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip("ORBIS")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 /// Response returned by `api_request` to the bundled UI.
 #[derive(Serialize)]
 struct ApiResponse {
@@ -585,11 +636,34 @@ pub fn run() {
         .manage(Sidecar::new())
         .manage(BackendUrl::default())
         .manage(BootState::default())
+        .on_window_event(|window, event| {
+            // Menu-bar agent: closing the window (red traffic light) hides it
+            // instead of quitting — ORBIS keeps listening in the background.
+            // Real exit is the tray's "Quit" (RunEvent::ExitRequested).
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|app| {
             // Register native audio engine state. Must be done in setup()
             // so it's available before supervise_sidecar runs.
             #[cfg(feature = "native-audio")]
             app.manage(AudioEngineState::new());
+
+            // Menu-bar-only agent mode: build the tray first, and only drop
+            // the dock icon (Accessory) if it succeeds — so a tray failure
+            // can't leave the app with no way to surface itself.
+            match setup_tray(app) {
+                Ok(()) => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = app
+                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                    }
+                }
+                Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
+            }
 
             let handle = app.handle().clone();
             // Spawn the sidecar on an async task so setup() returns
