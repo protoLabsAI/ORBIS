@@ -19,10 +19,12 @@ export function ProtoLabsIcon({
   className,
 }: {
   size?: number;
-  variant?: 'flat' | 'outline';
+  variant?: 'flat' | 'outline' | 'white';
   className?: string;
 }) {
-  const robotStroke = variant === 'flat' ? '#ffffff' : '#9b87f2';
+  // flat: white robot on the lavender square. white: white robot, no bg
+  // (for the dark title bar). outline: lavender strokes, no bg.
+  const robotStroke = variant === 'outline' ? '#9b87f2' : '#ffffff';
   return (
     <svg
       width={size}

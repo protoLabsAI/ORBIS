@@ -12,6 +12,7 @@
   },
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "dialog:allow-message",
     "log:default",
     "http:default",
