@@ -1,6 +1,6 @@
 """D1 orchestration loop — bounded, router-first, multi-step delegation.
 
-`orchestrate(goal)` is the agency centrepiece (docs/duplex-orchestration-direction.md).
+`orchestrate(goal)` is the agency centrepiece (docs/internal/duplex-orchestration-direction.md).
 It runs a bounded ReAct loop that chains several delegate hand-offs toward a
 goal and synthesises one answer. The **heavy reasoning stays in the delegates**
 (DECISIONS.md:59) — this loop only decides *which* agent to ask *what* next, and

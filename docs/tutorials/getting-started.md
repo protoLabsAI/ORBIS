@@ -82,7 +82,7 @@ immediately.
 
 ## Where to go next
 
-- **Do more** → [How-to: the proactive companion](../proactive-companion.md)
-  (recurring reminders, attribution, all the voice phrasings).
-- **Tune it** → the [config-knob reference](../proactive-companion.md#configuration).
-- **Understand it** → [why it's built this way](../proactive-agent-direction.md).
+- **Do more** → the [How-to guides](/how-to/README) — configure the LLM, add a
+  delegate, manage reminders, customize your orb.
+- **Tune it** → the [Reference](/reference/README) — every config and settings knob.
+- **Understand it** → [How ORBIS works](/explanation/how-orbis-works).

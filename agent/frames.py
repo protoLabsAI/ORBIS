@@ -18,7 +18,7 @@ cross-cutting frames land here.
 
 References:
 - Issue #66 (SenseVoice perception layer)
-- docs/voice-lifecycle-research.md § audio-pre
+- docs/internal/voice-lifecycle-research.md § audio-pre
 """
 
 from __future__ import annotations

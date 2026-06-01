@@ -13,7 +13,7 @@ questions, and ordered next steps.
 [DECISIONS.md](./DECISIONS.md) has the frozen architecture decisions
 — read that first if you haven't. [README.md](./README.md) has the
 developer-facing overview.
-[`docs/native-audio-direction.md`](./docs/native-audio-direction.md)
+[`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md)
 is the comprehensive guide for the Mac-first native audio direction and
 the 4-phase migration plan that supersedes the dual-transport
 architecture.
@@ -166,7 +166,7 @@ checkout of that repo before continuing.
 production target and Linux / Windows sequenced after the Mac native-audio
 build stabilizes. iOS / iPad remains a planned secondary target. Web / PWA /
 browser is dropped as a supported runtime.** See DECISIONS.md amendment of
-the same date and `docs/native-audio-direction.md` for the comprehensive
+the same date and `docs/internal/native-audio-direction.md` for the comprehensive
 guide.
 
 **Phase 1 is done.** All 11 ROI-ranked items shipped today across 11
@@ -385,7 +385,7 @@ before declaring a release.
 
 ## Recommended next steps (in priority order)
 
-The structure follows the 4-phase plan in `docs/native-audio-direction.md`.
+The structure follows the 4-phase plan in `docs/internal/native-audio-direction.md`.
 Items in the "Other in-flight" buckets are non-Phase-1 work that's still
 worth doing in parallel where it doesn't conflict with the carve.
 
@@ -440,7 +440,7 @@ These were "next steps" in the prior version of HANDOFF.md and remain relevant:
 - **Collectible / shop orbs** (per DECISIONS.md: deferred). Time-limited starter additions, themed drops.
 - **Fact extraction background agent.** SQLite facts table is ready; extractor module just needs writing.
 - **Observability — Langfuse + Prometheus `/metrics`.** Stubs exist from the seed; wire to the deployment env.
-- **Docs site rebuild.** README + DECISIONS + STATUS + HANDOFF + `docs/native-audio-direction.md` carry the load today; if/when there's a real user-facing audience, build a proper docs site (mkdocs / VitePress).
+- **Docs site rebuild.** README + DECISIONS + STATUS + HANDOFF + `docs/internal/native-audio-direction.md` carry the load today; if/when there's a real user-facing audience, build a proper docs site (mkdocs / VitePress).
 
 ## Useful commands
 

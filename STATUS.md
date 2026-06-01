@@ -12,7 +12,7 @@ first on any resume before digging into code.
 
 **ORBIS starts with Apple Silicon Mac as the production desktop target; Linux and Windows desktop support are intentionally sequenced after the Mac native-audio build is stable. iOS / iPad remains a planned secondary target. Web / PWA / browser is dropped entirely.**
 
-The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Mac-first desktop, Linux/Windows later" amendment (2026-05-29)](./DECISIONS.md) and [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide.
+The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Mac-first desktop, Linux/Windows later" amendment (2026-05-29)](./DECISIONS.md) and [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md) for the comprehensive guide.
 
 ## Native fork status — 2026-05-29
 
@@ -103,7 +103,7 @@ The migration is staged in four phases:
 
 ## Phase 1 — what shipped (2026-04-28)
 
-All 11 Phase-1 ROI-ranked items from `docs/native-audio-direction.md`, except items 2 (`webrtc-audio-processing 2.0.4`) and 7 (rubato `FftFixedIn` outside the audio callback) which are deferred — both get superseded by Phase 2's AVAudioEngine voice-processing IO so the work would be thrown away.
+All 11 Phase-1 ROI-ranked items from `docs/internal/native-audio-direction.md`, except items 2 (`webrtc-audio-processing 2.0.4`) and 7 (rubato `FftFixedIn` outside the audio callback) which are deferred — both get superseded by Phase 2's AVAudioEngine voice-processing IO so the work would be thrown away.
 
 | # | Action | Commit |
 |---|---|---|

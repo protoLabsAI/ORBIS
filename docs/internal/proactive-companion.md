@@ -158,7 +158,7 @@ These are recorded in full in `DECISIONS.md`; the user-relevant gist:
 
 ---
 
-See also: [`docs/agent-inbox.md`](./agent-inbox.md) (the pull-based inbox),
+See also: [`docs/internal/agent-inbox.md`](./agent-inbox.md) (the pull-based inbox),
 [`docs/proactive-agent-direction.md`](./proactive-agent-direction.md) (the
 architecture + roadmap), and `config/orbis.example.yaml` (full config
 reference).

@@ -232,7 +232,7 @@ scripts/check-macos-release-config.py
 
 ## Project docs
 
-📚 **[docs/](./docs/README.md)** is organised by [Diátaxis](https://diataxis.fr)
+📚 **[docs/](./docs/)** is organised by [Diátaxis](https://diataxis.fr)
 — tutorials, how-to guides, reference, and explanation. Start there to *use*
 or *understand* ORBIS (e.g. [getting started](./docs/tutorials/getting-started.md)).
 
@@ -248,11 +248,11 @@ pickup:
 3. **[HANDOFF.md](./HANDOFF.md)** — QA checklist, known open
    questions, and ordered next steps. Written for a teammate (or
    tomorrow-you) picking ORBIS up fresh.
-4. **[docs/proactive-companion.md](./docs/proactive-companion.md)** —
+4. **[docs/internal/proactive-companion.md](./docs/internal/proactive-companion.md)** —
    **user-facing guide**: what ORBIS can do as a proactive companion
    (reminders, hand-offs to your agents, external pings), how to drive
    it by voice, and the full config-knob reference.
-5. **[docs/orb-visualizer.md](./docs/orb-visualizer.md)** —
+5. **[docs/internal/orb-visualizer.md](./docs/internal/orb-visualizer.md)** —
    engineering reference for the orb plugin system inherited from
    protoVoice (variant registry, shared signal bus, palette system,
    field types).

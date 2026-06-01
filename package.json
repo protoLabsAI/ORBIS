@@ -8,6 +8,7 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@protolabsai/vitepress-theme": "^0.3.0",
     "sharp": "^0.34.5",
     "vitepress": "^1.6.4"
   }

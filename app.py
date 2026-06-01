@@ -967,7 +967,7 @@ class SseBusObserver(RTVIObserver):
     Pre-2026-04-28 this was a hand-rolled Frame observer that
     duplicated the RTVIObserver mapping logic against ``LLMTextFrame``
     /  ``BotStartedSpeakingFrame`` / etc. directly. The third research
-    stream (see ``docs/native-audio-direction.md``) flagged that as
+    stream (see ``docs/internal/native-audio-direction.md``) flagged that as
     forking the RTVI vocabulary; this rewrite keeps the dispatch
     surface in pipecat's hands and only customizes the egress.
 
