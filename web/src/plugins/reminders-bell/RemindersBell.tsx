@@ -127,10 +127,10 @@ export function RemindersBell() {
       ref={rootRef}
       className="fixed z-20"
       style={{
-        top: 'calc(0.75rem + env(safe-area-inset-top, 0px))',
-        // Sit to the left of the settings gear (which is at right: 0.75rem
-        // and ~2.75rem wide) with a small gap.
-        right: 'calc(0.75rem + 3rem + env(safe-area-inset-right, 0px))',
+        // Stack vertically down the right edge, directly below the settings
+        // gear (which sits at top: 0.75rem, right: 0.75rem, ~2.75rem tall).
+        top: 'calc(0.75rem + 3rem + env(safe-area-inset-top, 0px))',
+        right: 'calc(0.75rem + env(safe-area-inset-right, 0px))',
       }}
     >
       <button
