@@ -890,17 +890,17 @@ def check_docs() -> None:
             "DECISIONS must not describe WebRTC-only desktop builds as current",
         ),
         (
-            ROOT / "docs" / "native-audio-direction.md",
+            ROOT / "docs" / "internal" / "native-audio-direction.md",
             "only first-class platform",
             "native audio direction must describe Mac-first scope",
         ),
         (
-            ROOT / "docs" / "native-audio-transport.md",
+            ROOT / "docs" / "internal" / "native-audio-transport.md",
             "## Feature Flags",
             "historical transport docs must not present obsolete flags as current",
         ),
         (
-            ROOT / "docs" / "desktop-dev.md",
+            ROOT / "docs" / "internal" / "desktop-dev.md",
             "ORBIS_DEV_URL",
             "desktop dev docs must not advertise unimplemented ORBIS_DEV_URL flow",
         ),
@@ -920,12 +920,12 @@ def check_docs() -> None:
             "validation script usage must not hard-code versioned release artifact names",
         ),
         (
-            ROOT / "docs" / "voice-lifecycle.md",
+            ROOT / "docs" / "internal" / "voice-lifecycle.md",
             "install UIDelegate patch",
             "voice lifecycle docs must not point current Mac path at the WebView permission patch",
         ),
         (
-            ROOT / "docs" / "voice-lifecycle.md",
+            ROOT / "docs" / "internal" / "voice-lifecycle.md",
             "`audio-input`, `camera`",
             "voice lifecycle docs must not describe camera entitlement in the current Tauri shell",
         ),
