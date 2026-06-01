@@ -186,7 +186,7 @@ export function STTSettings() {
               value={whisperModel}
               onChange={(e) => setWhisperModel(e.target.value)}
               placeholder="openai/whisper-large-v3-turbo"
-              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
               spellCheck={false}
             />
             <div className="text-helper text-brand/70 mt-1">
@@ -224,7 +224,7 @@ export function STTSettings() {
                 value={sttUrl}
                 onChange={(e) => { setSttUrl(e.target.value); setSttPreset(matchSttPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 spellCheck={false}
               />
             </div>
@@ -236,7 +236,7 @@ export function STTSettings() {
                 value={sttModel}
                 onChange={(e) => setSttModel(e.target.value)}
                 placeholder="whisper-1"
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 spellCheck={false}
               />
             </div>
@@ -253,7 +253,7 @@ export function STTSettings() {
                     ? 'key is already set — leave blank to keep'
                     : 'sk-...'
                 }
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />

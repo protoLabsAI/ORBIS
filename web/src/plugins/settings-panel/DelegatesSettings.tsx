@@ -294,7 +294,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
           }
           disabled={isEdit}
           placeholder="ava"
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono disabled:opacity-50"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono disabled:opacity-50"
           spellCheck={false}
         />
       </Field>
@@ -309,7 +309,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
             setDraft({ ...draft, description: e.target.value } as Delegate)
           }
           placeholder="Chief of staff — sitreps, planning, fleet delegation."
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted"
           spellCheck={false}
         />
       </Field>
@@ -326,7 +326,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
           value={draft.url}
           onChange={(e) => setDraft({ ...draft, url: e.target.value } as Delegate)}
           placeholder={draft.type === 'a2a' ? 'http://ava:3008/a2a' : 'http://gateway:4000/v1'}
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
           spellCheck={false}
         />
       </Field>
@@ -418,7 +418,7 @@ function A2AFields({
               } as Delegate)
             }
             placeholder="AVA_API_KEY"
-            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
           />
         </Field>
@@ -440,7 +440,7 @@ function OpenAIFields({
           value={draft.model}
           onChange={(e) => setDraft({ ...draft, model: e.target.value } as Delegate)}
           placeholder="claude-opus-4-6"
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
           spellCheck={false}
         />
       </Field>
@@ -454,7 +454,7 @@ function OpenAIFields({
             setDraft({ ...draft, api_key_env: e.target.value } as Delegate)
           }
           placeholder="LITELLM_MASTER_KEY"
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
           spellCheck={false}
         />
       </Field>
@@ -469,7 +469,7 @@ function OpenAIFields({
           }
           placeholder="Answer thoroughly but concisely (2-4 sentences). Plain text only."
           rows={2}
-          className="w-full rounded-md border border-edge bg-raised/60 px-2.5 py-1.5 text-xs text-fg-body placeholder-fg-faint leading-snug"
+          className="w-full rounded-md border border-edge bg-raised/60 px-2.5 py-1.5 text-xs text-fg-body placeholder-fg-muted leading-snug"
           spellCheck={false}
         />
       </Field>

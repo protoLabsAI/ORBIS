@@ -338,7 +338,7 @@ export function TTSSettings() {
                 value={voice}
                 onChange={(e) => setVoice(e.target.value)}
                 placeholder={VOICE_PLACEHOLDER[backend]}
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 spellCheck={false}
               />
               {VOICE_UI[backend] === 'datalist' && voices.length > 0 && (
@@ -413,7 +413,7 @@ export function TTSSettings() {
                 value={ttsUrl}
                 onChange={(e) => { setTtsUrl(e.target.value); setTtsPreset(matchTtsPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 spellCheck={false}
               />
             </div>
@@ -425,7 +425,7 @@ export function TTSSettings() {
                 value={ttsModel}
                 onChange={(e) => setTtsModel(e.target.value)}
                 placeholder="tts-1"
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 spellCheck={false}
               />
             </div>
@@ -442,7 +442,7 @@ export function TTSSettings() {
                     ? 'key is already set — leave blank to keep'
                     : 'sk-...'
                 }
-                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />

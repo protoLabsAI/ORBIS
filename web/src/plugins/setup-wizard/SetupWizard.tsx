@@ -158,7 +158,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
         across sessions, and can route the heavy lifting to the agents
         you've configured.
       </p>
-      <p className="text-xs text-fg-faint max-w-sm mx-auto">
+      <p className="text-xs text-fg-muted max-w-sm mx-auto">
         Four quick steps: access, pick an orb, and meet it.
       </p>
       <Button onClick={onNext}>Let's go</Button>
@@ -208,7 +208,7 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             value={userName}
             onChange={(e) => setUserName(e.target.value)}
             placeholder="Alice"
-            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted"
             autoComplete="off"
             spellCheck={false}
           />
@@ -222,7 +222,7 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             value={orbName}
             onChange={(e) => setOrbName(e.target.value)}
             placeholder="ORBIS"
-            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted"
             autoComplete="off"
             spellCheck={false}
           />
@@ -485,7 +485,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://api.openai.com/v1"
-            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
           />
         </div>
@@ -506,7 +506,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="gpt-4o-mini"
-            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
           />
           {availableModels.length > 0 && (
@@ -529,7 +529,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={current.keyPlaceholder}
-              className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
+              className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
               autoComplete="off"
               spellCheck={false}
             />
@@ -898,7 +898,7 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
             <div className="font-mono text-sm uppercase tracking-wider text-fg-body">
               {current?.name}
             </div>
-            <div className="mx-auto mt-0.5 max-w-xs text-xs text-fg-subtle">
+            <div className="mx-auto mt-0.5 max-w-xs text-xs text-fg-muted">
               {current?.description}
             </div>
           </div>
