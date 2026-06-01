@@ -2,7 +2,11 @@
  * The protoLabs.studio bot mark, from protoContent's brand assets
  * (docs/assets/brand/protolabs-icon{,-outline}.svg). Reproduced verbatim
  * — per brand rules the mark is never deformed; only the icon background
- * may be recolored, and the default is the brand violet #7c3aed.
+ * may be recolored. ORBIS recolors it to its lavender chrome accent
+ * (#9b87f2) so the splash mark matches the app, not the brand default
+ * violet #7c3aed. Interim inline copy — will be replaced by the synced
+ * asset from @protolabsai/design (protolabs-sync-assets) once 0.3.0 ships;
+ * see brand-assets.config.json.
  *
  * - `flat` (default): violet rounded square + white robot — the app/brand
  *   icon at moderate sizes (splash, about).
@@ -18,7 +22,7 @@ export function ProtoLabsIcon({
   variant?: 'flat' | 'outline';
   className?: string;
 }) {
-  const robotStroke = variant === 'flat' ? '#ffffff' : '#7c3aed';
+  const robotStroke = variant === 'flat' ? '#ffffff' : '#9b87f2';
   return (
     <svg
       width={size}
@@ -29,7 +33,7 @@ export function ProtoLabsIcon({
       className={className}
     >
       {variant === 'flat' && (
-        <rect x="16" y="16" width="224" height="224" rx="56" fill="#7c3aed" />
+        <rect x="16" y="16" width="224" height="224" rx="56" fill="#9b87f2" />
       )}
       <g
         transform="translate(224, 32) scale(-8, 8)"
