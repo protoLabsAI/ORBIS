@@ -31,6 +31,26 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
+
+  /* ── ORBIS chrome tokens ──────────────────────────────────────────────
+     Real custom properties (not @theme-inline-only) so plain CSS can read
+     them too. Dark-only constants — no light/dark split needed. The sweep
+     migrates raw zinc-*/amber-*/text-[Npx] onto these. */
+  --base: #0a0a0a;        /* app background */
+  --raised: #18181b;      /* zinc-900 — cards/panels (use bg-raised/40) */
+  --edge: #27272a;        /* zinc-800 — the ubiquitous border */
+  --fg: #f4f4f5;          /* zinc-100 — strong / emphasis */
+  --fg-body: #e4e4e7;     /* zinc-200 — default body + input values */
+  --fg-muted: #a1a1aa;    /* zinc-400 — secondary, helper/hint */
+  --fg-subtle: #71717a;   /* zinc-500 — de-emphasized labels */
+  --fg-faint: #52525b;    /* zinc-600 — faint footnotes */
+  --success: #34d399;     /* emerald-400 */
+  --danger: #f87171;      /* red-400 */
+  /* Accent: amber by default, overwritten at runtime by OrbAccentBridge so
+     the chrome echoes the orb's current palette. */
+  --orb-accent: #f59e0b;  /* amber-500 fallback */
+  --brand: var(--orb-accent, #f59e0b);
+
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -44,8 +64,8 @@
 html, body {
   margin: 0;
   min-height: 100svh;
-  background: #0a0a0a;
-  color: #e5e5e5;
+  background: var(--base);
+  color: var(--fg-body);
   font: 16px/1.4 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   /* iOS: disable pull-to-refresh + rubber-band so the orb doesn't bounce. */
@@ -101,6 +121,30 @@ html, body {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* ── ORBIS chrome tokens → Tailwind utilities ─────────────────────────
+     text-fg / bg-base / border-edge / text-brand / bg-brand/10 / etc.
+     `inline` keeps the var() expression at the use-site, so changing
+     --orb-accent at runtime re-tints every text-brand/bg-brand. */
+  --color-base: var(--base);
+  --color-raised: var(--raised);
+  --color-edge: var(--edge);
+  --color-fg: var(--fg);
+  --color-fg-body: var(--fg-body);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-faint: var(--fg-faint);
+  --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+
+  /* Semantic type scale — replaces literal text-[10/11/13px]. */
+  --text-micro: 0.6875rem;          /* 11px — tiniest chrome */
+  --text-micro--line-height: 1rem;
+  --text-helper: 0.75rem;           /* 12px — hints / descriptions */
+  --text-helper--line-height: 1rem;
+  --text-label: 0.8125rem;          /* 13px — uppercase labels, badges */
+  --text-label--line-height: 1.125rem;
 }
 
 .dark {
@@ -142,7 +186,7 @@ html, body {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-base text-fg-body;
   }
   html {
     @apply font-sans;

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, Repeat, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api, type ReminderItem } from '@/lib/api';
-import { useOrbAccent } from './orbAccent';
 
 /**
  * Reminders bell — top-level alert affordance. Sits in the top-right
@@ -46,7 +45,6 @@ export function RemindersBell() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | 'all' | null>(null);
   const [open, setOpen] = useState(false);
-  const accent = useOrbAccent();
   const rootRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(async () => {
@@ -152,11 +150,7 @@ export function RemindersBell() {
         {hasReminders && (
           <span
             aria-hidden="true"
-            className="absolute top-2 right-2 h-2 w-2 rounded-full ring-1 ring-[#0a0a0a]"
-            style={{
-              backgroundColor: accent,
-              boxShadow: `0 0 6px ${accent}`,
-            }}
+            className="absolute top-2 right-2 h-2 w-2 rounded-full bg-brand ring-1 ring-base shadow-[0_0_6px_var(--brand)]"
           />
         )}
       </button>
