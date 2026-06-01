@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
+import { Field } from '@/components/ui/field';
 import {
   api,
   type Delegate,
@@ -479,24 +480,6 @@ function OpenAIFields({
 // ---------------------------------------------------------------------------
 // Tiny presentation helpers
 // ---------------------------------------------------------------------------
-
-function Field({
-  label, hint, children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className="text-[13px] uppercase tracking-wider text-zinc-300 mb-1 block">
-        {label}
-      </label>
-      {children}
-      {hint && <div className="text-xs text-zinc-400 mt-1">{hint}</div>}
-    </div>
-  );
-}
 
 function TypeBadge({ type }: { type: 'a2a' | 'openai' }) {
   const label = type === 'a2a' ? 'A2A' : 'OpenAI';
