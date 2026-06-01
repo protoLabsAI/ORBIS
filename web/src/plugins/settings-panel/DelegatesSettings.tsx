@@ -101,7 +101,7 @@ export function DelegatesSettings() {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-200 font-mono truncate">
+                    <span className="text-sm text-zinc-100 font-mono truncate">
                       {entry.name}
                     </span>
                     <TypeBadge type={entry.type} />
@@ -114,7 +114,7 @@ export function DelegatesSettings() {
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-zinc-500 mt-0.5 line-clamp-2">
+                  <div className="text-sm text-zinc-400 mt-0.5 line-clamp-2">
                     {entry.description}
                   </div>
                 </div>
@@ -489,11 +489,11 @@ function Field({
 }) {
   return (
     <div>
-      <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+      <label className="text-[13px] uppercase tracking-wider text-zinc-300 mb-1 block">
         {label}
       </label>
       {children}
-      {hint && <div className="text-[11px] text-zinc-600 mt-1">{hint}</div>}
+      {hint && <div className="text-xs text-zinc-400 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -526,8 +526,8 @@ function TypeTile({
           : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
       }
     >
-      <div className="text-xs text-zinc-200">{label}</div>
-      <div className="text-[11px] text-zinc-500 mt-0.5">{blurb}</div>
+      <div className="text-sm text-zinc-100">{label}</div>
+      <div className="text-xs text-zinc-400 mt-0.5">{blurb}</div>
     </button>
   );
 }
