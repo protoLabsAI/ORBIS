@@ -56,7 +56,7 @@ export function StatusPill() {
   return (
     <div
       className={
-        'pointer-events-none fixed left-1/2 -translate-x-1/2 z-10 text-zinc-300 text-sm font-mono tracking-wide text-center px-4 ' +
+        'pointer-events-none fixed left-1/2 -translate-x-1/2 z-10 text-zinc-300 text-[13px] font-mono tracking-wide text-center px-4 ' +
         (text === delegationText ? 'animate-pulse' : '')
       }
       style={{ bottom: 'calc(2rem + env(safe-area-inset-bottom, 0px))' }}
