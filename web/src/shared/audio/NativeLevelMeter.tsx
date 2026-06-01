@@ -36,18 +36,18 @@ export function NativeLevelMeter({ deviceName }: { deviceName: string }) {
               className={`flex-1 rounded-sm transition-all duration-75 ${
                 active
                   ? i / bars < 0.6
-                    ? 'bg-emerald-500'
+                    ? 'bg-success'
                     : i / bars < 0.85
                       ? 'bg-yellow-400'
                       : 'bg-red-500'
-                  : 'bg-zinc-800'
+                  : 'bg-edge'
               }`}
               style={{ height: `${40 + (i / bars) * 60}%` }}
             />
           );
         })}
       </div>
-      <p className="text-xs text-zinc-600 text-center">
+      <p className="text-xs text-fg-faint text-center">
         Speak to test — level meter reflects live input
       </p>
     </div>

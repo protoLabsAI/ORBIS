@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 /**
  * The uppercase micro-label used for section headings and form-field
  * labels across the chrome. One definition so size/tracking/tone are
- * tuned in a single place instead of re-typed as `text-[11px] uppercase
- * tracking-wider text-zinc-5xx` everywhere.
+ * tuned in a single place instead of re-typed as raw uppercase micro-label
+ * classes everywhere.
  *
  * `sectionLabelClass` is exported separately so a real `<label>` element
  * (which needs `htmlFor` association) can share the exact styling without

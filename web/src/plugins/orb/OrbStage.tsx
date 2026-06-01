@@ -44,7 +44,7 @@ export function OrbStage() {
 
   if (!variant) {
     return (
-      <div className="absolute inset-0 grid place-items-center text-zinc-500 text-sm">
+      <div className="absolute inset-0 grid place-items-center text-fg-subtle text-sm">
         No orb variant registered.
       </div>
     );

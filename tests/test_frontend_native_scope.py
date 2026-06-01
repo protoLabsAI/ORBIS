@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -266,6 +267,41 @@ def test_generated_openapi_browser_client_pipeline_stays_absent():
     )
 
     assert [p.relative_to(ROOT).as_posix() for p in forbidden_files if p.exists()] == []
+
+
+# Design-system guard: the chrome is fully tokenized (see the DS true-up,
+# web/src/index.css @theme). Raw zinc-* role colors and literal text-[Npx]
+# sizes drift apart and made every visual tweak a scavenger hunt — they must
+# go through the semantic tokens (text-fg-*/bg-base/border-edge/text-brand,
+# text-micro/helper/label) instead. The orb's own color world (palette data,
+# shaders) is exempt.
+_SPRAWL_PATTERNS = (
+    re.compile(r"text-zinc-\d"),          # role-drift text colors
+    re.compile(r"(?:bg|border)-zinc-\d"),  # role-drift surfaces/edges
+    re.compile(r"text-\[\d+px\]"),        # literal font sizes
+    re.compile(r"-(?:amber|emerald)-\d"),  # un-tokenized accent / success
+)
+# Exempt: the orb's intrinsic color system (presets/shaders/variant chrome).
+_SPRAWL_EXEMPT = ("src/plugins/orb/variants/",)
+
+
+def test_chrome_uses_design_tokens_not_raw_tailwind_palette():
+    """No raw zinc-*/amber-*/emerald-* or literal text-[Npx] in the chrome."""
+    src = WEB / "src"
+    violations: list[str] = []
+    for path in sorted([*src.rglob("*.tsx"), *src.rglob("*.ts")]):
+        rel = path.relative_to(WEB).as_posix()
+        if any(ex in rel for ex in _SPRAWL_EXEMPT):
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if any(p.search(line) for p in _SPRAWL_PATTERNS):
+                violations.append(f"{rel}:{lineno}: {line.strip()}")
+
+    assert not violations, (
+        "Raw Tailwind palette / literal px sizes found in chrome — route these "
+        "through the design tokens in web/src/index.css:\n  "
+        + "\n  ".join(violations)
+    )
 
 
 def test_upstream_orb_variants_stay_ported_to_native_frontend():
