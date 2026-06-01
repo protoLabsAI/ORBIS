@@ -242,7 +242,7 @@ export function OrbSettingsPanel() {
           <button
             type="button"
             onClick={onResetAll}
-            className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-helper uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
           >
             Reset all deltas for this context
           </button>
@@ -311,7 +311,7 @@ function SettingsSection({
         // Delta mode — only numeric sliders today.
         if (f.kind === 'color') {
           return (
-            <div key={f.key} className="text-[11px] text-zinc-600 py-1">
+            <div key={f.key} className="text-helper text-fg-faint py-1">
               {f.label} — color deltas not editable in this context.
             </div>
           );

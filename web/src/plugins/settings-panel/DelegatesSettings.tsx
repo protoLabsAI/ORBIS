@@ -70,7 +70,7 @@ export function DelegatesSettings() {
   if (items === null && !error) {
     return (
       <Panel title="Delegates">
-        <div className="text-xs text-zinc-500">Loading…</div>
+        <div className="text-xs text-fg-subtle">Loading…</div>
       </Panel>
     );
   }
@@ -78,17 +78,17 @@ export function DelegatesSettings() {
   return (
     <Panel title="Delegates">
       <div className="space-y-3">
-        <p className="text-sm text-zinc-400 -mt-1">
+        <p className="text-sm text-fg-muted -mt-1">
           Sub-agents the orb can route to. The LLM picks one based on
           its description when it decides delegation is the right call.
         </p>
 
         {error && (
-          <div className="text-xs text-red-400 break-words">{error}</div>
+          <div className="text-xs text-danger break-words">{error}</div>
         )}
 
         {items && items.length === 0 && !editing && (
-          <div className="text-xs text-zinc-500 italic">
+          <div className="text-xs text-fg-subtle italic">
             No delegates configured yet.
           </div>
         )}
@@ -98,24 +98,24 @@ export function DelegatesSettings() {
             {items.map((entry) => (
               <li
                 key={entry.name}
-                className="flex items-start gap-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-2.5"
+                className="flex items-start gap-3 rounded-md border border-edge bg-raised/40 p-2.5"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-zinc-100 font-mono truncate">
+                    <span className="text-sm text-fg font-mono truncate">
                       {entry.name}
                     </span>
                     <TypeBadge type={entry.type} />
                     {!entry.configured && (
                       <span
-                        className="text-[11px] uppercase tracking-wider text-amber-400"
+                        className="text-helper uppercase tracking-wider text-brand"
                         title="Runtime registry rejected this entry — fix the config or it won't be available to the LLM."
                       >
                         ⚠ unconfigured
                       </span>
                     )}
                   </div>
-                  <div className="text-sm text-zinc-400 mt-0.5 line-clamp-2">
+                  <div className="text-sm text-fg-muted mt-0.5 line-clamp-2">
                     {entry.description}
                   </div>
                 </div>
@@ -123,7 +123,7 @@ export function DelegatesSettings() {
                   <button
                     type="button"
                     onClick={() => setEditing({ kind: 'edit', original: entry })}
-                    className="p-1.5 rounded text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    className="p-1.5 rounded text-fg-muted hover:bg-edge hover:text-fg-body"
                     aria-label={`Edit ${entry.name}`}
                   >
                     <Pencil className="h-3.5 w-3.5" />
@@ -131,7 +131,7 @@ export function DelegatesSettings() {
                   <button
                     type="button"
                     onClick={() => onDelete(entry.name)}
-                    className="p-1.5 rounded text-zinc-400 hover:bg-red-900/40 hover:text-red-300"
+                    className="p-1.5 rounded text-fg-muted hover:bg-red-900/40 hover:text-danger"
                     aria-label={`Delete ${entry.name}`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -253,15 +253,15 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
   }, [draft, isEdit, onSaved, state]);
 
   return (
-    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-3">
+    <div className="rounded-md border border-brand/30 bg-brand/5 p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs uppercase tracking-wider text-amber-300/80">
+        <span className="text-xs uppercase tracking-wider text-brand/80">
           {isEdit ? `Edit ${state.original.name}` : 'New delegate'}
         </span>
         <button
           type="button"
           onClick={onCancel}
-          className="text-xs text-zinc-500 hover:text-zinc-200"
+          className="text-xs text-fg-subtle hover:text-fg-body"
         >
           Cancel
         </button>
@@ -294,7 +294,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
           }
           disabled={isEdit}
           placeholder="ava"
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono disabled:opacity-50"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono disabled:opacity-50"
           spellCheck={false}
         />
       </Field>
@@ -309,7 +309,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
             setDraft({ ...draft, description: e.target.value } as Delegate)
           }
           placeholder="Chief of staff — sitreps, planning, fleet delegation."
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint"
           spellCheck={false}
         />
       </Field>
@@ -326,7 +326,7 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
           value={draft.url}
           onChange={(e) => setDraft({ ...draft, url: e.target.value } as Delegate)}
           placeholder={draft.type === 'a2a' ? 'http://ava:3008/a2a' : 'http://gateway:4000/v1'}
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
           spellCheck={false}
         />
       </Field>
@@ -353,18 +353,18 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
         </Button>
         {test && test !== 'checking' && (
           test.ok ? (
-            <span className="text-xs text-emerald-400">
+            <span className="text-xs text-success">
               ✓ Reachable{test.latency_ms !== undefined && ` (${test.latency_ms} ms)`}
             </span>
           ) : (
-            <span className="text-xs text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-danger truncate max-w-[55%]">
               ✗ {test.error ?? 'unknown error'}
             </span>
           )
         )}
       </div>
 
-      {error && <div className="text-xs text-red-400">{error}</div>}
+      {error && <div className="text-xs text-danger">{error}</div>}
     </div>
   );
 }
@@ -397,7 +397,7 @@ function A2AFields({
               },
             } as Delegate)
           }
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body font-mono"
         >
           <option value="">(none — public endpoint)</option>
           <option value="apiKey">apiKey (X-API-Key header)</option>
@@ -418,7 +418,7 @@ function A2AFields({
               } as Delegate)
             }
             placeholder="AVA_API_KEY"
-            className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
             spellCheck={false}
           />
         </Field>
@@ -440,7 +440,7 @@ function OpenAIFields({
           value={draft.model}
           onChange={(e) => setDraft({ ...draft, model: e.target.value } as Delegate)}
           placeholder="claude-opus-4-6"
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
           spellCheck={false}
         />
       </Field>
@@ -454,7 +454,7 @@ function OpenAIFields({
             setDraft({ ...draft, api_key_env: e.target.value } as Delegate)
           }
           placeholder="LITELLM_MASTER_KEY"
-          className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
           spellCheck={false}
         />
       </Field>
@@ -469,7 +469,7 @@ function OpenAIFields({
           }
           placeholder="Answer thoroughly but concisely (2-4 sentences). Plain text only."
           rows={2}
-          className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 leading-snug"
+          className="w-full rounded-md border border-edge bg-raised/60 px-2.5 py-1.5 text-xs text-fg-body placeholder-fg-faint leading-snug"
           spellCheck={false}
         />
       </Field>
@@ -484,7 +484,7 @@ function OpenAIFields({
 function TypeBadge({ type }: { type: 'a2a' | 'openai' }) {
   const label = type === 'a2a' ? 'A2A' : 'OpenAI';
   return (
-    <span className="text-[11px] uppercase tracking-wider text-zinc-500 border border-zinc-700 rounded px-1.5 py-0.5">
+    <span className="text-helper uppercase tracking-wider text-fg-subtle border border-edge rounded px-1.5 py-0.5">
       {label}
     </span>
   );
@@ -505,12 +505,12 @@ function TypeTile({
       className={
         'p-2 text-left rounded-md border transition-colors ' +
         (active
-          ? 'border-amber-500/60 bg-amber-500/10'
-          : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+          ? 'border-brand/60 bg-brand/10'
+          : 'border-edge bg-raised/40 hover:bg-raised/70')
       }
     >
-      <div className="text-sm text-zinc-100">{label}</div>
-      <div className="text-xs text-zinc-400 mt-0.5">{blurb}</div>
+      <div className="text-sm text-fg">{label}</div>
+      <div className="text-xs text-fg-muted mt-0.5">{blurb}</div>
     </button>
   );
 }

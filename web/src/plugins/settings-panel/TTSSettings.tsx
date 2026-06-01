@@ -263,7 +263,7 @@ export function TTSSettings() {
   if (loading) {
     return (
       <Panel title="Voice">
-        <div className="text-xs text-zinc-500">Loading…</div>
+        <div className="text-xs text-fg-subtle">Loading…</div>
       </Panel>
     );
   }
@@ -271,13 +271,13 @@ export function TTSSettings() {
   return (
     <Panel title="Voice">
       <div className="space-y-3">
-        <p className="text-sm text-zinc-400 -mt-1">
+        <p className="text-sm text-fg-muted -mt-1">
           How the orb speaks. Provider credentials stay env-only —
           see <code>.env.example</code>.
         </p>
 
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
             Backend
           </label>
           <Select value={backend} onValueChange={(v) => setBackend(v as TTSBackend)}>
@@ -291,13 +291,13 @@ export function TTSSettings() {
               <SelectItem value="fish">Fish S2-Pro (sidecar)</SelectItem>
             </SelectContent>
           </Select>
-          <div className="text-[11px] text-zinc-600 mt-1">
+          <div className="text-helper text-fg-faint mt-1">
             {BACKEND_BLURB[backend]}
           </div>
         </div>
 
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
             {backend === 'fish' ? 'Reference ID' : 'Voice'}
           </label>
           {VOICE_UI[backend] === 'select' && voices.length > 0 ? (
@@ -338,7 +338,7 @@ export function TTSSettings() {
                 value={voice}
                 onChange={(e) => setVoice(e.target.value)}
                 placeholder={VOICE_PLACEHOLDER[backend]}
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 spellCheck={false}
               />
               {VOICE_UI[backend] === 'datalist' && voices.length > 0 && (
@@ -352,7 +352,7 @@ export function TTSSettings() {
               voice's local cache state, fallback errors, etc. Kept
               compact so the panel doesn't grow vertically per voice. */}
           {VOICE_UI[backend] === 'select' && voices.length > 0 && download.kind === 'idle' && (
-            <div className="text-[11px] text-zinc-500 mt-1">
+            <div className="text-helper text-fg-subtle mt-1">
               {selectedVoice?.cached === false
                 ? 'Not yet downloaded — first synthesis will fetch it.'
                 : selectedVoice?.cached === true
@@ -361,18 +361,18 @@ export function TTSSettings() {
             </div>
           )}
           {VOICE_UI[backend] === 'datalist' && (
-            <div className="text-[11px] text-zinc-500 mt-1">
+            <div className="text-helper text-fg-subtle mt-1">
               Suggestions are OpenAI's canonical 6 — type any voice your
               gateway accepts (e.g. <code>protolabs/fish</code>).
             </div>
           )}
           {download.kind === 'error' && (
-            <div className="text-[11px] text-red-400 mt-1">
+            <div className="text-helper text-danger mt-1">
               Download failed: {download.message}
             </div>
           )}
           {VOICE_UI[backend] === 'select' && voices.length === 0 && !voicesLoading && (
-            <div className="text-[11px] text-amber-500/80 mt-1">
+            <div className="text-helper text-brand/80 mt-1">
               {backend === 'fish'
                 ? 'No Fish references found — is the sidecar running on the configured URL?'
                 : `No ${backend} voices available.`}
@@ -396,41 +396,41 @@ export function TTSSettings() {
                   className={
                     'p-2 text-left rounded-md border transition-colors ' +
                     (ttsPreset === p.id
-                      ? 'border-amber-500/60 bg-amber-500/5'
-                      : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                      ? 'border-brand/60 bg-brand/5'
+                      : 'border-edge bg-raised/40 hover:bg-raised/70')
                   }
                 >
-                  <div className="text-xs text-zinc-200">{p.label}</div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                  <div className="text-xs text-fg-body">{p.label}</div>
+                  <div className="text-helper text-fg-subtle mt-0.5 line-clamp-2">{p.blurb}</div>
                 </button>
               ))}
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 URL
               </label>
               <input
                 value={ttsUrl}
                 onChange={(e) => { setTtsUrl(e.target.value); setTtsPreset(matchTtsPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 spellCheck={false}
               />
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 Model
               </label>
               <input
                 value={ttsModel}
                 onChange={(e) => setTtsModel(e.target.value)}
                 placeholder="tts-1"
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 spellCheck={false}
               />
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 API key
               </label>
               <input
@@ -442,11 +442,11 @@ export function TTSSettings() {
                     ? 'key is already set — leave blank to keep'
                     : 'sk-...'
                 }
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[11px] text-zinc-600 mt-1">
+              <div className="text-helper text-fg-faint mt-1">
                 {ttsKeyIsSet
                   ? 'A key is saved in config/orbis.yaml. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -460,17 +460,17 @@ export function TTSSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {save.kind === 'saved' && (
-            <span className="text-xs text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-success">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-xs text-red-400 truncate">
+            <span className="text-xs text-danger truncate">
               ✗ {save.message}
             </span>
           )}
         </div>
 
         {loadError && (
-          <div className="text-xs text-red-400">
+          <div className="text-xs text-danger">
             Failed to load current config: {loadError}
           </div>
         )}

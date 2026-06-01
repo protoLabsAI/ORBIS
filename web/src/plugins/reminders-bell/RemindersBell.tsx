@@ -144,7 +144,7 @@ export function RemindersBell() {
           setOpen((o) => !o);
           void reload();
         }}
-        className="relative grid place-items-center h-11 w-11 sm:h-10 sm:w-10 rounded-full bg-transparent text-zinc-500/60 hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-600 transition-colors"
+        className="relative grid place-items-center h-11 w-11 sm:h-10 sm:w-10 rounded-full bg-transparent text-fg-subtle/60 hover:text-fg-body focus-visible:text-fg-body focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-faint transition-colors"
       >
         <Bell className="h-[18px] w-[18px]" strokeWidth={1.5} />
         {hasReminders && (
@@ -159,10 +159,10 @@ export function RemindersBell() {
         <div
           role="dialog"
           aria-label="Reminders"
-          className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-zinc-800 bg-zinc-950/95 p-3 shadow-xl backdrop-blur-sm"
+          className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-edge bg-base/95 p-3 shadow-xl backdrop-blur-sm"
         >
           <div className="mb-2 flex items-center justify-between">
-            <div className="font-mono text-[11px] uppercase tracking-wider text-zinc-400">
+            <div className="font-mono text-helper uppercase tracking-wider text-fg-muted">
               Reminders
             </div>
             {hasReminders && (
@@ -177,22 +177,22 @@ export function RemindersBell() {
             )}
           </div>
 
-          {error && <div className="text-xs text-red-400">{error}</div>}
+          {error && <div className="text-xs text-danger">{error}</div>}
 
           {items === null ? (
-            <div className="text-xs text-zinc-500">Loading…</div>
+            <div className="text-xs text-fg-subtle">Loading…</div>
           ) : items.length === 0 ? (
-            <div className="py-2 text-xs text-zinc-500">No reminders scheduled.</div>
+            <div className="py-2 text-xs text-fg-subtle">No reminders scheduled.</div>
           ) : (
             <div className="max-h-[60vh] space-y-2 overflow-y-auto">
               {items.map((r) => (
                 <div
                   key={r.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-zinc-800 px-2.5 py-2"
+                  className="flex items-center justify-between gap-2 rounded-md border border-edge px-2.5 py-2"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm text-zinc-200">{r.text}</div>
-                    <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                    <div className="truncate text-sm text-fg-body">{r.text}</div>
+                    <div className="flex items-center gap-1.5 text-helper text-fg-subtle">
                       {r.recurring && (
                         <Repeat className="h-3 w-3" strokeWidth={1.5} />
                       )}
@@ -210,7 +210,7 @@ export function RemindersBell() {
                     disabled={busy === r.id}
                     onClick={() => void cancelOne(r.id)}
                   >
-                    <Trash2 className="h-4 w-4 text-zinc-400" strokeWidth={1.5} />
+                    <Trash2 className="h-4 w-4 text-fg-muted" strokeWidth={1.5} />
                   </Button>
                 </div>
               ))}

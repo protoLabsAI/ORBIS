@@ -17,7 +17,7 @@ export function FieldSlider({
       label={field.label}
       htmlFor={id}
       headerAside={
-        <span className="font-mono text-xs text-zinc-500">{formatValue(value, field.step)}</span>
+        <span className="font-mono text-xs text-fg-subtle">{formatValue(value, field.step)}</span>
       }
     >
       <Slider

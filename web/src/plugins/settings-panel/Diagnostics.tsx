@@ -39,7 +39,7 @@ export function Diagnostics() {
   return (
     <Panel title="Diagnostics">
       <div className="space-y-2">
-        <p className="text-sm text-zinc-400 leading-relaxed">
+        <p className="text-sm text-fg-muted leading-relaxed">
           Wipe the WKWebView's storage (cookies, localStorage, IndexedDB, service-worker
           registrations, fetch cache). Use if /api fetches start failing with "Load failed"
           or if the wizard reappears unexpectedly. The page reloads automatically.
@@ -51,7 +51,7 @@ export function Diagnostics() {
         >
           {status === 'clearing' ? 'Clearing…' : 'Clear browsing data'}
         </Button>
-        {error && <p className="text-xs text-red-400">Error: {error}</p>}
+        {error && <p className="text-xs text-danger">Error: {error}</p>}
       </div>
     </Panel>
   );

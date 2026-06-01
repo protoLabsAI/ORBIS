@@ -74,14 +74,14 @@ export function PersonalityPanel() {
   if (error) {
     return (
       <Panel title="Profile">
-        <div className="text-xs text-red-400">{error}</div>
+        <div className="text-xs text-danger">{error}</div>
       </Panel>
     );
   }
   if (!state) {
     return (
       <Panel title="Profile">
-        <div className="text-xs text-zinc-500">Loading…</div>
+        <div className="text-xs text-fg-subtle">Loading…</div>
       </Panel>
     );
   }
@@ -95,18 +95,18 @@ export function PersonalityPanel() {
     <Panel title="Profile">
       <div className="space-y-4">
         <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">Mood</div>
-          <div className="text-sm text-zinc-200 capitalize">
+          <div className="text-xs uppercase tracking-wider text-fg-subtle mb-1">Mood</div>
+          <div className="text-sm text-fg-body capitalize">
             {moodDescriptor(state.mood)}
           </div>
         </div>
 
         <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
+          <div className="text-xs uppercase tracking-wider text-fg-subtle mb-1">
             Temperament
           </div>
           {prominentAxes.length === 0 ? (
-            <div className="text-sm text-zinc-500">Still forming.</div>
+            <div className="text-sm text-fg-subtle">Still forming.</div>
           ) : (
             <ul className="space-y-1.5">
               {prominentAxes.map((a) => {
@@ -117,7 +117,7 @@ export function PersonalityPanel() {
                   magnitude < 0.4 ? 'slightly ' : magnitude < 0.75 ? '' : 'strongly ';
                 return (
                   <li key={a.axis} className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-300">
+                    <span className="text-fg-body">
                       {qualifier}
                       {adj}
                     </span>
@@ -130,27 +130,27 @@ export function PersonalityPanel() {
         </div>
 
         <div>
-          <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
+          <div className="text-xs uppercase tracking-wider text-fg-subtle mb-1">
             Sessions
           </div>
-          <div className="text-sm text-zinc-300">
+          <div className="text-sm text-fg-body">
             {state.sessions.count} total · last {formatDaysAgo(state.sessions.last_ended_at)}
           </div>
         </div>
 
         {state.recent_events.length > 0 && (
           <div>
-            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
+            <div className="text-xs uppercase tracking-wider text-fg-subtle mb-1">
               Recent drift
             </div>
-            <ul className="space-y-1 text-xs text-zinc-400 max-h-32 overflow-y-auto">
+            <ul className="space-y-1 text-xs text-fg-muted max-h-32 overflow-y-auto">
               {state.recent_events.slice(0, 8).map((e, i) => (
                 <li key={i} className="flex items-center justify-between">
                   <span>
                     {e.axis} {e.delta >= 0 ? '+' : ''}
                     {e.delta.toFixed(2)}
                   </span>
-                  <span className="text-zinc-600 truncate ml-2 max-w-[60%]">
+                  <span className="text-fg-faint truncate ml-2 max-w-[60%]">
                     {e.reason || '—'}
                   </span>
                 </li>
@@ -168,10 +168,10 @@ function AxisBar({ value }: { value: number }) {
   const magnitude = Math.min(1, Math.abs(value));
   const left = value < 0;
   return (
-    <div className="relative w-24 h-1.5 rounded-full bg-zinc-800/80">
-      <div className="absolute top-0 bottom-0 left-1/2 w-px bg-zinc-700" />
+    <div className="relative w-24 h-1.5 rounded-full bg-edge/80">
+      <div className="absolute top-0 bottom-0 left-1/2 w-px bg-edge" />
       <div
-        className={`absolute top-0 bottom-0 rounded-full ${left ? 'bg-sky-500/70' : 'bg-amber-500/70'}`}
+        className={`absolute top-0 bottom-0 rounded-full ${left ? 'bg-sky-500/70' : 'bg-brand/70'}`}
         style={{
           left: left ? `${50 - magnitude * 50}%` : '50%',
           right: left ? '50%' : `${50 - magnitude * 50}%`,

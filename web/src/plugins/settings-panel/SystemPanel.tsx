@@ -21,7 +21,7 @@ export function SystemPanel() {
         <Diagnostics />
         <Panel title="Developer">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs text-zinc-300">Developer mode</div>
+            <div className="text-xs text-fg-body">Developer mode</div>
             <Button
               size="sm"
               variant={devMode ? 'default' : 'secondary'}
