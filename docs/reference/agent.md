@@ -1,10 +1,92 @@
 # Agent & LLM
 
-The brain: the language model that routes and replies, the tools it can call,
-and the delegates it can hand work to.
+The brain: the language model that routes and replies, the sub-agents it can
+delegate to, and the actions it can take. Set these in **Settings → Agent**
+(and in [`orbis.yaml`](./config) for headless setups).
 
-::: tip Filling out
-This reference is being written domain by domain (LLM config, tools,
-delegation, orchestration). See [How ORBIS works](/explanation/how-orbis-works)
-for the model in the meantime.
-:::
+For the *why*, see [The agent model](/explanation/the-agent-model).
+
+## The LLM
+
+One small, fast model powers the orb's routing and personality — it decides
+each turn and writes the replies. Pick a **provider** in **Settings → Agent →
+LLM**.
+
+| Provider | Local? | Notes |
+| --- | --- | --- |
+| **Built-in (MLX)** | ✅ | Apple-Silicon native (Qwen 3.5 4B) in-process. Best local quality on M-series; ~2.5 GB first download. |
+| **Ollama** | ✅ | A separate local process; share a model with other tools. |
+| **LM Studio** | ✅ | Local; start the LM Studio server first. |
+| **vLLM** | ✅ | Your own local vLLM server. |
+| **protoLabs** | ☁️ | The protoLabs gateway — fast, voice-tuned routing. |
+| **OpenAI** | ☁️ | `gpt-4o-mini`, a few cents/hour. |
+| **Anthropic** | ☁️ | Claude Haiku — great personality. |
+| **Groq / DeepSeek** | ☁️ | Fast / cheap alternatives. |
+
+**Keys** (`llm:` in `orbis.yaml`; overrides the `LLM_*` env vars):
+
+| Key | Meaning |
+| --- | --- |
+| `url` | OpenAI-compatible base URL (or `mlx://…` / `ollama` local). |
+| `model` | Model id. |
+| `api_key` / `api_key_env` | The key directly, or the name of an env var holding it. |
+
+### Advanced LLM options
+
+All optional; leave unset for simple single-model behaviour.
+
+- **Failover backup** (`fallback:`) — if the primary LLM errors (e.g. the cloud
+  gateway drops), ORBIS switches to a backup for the rest of the session so the
+  orb keeps talking. The natural backup is a **local** model. Same fields as the
+  primary.
+- **Two-model routing** (`router_model` / `content_model`) — use a stronger
+  model for the tool-decision turn and a faster one for narrating a tool/delegate
+  result. Both served at the same `url`. OpenAI-compatible gateways only.
+- **Micro-task model** (`micro_model`) — the cheap tier for throwaway generation
+  (fillers, acknowledgements, proactive phrasing). Defaults to `model`.
+
+## Delegates
+
+**Delegates** are sub-agents the orb can hand work to. The LLM picks one by its
+**description** when it decides delegation is the right call. Manage them in
+**Settings → Agent → Delegates**.
+
+Two types:
+
+| Type | What it is |
+| --- | --- |
+| **A2A agent** | A JSON-RPC fleet peer (the Agent2Agent protocol) — e.g. another studio agent. |
+| **OpenAI-compat** | Any `/v1/chat/completions` endpoint treated as a sub-agent. |
+
+**Fields:**
+
+| Field | Applies | Meaning |
+| --- | --- | --- |
+| **Name** | both | Used in `delegate_to(target=…)`. Lowercase, no spaces. |
+| **Description** | both | The LLM reads this to choose between delegates — be specific. |
+| **URL** | both | A2A: the JSON-RPC endpoint (often `/a2a`). OpenAI: the base URL ending in `/v1`. |
+| **Auth scheme** | A2A | `apiKey` (X-API-Key) or `bearer`, or none for a public endpoint. |
+| **Credentials env var** | A2A | Name of the env var holding the secret (set it in `.env`). |
+| **Model** | OpenAI | Provider model id. |
+| **API key env var** | OpenAI | Optional; for endpoints that need auth. |
+
+No secrets cross the wire from the UI — the schema only references env-var
+**names**; the values come from the process environment.
+
+See [Add a delegate](/how-to/add-a-delegate) for the steps.
+
+## What the agent can do
+
+Beyond replying, the orb can take actions by voice:
+
+- **Reminders** — set, list, and cancel time-based reminders (one-off or
+  recurring). They also appear in the top-right **reminders bell**.
+- **Delegate** — hand a task to one configured delegate and speak the result.
+- **Orchestrate** — run a bounded multi-step task across your delegates in the
+  background, then report back.
+
+## See also
+
+- [The agent model](/explanation/the-agent-model)
+- [Add a delegate](/how-to/add-a-delegate)
+- [Config reference](./config)
