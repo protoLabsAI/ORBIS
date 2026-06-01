@@ -658,8 +658,7 @@ pub fn run() {
                 Ok(()) => {
                     #[cfg(target_os = "macos")]
                     {
-                        let _ = app
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                     }
                 }
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
