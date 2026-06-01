@@ -41,6 +41,15 @@ export interface GalaxyPreset {
 }
 
 export const GALAXY_PRESETS: Record<string, GalaxyPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#312e81', density: 1.5,
+    atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, speed: 0.5,
+    chromaticAberration: 0.014, asymmetry: 0.40, orbRotation: 0.50, plasmaScale: 0.2,
+    plasmaBrightness: 1.31, voidThreshold: 0.09, colorDeep: '#1e1b4b', colorMid: '#6366f1',
+    colorBright: '#a78bfa', voiceMix: 0.25, shellColor: '#818cf8', shellOpacity: 0.41,
+    particleCount: 600, particleColor: '#e0e7ff', particleRadius: 0.95, dpr: 0.7,
+  },
   // Default — cyan/teal galaxy with bright cores.
   Andromeda: {
     primaryEnergy: '#22d3ee', secondaryEnergy: '#1e1b4b',

@@ -34,6 +34,14 @@ export interface SpectrumPreset {
 }
 
 export const SPECTRUM_PRESETS: Record<string, SpectrumPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', density: 1.6,
+    atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, speed: 0.5,
+    chromaticAberration: 0.018, asymmetry: 0.45, orbRotation: 0.50, fractalScale: 1.0,
+    fadeOuter: 2.60, fadeInner: 2.45, smoothing: 1.55, glow: 1.0,
+    colorPhaseR: 1.0, colorPhaseG: 4.2, colorPhaseB: 1.4, colorPhaseA: 0.2, dpr: 0.7,
+  },
   // Default — full rainbow shimmer through the volume.
   Rainbow: {
     primaryEnergy: '#a78bfa', secondaryEnergy: '#f472b6',

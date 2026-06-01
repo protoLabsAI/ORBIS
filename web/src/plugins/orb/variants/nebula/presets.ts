@@ -19,6 +19,13 @@ export interface NebulaPreset {
 }
 
 export const NEBULA_PRESETS: Record<string, NebulaPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', speed: 0.5, density: 1.3, dpr: 0.55,
+    atmosphereGlow: 0.18, atmosphereLevel: 0.9, atmosphereScale: 1.04, orbRotation: 0.45,
+    asymmetry: 0.4, chromaticAberration: 0.018, cloudScale: 1.8, cloudiness: 0.95,
+    drift: 0.5, softness: 0.6, internalAnim: 0.4,
+  },
   Andromeda: {
     primaryEnergy: '#c084fc', secondaryEnergy: '#38bdf8',
     speed: 0.5, density: 1.3, dpr: 0.55,
