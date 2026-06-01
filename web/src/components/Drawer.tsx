@@ -50,7 +50,7 @@ export function Drawer() {
         <button
           type="button"
           aria-label="Open settings drawer"
-          className="fixed z-20 grid place-items-center h-11 w-11 sm:h-10 sm:w-10 rounded-full bg-transparent text-zinc-500/60 hover:text-zinc-300 focus-visible:text-zinc-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-600 transition-colors"
+          className="fixed z-20 grid place-items-center h-11 w-11 sm:h-10 sm:w-10 rounded-full bg-transparent text-fg-subtle/60 hover:text-fg-body focus-visible:text-fg-body focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg-faint transition-colors"
           style={{
             top: 'calc(0.75rem + env(safe-area-inset-top, 0px))',
             right: 'calc(0.75rem + env(safe-area-inset-right, 0px))',
@@ -77,7 +77,7 @@ export function Drawer() {
             there's vertical budget for it. Mobile hides it to give the
             preview the full top-half of the viewport. */}
         <SheetHeader className={cn('pb-0', isMobile && 'sr-only')}>
-          <SheetTitle className="font-mono text-sm tracking-wider uppercase text-zinc-400">
+          <SheetTitle className="font-mono text-sm tracking-wider uppercase text-fg-muted">
             ORBIS
           </SheetTitle>
           <SheetDescription className="sr-only">
@@ -88,7 +88,7 @@ export function Drawer() {
         {/* Mobile: live orb preview in the top half. On desktop the main
             orb is visible behind the drawer, no preview needed. */}
         {isMobile && open && (
-          <div className="relative shrink-0 h-[50dvh] bg-[#0a0a0a] border-b border-zinc-800">
+          <div className="relative shrink-0 h-[50dvh] bg-base border-b border-edge">
             <OrbPreview />
           </div>
         )}

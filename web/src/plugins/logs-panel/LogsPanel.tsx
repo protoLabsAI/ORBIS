@@ -4,15 +4,15 @@ import { logBus, useLogBus, type LogEvent, type LogSource } from '@/shared/logBu
 
 const SOURCE_COLOR: Record<LogSource, string> = {
   api: 'text-sky-400/80',
-  sse: 'text-emerald-400/80',
+  sse: 'text-success/80',
   voice: 'text-violet-400/80',
 };
 
 const LEVEL_COLOR = {
-  debug: 'text-zinc-600',
-  info: 'text-zinc-300',
-  warn: 'text-amber-400',
-  error: 'text-red-400',
+  debug: 'text-fg-faint',
+  info: 'text-fg-body',
+  warn: 'text-brand',
+  error: 'text-danger',
 };
 
 const fmtTs = (ms: number): string => {
@@ -31,7 +31,7 @@ export function LogsPanel() {
   return (
     <Panel title="Events">
       <div className="-mt-1 mb-2 flex items-center justify-between">
-        <span className="font-mono text-[10px] text-zinc-600">
+        <span className="font-mono text-helper text-fg-faint">
           {events.length} / 500 entries
         </span>
         <Button
@@ -43,9 +43,9 @@ export function LogsPanel() {
           Clear
         </Button>
       </div>
-      <div className="max-h-[60vh] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 font-mono text-[10px]">
+      <div className="max-h-[60vh] overflow-y-auto rounded-md border border-edge bg-base font-mono text-helper">
         {events.length === 0 ? (
-          <div className="p-3 text-zinc-600">
+          <div className="p-3 text-fg-faint">
             No events yet. Start a native voice session to see SSE and voice
             state flow through here.
           </div>
@@ -53,9 +53,9 @@ export function LogsPanel() {
           events.slice().reverse().map((event: LogEvent, i: number) => (
             <div
               key={`${event.ts}-${i}`}
-              className="flex gap-2 border-b border-zinc-900/60 px-2 py-1 last:border-b-0"
+              className="flex gap-2 border-b border-raised/60 px-2 py-1 last:border-b-0"
             >
-              <span className="shrink-0 text-zinc-600">{fmtTs(event.ts)}</span>
+              <span className="shrink-0 text-fg-faint">{fmtTs(event.ts)}</span>
               <span className={`w-12 shrink-0 ${SOURCE_COLOR[event.source]}`}>
                 {event.source}
               </span>

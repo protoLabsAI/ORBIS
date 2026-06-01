@@ -77,7 +77,7 @@ export function AuthoringContextPicker({
         <div>
           <div
             id="authoring-section-base"
-            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+            className="text-helper uppercase tracking-wider text-fg-subtle mb-1.5"
           >
             Base + live values
           </div>
@@ -94,7 +94,7 @@ export function AuthoringContextPicker({
         <div>
           <div
             id="authoring-section-state"
-            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+            className="text-helper uppercase tracking-wider text-fg-subtle mb-1.5"
           >
             State overrides
           </div>
@@ -121,7 +121,7 @@ export function AuthoringContextPicker({
         <div>
           <div
             id="authoring-section-mood"
-            className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1.5"
+            className="text-helper uppercase tracking-wider text-fg-subtle mb-1.5"
           >
             Mood overrides
           </div>
@@ -144,9 +144,9 @@ export function AuthoringContextPicker({
 
         {!isBase(ctx) && (
           <div className="flex items-center justify-between pt-1">
-            <div className="text-[11px] text-zinc-500">
+            <div className="text-helper text-fg-subtle">
               Simulate{' '}
-              <span className="text-zinc-400">{contextLabel(ctx)}</span>
+              <span className="text-fg-muted">{contextLabel(ctx)}</span>
               {' '}so you can see the delta without waiting.
             </div>
             <Button
@@ -200,8 +200,8 @@ function Chip({
       className={
         'px-2.5 py-1 rounded-md text-xs transition-colors border ' +
         (active
-          ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
-          : 'bg-zinc-900/40 border-zinc-800 text-zinc-300 hover:bg-zinc-900/70')
+          ? 'bg-brand/15 border-brand/50 text-brand'
+          : 'bg-raised/40 border-edge text-fg-body hover:bg-raised/70')
       }
     >
       {children}

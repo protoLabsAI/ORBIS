@@ -135,10 +135,10 @@ export function MicSettings() {
     <Panel title="Microphone">
       <div className="space-y-3">
         {!authorized && (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 space-y-3">
+          <div className="rounded-lg border border-edge bg-base/60 p-3 space-y-3">
             <div>
-              <div className="text-sm text-zinc-200">Microphone access</div>
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className="text-sm text-fg-body">Microphone access</div>
+              <div className="text-xs text-fg-subtle mt-1">
                 Current status: {permission.replace('_', ' ')}
               </div>
             </div>
@@ -163,21 +163,21 @@ export function MicSettings() {
         )}
 
         {authorized && !selectableInput && (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-sm text-zinc-400">
+          <div className="rounded-lg border border-edge bg-base/60 p-3 text-sm text-fg-muted">
             Input source: macOS system input
           </div>
         )}
 
         {authorized && selectableInput && devices.length > 0 && (
           <div className="space-y-1">
-            <p className="text-xs uppercase tracking-wider text-zinc-500">
+            <p className="text-xs uppercase tracking-wider text-fg-subtle">
               Input device
             </p>
             <Select value={device} onValueChange={onChange}>
-              <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+              <SelectTrigger className="w-full bg-raised border-edge">
                 <SelectValue placeholder="System default" />
               </SelectTrigger>
-              <SelectContent className="bg-zinc-900 border-zinc-800">
+              <SelectContent className="bg-raised border-edge">
                 {devices.map((name) => (
                   <SelectItem key={name} value={name}>
                     {name}
@@ -189,7 +189,7 @@ export function MicSettings() {
         )}
 
         {authorized && selectableInput && devices.length === 0 && (
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-sm text-zinc-400">
+          <div className="rounded-lg border border-edge bg-base/60 p-3 text-sm text-fg-muted">
             No microphone input device was found.
           </div>
         )}
@@ -197,12 +197,12 @@ export function MicSettings() {
         {authorized && <NativeLevelMeter deviceName={device || audioInputMode} />}
 
         {error && (
-          <p className="text-xs text-red-300">
+          <p className="text-xs text-danger">
             {error}
           </p>
         )}
 
-        <p className="text-xs text-zinc-600 leading-relaxed">
+        <p className="text-xs text-fg-faint leading-relaxed">
           {selectableInput
             ? 'Device selection is passed to the native audio engine. Changes take effect on the next voice session.'
             : 'Voice processing follows the current macOS system input.'}

@@ -183,7 +183,7 @@ export function LLMSettings() {
   if (loading) {
     return (
       <Panel title="LLM">
-        <div className="text-xs text-zinc-500">Loading…</div>
+        <div className="text-xs text-fg-subtle">Loading…</div>
       </Panel>
     );
   }
@@ -191,7 +191,7 @@ export function LLMSettings() {
   return (
     <Panel title="LLM">
       <div className="space-y-4">
-        <p className="text-sm text-zinc-400 -mt-1">
+        <p className="text-sm text-fg-muted -mt-1">
           Router brain. Pick a preset or type your own URL.
         </p>
 
@@ -204,12 +204,12 @@ export function LLMSettings() {
               className={
                 'p-2 text-left rounded-md border transition-colors ' +
                 (provider === p.id
-                  ? 'border-amber-500/60 bg-amber-500/5'
-                  : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                  ? 'border-brand/60 bg-brand/5'
+                  : 'border-edge bg-raised/40 hover:bg-raised/70')
               }
             >
-              <div className="text-xs text-zinc-200">{p.label}</div>
-              <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">
+              <div className="text-xs text-fg-body">{p.label}</div>
+              <div className="text-helper text-fg-subtle mt-0.5 line-clamp-2">
                 {p.blurb}
               </div>
             </button>
@@ -220,7 +220,7 @@ export function LLMSettings() {
           <button
             type="button"
             onClick={() => setShowAllProviders(true)}
-            className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-xs uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
           >
             Show {hiddenCount} more providers
           </button>
@@ -229,7 +229,7 @@ export function LLMSettings() {
           <button
             type="button"
             onClick={() => setShowAllProviders(false)}
-            className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-xs uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
           >
             Show fewer
           </button>
@@ -237,27 +237,27 @@ export function LLMSettings() {
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+            <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
               URL
             </label>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://api.openai.com/v1"
-              className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
               spellCheck={false}
             />
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-xs uppercase tracking-wider text-zinc-500">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle">
                 Model
               </label>
               <button
                 type="button"
                 onClick={onFetchModels}
-                className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+                className="text-helper uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
               >
                 Fetch list
               </button>
@@ -267,7 +267,7 @@ export function LLMSettings() {
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder="gpt-4o-mini"
-              className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
               spellCheck={false}
             />
             {availableModels.length > 0 && (
@@ -279,7 +279,7 @@ export function LLMSettings() {
 
           {current.needsKey && (
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 API key
               </label>
               <input
@@ -287,11 +287,11 @@ export function LLMSettings() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={keyPlaceholder}
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[11px] text-zinc-600 mt-1">
+              <div className="text-helper text-fg-faint mt-1">
                 {keyIsSet
                   ? 'A key is saved on your machine. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -317,26 +317,26 @@ export function LLMSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {test.kind === 'ok' && (
-            <span className="text-xs text-emerald-400">
+            <span className="text-xs text-success">
               ✓ Connected ({test.latency} ms)
             </span>
           )}
           {test.kind === 'error' && (
-            <span className="text-xs text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-danger truncate max-w-[55%]">
               ✗ {test.message}
             </span>
           )}
           {save.kind === 'saved' && (
-            <span className="text-xs text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-success">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-xs text-red-400 truncate max-w-[55%]">
+            <span className="text-xs text-danger truncate max-w-[55%]">
               ✗ {save.message}
             </span>
           )}
         </div>
 
-        {error && <div className="text-xs text-red-400">{error}</div>}
+        {error && <div className="text-xs text-danger">{error}</div>}
       </div>
     </Panel>
   );

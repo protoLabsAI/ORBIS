@@ -145,7 +145,7 @@ export function STTSettings() {
   if (loading) {
     return (
       <Panel title="STT">
-        <div className="text-xs text-zinc-500">Loading…</div>
+        <div className="text-xs text-fg-subtle">Loading…</div>
       </Panel>
     );
   }
@@ -153,13 +153,13 @@ export function STTSettings() {
   return (
     <Panel title="STT">
       <div className="space-y-3">
-        <p className="text-sm text-zinc-400 -mt-1">
+        <p className="text-sm text-fg-muted -mt-1">
           Speech to text. The backend below decides whether the loop is
           segmented (Whisper / OpenAI) or streaming (future providers).
         </p>
 
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
             Backend
           </label>
           <Select value={backend} onValueChange={(v) => setBackend(v as STTBackend)}>
@@ -172,24 +172,24 @@ export function STTSettings() {
               <SelectItem value="openai">OpenAI-compatible</SelectItem>
             </SelectContent>
           </Select>
-          <div className="text-[11px] text-zinc-600 mt-1">
+          <div className="text-helper text-fg-faint mt-1">
             {BACKEND_BLURB[backend]}
           </div>
         </div>
 
         {backend === 'local' && (
           <div>
-            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+            <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
               Whisper model (HF id)
             </label>
             <input
               value={whisperModel}
               onChange={(e) => setWhisperModel(e.target.value)}
               placeholder="openai/whisper-large-v3-turbo"
-              className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+              className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
               spellCheck={false}
             />
-            <div className="text-[11px] text-amber-500/70 mt-1">
+            <div className="text-helper text-brand/70 mt-1">
               Model loads at server boot — restart the sidecar after
               changing.
             </div>
@@ -207,41 +207,41 @@ export function STTSettings() {
                   className={
                     'p-2 text-left rounded-md border transition-colors ' +
                     (sttPreset === p.id
-                      ? 'border-amber-500/60 bg-amber-500/5'
-                      : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                      ? 'border-brand/60 bg-brand/5'
+                      : 'border-edge bg-raised/40 hover:bg-raised/70')
                   }
                 >
-                  <div className="text-xs text-zinc-200">{p.label}</div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{p.blurb}</div>
+                  <div className="text-xs text-fg-body">{p.label}</div>
+                  <div className="text-helper text-fg-subtle mt-0.5 line-clamp-2">{p.blurb}</div>
                 </button>
               ))}
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 URL
               </label>
               <input
                 value={sttUrl}
                 onChange={(e) => { setSttUrl(e.target.value); setSttPreset(matchSttPreset(e.target.value)); }}
                 placeholder="https://api.openai.com/v1"
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 spellCheck={false}
               />
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 Model
               </label>
               <input
                 value={sttModel}
                 onChange={(e) => setSttModel(e.target.value)}
                 placeholder="whisper-1"
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 spellCheck={false}
               />
             </div>
             <div>
-              <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1 block">
+              <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
                 API key
               </label>
               <input
@@ -253,11 +253,11 @@ export function STTSettings() {
                     ? 'key is already set — leave blank to keep'
                     : 'sk-...'
                 }
-                className="w-full h-9 rounded-md border border-zinc-800 bg-zinc-900/60 px-2.5 text-xs text-zinc-200 placeholder-zinc-600 font-mono"
+                className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-faint font-mono"
                 autoComplete="off"
                 spellCheck={false}
               />
-              <div className="text-[11px] text-zinc-600 mt-1">
+              <div className="text-helper text-fg-faint mt-1">
                 {keyIsSet
                   ? 'A key is saved in config/orbis.yaml. Leave blank to keep it.'
                   : 'Stored in config/orbis.yaml on your machine.'}
@@ -271,17 +271,17 @@ export function STTSettings() {
             {save.kind === 'saving' ? 'Saving…' : 'Save'}
           </Button>
           {save.kind === 'saved' && (
-            <span className="text-xs text-emerald-400">✓ Saved</span>
+            <span className="text-xs text-success">✓ Saved</span>
           )}
           {save.kind === 'error' && (
-            <span className="text-xs text-red-400 truncate">
+            <span className="text-xs text-danger truncate">
               ✗ {save.message}
             </span>
           )}
         </div>
 
         {loadError && (
-          <div className="text-xs text-red-400">
+          <div className="text-xs text-danger">
             Failed to load current config: {loadError}
           </div>
         )}

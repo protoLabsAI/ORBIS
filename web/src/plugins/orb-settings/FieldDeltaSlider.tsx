@@ -43,11 +43,11 @@ export function FieldDeltaSlider({
       htmlFor={id}
       headerAside={
         <div className="flex items-center gap-2 font-mono text-xs">
-          <span className="text-zinc-500">{formatValue(baseValue, field.step)}</span>
-          <span className="text-zinc-600">→</span>
+          <span className="text-fg-subtle">{formatValue(baseValue, field.step)}</span>
+          <span className="text-fg-faint">→</span>
           <span
             className={
-              outOfRange ? 'text-red-400' : hasDelta ? 'text-amber-300' : 'text-zinc-500'
+              outOfRange ? 'text-danger' : hasDelta ? 'text-brand' : 'text-fg-subtle'
             }
             title={outOfRange ? `outside authored range [${field.min}, ${field.max}]` : undefined}
           >
@@ -61,8 +61,8 @@ export function FieldDeltaSlider({
             className={
               'h-4 w-4 grid place-items-center rounded-sm transition-colors ' +
               (hasDelta
-                ? 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                : 'text-zinc-700 cursor-not-allowed')
+                ? 'text-fg-muted hover:text-fg-body hover:bg-edge'
+                : 'text-edge cursor-not-allowed')
             }
           >
             <X className="h-3 w-3" strokeWidth={2} />
