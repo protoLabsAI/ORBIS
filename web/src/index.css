@@ -35,7 +35,7 @@
   /* ── ORBIS chrome tokens ──────────────────────────────────────────────
      Real custom properties (not @theme-inline-only) so plain CSS can read
      them too. Dark-only constants — no light/dark split needed. The sweep
-     migrates raw zinc-*/amber-*/text-[Npx] onto these. */
+     migrates raw zinc, amber, and px utilities onto these. */
   --base: #0a0a0a;        /* app background */
   --raised: #18181b;      /* zinc-900 — cards/panels (use bg-raised/40) */
   --edge: #27272a;        /* zinc-800 — the ubiquitous border */
