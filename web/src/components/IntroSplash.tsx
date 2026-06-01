@@ -41,11 +41,12 @@ export function IntroSplash() {
       aria-label="protoLabs.studio"
     >
       <div className="pl-rise flex flex-col items-center gap-6">
-        <div
-          className="rounded-[28px]"
-          style={{ boxShadow: '0 0 80px rgba(167, 139, 250, 0.18)' }}
-        >
-          <ProtoLabsIcon size={96} />
+        {/* Outline mark per brand rules (protoContent visual-identity: the
+            in-app / favicon treatment is the face-only outline, paired with
+            the wordmark as text). Subtle glow on the strokes, not a filled
+            square. */}
+        <div style={{ filter: 'drop-shadow(0 0 14px rgba(167, 139, 250, 0.35))' }}>
+          <ProtoLabsIcon variant="outline" size={88} />
         </div>
         <div
           className="font-sans text-3xl font-semibold tracking-tight bg-clip-text text-transparent"
