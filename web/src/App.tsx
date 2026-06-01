@@ -1,5 +1,6 @@
 import { Drawer } from '@/components/Drawer';
 import { BootStatus } from '@/components/BootStatus';
+import { IntroSplash } from '@/components/IntroSplash';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -27,13 +28,14 @@ function App() {
       <VoiceStateBridge />
       <OrbAccentBridge />
       <LogsCollector />
-      <div className="fixed inset-0 overflow-hidden bg-[#0a0a0a]">
+      <div className="fixed inset-0 overflow-hidden bg-surface">
         <Slot name="stage" />
         <Slot name="overlay-top" />
         <Slot name="overlay-bottom" />
         <Drawer />
       </div>
       <BootStatus />
+      <IntroSplash />
     </>
   );
 }
