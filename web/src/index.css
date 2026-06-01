@@ -42,8 +42,10 @@
   --fg: #f4f4f5;          /* zinc-100 — strong / emphasis */
   --fg-body: #e4e4e7;     /* zinc-200 — default body + input values */
   --fg-muted: #a1a1aa;    /* zinc-400 — secondary, helper/hint */
-  --fg-subtle: #71717a;   /* zinc-500 — de-emphasized labels */
-  --fg-faint: #52525b;    /* zinc-600 — faint footnotes */
+  --fg-subtle: #8a8a93;   /* de-emphasized labels — lifted from zinc-500 for
+                             legible contrast on the near-black ground */
+  --fg-faint: #767680;    /* faintest text — lifted from zinc-600 (zinc-600
+                             failed contrast on #0a0a0a) */
   --success: #34d399;     /* emerald-400 */
   --danger: #f87171;      /* red-400 */
   /* Accent: protoLabs.studio brand lavender — the light end of the brand
