@@ -93,11 +93,17 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
       <div className="w-full max-w-xl">
         <StepIndicator current={step} />
         <div className="mt-8">
-          {step === 'welcome' && <WelcomeStep onNext={() => setStep('names')} />}
+          {step === 'welcome' && <WelcomeStep onNext={() => setStep('mic')} />}
+          {step === 'mic' && (
+            <MicStep
+              onNext={() => setStep('names')}
+              onBack={() => setStep('welcome')}
+            />
+          )}
           {step === 'names' && (
             <NamesStep
               onNext={() => setStep('llm')}
-              onBack={() => setStep('welcome')}
+              onBack={() => setStep('mic')}
             />
           )}
           {step === 'llm' && (
@@ -108,14 +114,8 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
           )}
           {step === 'pick' && (
             <PickStep
-              onNext={() => setStep('mic')}
-              onBack={() => setStep('llm')}
-            />
-          )}
-          {step === 'mic' && (
-            <MicStep
               onNext={() => setStep('done')}
-              onBack={() => setStep('pick')}
+              onBack={() => setStep('llm')}
             />
           )}
           {step === 'done' && (
@@ -130,7 +130,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 // ── Indicator ──────────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: Step }) {
-  const order: Step[] = ['welcome', 'names', 'llm', 'pick', 'mic', 'done'];
+  const order: Step[] = ['welcome', 'mic', 'names', 'llm', 'pick', 'done'];
   const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
@@ -159,7 +159,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
         you've configured.
       </p>
       <p className="text-xs text-fg-muted max-w-sm mx-auto">
-        Four quick steps: access, pick an orb, and meet it.
+        A few quick steps: mic access, the basics, then pick your orb.
       </p>
       <Button onClick={onNext}>Let's go</Button>
     </div>
