@@ -22,7 +22,7 @@ the UI references the env-var *name*, never the value.
 1. Open **Settings → Agent → Delegates** and click **Add delegate**.
 2. Pick the type — **A2A agent** or **OpenAI-compat**.
 3. Fill in the shared fields:
-   - **Name** — lowercase, no spaces (e.g. `ava`). This is what the model uses
+   - **Name** — lowercase, no spaces (e.g. `helm`). This is what the model uses
      in `delegate_to(target=…)`.
    - **Description** — *be specific*. The model reads this to decide *when* to
      pick this delegate over another. "Chief of staff — sitreps, planning, fleet
@@ -40,8 +40,8 @@ the UI references the env-var *name*, never the value.
 
 ## Use it
 
-Just talk: ask the orb something that fits the delegate's description — *"ask
-Ava for the fleet status."* The orb acknowledges, hands off, and speaks the
+Just talk: ask the orb something that fits the delegate's description — e.g.
+*"ask helm for the project status."* The orb acknowledges, hands off, speaks the
 result. For multi-step asks, it can [orchestrate](/explanation/the-agent-model#sync-vs-background)
 across delegates in the background.
 
