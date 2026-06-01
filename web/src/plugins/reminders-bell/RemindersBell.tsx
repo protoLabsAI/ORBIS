@@ -150,7 +150,7 @@ export function RemindersBell() {
         {hasReminders && (
           <span
             aria-hidden="true"
-            className="absolute top-2 right-2 h-2 w-2 rounded-full bg-brand ring-1 ring-base shadow-[0_0_6px_var(--brand)]"
+            className="absolute top-2 right-2 h-2 w-2 rounded-full bg-orb ring-1 ring-base shadow-[0_0_6px_var(--orb)]"
           />
         )}
       </button>

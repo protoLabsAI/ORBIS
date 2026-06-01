@@ -1183,11 +1183,11 @@ function HatchAnimation({ onDone }: { onDone: () => void }) {
           animation: orbis-hatch-fade 3.6s ease-out forwards;
         }
         .orbis-hatch-seed {
-          background: radial-gradient(circle, rgba(245,158,11,0.95) 0%, rgba(245,158,11,0.2) 55%, transparent 75%);
+          background: radial-gradient(circle, rgba(167,139,250,0.95) 0%, rgba(167,139,250,0.2) 55%, transparent 75%);
           animation: orbis-hatch-seed 3.2s cubic-bezier(.45,0,.25,1) forwards;
         }
         .orbis-hatch-flare {
-          background: radial-gradient(circle, rgba(251,191,36,0.9) 0%, rgba(245,158,11,0.35) 40%, transparent 70%);
+          background: radial-gradient(circle, rgba(196,181,253,0.9) 0%, rgba(167,139,250,0.35) 40%, transparent 70%);
           animation: orbis-hatch-flare 3.2s cubic-bezier(.2,0,.2,1) forwards;
         }
       `}</style>

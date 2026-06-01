@@ -46,10 +46,18 @@
   --fg-faint: #52525b;    /* zinc-600 — faint footnotes */
   --success: #34d399;     /* emerald-400 */
   --danger: #f87171;      /* red-400 */
-  /* Accent: amber by default, overwritten at runtime by OrbAccentBridge so
-     the chrome echoes the orb's current palette. */
-  --orb-accent: #f59e0b;  /* amber-500 fallback */
-  --brand: var(--orb-accent, #f59e0b);
+  /* Accent: protoLabs.studio brand lavender — the light end of the brand
+     gradient (#a78bfa→#818cf8→#6366f1, docs/reference/foundation.md). Fixed
+     chrome accent: boot, wizard, settings, tabs, rings. (Naming + exact
+     shades are provisional — to be reconciled with the brand system.) */
+  --brand: #a78bfa;        /* lavender — primary */
+  --brand-light: #c4b5fd;  /* lighter lavender — hover */
+  --brand-deep: #818cf8;   /* indigo-lavender — active / deep */
+  /* The live orb's current accent, published by OrbAccentBridge. Only the
+     orb-tinted reminders dot reads this; it falls back to the brand lavender
+     before any orb color exists. */
+  --orb-accent: #a78bfa;
+  --orb: var(--orb-accent, var(--brand));
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -135,6 +143,9 @@ html, body {
   --color-fg-subtle: var(--fg-subtle);
   --color-fg-faint: var(--fg-faint);
   --color-brand: var(--brand);
+  --color-brand-light: var(--brand-light);
+  --color-brand-deep: var(--brand-deep);
+  --color-orb: var(--orb);
   --color-success: var(--success);
   --color-danger: var(--danger);
 

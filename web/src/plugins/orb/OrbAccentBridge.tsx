@@ -3,11 +3,11 @@ import { useOrbAccent } from './orbAccent';
 
 /**
  * Publishes the orb's current accent color to the `--orb-accent` CSS
- * variable on :root. The `brand` design token resolves to it
- * (`--brand: var(--orb-accent, #f59e0b)`), so every `text-brand` /
- * `bg-brand` / `ring-brand` in the chrome re-tints live as the orb's
- * palette changes — focus rings, active tabs, the reminders dot, etc.
- * Renders nothing.
+ * variable on :root. The `orb` design token resolves to it
+ * (`--orb: var(--orb-accent, var(--brand))`), so `bg-orb` / `text-orb`
+ * re-tint live as the orb's palette changes. The chrome accent itself
+ * (`brand`) is the fixed protoLabs lavender; only the orb-tinted
+ * reminders dot reads `orb` today. Renders nothing.
  */
 export function OrbAccentBridge() {
   const accent = useOrbAccent();
