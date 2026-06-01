@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
  * Section container with consistent spacing and a tiny-caps heading.
  * Replaces the inline
  *   <section className="space-y-3">
- *     <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">…</div>
+ *     <div className="text-helper font-mono uppercase tracking-wider text-fg-subtle">…</div>
  * pattern that was repeated across every drawer panel.
  *
  * Optionally collapsible via ``CollapsiblePanelProvider``. Wrapped
@@ -63,12 +63,12 @@ export function Panel({
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-1.5 -m-1 p-1 rounded hover:bg-zinc-900/50 transition-colors text-left"
+          className="flex items-center gap-1.5 -m-1 p-1 rounded hover:bg-raised/50 transition-colors text-left"
           aria-expanded={open}
         >
           <ChevronRight
             className={cn(
-              'h-4 w-4 text-zinc-500 transition-transform',
+              'h-4 w-4 text-fg-subtle transition-transform',
               open && 'rotate-90',
             )}
             aria-hidden="true"

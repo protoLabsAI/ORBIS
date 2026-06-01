@@ -81,16 +81,16 @@ export function BootStatus() {
   if (ready) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-[#0a0a0a] text-zinc-300">
-      <div className="h-10 w-10 animate-spin rounded-full border-2 border-zinc-700 border-t-amber-400" />
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-base text-fg-body">
+      <div className="h-10 w-10 animate-spin rounded-full border-2 border-edge border-t-brand" />
       <div className="text-base">{detail}</div>
-      <div className="h-1 w-56 overflow-hidden rounded-full bg-zinc-800">
+      <div className="h-1 w-56 overflow-hidden rounded-full bg-edge">
         <div
-          className="h-full rounded-full bg-amber-400 transition-[width] duration-700 ease-out"
+          className="h-full rounded-full bg-brand transition-[width] duration-700 ease-out"
           style={{ width: `${Math.round(progress * 100)}%` }}
         />
       </div>
-      <div className="max-w-xs text-center text-sm text-zinc-500">
+      <div className="max-w-xs text-center text-sm text-fg-subtle">
         First launch loads local speech + language models — this can take a
         minute or two. Later launches are quick.
       </div>

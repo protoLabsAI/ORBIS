@@ -66,7 +66,7 @@ export function SetupWizard() {
   if (!needsSetup) return null;
 
   return (
-    <div className="fixed inset-0 z-30 bg-[#0a0a0a]/95 backdrop-blur-sm overflow-y-auto">
+    <div className="fixed inset-0 z-30 bg-base/95 backdrop-blur-sm overflow-y-auto">
         <WizardFlow
           onFinish={() => {
           try {
@@ -139,7 +139,7 @@ function StepIndicator({ current }: { current: Step }) {
           key={s}
           className={
             'h-1.5 rounded-full transition-all ' +
-            (i < idx ? 'bg-amber-500/70 w-6' : i === idx ? 'bg-amber-500 w-10' : 'bg-zinc-700 w-6')
+            (i < idx ? 'bg-brand/70 w-6' : i === idx ? 'bg-brand w-10' : 'bg-edge w-6')
           }
         />
       ))}
@@ -152,13 +152,13 @@ function StepIndicator({ current }: { current: Step }) {
 function WelcomeStep({ onNext }: { onNext: () => void }) {
   return (
     <div className="text-center space-y-6">
-      <h1 className="font-mono text-3xl tracking-wider text-zinc-200">ORBIS</h1>
-      <p className="text-base text-zinc-400 max-w-sm mx-auto leading-relaxed">
+      <h1 className="font-mono text-3xl tracking-wider text-fg-body">ORBIS</h1>
+      <p className="text-base text-fg-muted max-w-sm mx-auto leading-relaxed">
         A voice companion. It talks back in real time, remembers you
         across sessions, and can route the heavy lifting to the agents
         you've configured.
       </p>
-      <p className="text-xs text-zinc-600 max-w-sm mx-auto">
+      <p className="text-xs text-fg-faint max-w-sm mx-auto">
         Four quick steps: access, pick an orb, and meet it.
       </p>
       <Button onClick={onNext}>Let's go</Button>
@@ -192,8 +192,8 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-lg text-zinc-200">Introductions</h2>
-        <p className="text-base text-zinc-400 max-w-md mx-auto">
+        <h2 className="text-lg text-fg-body">Introductions</h2>
+        <p className="text-base text-fg-muted max-w-md mx-auto">
           Both fields are optional — the orb will still work without
           them, just more generically.
         </p>
@@ -201,37 +201,37 @@ function NamesStep({ onNext, onBack }: { onNext: () => void; onBack: () => void 
 
       <div className="space-y-4">
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">
             Your name — what the orb should call you
           </label>
           <input
             value={userName}
             onChange={(e) => setUserName(e.target.value)}
             placeholder="Alice"
-            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint"
             autoComplete="off"
             spellCheck={false}
           />
         </div>
 
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">
             Orb's name — what you'll call the orb
           </label>
           <input
             value={orbName}
             onChange={(e) => setOrbName(e.target.value)}
             placeholder="ORBIS"
-            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint"
             autoComplete="off"
             spellCheck={false}
           />
-          <div className="text-xs text-zinc-600 mt-1">
+          <div className="text-xs text-fg-faint mt-1">
             Defaults to ORBIS. Rename to whatever suits.
           </div>
         </div>
 
-        {error && <div className="text-xs text-red-400">{error}</div>}
+        {error && <div className="text-xs text-danger">{error}</div>}
       </div>
 
       <div className="flex items-center justify-between">
@@ -377,16 +377,16 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-lg text-zinc-200">Router brain</h2>
-        <p className="text-base text-zinc-400 max-w-md mx-auto">
+        <h2 className="text-lg text-fg-body">Router brain</h2>
+        <p className="text-base text-fg-muted max-w-md mx-auto">
           Small + fast is the right pick — this LLM handles conversation
           + routing decisions. Heavy reasoning delegates out.
         </p>
       </div>
 
       {localCallouts.length > 0 && (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-zinc-300">
-          <div className="text-xs uppercase tracking-wider text-emerald-400 mb-2">
+        <div className="rounded-md border border-success/30 bg-success/5 p-3 text-sm text-fg-body">
+          <div className="text-xs uppercase tracking-wider text-success mb-2">
             Detected on your machine
           </div>
           <div className="flex flex-wrap gap-2">
@@ -395,7 +395,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
                 key={c.key}
                 type="button"
                 onClick={() => applyDetected(c.key)}
-                className="px-3 py-1.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-200 text-xs transition-colors"
+                className="px-3 py-1.5 rounded-md bg-success/10 hover:bg-success/20 border border-success/30 text-success text-xs transition-colors"
               >
                 Use {c.label} ({c.count} model{c.count === 1 ? '' : 's'})
               </button>
@@ -447,12 +447,12 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             className={
               'p-3 text-left rounded-md border transition-colors ' +
               (provider === p.id
-                ? 'border-amber-500/60 bg-amber-500/5'
-                : 'border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/70')
+                ? 'border-brand/60 bg-brand/5'
+                : 'border-edge bg-raised/40 hover:bg-raised/70')
             }
           >
-            <div className="text-sm text-zinc-200">{p.label}</div>
-            <div className="text-xs text-zinc-500 mt-0.5 line-clamp-2">
+            <div className="text-sm text-fg-body">{p.label}</div>
+            <div className="text-xs text-fg-subtle mt-0.5 line-clamp-2">
               {p.blurb}
             </div>
           </button>
@@ -463,7 +463,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         <button
           type="button"
           onClick={() => setShowAllProviders(true)}
-          className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="text-xs uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
         >
           Show {hiddenCount} more providers ▾
         </button>
@@ -472,7 +472,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         <button
           type="button"
           onClick={() => setShowAllProviders(false)}
-          className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="text-xs uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
         >
           Show fewer ▴
         </button>
@@ -480,23 +480,23 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
       <div className="space-y-3">
         <div>
-          <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">URL</label>
+          <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">URL</label>
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://api.openai.com/v1"
-            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
             spellCheck={false}
           />
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs uppercase tracking-wider text-zinc-500">Model</label>
+            <label className="text-xs uppercase tracking-wider text-fg-subtle">Model</label>
             <button
               type="button"
               onClick={onFetchModels}
-              className="text-xs uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+              className="text-xs uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors"
             >
               Fetch list
             </button>
@@ -506,7 +506,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder="gpt-4o-mini"
-            className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+            className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
             spellCheck={false}
           />
           {availableModels.length > 0 && (
@@ -515,7 +515,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             </datalist>
           )}
           {availableModels.length > 0 && (
-            <div className="text-xs text-zinc-600 mt-1">
+            <div className="text-xs text-fg-faint mt-1">
               {availableModels.length} models available — type to filter.
             </div>
           )}
@@ -523,17 +523,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
         {current.needsKey && (
           <div>
-            <label className="text-xs uppercase tracking-wider text-zinc-500 mb-1.5 block">API key</label>
+            <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">API key</label>
             <input
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={current.keyPlaceholder}
-              className="w-full h-10 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 text-sm text-zinc-200 placeholder-zinc-600 font-mono"
+              className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-faint font-mono"
               autoComplete="off"
               spellCheck={false}
             />
-            <div className="text-xs text-zinc-600 mt-1">
+            <div className="text-xs text-fg-faint mt-1">
               Stored in <code>config/orbis.yaml</code> on your machine.
               Never sent to protoLabsAI.
             </div>
@@ -545,18 +545,18 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             {test.kind === 'checking' ? 'Testing…' : 'Test connection'}
           </Button>
           {test.kind === 'ok' && (
-            <span className="text-xs text-emerald-400">
+            <span className="text-xs text-success">
               ✓ Connected ({test.latency} ms)
             </span>
           )}
           {test.kind === 'error' && (
-            <span className="text-xs text-red-400 truncate max-w-[60%]">
+            <span className="text-xs text-danger truncate max-w-[60%]">
               ✗ {test.message}
             </span>
           )}
         </div>
 
-        {error && <div className="text-xs text-red-400">{error}</div>}
+        {error && <div className="text-xs text-danger">{error}</div>}
       </div>
 
       <div className="flex items-center justify-between">
@@ -597,11 +597,11 @@ function OllamaInstallHelper() {
   };
 
   return (
-    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
-      <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
+    <div className="rounded-md border border-brand/30 bg-brand/5 p-3 text-sm text-fg-body">
+      <div className="text-xs uppercase tracking-wider text-brand mb-2">
         Recommended — Install Ollama
       </div>
-      <p className="text-sm text-zinc-400 mb-3">
+      <p className="text-sm text-fg-muted mb-3">
         ORBIS works best with a local LLM. Ollama is the fastest way to
         get one running; it's free, open-source, and auto-detected once
         installed.
@@ -617,20 +617,20 @@ function OllamaInstallHelper() {
               className={
                 'flex items-center gap-2 rounded px-2.5 py-1.5 ' +
                 (highlight
-                  ? 'bg-amber-500/10 border border-amber-500/40'
-                  : 'bg-zinc-900/40 border border-zinc-800')
+                  ? 'bg-brand/10 border border-brand/40'
+                  : 'bg-raised/40 border border-edge')
               }
             >
-              <span className="text-[11px] uppercase tracking-wider text-zinc-500 w-14 shrink-0">
+              <span className="text-helper uppercase tracking-wider text-fg-subtle w-14 shrink-0">
                 {label}
               </span>
-              <code className="flex-1 font-mono text-xs text-zinc-200 truncate">
+              <code className="flex-1 font-mono text-xs text-fg-body truncate">
                 {cmd}
               </code>
               <button
                 type="button"
                 onClick={() => onCopy(key, cmd)}
-                className="text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-200 transition-colors shrink-0"
+                className="text-helper uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors shrink-0"
               >
                 {copied === key ? 'Copied' : 'Copy'}
               </button>
@@ -638,7 +638,7 @@ function OllamaInstallHelper() {
           );
         })}
       </div>
-      <div className="text-xs text-zinc-500 mt-2">
+      <div className="text-xs text-fg-subtle mt-2">
         After install, reopen this step — we'll detect Ollama and offer
         to pull the recommended <code>gemma3n:e2b</code> model
         automatically.
@@ -715,18 +715,18 @@ function ModelPullCallout({
   const mb = (n: number) => (n / (1024 * 1024)).toFixed(0);
 
   return (
-    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-zinc-300">
-      <div className="text-xs uppercase tracking-wider text-amber-400 mb-2">
+    <div className="rounded-md border border-brand/30 bg-brand/5 p-3 text-sm text-fg-body">
+      <div className="text-xs uppercase tracking-wider text-brand mb-2">
         {source === 'mlx' ? 'Built-in model — first run' : 'Recommended model not installed'}
       </div>
-      <p className="text-sm text-zinc-400 mb-3">
+      <p className="text-sm text-fg-muted mb-3">
         {source === 'mlx'
-          ? <>Download <code className="text-zinc-200">{modelName}</code> from HuggingFace (~2-5 GB). One-time; cached locally for every future session.</>
-          : <>Pull <code className="text-zinc-200">{modelName}</code> for the fastest local voice loop on this machine. ~5.6 GB; takes a few minutes on a normal connection.</>}
+          ? <>Download <code className="text-fg-body">{modelName}</code> from HuggingFace (~2-5 GB). One-time; cached locally for every future session.</>
+          : <>Pull <code className="text-fg-body">{modelName}</code> for the fastest local voice loop on this machine. ~5.6 GB; takes a few minutes on a normal connection.</>}
       </p>
       {!pulling && !done && (
         <div className="flex items-center justify-between gap-3">
-          <div className="text-xs text-zinc-500">
+          <div className="text-xs text-fg-subtle">
             {error ? <span className="text-rose-400">{error}</span> : 'One-time download.'}
           </div>
           <Button onClick={start}>Pull {modelName}</Button>
@@ -735,14 +735,14 @@ function ModelPullCallout({
       {pulling && (
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-zinc-400 truncate pr-2">{status}</span>
-            <span className="text-zinc-500 tabular-nums shrink-0">
+            <span className="text-fg-muted truncate pr-2">{status}</span>
+            <span className="text-fg-subtle tabular-nums shrink-0">
               {total > 0 ? `${mb(completed)} / ${mb(total)} MB · ${pct}%` : '…'}
             </span>
           </div>
-          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-edge overflow-hidden">
             <div
-              className="h-full bg-amber-500/80 transition-[width] duration-200"
+              className="h-full bg-brand/80 transition-[width] duration-200"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -752,7 +752,7 @@ function ModelPullCallout({
         </div>
       )}
       {done && (
-        <div className="text-sm text-emerald-400">
+        <div className="text-sm text-success">
           ✓ {modelName} installed. You can continue.
         </div>
       )}
@@ -845,19 +845,19 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-lg text-zinc-200">Pick your orb</h2>
-        <p className="text-base text-zinc-400 max-w-md mx-auto">
+        <h2 className="text-lg text-fg-body">Pick your orb</h2>
+        <p className="text-base text-fg-muted max-w-md mx-auto">
           Swipe or use the arrows to browse — this is the real thing,
           live. Drag the orb to rotate it.
         </p>
       </div>
 
-      {error && <div className="text-xs text-red-400 text-center">{error}</div>}
+      {error && <div className="text-xs text-danger text-center">{error}</div>}
 
       {starters === null ? (
-        <div className="text-center text-zinc-500 text-sm">Loading pool…</div>
+        <div className="text-center text-fg-subtle text-sm">Loading pool…</div>
       ) : starters.length === 0 ? (
-        <div className="text-center text-zinc-500 text-sm">
+        <div className="text-center text-fg-subtle text-sm">
           No starters configured on the server.
         </div>
       ) : (
@@ -867,13 +867,13 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
               type="button"
               onClick={() => go(-1)}
               aria-label="Previous orb"
-              className="absolute left-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-zinc-800 bg-zinc-900/70 text-lg text-zinc-300 hover:bg-zinc-800"
+              className="absolute left-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-edge bg-raised/70 text-lg text-fg-body hover:bg-edge"
             >‹</button>
 
             {/* The live orb. The variant handles drag-to-rotate itself;
                 a deliberate horizontal flick (≥60px) flips starters. */}
             <div
-              className="relative aspect-square w-56 overflow-hidden rounded-xl border border-zinc-800 bg-black"
+              className="relative aspect-square w-56 overflow-hidden rounded-xl border border-edge bg-black"
               onPointerDown={(e) => { dragXRef.current = e.clientX; }}
               onPointerUp={(e) => {
                 if (dragXRef.current === null) return;
@@ -890,15 +890,15 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
               type="button"
               onClick={() => go(1)}
               aria-label="Next orb"
-              className="absolute right-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-zinc-800 bg-zinc-900/70 text-lg text-zinc-300 hover:bg-zinc-800"
+              className="absolute right-0 z-10 grid h-9 w-9 place-items-center rounded-full border border-edge bg-raised/70 text-lg text-fg-body hover:bg-edge"
             >›</button>
           </div>
 
           <div className="min-h-[2.75rem] text-center">
-            <div className="font-mono text-sm uppercase tracking-wider text-zinc-300">
+            <div className="font-mono text-sm uppercase tracking-wider text-fg-body">
               {current?.name}
             </div>
-            <div className="mx-auto mt-0.5 max-w-xs text-xs text-zinc-500">
+            <div className="mx-auto mt-0.5 max-w-xs text-xs text-fg-subtle">
               {current?.description}
             </div>
           </div>
@@ -912,7 +912,7 @@ function PickStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }
                 onClick={() => setIndex(i)}
                 className={
                   'h-1.5 rounded-full transition-all ' +
-                  (i === index ? 'w-5 bg-amber-400' : 'w-1.5 bg-zinc-700 hover:bg-zinc-600')
+                  (i === index ? 'w-5 bg-brand' : 'w-1.5 bg-edge hover:bg-fg-faint')
                 }
               />
             ))}
@@ -1037,17 +1037,17 @@ function MicStep({
   return (
     <div className="space-y-6">
       <div className="text-center space-y-2">
-        <h2 className="text-lg text-zinc-200">Microphone</h2>
-        <p className="text-base text-zinc-400 max-w-sm mx-auto">
+        <h2 className="text-lg text-fg-body">Microphone</h2>
+        <p className="text-base text-fg-muted max-w-sm mx-auto">
           ORBIS needs microphone access before the native audio engine starts.
         </p>
       </div>
 
       {!authorized && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 space-y-3">
+        <div className="rounded-lg border border-edge bg-base/60 p-4 space-y-3">
           <div>
-            <div className="text-sm text-zinc-200">Microphone access</div>
-            <div className="text-xs text-zinc-500 mt-1">
+            <div className="text-sm text-fg-body">Microphone access</div>
+            <div className="text-xs text-fg-subtle mt-1">
               Current status: {permission.replace('_', ' ')}
             </div>
           </div>
@@ -1072,21 +1072,21 @@ function MicStep({
       )}
 
       {authorized && !selectableInput && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+        <div className="rounded-lg border border-edge bg-base/60 p-4 text-sm text-fg-muted">
           Input source: macOS system input
         </div>
       )}
 
       {authorized && selectableInput && devices.length > 0 && (
         <div className="space-y-1.5">
-          <p className="text-xs uppercase tracking-wider text-zinc-500">
+          <p className="text-xs uppercase tracking-wider text-fg-subtle">
             Input device
           </p>
           <Select value={device} onValueChange={onChangeDevice}>
-            <SelectTrigger className="w-full bg-zinc-900 border-zinc-800">
+            <SelectTrigger className="w-full bg-raised border-edge">
               <SelectValue placeholder="System default" />
             </SelectTrigger>
-            <SelectContent className="bg-zinc-900 border-zinc-800">
+            <SelectContent className="bg-raised border-edge">
               {devices.map((name) => (
                 <SelectItem key={name} value={name}>
                   {name}
@@ -1098,7 +1098,7 @@ function MicStep({
       )}
 
       {authorized && selectableInput && devices.length === 0 && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+        <div className="rounded-lg border border-edge bg-base/60 p-4 text-sm text-fg-muted">
           No microphone input device was found.
         </div>
       )}
@@ -1106,7 +1106,7 @@ function MicStep({
       {authorized && <NativeLevelMeter deviceName={device || audioInputMode} />}
 
       {error && (
-        <p className="text-xs text-red-300 text-center">
+        <p className="text-xs text-danger text-center">
           {error}
         </p>
       )}
@@ -1122,8 +1122,8 @@ function MicStep({
 function DoneStep({ onFinish }: { onFinish: () => void }) {
   return (
     <div className="text-center space-y-6">
-      <h2 className="text-lg text-zinc-200">Ready.</h2>
-      <p className="text-base text-zinc-400 max-w-sm mx-auto">
+      <h2 className="text-lg text-fg-body">Ready.</h2>
+      <p className="text-base text-fg-muted max-w-sm mx-auto">
         Press Start in the main view to meet the orb. You can tweak
         anything from the settings drawer — voice, memory, access,
         profile.
@@ -1154,7 +1154,7 @@ function HatchAnimation({ onDone }: { onDone: () => void }) {
 
   return (
     <div
-      className="fixed inset-0 bg-[#0a0a0a] flex items-center justify-center pointer-events-none orbis-hatch-fade"
+      className="fixed inset-0 bg-base flex items-center justify-center pointer-events-none orbis-hatch-fade"
       aria-label="Hatching"
     >
       <div className="relative w-48 h-48">
