@@ -1128,7 +1128,7 @@ function DoneStep({ onFinish }: { onFinish: () => void }) {
         anything from the settings drawer — voice, memory, access,
         profile.
       </p>
-      <Button onClick={onFinish}>Let it hatch</Button>
+      <Button onClick={onFinish}>Meet your orb</Button>
     </div>
   );
 }
