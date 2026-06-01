@@ -1,6 +1,7 @@
 import { Drawer } from '@/components/Drawer';
 import { BootStatus } from '@/components/BootStatus';
 import { IntroSplash } from '@/components/IntroSplash';
+import { TitleBar } from '@/components/TitleBar';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
@@ -33,6 +34,7 @@ function App() {
         <Slot name="overlay-top" />
         <Slot name="overlay-bottom" />
         <Drawer />
+        <TitleBar />
       </div>
       <BootStatus />
       <IntroSplash />
