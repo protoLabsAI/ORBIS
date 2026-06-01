@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Label } from '@/components/ui/label';
+import { Hint } from '@/components/ui/hint';
+import { sectionLabelClass } from '@/components/ui/section-label';
 import { cn } from '@/lib/utils';
 
 /**
@@ -34,13 +36,13 @@ export function Field({
     <div className={cn('space-y-1.5', className)}>
       {label && (
         <div className="flex items-center justify-between">
-          <Label htmlFor={htmlFor} className="text-xs text-zinc-400">{label}</Label>
+          <Label htmlFor={htmlFor} className={sectionLabelClass}>{label}</Label>
           {headerAside}
         </div>
       )}
       {children}
-      {hint && <div className="text-xs text-zinc-500">{hint}</div>}
-      {error && <div className="text-xs text-red-400">{error}</div>}
+      {hint && <Hint>{hint}</Hint>}
+      {error && <div className="text-helper text-danger">{error}</div>}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { SectionLabel } from '@/components/ui/section-label';
 import { cn } from '@/lib/utils';
 
 /**
@@ -82,10 +83,12 @@ export function Panel({
 }
 
 export function PanelHeading({ children }: { children: ReactNode }) {
+  // Section headers are the mono, slightly-smaller variant of the shared
+  // uppercase micro-label.
   return (
-    <div className="text-[11px] font-mono uppercase tracking-wider text-zinc-400">
+    <SectionLabel className="font-mono text-micro text-fg-muted">
       {children}
-    </div>
+    </SectionLabel>
   );
 }
 
