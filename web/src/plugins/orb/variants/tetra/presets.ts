@@ -34,6 +34,14 @@ export interface TetraPreset {
 }
 
 export const TETRA_PRESETS: Record<string, TetraPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', density: 1.6,
+    atmosphereGlow: 0.16, atmosphereLevel: 1.0, atmosphereScale: 1.03, speed: 0.5,
+    chromaticAberration: 0.018, asymmetry: 0.45, orbRotation: 0.55, shapeSize: 1.6,
+    iterations: 5, foldX: 1.7, foldY: 0.5, foldZ: 0.7, glowIntensity: 0.030,
+    glowBase: 0.28, internalAnim: 0.15, dpr: 0.7,
+  },
   // Default — sky/rose, balanced fold, the look from the source shader.
   Drift: {
     primaryEnergy: '#7dd3fc', secondaryEnergy: '#fb7185',

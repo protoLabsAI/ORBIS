@@ -27,6 +27,15 @@ export interface CrystalPreset {
 }
 
 export const CRYSTAL_PRESETS: Record<string, CrystalPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1',
+    speed: 0.35, density: 0.6, dpr: 0.9,
+    atmosphereGlow: 0.10, atmosphereLevel: 0.6, atmosphereScale: 1.04, orbRotation: 0.30,
+    asymmetry: 0.30, chromaticAberration: 0.08,
+    transmission: 1.0, ior: 1.6, thickness: 0.8, roughness: 0.02, iridescence: 0.5,
+    detail: 0, envIntensity: 1.3,
+  },
   Prism: {
     primaryEnergy: '#a78bfa', secondaryEnergy: '#22d3ee',
     speed: 0.35, density: 0.6, dpr: 0.9,

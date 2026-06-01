@@ -32,6 +32,14 @@ export interface LatticePreset {
 }
 
 export const LATTICE_PRESETS: Record<string, LatticePreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', density: 1.6,
+    atmosphereGlow: 0.16, atmosphereLevel: 1.0, atmosphereScale: 1.03, speed: 0.5,
+    chromaticAberration: 0.018, asymmetry: 0.45, orbRotation: 0.55, cubeSize: 2.0,
+    gridScale: 1.0, distortion: 0.0, glow: 0.6, colorOffsetR: 2.0, colorOffsetG: 1.0,
+    colorOffsetB: 0.0, dpr: 0.7,
+  },
   // Default — cyan/rose, vivid grid lines through a tightly-packed cube.
   Glasshouse: {
     primaryEnergy: '#7dd3fc', secondaryEnergy: '#fb7185',

@@ -19,6 +19,13 @@ export interface ParticlesPreset {
 }
 
 export const PARTICLES_PRESETS: Record<string, ParticlesPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', speed: 0.4, density: 0.6, dpr: 0.9,
+    atmosphereGlow: 0.15, atmosphereLevel: 0.7, atmosphereScale: 1.05, orbRotation: 0.35,
+    asymmetry: 0.25, chromaticAberration: 0.016, count: 1800, particleSize: 0.022,
+    jitter: 0.08, radius: 1.15, hueSpread: 12,
+  },
   Constellation: {
     primaryEnergy: '#38bdf8', secondaryEnergy: '#fb923c',
     speed: 0.4, density: 0.6, dpr: 0.9,

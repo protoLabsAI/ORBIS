@@ -28,6 +28,13 @@ export interface FractalPreset {
 }
 
 export const FRACTAL_PRESETS: Record<string, FractalPreset> = {
+  // ProtoLabs — brand scheme: lavender → indigo (#9b87f2 → #818cf8 → #6366f1).
+  ProtoLabs: {
+    primaryEnergy: '#9b87f2', secondaryEnergy: '#6366f1', speed: 0.5, density: 2.4, dpr: 0.7,
+    atmosphereGlow: 0.18, atmosphereLevel: 1.0, atmosphereScale: 1.03, orbRotation: 0.80,
+    internalAnim: 0.42, fractalIters: 4, fractalScale: 0.85, fractalDecay: -17.0,
+    smoothness: 0.032, asymmetry: 0.50, chromaticAberration: 0.022,
+  },
   // Sky / pink — soft cool/warm complementary, reads as "calm tech."
   Aurora: {
     primaryEnergy: '#0ea5e9', secondaryEnergy: '#f472b6', speed: 0.5, density: 2.4, dpr: 0.7,
