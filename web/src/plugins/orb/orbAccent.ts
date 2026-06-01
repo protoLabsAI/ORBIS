@@ -2,15 +2,18 @@ import { useOrbState } from '@/plugins/orb/useOrbState';
 
 /**
  * Derive a single representative accent color from the orb's current
- * params so chrome (e.g. the reminders notification dot) can echo the
- * orb. Most variants expose `primaryEnergy` as a hex string; a few
- * (spectrum) drive color procedurally with no single hex, so we scan
- * a preference list, then any hex-looking param, then fall back.
+ * params. Most variants expose `primaryEnergy` as a hex string; a few
+ * (spectrum) drive color procedurally with no single hex, so we scan a
+ * preference list, then any hex-looking param, then fall back.
+ *
+ * This is the single source of truth for the app's accent: the reminders
+ * dot reads it directly, and `OrbAccentBridge` publishes it to the
+ * `--orb-accent` CSS variable so all `brand`-tokened chrome echoes the orb.
  */
 
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const PREFERRED = ['primaryEnergy', 'colorBright', 'colorMid', 'secondaryEnergy'];
-const FALLBACK = '#c084fc';
+const FALLBACK = '#f59e0b'; // amber-500 — matches --orb-accent default
 
 export function orbAccentFromParams(params: Record<string, unknown>): string {
   for (const key of PREFERRED) {

@@ -3,6 +3,7 @@ import { BootStatus } from '@/components/BootStatus';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
+import { OrbAccentBridge } from './plugins/orb/OrbAccentBridge';
 // Side-effect imports — each plugin registers at module load.
 import './plugins/orb';
 import './plugins/status-pill';
@@ -24,6 +25,7 @@ function App() {
   return (
     <>
       <VoiceStateBridge />
+      <OrbAccentBridge />
       <LogsCollector />
       <div className="fixed inset-0 overflow-hidden bg-[#0a0a0a]">
         <Slot name="stage" />
