@@ -33,7 +33,7 @@ Composes with the rest of the mood-write three-writer pattern (see
 References:
 - Issue #66: https://github.com/protoLabsAI/ORBIS/issues/66
 - Frame contracts: agent/frames.py
-- Lifecycle audit: docs/voice-lifecycle.md
+- Lifecycle audit: docs/internal/voice-lifecycle.md
 """
 
 from __future__ import annotations

@@ -86,4 +86,4 @@ If voice still doesn't work after a clean rebuild, follow the diagnosis checklis
 
 ## Roadmap note
 
-This script is Phase 1-and-2 tooling. Phase 3 of the migration (see `docs/native-audio-direction.md`) replaces the PyApp sidecar pattern with `protolabs-voice-core` from `protoLabsAI/protoApp` plus the `orbis-sidecar` WebSocket contract. At that point the pyapp-cache wipe becomes irrelevant and this script's nuke list shrinks substantially.
+This script is Phase 1-and-2 tooling. Phase 3 of the migration (see `docs/internal/native-audio-direction.md`) replaces the PyApp sidecar pattern with `protolabs-voice-core` from `protoLabsAI/protoApp` plus the `orbis-sidecar` WebSocket contract. At that point the pyapp-cache wipe becomes irrelevant and this script's nuke list shrinks substantially.

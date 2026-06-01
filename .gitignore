@@ -56,3 +56,7 @@ dist-sdist/
 # describe how to operate on this codebase and ship with the repo.
 .claude/*
 !.claude/skills/
+
+# VitePress docs build artifacts
+docs/.vitepress/cache/
+docs/.vitepress/dist/

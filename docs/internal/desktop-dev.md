@@ -60,7 +60,7 @@ Exercises the PyApp binary + Tauri packaging end-to-end. Slower —
 each iteration rebuilds the sidecar.
 
 ```sh
-# 1. Build the PyApp sidecar binary (see docs/build-desktop-binary.md)
+# 1. Build the PyApp sidecar binary (see docs/internal/build-desktop-binary.md)
 scripts/build-desktop-binary.sh
 
 # 2. Stage it where Tauri expects it
@@ -198,7 +198,7 @@ scripts/validate-macos-native-audio.sh --dmg path/to/ORBIS.dmg
 
 ## See also
 
-- [docs/build-desktop-binary.md](./build-desktop-binary.md) — PyApp
+- [docs/internal/build-desktop-binary.md](./build-desktop-binary.md) — PyApp
   sidecar build
 - [Tauri 2 docs](https://v2.tauri.app/)
 - The protoApp repo at `protoLabsAI/protoApp` for a reference Tauri 2

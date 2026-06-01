@@ -428,7 +428,7 @@ desktop product build.
 - `protoLabsAI/protoApp` already ships the in-process Rust voice substrate (`whisper-rs` + `kokoros` + `llama-cpp-2` behind feature flags) and the WebSocket sidecar contract (`orbis-sidecar`). Migrating ORBIS to that pattern eliminates ~1,432 lines of bespoke audio plumbing, and is a prerequisite for the iOS port (no Python on iOS).
 - The only public Tauri+Pipecat reference (`kstonekuan/tambourine-voice`) and Daily/Pipecat's own desktop demo (`kwindla/macos-local-voice-agents`) both ship audio over WebRTC-to-localhost. We made the opposite call for latency / direct CoreAudio access. With this amendment, we double down on that decision and replace the browser-WebRTC fallback with a clean iOS path.
 
-**Decision (4-phase plan; full detail in [`docs/native-audio-direction.md`](./docs/native-audio-direction.md)):**
+**Decision (4-phase plan; full detail in [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md)):**
 
 1. **Phase 1 — Strip web** (this week). Delete WebRTC client deps, PWA service worker, `getUserMedia` paths, `voice/multi_input_mixer.py`, `voice/transport_factory.py` factory branching, `/api/offer`, `media_permission_patch.m`, the `audioTransport === 'webrtc'` branches in the React app. Roughly 600+ LoC out + several MB off the JS bundle.
 2. **Phase 2 — Apple-native audio** (1–2 weeks). Replace CPAL input + custom `aec.rs` with `AVAudioEngine` voice-processing IO via `objc2-avf-audio`. Re-enable backchannel + microack now that real AEC is in place. Delete the 8× software-mic-gain hack and the `STT_MIN_RMS` / `STT_STRONG_RMS` gates we added today.
@@ -457,7 +457,7 @@ desktop product build.
 - `voice/sse_bus.py` (replaced by WS event stream)
 - `voice/native_bargein.py` (functionality moves to protoApp host)
 
-**See:** [`docs/native-audio-direction.md`](./docs/native-audio-direction.md) for the comprehensive guide — full file/feature delete inventory, ROI-ranked Phase 1 actions list (11 items synthesized from the three research streams), the protoApp migration target, and citations for every claim.
+**See:** [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md) for the comprehensive guide — full file/feature delete inventory, ROI-ranked Phase 1 actions list (11 items synthesized from the three research streams), the protoApp migration target, and citations for every claim.
 
 ---
 

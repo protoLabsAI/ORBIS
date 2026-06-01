@@ -4,13 +4,13 @@
 - **STATUS.md** — point-in-time snapshot of current state, active incidents, and how to pick up. Read this before digging into code on any resume.
 - **DECISIONS.md** — architectural choices and the reasoning behind them. Don't re-litigate without reading the entry first.
 - **HANDOFF.md** — QA checklist + open design questions + ordered next steps.
-- **`docs/native-audio-direction.md`** — comprehensive guide for the Apple-Silicon-only direction (locked 2026-04-28) and the 4-phase migration plan (strip web → AVAudioEngine → protoApp consolidation → iOS).
+- **`docs/internal/native-audio-direction.md`** — comprehensive guide for the Apple-Silicon-only direction (locked 2026-04-28) and the 4-phase migration plan (strip web → AVAudioEngine → protoApp consolidation → iOS).
 
 ## Direction (locked 2026-04-28)
 
-**Apple Silicon Mac is the only first-class platform. iOS / iPad is the planned secondary target. Web / PWA / browser is dropped as a supported runtime.** Don't add features that re-introduce browser/PWA support, WebRTC paths, or `getUserMedia` flows. The dual-transport `AUDIO_TRANSPORT=native|webrtc` architecture is being phased out — see DECISIONS.md amendment 2026-04-28 and `docs/native-audio-direction.md`.
+**Apple Silicon Mac is the only first-class platform. iOS / iPad is the planned secondary target. Web / PWA / browser is dropped as a supported runtime.** Don't add features that re-introduce browser/PWA support, WebRTC paths, or `getUserMedia` flows. The dual-transport `AUDIO_TRANSPORT=native|webrtc` architecture is being phased out — see DECISIONS.md amendment 2026-04-28 and `docs/internal/native-audio-direction.md`.
 
-When making changes, ask: *does this make Phase 1 (strip web) easier or harder?* If harder, push back. If you're touching `voice/local_transport.py`, `voice/native_bargein.py`, `voice/sse_bus.py`, or `src-tauri/src/audio/{engine,socket,aec}.rs`, also check `docs/native-audio-direction.md` § "What stays in Phase 1" — these files have a planned deletion / migration in Phase 2 or 3, so don't sink effort into improving things that go away.
+When making changes, ask: *does this make Phase 1 (strip web) easier or harder?* If harder, push back. If you're touching `voice/local_transport.py`, `voice/native_bargein.py`, `voice/sse_bus.py`, or `src-tauri/src/audio/{engine,socket,aec}.rs`, also check `docs/internal/native-audio-direction.md` § "What stays in Phase 1" — these files have a planned deletion / migration in Phase 2 or 3, so don't sink effort into improving things that go away.
 
 ## Dev flow — when in doubt, nuke and rebuild
 

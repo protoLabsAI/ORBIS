@@ -38,8 +38,8 @@ the pipeline — wiring without resolution risks shipping latent bugs):
 References:
 - Issue #35 spec: https://github.com/protoLabsAI/ORBIS/issues/35
 - Companion-stack research: protoLabsAI/protoLab → experiments/companion-stack
-- Lifecycle audit: docs/voice-lifecycle.md (Stage 4 — STT, audio-pre slot)
-- Risks doc: docs/voice-lifecycle-risks.md (R15)
+- Lifecycle audit: docs/internal/voice-lifecycle.md (Stage 4 — STT, audio-pre slot)
+- Risks doc: docs/internal/voice-lifecycle-risks.md (R15)
 """
 
 from __future__ import annotations

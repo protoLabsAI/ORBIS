@@ -14,7 +14,7 @@ pipeline is built in `run_bot()`.
 > audit. The current Mac production path is native desktop audio with
 > Rust-owned microphone permission, AVAudioEngine voice-processing
 > input, CPAL output, and the Python sidecar over the Unix socket. See
-> `STATUS.md`, `docs/desktop-dev.md`, and
+> `STATUS.md`, `docs/internal/desktop-dev.md`, and
 > `scripts/validate-macos-native-audio.sh` for the current Mac release
 > validation path.
 

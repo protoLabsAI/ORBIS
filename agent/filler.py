@@ -277,7 +277,7 @@ def tool_use_block(verbosity: Verbosity, tts_backend: str) -> str:
     decision is the fix: the tool call goes out clean, and the "I heard
     you" lives in the separate ack / progress-narration layer (which fires
     on user-stop / during a slow tool, not gated on tool emission). See
-    ``docs/duplex-orchestration-direction.md``.
+    ``docs/internal/duplex-orchestration-direction.md``.
 
     The ``tts_backend`` arg is retained for signature stability (callers
     pass it); the block is now backend-agnostic since it no longer carries
