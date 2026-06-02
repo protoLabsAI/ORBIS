@@ -1,6 +1,6 @@
 [project]
 name = "orbis"
-version = "0.2.92"
+version = "0.2.93"
 description = "ORBIS — voice-first AI companion. Pipecat voice pipeline + orb visualization + delegate-to-your-agents routing."
 requires-python = ">=3.11"
 dependencies = [
