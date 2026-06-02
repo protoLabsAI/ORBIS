@@ -1,17 +1,21 @@
-"""Tests for the entitlement module's plumbing.
+"""Tests for offline license verification + the entitlement gate.
 
-Covers configuration gating, the refresh no-op path, and the
-webhook-event → entitlement-cache write/revoke. Real Stripe calls are
-mocked — we care about the glue, not Stripe's API.
+Licenses are Ed25519-signed tokens verified against a public key baked into
+the build (no Stripe secret, no network). Tests use an ephemeral keypair and
+wire its public half in via ORBIS_LICENSE_PUBKEY.
 """
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
+from cryptography.hazmat.primitives import serialization as ser
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from agent import entitlement
+from agent import license as lic
 from memory import Memory
 
 
@@ -24,269 +28,145 @@ def mem(tmp_path: Path) -> Memory:
 
 
 @pytest.fixture
-def configured_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_fake")
-    monkeypatch.setenv("STRIPE_PRICE_CUSTOMIZATION", "price_fake")
+def signer(monkeypatch: pytest.MonkeyPatch) -> Ed25519PrivateKey:
+    """Ephemeral signing key; its public half is wired in as the app's
+    verification key via ORBIS_LICENSE_PUBKEY (raw base64url)."""
+    priv = Ed25519PrivateKey.generate()
+    raw_pub = priv.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
+    monkeypatch.setenv(
+        "ORBIS_LICENSE_PUBKEY",
+        base64.urlsafe_b64encode(raw_pub).decode().rstrip("="),
+    )
+    return priv
 
 
-# --- configuration gating ---------------------------------------------------
+def _license(
+    priv: Ed25519PrivateKey,
+    *,
+    feat: str = "customization",
+    sub: str = "buyer@example.com",
+    lid: str = "lid-1",
+) -> str:
+    return lic.sign_license(
+        {"v": 1, "feat": feat, "sub": sub, "lid": lid, "iat": 1_700_000_000}, priv
+    )
 
 
-def test_configured_returns_false_without_env(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
-    # Force a re-read of the module-level constants.
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    assert entitlement.configured() is False
+def _raw_pubkey_b64(priv: Ed25519PrivateKey) -> str:
+    raw = priv.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def test_configured_returns_true_with_env(
-    monkeypatch: pytest.MonkeyPatch, configured_env,
-):
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    assert entitlement.configured() is True
+# --- license.py: verification -----------------------------------------------
 
 
-# --- has_customization gate behavior ---------------------------------------
+def test_sign_verify_roundtrip(signer: Ed25519PrivateKey):
+    token = _license(signer)
+    assert token.startswith("ORBIS-")
+    payload = lic.verify_license(token)
+    assert payload["feat"] == "customization"
+    assert payload["sub"] == "buyer@example.com"
 
 
-def test_has_customization_open_in_dev_mode(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
-):
-    """Unconfigured Stripe → customization is open (dev mode).
-    Ships with a sane default so local dev doesn't need commerce set up."""
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
+def test_tampered_payload_rejected(signer: Ed25519PrivateKey):
+    token = _license(signer)
+    seg, sig = token[len(lic.TOKEN_PREFIX) :].split(".", 1)
+    flipped = seg[:-1] + ("A" if seg[-1] != "A" else "B")
+    with pytest.raises(lic.LicenseError):
+        lic.verify_license(f"{lic.TOKEN_PREFIX}{flipped}.{sig}")
+
+
+def test_wrong_key_rejected(signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch):
+    token = _license(signer)
+    monkeypatch.setenv(
+        "ORBIS_LICENSE_PUBKEY", _raw_pubkey_b64(Ed25519PrivateKey.generate())
+    )
+    with pytest.raises(lic.LicenseError):
+        lic.verify_license(token)
+
+
+def test_non_orbis_token_rejected(signer: Ed25519PrivateKey):
+    with pytest.raises(lic.LicenseError):
+        lic.verify_license("not-a-license")
+
+
+def test_pem_public_key_supported(monkeypatch: pytest.MonkeyPatch):
+    priv = Ed25519PrivateKey.generate()
+    pem = (
+        priv.public_key()
+        .public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    monkeypatch.setenv("ORBIS_LICENSE_PUBKEY", pem)
+    token = lic.sign_license({"v": 1, "feat": "customization"}, priv)
+    assert lic.verify_license(token)["feat"] == "customization"
+
+
+# --- entitlement gate -------------------------------------------------------
+
+
+def test_open_gate_unlocked_without_license(mem: Memory, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(entitlement, "GATE_MODE", "open")
     assert entitlement.has_customization(mem) is True
+    state = entitlement.entitlement_state(mem)["customization"]
+    assert state["active"] is True
+    assert state["licensed"] is False
 
 
-def test_has_customization_gated_when_configured(
-    mem: Memory, configured_env,
-):
-    """Configured Stripe + no cached entitlement → gate closed."""
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
+def test_closed_gate_locked_without_license(mem: Memory, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
     assert entitlement.has_customization(mem) is False
 
 
-def test_has_customization_open_when_cache_active(
-    mem: Memory, configured_env,
+def test_activate_unlocks_closed_gate(
+    mem: Memory, signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch
 ):
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    from datetime import datetime, timedelta, timezone
-    future = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=future)
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
+    state = entitlement.activate_license(mem, _license(signer))["customization"]
+    assert state["active"] is True
+    assert state["licensed"] is True
+    assert state["sub"] == "buyer@example.com"
+    assert state["lid"] == "lid-1"
     assert entitlement.has_customization(mem) is True
 
 
-# --- ORBIS_GATE distribution policy -----------------------------------------
-
-
-def test_orbis_gate_closed_locks_when_unconfigured(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
+def test_activate_wrong_feature_rejected(
+    mem: Memory, signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch
 ):
-    """ORBIS_GATE=closed + Stripe unconfigured → gate stays shut.
-    The right setting for a public distribution that intends to monetise
-    the unlock but ships without Stripe credentials baked in."""
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
-    monkeypatch.setenv("ORBIS_GATE", "closed")
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    assert entitlement.GATE_MODE == "closed"
-    assert entitlement.has_customization(mem) is False
-
-
-def test_orbis_gate_open_default_unlocks_when_unconfigured(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
-):
-    """ORBIS_GATE unset (default 'open') preserves the dev-mode unlock —
-    no behaviour change for existing local-dev setups."""
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
-    monkeypatch.delenv("ORBIS_GATE", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    assert entitlement.GATE_MODE == "open"
-    assert entitlement.has_customization(mem) is True
-
-
-def test_orbis_gate_unknown_value_falls_back_to_open(
-    monkeypatch: pytest.MonkeyPatch, caplog,
-):
-    """A typo in ORBIS_GATE shouldn't silently lock an install — log a
-    warning and preserve the safer (current-behaviour) default."""
-    monkeypatch.setenv("ORBIS_GATE", "yarp")
-    import importlib
-    from agent import entitlement
-    with caplog.at_level("WARNING"):
-        importlib.reload(entitlement)
-    assert entitlement.GATE_MODE == "open"
-    assert any("ORBIS_GATE='yarp'" in r.message for r in caplog.records)
-
-
-def test_orbis_gate_does_not_override_active_paid_cache(
-    mem: Memory, configured_env, monkeypatch: pytest.MonkeyPatch,
-):
-    """When Stripe IS configured, ORBIS_GATE has no effect — the cache
-    is the source of truth. A 'closed' gate doesn't lock out a user
-    who's actually paid; an 'open' gate doesn't unlock a user who hasn't."""
-    monkeypatch.setenv("ORBIS_GATE", "closed")
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    from datetime import datetime, timedelta, timezone
-    future = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=future)
-    assert entitlement.has_customization(mem) is True
-
-
-def test_entitlement_state_exposes_gate_mode(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
-):
-    """The /api/entitlement payload carries gate_mode so the UI can
-    distinguish 'locked by policy' from 'unconfigured, dev-open'."""
-    monkeypatch.setenv("ORBIS_GATE", "closed")
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    state = entitlement.entitlement_state(mem)
-    assert state["customization"]["gate_mode"] == "closed"
-    assert state["customization"]["active"] is False
-    assert state["customization"]["configured"] is False
-
-
-# --- refresh_from_stripe ----------------------------------------------------
-
-
-def test_refresh_from_stripe_noop_when_unconfigured(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    result = entitlement.refresh_from_stripe(mem)
-    assert result["ok"] is False
-    assert result["reason"] == "unconfigured"
-
-
-# --- webhook handling -------------------------------------------------------
-
-
-def test_webhook_raises_when_unconfigured(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
     with pytest.raises(entitlement.EntitlementError):
-        entitlement.handle_webhook_event(b"{}", "sig", mem)
+        entitlement.activate_license(mem, _license(signer, feat="something-else"))
+    assert entitlement.has_customization(mem) is False
 
 
-def test_webhook_grants_entitlement_on_checkout_completed(
-    mem: Memory, configured_env,
+def test_activate_invalid_key_rejected(
+    mem: Memory, signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch
 ):
-    """Simulate a 'checkout.session.completed' webhook — entitlement
-    cache should be populated with a future expiry."""
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-
-    # Mock stripe.Webhook.construct_event to avoid needing real signatures.
-    with patch.object(entitlement, "_stripe") as mock_stripe_fn:
-        mock_stripe = mock_stripe_fn.return_value
-        mock_stripe.Webhook.construct_event.return_value = {
-            "type": "checkout.session.completed",
-            "data": {},
-        }
-        result = entitlement.handle_webhook_event(b"payload", "sig", mem)
-
-    assert result["action"] == "granted"
-    assert mem.entitlement.is_active("customization")
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
+    with pytest.raises(entitlement.EntitlementError):
+        entitlement.activate_license(mem, "ORBIS-garbage.signature")
+    assert entitlement.has_customization(mem) is False
 
 
-def test_webhook_revokes_on_refund(mem: Memory, configured_env):
-    import importlib
-    from datetime import datetime, timedelta, timezone
-    from agent import entitlement
-    importlib.reload(entitlement)
-
-    # Seed an active entitlement.
-    future = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=future)
-    assert mem.entitlement.is_active("customization")
-
-    with patch.object(entitlement, "_stripe") as mock_stripe_fn:
-        mock_stripe = mock_stripe_fn.return_value
-        mock_stripe.Webhook.construct_event.return_value = {
-            "type": "charge.refunded", "data": {},
-        }
-        result = entitlement.handle_webhook_event(b"payload", "sig", mem)
-
-    assert result["action"] == "revoked"
-    assert not mem.entitlement.is_active("customization")
-
-
-def test_webhook_ignores_unrelated_events(mem: Memory, configured_env):
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-
-    with patch.object(entitlement, "_stripe") as mock_stripe_fn:
-        mock_stripe = mock_stripe_fn.return_value
-        mock_stripe.Webhook.construct_event.return_value = {
-            "type": "customer.updated", "data": {},
-        }
-        result = entitlement.handle_webhook_event(b"payload", "sig", mem)
-
-    assert result["action"] == "ignored"
-    assert not mem.entitlement.is_active("customization")
-
-
-# --- entitlement_state response shape ----------------------------------------
-
-
-def test_entitlement_state_shape(mem: Memory, configured_env):
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    state = entitlement.entitlement_state(mem)
-    assert "customization" in state
-    assert state["customization"]["active"] is False
-    assert state["customization"]["configured"] is True
-
-
-def test_entitlement_state_dev_mode_active(
-    mem: Memory, monkeypatch: pytest.MonkeyPatch,
+def test_deactivate_removes_license(
+    mem: Memory, signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch
 ):
-    """Unconfigured Stripe → state reports active=True so the UI mirrors
-    the open-by-default gate (has_customization)."""
-    monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
-    monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
-    monkeypatch.delenv("STRIPE_PRICE_CUSTOMIZATION", raising=False)
-    import importlib
-    from agent import entitlement
-    importlib.reload(entitlement)
-    state = entitlement.entitlement_state(mem)
-    assert state["customization"]["active"] is True
-    assert state["customization"]["configured"] is False
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
+    entitlement.activate_license(mem, _license(signer))
+    assert entitlement.has_customization(mem) is True
+    entitlement.deactivate(mem)
+    assert entitlement.has_customization(mem) is False
+
+
+def test_stored_license_treated_absent_when_key_rotates(
+    mem: Memory, signer: Ed25519PrivateKey, monkeypatch: pytest.MonkeyPatch
+):
+    """A stored key that no longer verifies (build's public key rotated) is
+    treated as absent rather than crashing the gate."""
+    monkeypatch.setattr(entitlement, "GATE_MODE", "closed")
+    entitlement.activate_license(mem, _license(signer))
+    assert entitlement.has_customization(mem) is True
+    monkeypatch.setenv(
+        "ORBIS_LICENSE_PUBKEY", _raw_pubkey_b64(Ed25519PrivateKey.generate())
+    )
+    assert entitlement.has_customization(mem) is False
