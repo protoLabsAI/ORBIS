@@ -69,3 +69,16 @@ delegates: []
 #     command: npx
 #     args: ["@zed-industries/claude-code-acp"]
 #     workdir: ~/dev/ORBIS
+#
+#   - name: codex
+#     description: OpenAI Codex, for the ORBIS repo.
+#     type: acp
+#     command: codex-acp        # the zed-industries/codex-acp bridge binary
+#     args: []
+#     workdir: ~/dev/ORBIS
+#
+# Launch commands per agent (each speaks ACP over stdio):
+#   proto        → command: proto       args: ["--acp"]
+#   opencode     → command: opencode    args: ["acp"]
+#   claude-code  → command: npx         args: ["@zed-industries/claude-code-acp"]
+#   codex        → command: codex-acp   args: []   (install zed-industries/codex-acp)
