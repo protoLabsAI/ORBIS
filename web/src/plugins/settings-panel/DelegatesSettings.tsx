@@ -7,6 +7,7 @@ import {
   api,
   type Delegate,
   type DelegateA2A,
+  type DelegateACP,
   type DelegateOpenAI,
   type DelegateTestResult,
   type DelegateWithStatus,
@@ -198,28 +199,24 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
   const [error, setError] = useState<string | null>(null);
 
   const onSwitchType = useCallback(
-    (next: 'a2a' | 'openai') => {
-      // Type switch resets type-specific fields to safe defaults but
-      // keeps name + description + url so the user doesn't lose what
-      // they've typed.
+    (next: 'a2a' | 'openai' | 'acp') => {
+      // Type switch resets type-specific fields to safe defaults but keeps
+      // name + description so the user doesn't lose what they've typed.
       setDraft((prev) => {
-        const common = {
-          name: prev.name,
-          description: prev.description,
-          url: prev.url,
-        };
+        const common = { name: prev.name, description: prev.description };
+        const url = (prev as { url?: string }).url ?? '';
         if (next === 'a2a') {
           return {
-            ...common, type: 'a2a',
+            ...common, type: 'a2a', url,
             auth: { scheme: 'apiKey', credentialsEnv: '' },
             headers: {},
           };
         }
-        return {
-          ...common, type: 'openai',
-          model: '',
-          api_key_env: '',
-        };
+        if (next === 'openai') {
+          return { ...common, type: 'openai', url, model: '', api_key_env: '' };
+        }
+        // acp — a local coding agent ORBIS launches + drives (no url).
+        return { ...common, type: 'acp', command: 'proto', args: ['--acp'], workdir: '' };
       });
       setTest(null);
     },
@@ -268,18 +265,24 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
       </div>
 
       {/* Type picker */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <TypeTile
           active={draft.type === 'a2a'}
           label="A2A agent"
-          blurb="JSON-RPC fleet peer (ava, quinn, etc.)"
+          blurb="JSON-RPC fleet peer"
           onClick={() => onSwitchType('a2a')}
         />
         <TypeTile
           active={draft.type === 'openai'}
           label="OpenAI-compat"
-          blurb="Any /v1/chat/completions endpoint"
+          blurb="/v1 endpoint"
           onClick={() => onSwitchType('openai')}
+        />
+        <TypeTile
+          active={draft.type === 'acp'}
+          label="ACP coding agent"
+          blurb="proto / opencode / codex"
+          onClick={() => onSwitchType('acp')}
         />
       </div>
 
@@ -314,40 +317,47 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
         />
       </Field>
 
-      <Field
-        label="URL"
-        hint={
-          draft.type === 'a2a'
-            ? 'JSON-RPC endpoint, typically ending in /a2a. Supports ${VAR:-default}.'
-            : 'OpenAI-compat base URL ending in /v1.'
-        }
-      >
-        <input
-          value={draft.url}
-          onChange={(e) => setDraft({ ...draft, url: e.target.value } as Delegate)}
-          placeholder={draft.type === 'a2a' ? 'http://ava:3008/a2a' : 'http://gateway:4000/v1'}
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
-          spellCheck={false}
-        />
-      </Field>
+      {draft.type !== 'acp' && (
+        <Field
+          label="URL"
+          hint={
+            draft.type === 'a2a'
+              ? 'JSON-RPC endpoint, typically ending in /a2a. Supports ${VAR:-default}.'
+              : 'OpenAI-compat base URL ending in /v1.'
+          }
+        >
+          <input
+            value={draft.url}
+            onChange={(e) => setDraft({ ...draft, url: e.target.value } as Delegate)}
+            placeholder={draft.type === 'a2a' ? 'http://ava:3008/a2a' : 'http://gateway:4000/v1'}
+            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
+            spellCheck={false}
+          />
+        </Field>
+      )}
 
       {/* Type-specific fields */}
       {draft.type === 'a2a' ? (
         <A2AFields draft={draft} setDraft={setDraft} />
-      ) : (
+      ) : draft.type === 'openai' ? (
         <OpenAIFields draft={draft} setDraft={setDraft} />
+      ) : (
+        <ACPFields draft={draft} setDraft={setDraft} />
       )}
 
-      {/* Test + save row */}
+      {/* Test + save row. ACP agents launch a process (no URL to ping), so
+          there's nothing to Test before save. */}
       <div className="flex items-center gap-2 pt-1">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={onTest}
-          disabled={test === 'checking'}
-        >
-          {test === 'checking' ? 'Testing…' : 'Test'}
-        </Button>
+        {draft.type !== 'acp' && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onTest}
+            disabled={test === 'checking'}
+          >
+            {test === 'checking' ? 'Testing…' : 'Test'}
+          </Button>
+        )}
         <Button size="sm" onClick={onSave} disabled={saving}>
           {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create'}
         </Button>
@@ -481,8 +491,54 @@ function OpenAIFields({
 // Tiny presentation helpers
 // ---------------------------------------------------------------------------
 
-function TypeBadge({ type }: { type: 'a2a' | 'openai' }) {
-  const label = type === 'a2a' ? 'A2A' : 'OpenAI';
+function ACPFields({
+  draft, setDraft,
+}: {
+  draft: DelegateACP;
+  setDraft: (d: Delegate) => void;
+}) {
+  const inputCls =
+    'w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono';
+  return (
+    <div className="space-y-3">
+      <Field label="Command" hint="The agent binary on your PATH.">
+        <input
+          value={draft.command}
+          onChange={(e) => setDraft({ ...draft, command: e.target.value } as Delegate)}
+          placeholder="proto"
+          className={inputCls}
+          spellCheck={false}
+        />
+      </Field>
+      <Field label="Args" hint="Space-separated args that start it in ACP mode (proto: --acp · opencode: acp).">
+        <input
+          value={(draft.args ?? []).join(' ')}
+          onChange={(e) =>
+            setDraft({
+              ...draft,
+              args: e.target.value.split(/\s+/).filter(Boolean),
+            } as Delegate)
+          }
+          placeholder="--acp"
+          className={inputCls}
+          spellCheck={false}
+        />
+      </Field>
+      <Field label="Workdir" hint="The directory the agent reads, edits, and runs code in.">
+        <input
+          value={draft.workdir}
+          onChange={(e) => setDraft({ ...draft, workdir: e.target.value } as Delegate)}
+          placeholder="~/dev/ORBIS"
+          className={inputCls}
+          spellCheck={false}
+        />
+      </Field>
+    </div>
+  );
+}
+
+function TypeBadge({ type }: { type: 'a2a' | 'openai' | 'acp' }) {
+  const label = type === 'a2a' ? 'A2A' : type === 'openai' ? 'OpenAI' : 'ACP';
   return (
     <span className="text-helper uppercase tracking-wider text-fg-subtle border border-edge rounded px-1.5 py-0.5">
       {label}

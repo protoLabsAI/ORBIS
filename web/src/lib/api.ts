@@ -221,7 +221,19 @@ export interface DelegateOpenAI {
   temperature?: number;
 }
 
-export type Delegate = DelegateA2A | DelegateOpenAI;
+export interface DelegateACP {
+  name: string;
+  type: 'acp';
+  description: string;
+  /** The agent binary ORBIS launches (e.g. "proto", "opencode", "npx"). */
+  command: string;
+  /** Args that start it in ACP mode (e.g. ["--acp"], ["acp"]). */
+  args?: string[];
+  /** The directory the agent is responsible for — its session working dir. */
+  workdir: string;
+}
+
+export type Delegate = DelegateA2A | DelegateOpenAI | DelegateACP;
 
 export type DelegateHealth = {
   ok: boolean | null;
