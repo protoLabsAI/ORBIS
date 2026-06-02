@@ -4,9 +4,13 @@
 # name. Each delegate has a `description` the LLM uses to decide which
 # target fits a question.
 #
-# Two `type`s supported:
+# Three `type`s supported:
 #   a2a    — JSON-RPC `message/send` to another agent (the A2A protocol)
 #   openai — chat-completions to any OpenAI-compatible /v1 endpoint
+#   acp    — a local coding agent ORBIS launches + drives over the Agent
+#            Client Protocol (protoCLI, OpenCode, Claude Code, Codex). Needs
+#            `command` + `args` (how to start it in ACP mode) and `workdir`
+#            (the directory it's responsible for — its session cwd + sandbox).
 #
 # No delegates ship by default — add your own here, or from
 # Settings → Agent → Delegates. Empty list = `delegate_to` is not
@@ -39,3 +43,29 @@ delegates: []
 #     api_key_env: LITELLM_MASTER_KEY
 #     system_prompt: >-
 #       You are a research assistant. Answer thoroughly but concisely.
+#
+# An ACP coding agent you voice-drive (proto first-class; opencode / claude
+# code / codex are the same shape — point `workdir` at the repo it owns):
+#
+#   - name: proto
+#     description: >-
+#       My terminal coding agent for the ORBIS repo. Use to read, edit, or
+#       run code in that project — "ask proto to add a test", "fix the build".
+#     type: acp
+#     command: proto
+#     args: ["--acp"]
+#     workdir: ~/dev/ORBIS
+#
+#   - name: opencode
+#     description: Coding agent for the marketing repo.
+#     type: acp
+#     command: opencode
+#     args: ["acp"]
+#     workdir: ~/dev/ORBIS/sites/marketing
+#
+#   - name: claude-code
+#     description: Claude Code, for deep refactors in the ORBIS repo.
+#     type: acp
+#     command: npx
+#     args: ["@zed-industries/claude-code-acp"]
+#     workdir: ~/dev/ORBIS

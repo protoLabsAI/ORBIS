@@ -48,6 +48,7 @@ from a2a.client import (
     A2ADispatchError,
     ProgressCallback,
 )
+from acp import AcpClient, AcpError
 from agent.tracing import active_trace, propagation_headers
 
 logger = logging.getLogger(__name__)
@@ -70,10 +71,15 @@ class Delegate:
     LLM endpoint, switched on `type`."""
     name: str
     description: str
-    type: str  # "a2a" | "openai"
+    type: str  # "a2a" | "openai" | "acp"
 
     # Common
     url: str = ""
+
+    # type=acp — a local coding agent ORBIS launches + drives over ACP.
+    command: str = ""  # the agent binary (e.g. "proto", "opencode")
+    args: list[str] = field(default_factory=list)  # e.g. ["--acp"]
+    workdir: str = ""  # the directory the agent is responsible for (session cwd)
 
     # type=a2a
     auth_scheme: str | None = None
@@ -120,9 +126,32 @@ def _parse_entry(raw: dict) -> Delegate | None:
     if not name or not dtype or not desc:
         logger.warning(f"[delegates] skipping entry missing name/type/description: {raw!r}")
         return None
-    if dtype not in ("a2a", "openai"):
+    if dtype not in ("a2a", "openai", "acp"):
         logger.warning(f"[delegates] {name}: unknown type {dtype!r}; skipping")
         return None
+
+    # type=acp — launched local coding agent. Needs command + workdir, not a url.
+    if dtype == "acp":
+        command = _expand_env(str(raw.get("command", "")))
+        if not command:
+            logger.warning(f"[delegates] {name}: acp delegate requires command; skipping")
+            return None
+        workdir = _expand_env(str(raw.get("workdir", "")))
+        if not workdir:
+            logger.warning(f"[delegates] {name}: acp delegate requires workdir; skipping")
+            return None
+        raw_args = raw.get("args", [])
+        args = (
+            [_expand_env(str(a)) for a in raw_args] if isinstance(raw_args, list) else []
+        )
+        return Delegate(
+            name=name,
+            description=desc,
+            type=dtype,
+            command=command,
+            args=args,
+            workdir=workdir,
+        )
 
     url = _expand_env(str(raw.get("url", "")))
     if not url:
@@ -378,7 +407,54 @@ async def dispatch(
         )
     if delegate.type == "openai":
         return await _dispatch_openai(delegate, query, timeout=timeout)
+    if delegate.type == "acp":
+        return await _dispatch_acp(
+            delegate, query, timeout=timeout, progress_callback=progress_callback
+        )
     raise DelegateError(f"unknown delegate type {delegate.type!r}")
+
+
+# Per-delegate AcpClient cache — one launched agent process + session per
+# delegate, reused across turns so follow-ups continue the thread (the sticky-
+# session analog of the A2A contextId). Keyed by the launch identity.
+_acp_clients: dict[tuple, AcpClient] = {}
+
+
+def _acp_client_for(delegate: Delegate) -> AcpClient:
+    key = (delegate.name, delegate.command, tuple(delegate.args), delegate.workdir)
+    client = _acp_clients.get(key)
+    if client is None:
+        client = AcpClient(
+            delegate.command,
+            delegate.args,
+            cwd=delegate.workdir,
+            name=delegate.name,
+        )
+        _acp_clients[key] = client
+    return client
+
+
+async def _dispatch_acp(
+    delegate: Delegate,
+    query: str,
+    *,
+    timeout: float,
+    progress_callback: ProgressCallback | None = None,
+) -> str:
+    """Drive a launched ACP coding agent for one turn. Coding turns are slow,
+    so the floor is generous regardless of the caller's default timeout."""
+    client = _acp_client_for(delegate)
+    try:
+        text = await client.prompt(
+            query,
+            progress_callback=progress_callback,
+            timeout=max(timeout, 600.0),
+        )
+    except AcpError as exc:
+        raise DelegateError(f"{delegate.name}: {exc}") from exc
+    if not text:
+        raise DelegateError(f"{delegate.name} finished but returned no text")
+    return text
 
 
 # Per-delegate A2AClient cache — reused across dispatches so the Agent Card
