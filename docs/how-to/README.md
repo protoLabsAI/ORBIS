@@ -3,8 +3,8 @@
 Task-oriented — a recipe for a specific goal. These assume you've done the
 [Getting started](/tutorials/getting-started) tutorial and just need the steps.
 
-::: tip Filling out
-This section is being written domain by domain. Planned guides: configure the
-LLM, add a delegate (A2A / OpenAI-compat), set & manage reminders, pick and
-customize your orb, run ORBIS as a menu-bar agent, and troubleshoot voice.
-:::
+- **[Add a delegate](./add-a-delegate)** — wire up an A2A or OpenAI-compat agent.
+- **[Customize your orb](./customize-your-orb)** — variant, palette, fine-tuning.
+- **[Personalize ORBIS](./personalize-orbis)** — names, persona voice, verbosity.
+- **[Run ORBIS as a menu-bar agent](./menu-bar-mode)** — show, hide, quit.
+- **[Voice isn't working](./voice-not-working)** — troubleshooting.
