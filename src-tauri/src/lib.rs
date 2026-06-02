@@ -699,18 +699,21 @@ fn handle_agent_click(app: AppHandle, agent_id: String) {
     }
 }
 
-/// Build the macOS menu-bar (tray) item: the protoLabs robot mark (template,
-/// so the system tints it to the menu bar) with a Show / Quit menu. Left-click
-/// surfaces the window; the menu's Quit is the real exit path in menu-bar-only
-/// mode. Returns Err if the tray can't be created, so the caller can stay in
-/// the dock as a fallback rather than leave the app unreachable.
+/// Build the macOS menu-bar (tray) item: the ORBIS orb (full-color, NOT a
+/// template — the lavender orb is our identity, so we don't let the system
+/// flatten it to monochrome) with a Show / Quit menu. Each protoLabs.studio app
+/// owns its own menu-bar presence (ORBIS = the orb; fleet agents = the robot),
+/// managed separately. Left-click surfaces the window; the menu's Quit is the
+/// real exit path in menu-bar-only mode. Returns Err if the tray can't be
+/// created, so the caller can stay in the dock as a fallback rather than leave
+/// the app unreachable.
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::MenuBuilder;
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    // One icon for the ecosystem: ORBIS itself, then the registered fleet
-    // agents, then Quit. (Selecting an agent launches/embeds it — lands in the
-    // follow-up PRs; here the dropdown just enumerates them.)
+    // ORBIS's own menu: Show, then any registered fleet agents it can
+    // launch/embed (ORBIS#325), then Quit. The orb is ORBIS's identity here;
+    // fleet agents carry their own (the robot) and run their own menu-bar item.
     let agents = scan_agent_manifests();
     log::info!("[fleet] {} agent manifest(s) registered", agents.len());
 
@@ -723,11 +726,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     }
     let menu = mb.separator().text("quit", "Quit ORBIS").build()?;
 
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-robot.png"))?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-orb.png"))?;
 
     TrayIconBuilder::with_id("orbis-tray")
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(false)
         .tooltip("ORBIS")
         .menu(&menu)
         .show_menu_on_left_click(false)
