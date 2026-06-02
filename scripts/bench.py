@@ -196,25 +196,22 @@ async def bench_fish(turns: int) -> tuple[list[float], list[float], list[float]]
 # ---------------------------------------------------------------------------
 
 async def bench_a2a(turns: int) -> list[float]:
+    # Drive through the real SDK-backed client so the wire shape is always
+    # whatever ORBIS actually speaks (A2A 1.0) — no hand-maintained JSON-RPC
+    # body to drift out of sync with the inbound handler.
+    from a2a_outbound import A2AClient
+
     samples: list[float] = []
-    async with httpx.AsyncClient(timeout=60) as c:
+    client = A2AClient(
+        f"{ORBIS_URL}/a2a", card_origin=ORBIS_URL, name="bench", context_id="bench"
+    )
+    try:
         for i in range(turns):
-            body = {
-                "jsonrpc": "2.0",
-                "id": f"bench-{i}",
-                "method": "message/send",
-                "params": {
-                    "contextId": "bench",
-                    "message": {
-                        "role": "user",
-                        "parts": [{"kind": "text", "text": PROMPTS[i % len(PROMPTS)]}],
-                    },
-                },
-            }
             t0 = time.time()
-            r = await c.post(f"{ORBIS_URL}/a2a", json=body)
-            r.raise_for_status()
+            await client.send(PROMPTS[i % len(PROMPTS)])
             samples.append(time.time() - t0)
+    finally:
+        await client.close()
     return samples
 
 
