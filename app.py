@@ -1409,7 +1409,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 logger.warning(f"[delegates/hot] re-register failed: {e}")
                 return
         if new_schema is not None:
-            context.tools = new_schema
+            context.set_tools(new_schema)
             context.messages[0]["content"] = _effective_prompt(
                 skill, tts_backend,
                 verbosity=user_state.filler_settings.verbosity,
