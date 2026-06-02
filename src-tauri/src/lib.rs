@@ -398,7 +398,7 @@ fn show_main_window(app: &AppHandle) {
 /// dropdown.)
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)] // launch/icon/health/api_base consumed by the launcher PRs
+#[allow(dead_code)] // `icon` is consumed by the embedded-console PR (ORBIS#325)
 struct AgentManifest {
     id: String,
     name: String,
@@ -413,7 +413,6 @@ struct AgentManifest {
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
-#[allow(dead_code)]
 struct AgentLaunch {
     bin: String,
     #[serde(default)]
@@ -460,6 +459,178 @@ fn scan_agent_manifests() -> Vec<AgentManifest> {
     out
 }
 
+/// A launched (or connect-only) fleet agent ORBIS is tracking.
+struct FleetChild {
+    /// `Some` when ORBIS spawned the process (launch manifest) — killed on
+    /// quit. `None` for connect-only entries (a fixed `apiBase`), which ORBIS
+    /// reaches but doesn't own, so it leaves them running.
+    child: Option<std::process::Child>,
+    /// Loopback base (`http://127.0.0.1:<port>`) or the manifest's `apiBase`.
+    base_url: String,
+}
+
+/// Tauri-managed registry of running fleet agents, keyed by manifest id, so a
+/// second click reuses the live process and the exit handler can reap the ones
+/// ORBIS launched.
+#[derive(Default)]
+struct FleetAgents(Mutex<HashMap<String, FleetChild>>);
+
+impl FleetAgents {
+    /// Kill every agent ORBIS launched (connect-only entries are left alone).
+    fn reap(&self) {
+        if let Ok(mut map) = self.0.lock() {
+            for (id, agent) in map.iter_mut() {
+                if let Some(child) = agent.child.as_mut() {
+                    log::info!("[fleet] reaping {id}");
+                    let _ = child.kill();
+                }
+            }
+            map.clear();
+        }
+    }
+}
+
+/// Grab a free loopback TCP port by binding `:0` and reading the assignment.
+/// The listener is dropped immediately; there's a benign TOCTOU window before
+/// the agent binds it, same as ORBIS's own sidecar (which uses `--port 0`).
+fn free_port() -> std::io::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    Ok(listener.local_addr()?.port())
+}
+
+/// Tee a child's stdout/stderr into the unified ORBIS log so a launched
+/// agent's output is greppable alongside the sidecar's.
+fn spawn_log_reader<R: std::io::Read + Send + 'static>(reader: R, tag: String) {
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let buf = std::io::BufReader::new(reader);
+        for line in buf.lines().map_while(Result::ok) {
+            log::info!("[{tag}] {line}");
+        }
+    });
+}
+
+/// Poll an agent's health endpoint until it answers `200`, then log it ready.
+/// `503` is treated as "still compiling" (protoAgent returns it until its
+/// graph is built), so we keep waiting. Gives up after ~60s.
+async fn await_agent_health(id: String, base_url: String, health: String) {
+    let url = format!("{base_url}{health}");
+    let client = reqwest::Client::new();
+    for _ in 0..120 {
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().as_u16() == 200 => {
+                log::info!("[fleet] {id} ready at {base_url}");
+                return;
+            }
+            Ok(resp) => log::debug!("[fleet] {id} health {} — waiting", resp.status()),
+            Err(_) => {} // not listening yet
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    log::warn!("[fleet] {id} never became healthy at {url} (gave up after ~60s)");
+}
+
+/// Tray dropdown handler for a selected fleet agent. Re-scans manifests (so a
+/// freshly-installed agent is picked up without a relaunch), then either
+/// reuses a live process, launches the `launch` binary on a free port, or
+/// records a connect-only `apiBase` entry. Spawning the process is synchronous;
+/// the health wait runs on the async runtime. The embedded console window is
+/// the next PR — here we just bring the agent up and track it.
+fn handle_agent_click(app: AppHandle, agent_id: String) {
+    let state = match app.try_state::<FleetAgents>() {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Already running? Reuse it (the window-focus path lands with PR3).
+    if let Ok(map) = state.0.lock() {
+        if let Some(agent) = map.get(&agent_id) {
+            log::info!("[fleet] {agent_id} already running at {}", agent.base_url);
+            return;
+        }
+    }
+
+    let manifest = match scan_agent_manifests()
+        .into_iter()
+        .find(|m| m.id == agent_id)
+    {
+        Some(m) => m,
+        None => {
+            log::warn!("[fleet] {agent_id} clicked but its manifest is gone");
+            return;
+        }
+    };
+
+    match (&manifest.launch, &manifest.api_base) {
+        // ORBIS launches and owns the process.
+        (Some(launch), _) => {
+            let port = match free_port() {
+                Ok(p) => p,
+                Err(e) => {
+                    log::error!("[fleet] {agent_id} couldn't get a free port: {e}");
+                    return;
+                }
+            };
+            let base_url = format!("http://127.0.0.1:{port}");
+            let mut child = match std::process::Command::new(&launch.bin)
+                .args(&launch.args)
+                .arg("--port")
+                .arg(port.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("[fleet] {agent_id} launch failed ({}): {e}", launch.bin);
+                    return;
+                }
+            };
+            log::info!(
+                "[fleet] launched {agent_id} ({}) on port {port}",
+                launch.bin
+            );
+            if let Some(out) = child.stdout.take() {
+                spawn_log_reader(out, format!("fleet/{agent_id}"));
+            }
+            if let Some(err) = child.stderr.take() {
+                spawn_log_reader(err, format!("fleet/{agent_id}"));
+            }
+            if let Ok(mut map) = state.0.lock() {
+                map.insert(
+                    agent_id.clone(),
+                    FleetChild {
+                        child: Some(child),
+                        base_url: base_url.clone(),
+                    },
+                );
+            }
+            tauri::async_runtime::spawn(await_agent_health(agent_id, base_url, manifest.health));
+        }
+        // Connect-only: an already-running agent at a fixed base URL.
+        (None, Some(api_base)) => {
+            log::info!("[fleet] {agent_id} connect-only at {api_base}");
+            if let Ok(mut map) = state.0.lock() {
+                map.insert(
+                    agent_id.clone(),
+                    FleetChild {
+                        child: None,
+                        base_url: api_base.clone(),
+                    },
+                );
+            }
+            tauri::async_runtime::spawn(await_agent_health(
+                agent_id,
+                api_base.clone(),
+                manifest.health,
+            ));
+        }
+        (None, None) => {
+            log::warn!("[fleet] {agent_id} has neither `launch` nor `apiBase` — nothing to do");
+        }
+    }
+}
+
 /// Build the macOS menu-bar (tray) item: the protoLabs robot mark (template,
 /// so the system tints it to the menu bar) with a Show / Quit menu. Left-click
 /// surfaces the window; the menu's Quit is the real exit path in menu-bar-only
@@ -498,11 +669,11 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 "show" => show_main_window(app),
                 "quit" => app.exit(0),
                 _ if id.starts_with("agent:") => {
-                    let agent_id = &id["agent:".len()..];
-                    // PR1: registry + dropdown. Launch (free-port + spawn +
-                    // /healthz wait) and the embedded console window land in
-                    // the follow-up PRs — see ORBIS#325.
-                    log::info!("[fleet] agent selected: {agent_id} (launch lands next)");
+                    // Launch (free-port + spawn + /healthz wait) on click. The
+                    // embedded console window lands in the next PR — see
+                    // ORBIS#325 — so for now this brings the agent up + tracks
+                    // it (greppable in the unified log).
+                    handle_agent_click(app.clone(), id["agent:".len()..].to_string());
                 }
                 _ => {}
             }
@@ -727,6 +898,7 @@ pub fn run() {
         .manage(Sidecar::new())
         .manage(BackendUrl::default())
         .manage(BootState::default())
+        .manage(FleetAgents::default())
         .on_window_event(|window, event| {
             // Menu-bar agent: closing the window (red traffic light) hides it
             // instead of quitting — ORBIS keeps listening in the background.
@@ -782,6 +954,10 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<Sidecar>() {
                     log::info!("app exit requested — killing sidecar");
                     state.kill();
+                }
+                // Reap any fleet agents ORBIS launched (connect-only stay up).
+                if let Some(state) = app_handle.try_state::<FleetAgents>() {
+                    state.reap();
                 }
                 // Flush CPAL playback ring so audio doesn't click on exit.
                 #[cfg(feature = "native-audio")]
