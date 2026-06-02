@@ -152,7 +152,7 @@ from agent.tools import (
 from auth import load_users, require_user, user_registry
 from auth.users import User
 from auth.context import current_session_id, current_user_id
-from agent.user_state import active_user_states, user_state_for
+from agent.user_state import active_user_states, all_user_states, user_state_for
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
@@ -1305,14 +1305,18 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # over the session's text LLM client. Built once and shared across failover
     # members. Only when delegates + a DeliveryController exist (the synthesis
     # has to be speakable). See agent/orchestrate.py.
+    # Built whenever a DeliveryController exists (not gated on the boot-time
+    # delegate count) so orchestrate is available after a hot-swap adds the
+    # first delegate. Resolves the registry LIVE per run so it sees current
+    # delegates even when the session booted with none.
     _orch_runner = None
-    if session_delegates and session_delegates.names() and delivery is not None:
+    if delivery is not None:
         _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
 
         async def _orch_runner(goal: str, *, progress=None, ask_user=None) -> str:
             return await run_orchestration(
                 goal,
-                delegates=session_delegates,
+                delegates=_DELEGATES.filtered(skill.delegates if skill else None),
                 client=_orch_client,
                 model=llm_cfg["model"],
                 extra_body=llm_cfg["extra_body"],
@@ -1377,6 +1381,43 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         }],
         tools=tools_schema,
     )
+
+    # Hot-swap: re-render the delegate roster into THIS live session when the
+    # registry changes (a delegate added/removed in Settings), so it takes
+    # effect on the next turn without a restart. register_function overwrites by
+    # name (idempotent), so re-running register_tools just refreshes the handler
+    # + schema; we then push the new schema + fleet-block prompt onto the
+    # running context. Stored on user_state; called by the /api/delegates
+    # endpoints. Mutating context.tools / messages[0] is picked up next turn.
+    def _refresh_delegates() -> None:
+        fresh = _DELEGATES.filtered(skill.delegates if skill else None)
+        new_schema = None
+        for m in _llm_members:
+            try:
+                s = register_tools(
+                    m,
+                    on_finish=_cancel_progress,
+                    delivery=delivery,
+                    delegates=fresh,
+                    push_notification_url=_push_url,
+                    push_notification_token=_push_token,
+                    orchestrate_runner=_orch_runner,
+                )
+                if new_schema is None:
+                    new_schema = s
+            except Exception as e:  # noqa: BLE001 — never break the live session
+                logger.warning(f"[delegates/hot] re-register failed: {e}")
+                return
+        if new_schema is not None:
+            context.tools = new_schema
+            context.messages[0]["content"] = _effective_prompt(
+                skill, tts_backend,
+                verbosity=user_state.filler_settings.verbosity,
+                user_id=user_id, delegates=fresh, tools_schema=new_schema,
+            )
+            logger.info("[delegates/hot] live session refreshed: %s", fresh.names())
+
+    user_state.refresh_delegates = _refresh_delegates
 
     _turn_strategies = _build_user_turn_strategies()
     # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
@@ -2425,10 +2466,24 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
     so in-flight sessions see the new registry on their next dispatch.
     """
     names = _DELEGATES.reload()
+    _hot_refresh_delegate_sessions()
     return {"ok": True, "delegates": names}
 
 
 # --- Delegates CRUD ---------------------------------------------------------
+
+
+def _hot_refresh_delegate_sessions() -> None:
+    """Push the updated delegate roster into any live voice session so a
+    Settings change (add/edit/remove a delegate) takes effect on the next turn
+    without a restart — see run_bot's _refresh_delegates."""
+    for st in all_user_states():
+        fn = getattr(st, "refresh_delegates", None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[delegates/hot] session refresh failed: {e}")
 
 
 def _decorate_delegates(entries: list[dict]) -> list[dict]:
@@ -2504,6 +2559,7 @@ async def create_delegate_endpoint(
     except DelegateValidationError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     _DELEGATES.reload()
+    _hot_refresh_delegate_sessions()
     return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
@@ -2538,6 +2594,7 @@ async def update_delegate_endpoint(
     except DelegateValidationError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     _DELEGATES.reload()
+    _hot_refresh_delegate_sessions()
     return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
@@ -2551,6 +2608,7 @@ async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)
             status_code=404, content={"error": f"delegate {name!r} not found"},
         )
     _DELEGATES.reload()
+    _hot_refresh_delegate_sessions()
     return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
