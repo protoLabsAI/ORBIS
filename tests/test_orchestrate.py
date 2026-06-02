@@ -106,6 +106,42 @@ async def test_single_step_then_synthesis(monkeypatch, registry):
 
 
 @pytest.mark.asyncio
+async def test_preamble_is_narrated_and_skips_generic_checking(monkeypatch, registry):
+    """When the model says what it's about to do, speak that (its own words) and
+    skip the generic 'checking with X' so we don't double-talk."""
+    llm = _run(monkeypatch, registry, [
+        _msg(
+            content="Let me check with ava first.",
+            tool_calls=[_tool_call("c1", "delegate_to", {"target": "ava", "query": "status?"})],
+        ),
+        _msg(content="all good"),
+    ])
+    steps = []
+    out = await orch.run_orchestration(
+        "check", delegates=registry, client=llm, model="m",
+        progress=lambda t: steps.append(t) or _noop(),
+    )
+    assert out == "all good"
+    assert "Let me check with ava first." in steps          # spoke the preamble
+    assert not any(s.startswith("checking with") for s in steps)  # no double-talk
+
+
+@pytest.mark.asyncio
+async def test_no_preamble_falls_back_to_generic_checking(monkeypatch, registry):
+    """Without a model preamble, the user still hears which agent we're asking."""
+    llm = _run(monkeypatch, registry, [
+        _msg(tool_calls=[_tool_call("c1", "delegate_to", {"target": "ava", "query": "q"})]),
+        _msg(content="done"),
+    ])
+    steps = []
+    await orch.run_orchestration(
+        "x", delegates=registry, client=llm, model="m",
+        progress=lambda t: steps.append(t) or _noop(),
+    )
+    assert any("checking with ava" == s for s in steps)
+
+
+@pytest.mark.asyncio
 async def test_same_delegate_reuses_one_sticky_client(monkeypatch, registry):
     # Two delegate_to calls to ava across two steps → ONE A2AClient (sticky ctx).
     llm = _run(monkeypatch, registry, [

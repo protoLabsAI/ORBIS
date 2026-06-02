@@ -61,6 +61,10 @@ HOW TO WORK:
 - If an agent asks for clarification you can answer from the goal, answer it.
   If you truly can't proceed, summarise what you got and what's blocking.
 - Don't pad. If one hand-off already answers the goal, synthesise and stop.
+- Before a hand-off you MAY add ONE short, natural sentence saying what you're
+  about to do ("Let me check with helm first."). It's spoken to the user while
+  they wait — but NEVER skip the actual tool call just to talk. The work is the
+  point; the sentence is courtesy.
 """
 
 
@@ -126,6 +130,12 @@ async def run_orchestration(
             final = (msg.content or "").strip()
             break
 
+        # Narrate the model's own preamble — its plan in its own words — so the
+        # user hears what's happening between hand-offs instead of dead air.
+        preamble = (msg.content or "").strip()
+        if progress is not None and preamble:
+            await _safe_progress(progress, preamble)
+
         messages.append({
             "role": "assistant",
             "content": msg.content or "",
@@ -150,7 +160,7 @@ async def run_orchestration(
             name = tc.function.name
             out = await _run_step(
                 name, args, delegates=delegates, client_for=_client_for,
-                progress=progress, step=step,
+                progress=progress, step=step, announce=not preamble,
             )
             messages.append({
                 "role": "tool",
@@ -177,10 +187,15 @@ async def _run_step(
     client_for: Callable[[str], A2AClient | None],
     progress: ProgressFn | None,
     step: int,
+    announce: bool = True,
 ) -> str:
     """Execute one tool call inside the loop. ``delegate_to`` is routed through
     the per-run sticky client (multi-turn continuity); every other tool falls
-    back to the shared text-mode runner."""
+    back to the shared text-mode runner.
+
+    ``announce`` is False when the model already narrated a preamble this turn —
+    we skip the generic "checking with X" so we don't double-talk. A slow step
+    still gets a reassurance line so the user isn't left in silence."""
     if name == "delegate_to":
         target = (args.get("target") or "").strip()
         query = (args.get("query") or "").strip()
@@ -190,13 +205,22 @@ async def _run_step(
         if not query:
             return f"(empty query for {target})"
         logger.info(f"[orchestrate] step={step} delegate_to {target} q={query!r}")
-        if progress is not None:
+        if announce and progress is not None:
             await _safe_progress(progress, f"checking with {target}")
+        # Reassure on a slow step so a 2-minute hand-off isn't dead air.
+        reassure = (
+            asyncio.ensure_future(_reassure(progress, target))
+            if progress is not None
+            else None
+        )
         try:
             res = await asyncio.wait_for(client.send(query), timeout=_STEP_TIMEOUT)
         except (A2ADispatchError, asyncio.TimeoutError) as e:
             logger.warning(f"[orchestrate] {target} step failed: {e}")
             return f"({target} couldn't answer that step: {e})"
+        finally:
+            if reassure is not None:
+                reassure.cancel()
         if res.input_required:
             # Surface the question back into the loop so the orchestrating model
             # can answer it (the sticky context keeps it in the same A2A
@@ -206,6 +230,24 @@ async def _run_step(
 
     # Read-only / local tools (calculator, datetime, web_search, …).
     return await run_text_tool(name, args, delegates=delegates)
+
+
+# How long a single delegate step may run quietly before we reassure the user.
+_REASSURE_AFTER_S = float(os.environ.get("ORCHESTRATE_REASSURE_AFTER", "8"))
+
+
+async def _reassure(progress: ProgressFn | None, target: str) -> None:
+    """Narrate a gentle 'still working' line if a step runs long, then go quiet.
+    Cancelled the instant the step returns, so fast steps say nothing."""
+    if progress is None:
+        return
+    try:
+        await asyncio.sleep(_REASSURE_AFTER_S)
+        await _safe_progress(progress, f"still working with {target}")
+        await asyncio.sleep(_REASSURE_AFTER_S * 2)
+        await _safe_progress(progress, f"{target}'s taking a moment — hang tight")
+    except asyncio.CancelledError:
+        pass
 
 
 async def _safe_progress(progress: ProgressFn, text: str) -> None:
