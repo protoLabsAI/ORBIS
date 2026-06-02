@@ -56,10 +56,11 @@ It answers from memory — the proactive line is part of the conversation.
 
 ## 4. Hand work to an agent
 
-If you've configured a delegate (see the README's *Configuration*; the
-default ships `ava`), say:
+ORBIS ships with **no delegates** — you add the agents you want it to hand
+work to. Configure one first (see [Add a delegate](/how-to/add-a-delegate)),
+then ask for it by name:
 
-> *"Ask Ava to do X and let me know."*
+> *"Ask my agent to do X and let me know."*
 
 It **acknowledges right away** and keeps talking with you. When the agent
 finishes, the orb **speaks the result** at the next pause, attributed to the

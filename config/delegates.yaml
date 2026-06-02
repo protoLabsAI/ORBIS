@@ -5,41 +5,37 @@
 # target fits a question.
 #
 # Two `type`s supported:
-#   a2a    — JSON-RPC `message/send` to another agent in the protoLabs fleet
+#   a2a    — JSON-RPC `message/send` to another agent (the A2A protocol)
 #   openai — chat-completions to any OpenAI-compatible /v1 endpoint
 #
-# Add as many as you want. Empty list = `delegate_to` is not registered.
+# No delegates ship by default — add your own here, or from
+# Settings → Agent → Delegates. Empty list = `delegate_to` is not
+# registered. See docs/reference/agent.md.
 
-delegates:
-  # ─── Ava — chief of staff on workstacean ────────────────────────────
-  # Native A2A. The two bugs that held this on type=openai (protoWorkstacean
-  # #471: message/send → protoBot; message/stream "Cannot POST /" 404) are
-  # CLOSED. Verified 2026-05-29: POST https://ava.proto-labs.ai/a2a message/send
-  # with no explicit target defaults to Ava and returns her output (the a2a
-  # server defaults targets=[ava]; she's the helm). a2a/client.py is
-  # spec-tolerant and falls back to status.message when artifacts is empty —
-  # which is exactly what Ava's in-process agent returns.
-  - name: ava
-    description: >-
-      Chief of staff for the protoLabs fleet. Best for project status
-      reports (sitreps), coordination across other agents, planning a
-      feature, bug triage, and anything that needs a wider look across
-      the board, CI, and incidents. Has her own sub-agents and
-      delegation authority.
-    type: a2a
-    url: https://ava.proto-labs.ai/a2a
-    auth: { scheme: apiKey, credentialsEnv: WORKSTACEAN_API_KEY }
+delegates: []
 
-  # ─── Add more delegates here as you wire them up ────────────────────
-  # Example — a heavy reasoning model through the LiteLLM gateway:
-  #
-  # - name: opus
-  #   description: >-
-  #     Heavy reasoning model. Use when the user wants analysis,
-  #     summarization, or a thorough explanation of a topic.
-  #   type: openai
-  #   url: http://gateway:4000/v1
-  #   model: claude-opus-4-6
-  #   api_key_env: LITELLM_MASTER_KEY
-  #   system_prompt: >-
-  #     You are a research assistant. Answer thoroughly but concisely.
+# ─── Examples (uncomment + edit) ────────────────────────────────────────
+#
+# An A2A agent in a fleet:
+#
+#   - name: helm
+#     description: >-
+#       Chief of staff — project status (sitreps), coordination across
+#       agents, planning, and bug triage. Use for anything needing a wider
+#       look across the board, CI, and incidents.
+#     type: a2a
+#     url: https://agent.example.com/a2a
+#     auth: { scheme: apiKey, credentialsEnv: AGENT_API_KEY }
+#
+# A heavy reasoning model through an OpenAI-compatible gateway:
+#
+#   - name: opus
+#     description: >-
+#       Heavy reasoning model. Use for analysis, summarization, or a
+#       thorough explanation of a topic.
+#     type: openai
+#     url: http://gateway:4000/v1
+#     model: claude-opus-4-6
+#     api_key_env: LITELLM_MASTER_KEY
+#     system_prompt: >-
+#       You are a research assistant. Answer thoroughly but concisely.

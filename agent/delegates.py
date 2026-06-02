@@ -13,11 +13,11 @@ by editing `config/delegates.yaml` — no code change needed.
 Schema (config/delegates.yaml):
 
     delegates:
-      - name: ava
+      - name: helm
         description: "Chief of staff — sitreps, planning, fleet delegation."
         type: a2a
-        url: ${AVA_URL:-http://ava:3008/a2a}
-        auth: { scheme: apiKey, credentialsEnv: AVA_API_KEY }
+        url: ${AGENT_URL:-http://agent:3008/a2a}
+        auth: { scheme: apiKey, credentialsEnv: AGENT_API_KEY }
 
       - name: opus
         description: "Heavy reasoning model — analysis, summarization, depth."
