@@ -51,29 +51,55 @@ All optional; leave unset for simple single-model behaviour.
 **description** when it decides delegation is the right call. Manage them in
 **Settings → Agent → Delegates**.
 
-Two types:
+Three types:
 
 | Type | What it is |
 | --- | --- |
 | **A2A agent** | A JSON-RPC fleet peer (the Agent2Agent protocol) — e.g. another studio agent. |
 | **OpenAI-compat** | Any `/v1/chat/completions` endpoint treated as a sub-agent. |
+| **ACP coding agent** | A local terminal coding agent ORBIS launches and drives over the [Agent Client Protocol](https://agentclientprotocol.com) — protoCLI, OpenCode, Claude Code, Codex. |
 
 **Fields:**
 
 | Field | Applies | Meaning |
 | --- | --- | --- |
-| **Name** | both | Used in `delegate_to(target=…)`. Lowercase, no spaces. |
-| **Description** | both | The LLM reads this to choose between delegates — be specific. |
-| **URL** | both | A2A: the JSON-RPC endpoint (often `/a2a`). OpenAI: the base URL ending in `/v1`. |
+| **Name** | all | Used in `delegate_to(target=…)`. Lowercase, no spaces. |
+| **Description** | all | The LLM reads this to choose between delegates — be specific. |
+| **URL** | A2A · OpenAI | A2A: the JSON-RPC endpoint (often `/a2a`). OpenAI: the base URL ending in `/v1`. |
 | **Auth scheme** | A2A | `apiKey` (X-API-Key) or `bearer`, or none for a public endpoint. |
 | **Credentials env var** | A2A | Name of the env var holding the secret (set it in `.env`). |
 | **Model** | OpenAI | Provider model id. |
 | **API key env var** | OpenAI | Optional; for endpoints that need auth. |
+| **Command** | ACP | The agent binary to launch (e.g. `proto`, `opencode`). |
+| **Args** | ACP | Args that start it in ACP mode (e.g. `["--acp"]`, `["acp"]`). |
+| **Workdir** | ACP | The directory the agent is responsible for — its session working directory. |
 
 No secrets cross the wire from the UI — the schema only references env-var
 **names**; the values come from the process environment.
 
-See [Add a delegate](/how-to/add-a-delegate) for the steps.
+### ACP coding agents
+
+An **ACP delegate** is a coding agent that runs on *your* machine. ORBIS launches
+it (`command` + `args`) in the registered `workdir`, drives it by voice, narrates
+its tool calls ("Editing app.py", "Running pytest"), and the agent reads, edits,
+and runs code **in that directory**. The `workdir` is the unit of identity — add
+the same agent twice against two repos and you get two scoped delegates
+(*"ask proto in the ORBIS repo…"*).
+
+Launch commands (each speaks ACP over stdio):
+
+| Agent | `command` | `args` |
+| --- | --- | --- |
+| **protoCLI** | `proto` | `["--acp"]` |
+| **OpenCode** | `opencode` | `["acp"]` |
+| **Claude Code** | `npx` | `["@zed-industries/claude-code-acp"]` |
+| **Codex** | `codex-acp` | `[]` (install [zed-industries/codex-acp](https://github.com/zed-industries/codex-acp)) |
+
+The agent must be installed and on your `PATH`. ORBIS only launches one on an
+explicit request — never automatically.
+
+See [Add a delegate](/how-to/add-a-delegate) and
+[Voice-drive a coding agent](/how-to/voice-drive-a-coding-agent) for the steps.
 
 ## What the agent can do
 

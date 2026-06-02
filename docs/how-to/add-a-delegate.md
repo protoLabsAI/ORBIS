@@ -13,6 +13,9 @@ Decide which kind you're adding:
   (e.g. a peer in your fleet). You'll need its endpoint URL.
 - **OpenAI-compat** — any `/v1/chat/completions` endpoint you want to treat as a
   specialist (a bigger model, a service).
+- **ACP coding agent** — a terminal coding agent (protoCLI, OpenCode, Claude
+  Code, Codex) ORBIS launches and drives by voice. It has its own guide:
+  [Voice-drive a coding agent](/how-to/voice-drive-a-coding-agent).
 
 If the endpoint needs a secret, put it in your **`.env`** on the host first —
 the UI references the env-var *name*, never the value.
