@@ -57,6 +57,12 @@ class UserState:
     # HITL: a background orchestration run waiting on the user's spoken answer.
     pending_ask: PendingAsk | None = None
 
+    # Hot-swap: re-render the live session's delegate roster (fleet-block prompt
+    # + delegate_to/orchestrate tool schema) from the current registry, so a
+    # delegate added/removed in Settings takes effect without a restart. Set by
+    # run_bot when the pipeline is built; called by the /api/delegates endpoints.
+    refresh_delegates: Any = None
+
 
 class UserStateRegistry:
     def __init__(self) -> None:
