@@ -14,6 +14,14 @@
 //! network reach. `shell:allow-execute` in the default capability
 //! pins the sidecar args so there's no arbitrary-exec surface.
 //!
+//! One deliberate exception: fleet agents (protoLabsAI/ORBIS#325) drop
+//! a manifest in the user-writable
+//! `~/Library/Application Support/protoLabs.studio/agents/` dir, and
+//! ORBIS launches the `launch.bin` it names. That's an intentional trust
+//! boundary — the same user who installs a fleet agent owns that dir —
+//! but it means a manifest there can name any executable. ORBIS only
+//! spawns one on an explicit tray click, never automatically.
+//!
 //! ## Runtime flow
 //!
 //! On boot:
@@ -467,6 +475,8 @@ struct FleetChild {
     child: Option<std::process::Child>,
     /// Loopback base (`http://127.0.0.1:<port>`) or the manifest's `apiBase`.
     base_url: String,
+    /// Display name, used as the console window title on reuse.
+    name: String,
 }
 
 /// Tauri-managed registry of running fleet agents, keyed by manifest id, so a
@@ -510,16 +520,60 @@ fn spawn_log_reader<R: std::io::Read + Send + 'static>(reader: R, tag: String) {
     });
 }
 
-/// Poll an agent's health endpoint until it answers `200`, then log it ready.
-/// `503` is treated as "still compiling" (protoAgent returns it until its
-/// graph is built), so we keep waiting. Gives up after ~60s.
-async fn await_agent_health(id: String, base_url: String, health: String) {
+/// Open (or focus, if it's already up) the embedded console window for an
+/// agent: a Tauri webview pointed at the agent's loopback origin, which serves
+/// protoAgent's `--ui console`. The console reads its API location from
+/// `localStorage['protoagent.apiBase']`, so we seed that to the agent's base
+/// URL via an init script that runs before the page loads — one app, one
+/// window per agent, switched from the tray.
+fn open_or_focus_console(app: &AppHandle, id: &str, name: &str, base_url: &str) {
+    let label = format!("fleet-{id}");
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let url = match base_url.parse() {
+        Ok(u) => u,
+        Err(e) => {
+            log::error!("[fleet] {id} has an unparseable base url {base_url}: {e}");
+            return;
+        }
+    };
+    // JSON-encode the URL so it can't break out of the string literal.
+    let init = format!(
+        "try {{ localStorage.setItem('protoagent.apiBase', {}); }} catch (e) {{}}",
+        serde_json::to_string(base_url).unwrap_or_else(|_| "''".to_string())
+    );
+    match tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(url))
+        .title(name)
+        .inner_size(1024.0, 720.0)
+        .initialization_script(&init)
+        .build()
+    {
+        Ok(_) => log::info!("[fleet] opened console for {id} → {base_url}"),
+        Err(e) => log::error!("[fleet] couldn't open console for {id}: {e}"),
+    }
+}
+
+/// Poll an agent's health endpoint until it answers `200`, then open its
+/// console window. `503` is treated as "still compiling" (protoAgent returns it
+/// until its graph is built), so we keep waiting. Gives up after ~60s.
+async fn await_agent_health(
+    app: AppHandle,
+    id: String,
+    name: String,
+    base_url: String,
+    health: String,
+) {
     let url = format!("{base_url}{health}");
     let client = reqwest::Client::new();
     for _ in 0..120 {
         match client.get(&url).send().await {
             Ok(resp) if resp.status().as_u16() == 200 => {
                 log::info!("[fleet] {id} ready at {base_url}");
+                open_or_focus_console(&app, &id, &name, &base_url);
                 return;
             }
             Ok(resp) => log::debug!("[fleet] {id} health {} — waiting", resp.status()),
@@ -542,12 +596,16 @@ fn handle_agent_click(app: AppHandle, agent_id: String) {
         None => return,
     };
 
-    // Already running? Reuse it (the window-focus path lands with PR3).
-    if let Ok(map) = state.0.lock() {
-        if let Some(agent) = map.get(&agent_id) {
-            log::info!("[fleet] {agent_id} already running at {}", agent.base_url);
-            return;
-        }
+    // Already running? Reuse the live process — surface (or reopen) its
+    // console window instead of launching a second copy.
+    let existing = state.0.lock().ok().and_then(|map| {
+        map.get(&agent_id)
+            .map(|a| (a.base_url.clone(), a.name.clone()))
+    });
+    if let Some((base_url, name)) = existing {
+        log::info!("[fleet] {agent_id} already running at {base_url} — focusing console");
+        open_or_focus_console(&app, &agent_id, &name, &base_url);
+        return;
     }
 
     let manifest = match scan_agent_manifests()
@@ -602,10 +660,17 @@ fn handle_agent_click(app: AppHandle, agent_id: String) {
                     FleetChild {
                         child: Some(child),
                         base_url: base_url.clone(),
+                        name: manifest.name.clone(),
                     },
                 );
             }
-            tauri::async_runtime::spawn(await_agent_health(agent_id, base_url, manifest.health));
+            tauri::async_runtime::spawn(await_agent_health(
+                app,
+                agent_id,
+                manifest.name,
+                base_url,
+                manifest.health,
+            ));
         }
         // Connect-only: an already-running agent at a fixed base URL.
         (None, Some(api_base)) => {
@@ -616,11 +681,14 @@ fn handle_agent_click(app: AppHandle, agent_id: String) {
                     FleetChild {
                         child: None,
                         base_url: api_base.clone(),
+                        name: manifest.name.clone(),
                     },
                 );
             }
             tauri::async_runtime::spawn(await_agent_health(
+                app,
                 agent_id,
+                manifest.name,
                 api_base.clone(),
                 manifest.health,
             ));
@@ -900,12 +968,16 @@ pub fn run() {
         .manage(BootState::default())
         .manage(FleetAgents::default())
         .on_window_event(|window, event| {
-            // Menu-bar agent: closing the window (red traffic light) hides it
-            // instead of quitting — ORBIS keeps listening in the background.
-            // Real exit is the tray's "Quit" (RunEvent::ExitRequested).
+            // Menu-bar agent: closing the MAIN window (red traffic light) hides
+            // it instead of quitting — ORBIS keeps listening in the background.
+            // Real exit is the tray's "Quit" (RunEvent::ExitRequested). Fleet
+            // console windows (`fleet-*`) close normally; their agent process
+            // keeps running and the window reopens on the next tray click.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .setup(|app| {
