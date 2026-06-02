@@ -1335,33 +1335,49 @@ fn resolve_starter_orbs_path(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
-/// Resolve the bundled `config/delegates.yaml` Resource path so we can
-/// point the sidecar's `DELEGATES_YAML` env var at it. Without this, both
-/// the voice agent's DelegateRegistry (`_DELEGATES` in app.py) and the
-/// `/api/delegates` store fall back to a cwd-relative
-/// `config/delegates.yaml` that doesn't exist in the installed app — so
-/// `delegate_to` is never registered and the orb has nothing to delegate
-/// to (the bug behind "can you delegate to agents?" doing nothing).
-/// Returns None on resolve failure / missing resource; the Python loader
-/// degrades to an empty registry rather than crashing.
+/// Resolve the sidecar's `DELEGATES_YAML` to a PERSISTENT, writable path —
+/// `<app_data_dir>/delegates.yaml` — seeded once from the bundled examples.
+///
+/// This used to point straight at the read-only app Resource
+/// (`ORBIS.app/Contents/Resources/config/delegates.yaml`), which the UI's
+/// `/api/delegates` writes mutated in place — so every app update (a fresh
+/// `.app`) WIPED the user's delegates, and a properly-signed bundle's Resources
+/// dir may not even be writable. Mirrors `resolve_config_path`'s pattern for
+/// `orbis.yaml` so delegates survive updates + dev rebuilds. Returns None only
+/// if `app_data_dir` can't be resolved (Python then degrades to empty).
 fn resolve_delegates_path(app: &AppHandle) -> Option<PathBuf> {
-    match app
-        .path()
-        .resolve("config/delegates.yaml", BaseDirectory::Resource)
-    {
-        Ok(p) if p.exists() => Some(p),
-        Ok(p) => {
-            log::warn!(
-                "delegates resource resolved to {} but doesn't exist",
-                p.display()
-            );
-            None
-        }
+    let dest = match app.path().app_data_dir() {
+        Ok(dir) => dir.join("delegates.yaml"),
         Err(e) => {
-            log::warn!("delegates resource resolve failed: {e}");
-            None
+            log::warn!("delegates: app_data_dir resolve failed: {e}");
+            return None;
+        }
+    };
+    if !dest.exists() {
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match app
+            .path()
+            .resolve("config/delegates.yaml", BaseDirectory::Resource)
+        {
+            Ok(res) if res.exists() => match std::fs::copy(&res, &dest) {
+                Ok(_) => log::info!(
+                    "first-run seed: delegates {} → {}",
+                    res.display(),
+                    dest.display()
+                ),
+                Err(e) => log::warn!("delegates seed copy failed: {e}"),
+            },
+            // No bundled resource — write an empty registry so the file exists
+            // and the UI can write to it.
+            _ => {
+                let _ = std::fs::write(&dest, "delegates: []\n");
+                log::info!("delegates: seeded empty {}", dest.display());
+            }
         }
     }
+    Some(dest)
 }
 
 /// First-run seed: if `config_path` doesn't exist yet, copy the bundled
