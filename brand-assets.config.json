@@ -1,4 +1,10 @@
 {
-  "_comment": "Consumed by `protolabs-sync-assets` (bin shipped from @protolabsai/design >= 0.3.0). Each key is a target dir, relative to repo root; the value selects which marks from the package's assets/ to copy. '*' mirrors the full set. NOTE: schema is the documented flat-map shape; verify against the published bin when wiring it up (see bead: wire protolabs-sync-assets). Until then ORBIS renders an inlined copy of the mark (web/src/components/ProtoLabsIcon.tsx).",
-  "web/public/brand": "*"
+  "_comment": "Consumed by `protolabs-sync-assets` (bin from @protolabsai/design). Surfaces fan the brand marks out of the package's assets/ into served dirs at build time (generated, not committed). `protolabs-sync-assets docs` runs the docs surface; the docs:* npm scripts call it before VitePress.",
+  "surfaces": {
+    "docs": {
+      "docs/.vitepress/public": {
+        "protolabs-icon-outline.svg": "protolabs-icon-outline.svg"
+      }
+    }
+  }
 }
