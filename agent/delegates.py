@@ -43,7 +43,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from a2a.client import (
+from a2a_outbound import (
     A2AClient,
     A2ADispatchError,
     ProgressCallback,

@@ -25,6 +25,14 @@ dependencies = [
     "pyyaml",
     # Offline license-key verification (Ed25519) — agent/license.py.
     "cryptography>=42",
+    # A2A 1.0 (ORBIS#340 / protoWorkstacean ADR-0006). Official SDK owns the
+    # protocol mechanics; protolabs-a2a is the thin fleet conventions layer
+    # (the 4 extensions, agent-card defaults, auth schemes). Private git dep —
+    # the build env must have read access to protoLabsAI/protolabs-a2a.
+    "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
+    # Public fleet conventions layer, pinned to the published tag (not on PyPI).
+    "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0",
+    "sse-starlette",
     # Observability
     "langfuse>=4,<5",
     # MLX-LM for native Apple Silicon LLM inference (Mac arm64 only).
@@ -77,8 +85,13 @@ orbis = "app:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# protolabs-a2a is a direct (git) reference until it's on a package index;
+# hatchling requires this opt-in to allow direct references in dependencies.
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
-only-include = ["app.py", "a2a", "acp", "agent", "auth", "memory", "voice", "static"]
+only-include = ["app.py", "a2a_auth.py", "a2a_executor.py", "a2a_stores.py", "a2a_server.py", "a2a_outbound.py", "acp", "agent", "auth", "memory", "voice", "static"]
 
 # `web/dist/` is gitignored (standard Vite output) but the desktop
 # build runs `bun run build` before packing; force-include tells
@@ -89,7 +102,7 @@ only-include = ["app.py", "a2a", "acp", "agent", "auth", "memory", "voice", "sta
 "web/dist" = "web/dist"
 
 [tool.hatch.build.targets.sdist]
-include = ["app.py", "a2a", "acp", "agent", "auth", "memory", "voice", "static", "pyproject.toml", "README.md"]
+include = ["app.py", "a2a_auth.py", "a2a_executor.py", "a2a_stores.py", "a2a_server.py", "a2a_outbound.py", "acp", "agent", "auth", "memory", "voice", "static", "pyproject.toml", "README.md"]
 
 [tool.hatch.build.targets.sdist.force-include]
 "web/dist" = "web/dist"
