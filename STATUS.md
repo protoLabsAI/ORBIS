@@ -1,10 +1,58 @@
 # STATUS — current snapshot
 
-*Last updated 2026-05-29 (native fork selective upstream port). Branch:
-`tori/canon-native-mac`, pushed to `protoLabsAI/orbis-native:main`.*
+*Last updated 2026-06-02 (A2A 1.0 + agent/orchestration/ACP round). On `main`,
+all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-02 (A2A 1.0 + agent round)
+
+Big round shipped and live on the running build — ready for user testing.
+
+**A2A 1.0 migration (DONE, shipping in the bundle).** Off the hand-rolled `a2a/`
+(deleted) and onto official **`a2a-sdk` 1.1 + `protolabs-a2a@v0.1.0`**. Inbound
+`/a2a` = SDK server + `OrbisAgentExecutor`; outbound = SDK `Client` behind
+`a2a_outbound.A2AClient` (delegates/orchestrate only changed imports). **All 4
+fleet extensions emit** (cost, tool-call, worldstate-delta, confidence). Verified
+e2e (closed-loop test) + the private dep resolves in the pyapp build. Flat
+modules `a2a_{auth,executor,stores,server,outbound}.py`; **`import a2a` is the SDK
+now** (delete any stray `a2a/__pycache__`). See `reference_a2a_10` memory.
+
+**ACP client — voice-drive coding agents.** `acp/client.py` + `type: acp` delegate
+(proto / opencode / claude-code / codex). **Live-tested against real proto.**
+Settings UI has the ACP type (command/args/workdir). Delegates now **persist in
+app-data** (`DELEGATES_YAML` moved off the wiped bundle Resource) AND **hot-swap**
+into the live voice session — add/remove a delegate in Settings, no restart.
+
+**Orchestration + communication.** `orchestrate(goal)` now narrates its plan +
+reassures on slow steps (#356); pauses to **ask the user** via the `ask_user` tool
+and resumes on their spoken answer (HITL via the `AskGate` processor, #357); drives
+ACP agents, dedups identical calls, and force-synthesizes on the step cap (#358).
+
+**Paywall (backend only, dormant).** Offline Ed25519 signed-license unlock for orb
+customization (`agent/license.py`). `ORBIS_GATE=open` default → no-op today. UI +
+issuer + go-live flip parked (`orbis-1v4`). Precondition: repo goes private.
+
+**Also this round:** fleet menu bar (#326/#328/#330) + orb tray icon (#332); docs
+live at **orbis.protolabs.studio/docs** (Cloudflare, #338); GitHub Pages retired.
+
+### Ready to test (running build)
+- Voice-drive **codeBot** (registered ACP proto delegate): *"ask codebot to …"*
+- Add/remove a delegate in **Settings while running** → orb sees it next turn (hot-swap).
+- A multi-step goal → plan narration + "still working" + (if blocked) it asks you.
+- Inbound A2A: `/a2a` serves 1.0; the card declares all 4 extensions.
+
+### Known caveats / not-yet-done
+- Orchestration **HITL** passes unit tests; the live voice timing (speak goal → orb
+  asks → you answer → resumes) wants a real session test.
+- Paywall is backend-only (gate open). `orbis-1v4`.
+- Structured-output **#476** fan-out pending the shared `protolabs_a2a` helper;
+  ORBIS's slice = the executor finalizer (small mirror of protoAgent).
+- Open GitHub: **#231** (micro tier → `protolabs/micro`), #152 (mostly moot — Ava
+  removed), #154 (brand, deferred).
 
 ---
 

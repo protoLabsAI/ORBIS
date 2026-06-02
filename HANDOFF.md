@@ -18,6 +18,35 @@ is the comprehensive guide for the Mac-first native audio direction and
 the 4-phase migration plan that supersedes the dual-transport
 architecture.
 
+## Next round — user-testing checklist (2026-06-02)
+
+The A2A 1.0 + agent/ACP/orchestration round is shipped on `main` and live on the
+running bundle (see STATUS.md snapshot). Drive these by voice / in the app:
+
+**Agents & delegation**
+- [ ] *"Who can you delegate to?"* → lists the configured delegates (e.g. codeBot).
+- [ ] *"Ask codebot to add a docstring to X"* → ACP routing; the orb narrates the
+      tool calls ("Editing app.py") and speaks the result; the file is edited.
+- [ ] Add or remove a delegate in **Settings → Agent → Delegates while running** →
+      the orb sees the change on its **next turn** (hot-swap, no restart). New ACP
+      delegate shows **configured + green** (command on PATH + workdir exists).
+- [ ] A multi-step goal (*"check the project state, then have codebot look at the
+      failing test"*) → plan **narration**, "still working with …" on slow steps,
+      and if it's genuinely stuck it **asks you a question and waits** for your
+      spoken answer, then resumes (HITL — the unverified-live bit, watch the timing).
+
+**A2A 1.0 (mostly hub-facing)**
+- [ ] `curl /.well-known/agent-card.json` → declares all 4 extensions.
+- [ ] An inbound A2A turn returns text + cost/tool-call telemetry. (Cross-SDK
+      Python↔TS byte-compat with the hub is the coordinated flag-day test.)
+
+**Regression sanity**
+- [ ] Reminders still fire (in-process via DeliveryController — unaffected by A2A).
+- [ ] Orb customization works (paywall gate is `open`, no-op).
+
+Known-unverified: the HITL pause/resume *voice timing*. Everything else has unit
+coverage + was exercised live.
+
 ## Current fork posture
 
 `protoLabsAI/orbis-native` is the canonical Tauri-first staging fork for a
