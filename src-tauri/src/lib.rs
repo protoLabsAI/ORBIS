@@ -390,18 +390,99 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+/// A fleet agent registered for the shared menu bar (protoLabsAI/ORBIS#325).
+/// protoAgent-based agents drop a manifest in the fleet-shared dir; ORBIS
+/// renders them in the tray dropdown. `launch` present = ORBIS spawns + owns
+/// the sidecar; absent (with `api_base`) = connect-only (already running).
+/// (Launch + embedded console land in the follow-up PRs; PR1 is registry +
+/// dropdown.)
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)] // launch/icon/health/api_base consumed by the launcher PRs
+struct AgentManifest {
+    id: String,
+    name: String,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    launch: Option<AgentLaunch>,
+    #[serde(default = "default_health_path")]
+    health: String,
+    #[serde(default)]
+    api_base: Option<String>,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+#[allow(dead_code)]
+struct AgentLaunch {
+    bin: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+fn default_health_path() -> String {
+    "/healthz".to_string()
+}
+
+/// The fleet-shared agents dir:
+/// `~/Library/Application Support/protoLabs.studio/agents`.
+fn fleet_agents_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join("Library/Application Support/protoLabs.studio/agents"))
+}
+
+/// Scan the fleet agents dir for `*.json` manifests, sorted by name.
+/// Missing dir / bad files are skipped (warned), never fatal.
+fn scan_agent_manifests() -> Vec<AgentManifest> {
+    let dir = match fleet_agents_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<AgentManifest> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<AgentManifest>(&s).ok())
+        {
+            Some(m) => out.push(m),
+            None => log::warn!("[fleet] unparseable agent manifest: {}", path.display()),
+        }
+    }
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out
+}
+
 /// Build the macOS menu-bar (tray) item: the protoLabs robot mark (template,
 /// so the system tints it to the menu bar) with a Show / Quit menu. Left-click
 /// surfaces the window; the menu's Quit is the real exit path in menu-bar-only
 /// mode. Returns Err if the tray can't be created, so the caller can stay in
 /// the dock as a fallback rather than leave the app unreachable.
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem};
+    use tauri::menu::MenuBuilder;
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let show = MenuItem::with_id(app, "show", "Show ORBIS", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit ORBIS", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    // One icon for the ecosystem: ORBIS itself, then the registered fleet
+    // agents, then Quit. (Selecting an agent launches/embeds it — lands in the
+    // follow-up PRs; here the dropdown just enumerates them.)
+    let agents = scan_agent_manifests();
+    log::info!("[fleet] {} agent manifest(s) registered", agents.len());
+
+    let mut mb = MenuBuilder::new(app).text("show", "Show ORBIS");
+    if !agents.is_empty() {
+        mb = mb.separator();
+        for m in &agents {
+            mb = mb.text(format!("agent:{}", m.id), &m.name);
+        }
+    }
+    let menu = mb.separator().text("quit", "Quit ORBIS").build()?;
 
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-robot.png"))?;
 
@@ -411,10 +492,20 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .tooltip("ORBIS")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "quit" => app.exit(0),
-            _ => {}
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            match id {
+                "show" => show_main_window(app),
+                "quit" => app.exit(0),
+                _ if id.starts_with("agent:") => {
+                    let agent_id = &id["agent:".len()..];
+                    // PR1: registry + dropdown. Launch (free-port + spawn +
+                    // /healthz wait) and the embedded console window land in
+                    // the follow-up PRs — see ORBIS#325.
+                    log::info!("[fleet] agent selected: {agent_id} (launch lands next)");
+                }
+                _ => {}
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
