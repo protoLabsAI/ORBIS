@@ -2431,6 +2431,32 @@ async def reload_delegates_endpoint(user: User = Depends(require_user)):
 # --- Delegates CRUD ---------------------------------------------------------
 
 
+def _decorate_delegates(entries: list[dict]) -> list[dict]:
+    """Annotate raw delegate entries with ``configured`` (present in the live
+    registry) + cached ``health`` — the shape the Settings UI expects. Used by
+    the list AND the create/update responses so a freshly-saved delegate shows
+    its real status immediately instead of a stale '⚠ unconfigured'."""
+    parsed_names = set(_DELEGATES.names())
+    parsed_by_name = {d.name: d for d in _DELEGATES.all()}
+    out: list[dict] = []
+    for entry in entries:
+        name = entry.get("name")
+        d = parsed_by_name.get(name) if isinstance(name, str) else None
+        h = _DELEGATES.health(name) if isinstance(name, str) else None
+        out.append({
+            **entry,
+            "configured": name in parsed_names,
+            "health": {
+                "ok": h.ok if h else None,
+                "latency_ms": h.latency_ms if h else None,
+                "last_checked": h.last_checked if h else None,
+                "last_error": h.last_error if h else None,
+                "consecutive_failures": h.consecutive_failures if h else 0,
+            } if d else None,
+        })
+    return out
+
+
 @app.get("/api/delegates")
 async def list_delegates_endpoint(user: User = Depends(require_user)):
     from agent.delegate_config_store import (
@@ -2446,35 +2472,16 @@ async def list_delegates_endpoint(user: User = Depends(require_user)):
     except DelegateValidationError as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-    parsed_names = set(_DELEGATES.names())
-    parsed_by_name = {d.name: d for d in _DELEGATES.all()}
-
     # Belt-and-suspenders: if the file read produced nothing but the live
     # registry has delegates, surface those so the UI reflects reality.
-    if not entries and parsed_by_name:
+    if not entries and _DELEGATES.all():
         entries = [
             {"name": d.name, "type": d.type, "url": d.url,
              "description": d.description}
             for d in _DELEGATES.all()
         ]
 
-    def _decorate(entry: dict) -> dict:
-        name = entry.get("name")
-        d = parsed_by_name.get(name)
-        h = _DELEGATES.health(name) if isinstance(name, str) else None
-        return {
-            **entry,
-            "configured": name in parsed_names,
-            "health": {
-                "ok": h.ok if h else None,
-                "latency_ms": h.latency_ms if h else None,
-                "last_checked": h.last_checked if h else None,
-                "last_error": h.last_error if h else None,
-                "consecutive_failures": h.consecutive_failures if h else 0,
-            } if d else None,
-        }
-
-    return {"delegates": [_decorate(e) for e in entries]}
+    return {"delegates": _decorate_delegates(entries)}
 
 
 @app.post("/api/delegates")
@@ -2497,7 +2504,7 @@ async def create_delegate_endpoint(
     except DelegateValidationError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     _DELEGATES.reload()
-    return {"ok": True, "delegates": entries}
+    return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
 @app.put("/api/delegates/{name}")
@@ -2531,7 +2538,7 @@ async def update_delegate_endpoint(
     except DelegateValidationError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     _DELEGATES.reload()
-    return {"ok": True, "delegates": entries}
+    return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
 @app.delete("/api/delegates/{name}")
@@ -2544,7 +2551,7 @@ async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)
             status_code=404, content={"error": f"delegate {name!r} not found"},
         )
     _DELEGATES.reload()
-    return {"ok": True, "delegates": entries}
+    return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
 @app.post("/api/delegates/test")
