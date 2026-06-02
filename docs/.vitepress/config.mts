@@ -59,9 +59,10 @@ export default defineConfig({
   ],
 
   themeConfig: {
-    // protoLabs mark in the nav, synced from @protolabsai/design at build
-    // time by protolabs-sync-assets (see brand-assets.config.json).
-    logo: '/protolabs-icon-outline.svg',
+    // The ORBIS orb (the product's own mark) in the nav — same gradient as
+    // the app icon + favicon. The protoLabs.studio wordmark lives in the
+    // footer (see theme/StudioFooter.vue), where the studio attribution goes.
+    logo: '/favicon.svg',
     nav: SECTIONS.map(([s, t]) => ({ text: t, link: `/${s}/README` })),
     sidebar: Object.fromEntries(
       SECTIONS.map(([s, t]) => [`/${s}/`, [{ text: t, items: sidebarFor(s) }]]),
