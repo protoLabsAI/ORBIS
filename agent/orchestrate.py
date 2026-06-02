@@ -33,6 +33,33 @@ from agent.tools import build_text_tool_schemas, run_text_tool
 logger = logging.getLogger(__name__)
 
 ProgressFn = Callable[[str], Awaitable[None]]
+# Ask the user a question and await their spoken answer (HITL pause/resume).
+AskUserFn = Callable[[str], Awaitable[str]]
+
+# The in-loop tool the orchestrating model calls to pause and ask the user.
+_ASK_USER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "Ask the USER a specific question and wait for their spoken answer. "
+            "Use ONLY when you genuinely cannot proceed without information only "
+            "the user has — an ambiguous goal, or a delegate needs something the "
+            "goal doesn't cover. Don't guess, and don't use it for anything an "
+            "agent could answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The one specific question to ask the user.",
+                }
+            },
+            "required": ["question"],
+        },
+    },
+}
 
 # Bounded so a runaway plan can't loop forever; higher than the A2A inbound
 # ReAct cap (3) since a multi-step goal legitimately needs several hand-offs.
@@ -65,6 +92,10 @@ HOW TO WORK:
   about to do ("Let me check with helm first."). It's spoken to the user while
   they wait — but NEVER skip the actual tool call just to talk. The work is the
   point; the sentence is courtesy.
+- If you genuinely can't proceed without something only the user can tell you
+  (the goal is ambiguous, or a delegate asks for info the goal doesn't cover),
+  call `ask_user` with ONE specific question and use their answer. Don't guess,
+  and don't ask for things an agent could answer.
 """
 
 
@@ -78,12 +109,16 @@ async def run_orchestration(
     max_tokens: int = 512,
     temperature: float = 0.4,
     progress: ProgressFn | None = None,
+    ask_user: AskUserFn | None = None,
     max_iter: int = _MAX_ITER,
 ) -> str:
     """Drive the bounded orchestration loop and return the synthesised answer.
 
     ``client`` is an AsyncOpenAI-compatible client (the session's text LLM).
     ``progress`` (optional) is narrated to the user between steps.
+    ``ask_user`` (optional) pauses the run to ask the user a question and resume
+    with their spoken answer (HITL); the ``ask_user`` tool is only offered to the
+    model when this is provided.
     """
     # One sticky-context client per delegate, for THIS run only.
     run_clients: dict[str, A2AClient] = {}
@@ -109,6 +144,8 @@ async def run_orchestration(
         {"role": "user", "content": goal},
     ]
     tools_openai = build_text_tool_schemas(delegates)
+    if ask_user is not None:
+        tools_openai = [*tools_openai, _ASK_USER_TOOL]
 
     final = ""
     for step in range(max(1, max_iter)):
@@ -161,6 +198,7 @@ async def run_orchestration(
             out = await _run_step(
                 name, args, delegates=delegates, client_for=_client_for,
                 progress=progress, step=step, announce=not preamble,
+                ask_user=ask_user,
             )
             messages.append({
                 "role": "tool",
@@ -188,6 +226,7 @@ async def _run_step(
     progress: ProgressFn | None,
     step: int,
     announce: bool = True,
+    ask_user: AskUserFn | None = None,
 ) -> str:
     """Execute one tool call inside the loop. ``delegate_to`` is routed through
     the per-run sticky client (multi-turn continuity); every other tool falls
@@ -196,6 +235,20 @@ async def _run_step(
     ``announce`` is False when the model already narrated a preamble this turn —
     we skip the generic "checking with X" so we don't double-talk. A slow step
     still gets a reassurance line so the user isn't left in silence."""
+    if name == "ask_user":
+        question = (args.get("question") or "").strip()
+        if ask_user is None or not question:
+            return "(can't ask the user right now — proceed from the goal)"
+        logger.info(f"[orchestrate] step={step} ask_user {question!r}")
+        try:
+            answer = await ask_user(question)
+        except asyncio.TimeoutError:
+            return "(the user didn't answer in time — proceed or stop gracefully)"
+        except Exception as e:  # noqa: BLE001 — never crash the loop on an ask
+            logger.warning(f"[orchestrate] ask_user failed: {e}")
+            return f"(couldn't get a user answer: {e})"
+        return f"The user answered: {answer}" if answer else "(the user said nothing)"
+
     if name == "delegate_to":
         target = (args.get("target") or "").strip()
         query = (args.get("query") or "").strip()

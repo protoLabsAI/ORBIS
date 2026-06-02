@@ -771,8 +771,12 @@ def _delegate_async_handler(
 # and is injected as `runner` so this module needn't know about the LLM client.
 # ---------------------------------------------------------------------------
 
-# runner(goal: str, *, progress) -> Awaitable[str]
+# runner(goal: str, *, progress, ask_user) -> Awaitable[str]
 OrchestrateRunner = Any
+
+# How long a HITL ask_user pause waits for the user's spoken answer before the
+# run gives up (so a walked-away user can't wedge a background run forever).
+_ASK_USER_TIMEOUT_S = float(os.environ.get("ORCHESTRATE_ASK_TIMEOUT", "300"))
 
 
 def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
@@ -831,9 +835,33 @@ def _orchestrate_handler(
                 cooldown_key=f"orchestrate-step:{text[:40]}",
             )
 
+        async def _ask_user(question: str) -> str:
+            # HITL: speak the question, park a pending-ask on the live session,
+            # and wait for the voice AskGate to resolve it with the user's next
+            # transcript. Times out so a walked-away user can't wedge the run.
+            from agent.user_state import (
+                PendingAsk,
+                set_pending_ask_on_active,
+                take_pending_ask,
+            )
+
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            if not set_pending_ask_on_active(PendingAsk(question=question, future=fut)):
+                return "(no live session to ask the user — proceed from the goal)"
+            await delivery.deliver(
+                question,
+                priority=Priority.TIME_SENSITIVE,
+                source="orchestrator",
+                kind="orchestrate-ask",
+            )
+            try:
+                return await asyncio.wait_for(fut, timeout=_ASK_USER_TIMEOUT_S)
+            finally:
+                take_pending_ask()  # clear if it timed out / wasn't answered
+
         async def _run_and_deliver() -> None:
             try:
-                result = await runner(goal, progress=_progress)
+                result = await runner(goal, progress=_progress, ask_user=_ask_user)
                 await delivery.deliver(
                     _strip_markdown_for_speech(result),
                     priority=Priority.TIME_SENSITIVE,

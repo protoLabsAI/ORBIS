@@ -92,6 +92,7 @@ from pipecat.utils.context.llm_context_summarization import (
 )
 from pipecat.services.openai.llm import OpenAILLMService
 
+from voice.ask_gate import AskGate
 from voice.llm import make_llm
 from voice.local_transport import LocalAudioTransport, audio_runtime_info
 from voice.native_bargein import NativeBargeInObserver
@@ -1308,7 +1309,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     if session_delegates and session_delegates.names() and delivery is not None:
         _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
 
-        async def _orch_runner(goal: str, *, progress=None) -> str:
+        async def _orch_runner(goal: str, *, progress=None, ask_user=None) -> str:
             return await run_orchestration(
                 goal,
                 delegates=session_delegates,
@@ -1318,6 +1319,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 max_tokens=skill.max_tokens,
                 temperature=skill.temperature,
                 progress=progress,
+                ask_user=ask_user,
             )
 
     tools_schema = None
@@ -1553,6 +1555,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # the LLM what to do with the [audio] line and forbids
         # parroting it.
         audio_tags,
+        # AskGate — if a background orchestration run is paused on ask_user,
+        # the next user transcript answers it (and is swallowed) instead of
+        # starting a fresh turn. No-op when nothing's waiting.
+        AskGate(),
         user_agg,
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
         # that resolve within the grace window as coughs / backchannels /
