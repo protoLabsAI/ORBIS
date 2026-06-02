@@ -43,6 +43,7 @@ DEFAULT_PATH = (
 # fields the registry parser would silently ignore.
 _COMMON_KEYS = {"name", "type", "description", "url"}
 _A2A_KEYS = {"auth", "headers"}
+_ACP_KEYS = {"command", "args", "workdir"}
 _OPENAI_KEYS = {
     "model", "api_key_env", "system_prompt", "max_tokens", "temperature",
 }
@@ -105,9 +106,9 @@ def validate_entry(entry: dict) -> dict:
     name = name.strip()
 
     dtype = entry.get("type")
-    if dtype not in ("a2a", "openai"):
+    if dtype not in ("a2a", "openai", "acp"):
         raise DelegateValidationError(
-            f"`type` must be 'a2a' or 'openai', got {dtype!r}"
+            f"`type` must be 'a2a', 'openai', or 'acp', got {dtype!r}"
         )
 
     description = entry.get("description")
@@ -116,6 +117,37 @@ def validate_entry(entry: dict) -> dict:
             "`description` is required and must be a non-empty string — the LLM "
             "uses this to choose between delegates"
         )
+
+    # type=acp — a local coding agent ORBIS launches + drives. Needs command +
+    # workdir, NOT a url (handled before the url requirement below).
+    if dtype == "acp":
+        command = entry.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise DelegateValidationError(
+                "`command` is required for acp delegates (the agent binary, e.g. 'proto')"
+            )
+        workdir = entry.get("workdir")
+        if not isinstance(workdir, str) or not workdir.strip():
+            raise DelegateValidationError(
+                "`workdir` is required for acp delegates (the directory the agent works in)"
+            )
+        raw_args = entry.get("args") or []
+        if not isinstance(raw_args, list):
+            raise DelegateValidationError("`args` must be a list of strings")
+        out: dict[str, Any] = {
+            "name": name,
+            "type": dtype,
+            "description": description.strip(),
+            "command": command.strip(),
+            "args": [str(a) for a in raw_args],
+            "workdir": workdir.strip(),
+        }
+        for k in entry:
+            if k not in _COMMON_KEYS | _ACP_KEYS:
+                logger.warning(
+                    f"[delegate_config_store] {name}: dropping unknown acp key {k!r}"
+                )
+        return out
 
     url = entry.get("url")
     if not isinstance(url, str) or not url.strip():
