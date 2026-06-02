@@ -664,6 +664,22 @@ async def probe(delegate: Delegate, *, timeout: float = 8.0) -> dict:
             else "",
         )
 
+    if delegate.type == "acp":
+        # No URL to ping — an acp agent is "reachable" if its binary is on PATH
+        # and its workdir exists (ORBIS launches it on demand).
+        import shutil
+        from pathlib import Path
+
+        cmd = (delegate.command or "").strip()
+        if not cmd:
+            return {"ok": False, "error": "no command configured"}
+        if shutil.which(cmd) is None:
+            return {"ok": False, "error": f"command not on PATH: {cmd}"}
+        wd = Path((delegate.workdir or "").strip()).expanduser()
+        if not wd.is_dir():
+            return {"ok": False, "error": f"workdir not found: {wd}"}
+        return {"ok": True}
+
     return {"ok": False, "error": f"unknown delegate type {delegate.type!r}"}
 
 
