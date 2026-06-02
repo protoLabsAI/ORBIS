@@ -91,8 +91,10 @@ the tool calls, and surfaces permission asks out loud.
 ## Proposed shape (design, not code)
 
 1. **`type: "acp"` delegate.** A `delegates.yaml` entry like
-   `{type: acp, name: claude-code, command: "npx", args: ["@zed-industries/claude-code-acp"]}`.
-   The registry parses it like the other two types.
+   `{type: acp, name: proto, command: "proto", args: ["--acp"], workdir: "~/dev/ORBIS"}`.
+   The registry parses it like the other two types. **`workdir` is required for
+   acp delegates** — the directory the agent is responsible for (see *protoCLI
+   first-class + workspace registration* below).
 2. **An ACP transport** (`a2a/acp_client.py` or a new `acp/` package): owns the
    subprocess, the `initialize`/`session/new` handshake, an outstanding-request
    map, and a read loop that demultiplexes responses vs. `session/update`
@@ -107,6 +109,45 @@ the tool calls, and surfaces permission asks out loud.
 5. **One session per agent**, cached like `contextId`, so follow-ups
    ("now also update the docs") continue the thread.
 
+## protoCLI: first-class citizen + workspace registration
+
+Generic ACP agents (Claude Code, Codex, …) are "whatever's on PATH." **protoCLI
+([protoLabsAI/protoCLI](https://github.com/protoLabsAI/protoCLI) — our own
+open-source TypeScript terminal agent) is different: it's a first-class ACP
+citizen.** Because we own it end-to-end we can:
+
+- guarantee a clean **ACP server mode** (`proto --acp`) and version it against
+  ORBIS, rather than depending on a third-party adapter's shape;
+- give it **dedicated onboarding** (locate/install proto, sane defaults) instead
+  of "paste a command";
+- reciprocally — adding an ACP *server* to proto makes proto drivable from
+  Zed / VS Code too, not just ORBIS. One protocol, both directions.
+
+**The key onboarding idea: register the directory proto is responsible for.**
+An ACP agent operates *on a workspace*, and in ACP the **client owns that
+workspace**. So the unit we register isn't just "an agent" — it's **(agent ×
+directory)**. The delegate-onboarding flow (the *Add a delegate* step —
+`docs/how-to/add-a-delegate.md` + `DelegatesSettings.tsx`) gains a **folder
+picker**, and the chosen `workdir` becomes:
+
+- the **`cwd`** of the launched ACP subprocess,
+- the **`cwd` passed to `session/new`** (ACP sessions are workspace-rooted),
+- the **sandbox root** for the `fs/*` + `terminal/*` we serve — ORBIS refuses
+  paths/commands outside it (this is the answer to the fs/terminal-scope risk
+  below),
+- the delegate's **display identity** in the UI and in voice ("proto · ORBIS").
+
+This makes the directory the **addressable identity**: register proto once per
+repo and you get scoped agents — *"ask proto in the ORBIS repo to add a test"*
+vs *"…in the marketing repo."* It also lines up with the fleet menu bar
+(ORBIS#325): a proto fleet manifest can declare its `command`/`args` **and a
+default `workdir`**, so launching it from the tray and adding it as a voice
+delegate are the same registration.
+
+Onboarding capture (per proto delegate): **name**, **workdir** (folder picker,
+required), and optionally a default **permission policy** for that workspace
+(see below) — e.g. trust this repo's reads + test runs, confirm writes.
+
 ## Hard questions (the actual spike risk, not the transport)
 
 - **Permission over voice.** `session/request_permission` is synchronous and
@@ -117,12 +158,14 @@ the tool calls, and surfaces permission asks out loud.
   a protocol one. Likely also a visual fallback in the ORBIS window for diffs.
 - **fs / terminal capability scope.** If ORBIS advertises `fs` + `terminal`, the
   agent runs shell + edits files **on the user's machine through ORBIS**. Single-
-  owner native makes this defensible, but it's powerful — needs a working-dir
-  sandbox/root and an allowlist. Decide whether ORBIS executes terminals itself
-  or delegates to the agent's own sandbox.
-- **Which binaries.** We don't bundle Claude Code/Codex/etc. — the user installs
-  them; we launch what's on PATH (fits the fleet-manifest model: an agent
-  manifest could declare `command`/`args`). protoCLI we control.
+  owner native makes this defensible, but it's powerful. **The registered
+  `workdir` is the sandbox root** (above) — ORBIS refuses reads/writes/commands
+  outside it. Still need an allowlist for risky shell within the root, and a
+  decision on whether ORBIS runs terminals itself or defers to the agent's sandbox.
+- **Which binaries.** Third-party agents (Claude Code/Codex/…) aren't bundled —
+  the user installs them and we launch what's on PATH (fits the fleet-manifest
+  model: a manifest declares `command`/`args`). **protoCLI is first-class** (we
+  own it, version its `--acp` mode, and onboard it with a registered `workdir`).
 - **Streaming cadence for TTS.** ACP chunks are token-ish/structured; we must
   buffer to sentence/phrase boundaries before TTS (the same chunking lesson as
   the LLM narration path).
