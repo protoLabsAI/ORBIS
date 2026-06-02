@@ -6,6 +6,7 @@ Task-oriented — a recipe for a specific goal. These assume you've done the
 - **[Configure the LLM](./configure-the-llm)** — choose or switch the brain model.
 - **[Set and manage reminders](./manage-reminders)** — by voice + the bell.
 - **[Add a delegate](./add-a-delegate)** — wire up an A2A or OpenAI-compat agent.
+- **[Voice-drive a coding agent](./voice-drive-a-coding-agent)** — proto, OpenCode, Claude Code, Codex over ACP.
 - **[Customize your orb](./customize-your-orb)** — variant, palette, fine-tuning.
 - **[Personalize ORBIS](./personalize-orbis)** — names, persona voice, verbosity.
 - **[Run ORBIS as a menu-bar agent](./menu-bar-mode)** — show, hide, quit.
