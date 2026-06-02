@@ -59,6 +59,9 @@ export default defineConfig({
   ],
 
   themeConfig: {
+    // protoLabs mark in the nav, synced from @protolabsai/design at build
+    // time by protolabs-sync-assets (see brand-assets.config.json).
+    logo: '/protolabs-icon-outline.svg',
     nav: SECTIONS.map(([s, t]) => ({ text: t, link: `/${s}/README` })),
     sidebar: Object.fromEntries(
       SECTIONS.map(([s, t]) => [`/${s}/`, [{ text: t, items: sidebarFor(s) }]]),
