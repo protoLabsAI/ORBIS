@@ -206,16 +206,62 @@ async def test_two_different_delegates_get_separate_clients(monkeypatch, registr
 
 
 @pytest.mark.asyncio
-async def test_step_limit_returns_graceful_message(monkeypatch, registry):
-    # Always calls a tool → never synthesises → hits the cap.
-    forever = _msg(tool_calls=[_tool_call("c", "delegate_to", {"target": "ava", "query": "x"})])
-    llm = _FakeLLM([forever] * 10)
+async def test_step_limit_forces_a_synthesis(monkeypatch, registry):
+    """Hitting the step cap forces ONE no-tools synthesis (fail-safe done) so
+    the user gets a real answer, not a shrug."""
+    # Distinct queries so the stall-dedup doesn't short-circuit the loop.
+    llm = _FakeLLM([
+        _msg(tool_calls=[_tool_call("c", "delegate_to", {"target": "ava", "query": "q1"})]),
+        _msg(tool_calls=[_tool_call("c", "delegate_to", {"target": "ava", "query": "q2"})]),
+        _msg(tool_calls=[_tool_call("c", "delegate_to", {"target": "ava", "query": "q3"})]),
+        _msg(content="Best I can say: the fleet is mostly green."),  # forced synthesis
+    ])
     monkeypatch.setattr(orch, "A2AClient", _FakeA2AClient)
     out = await orch.run_orchestration(
         "endless", delegates=registry, client=llm, model="m", max_iter=3,
     )
-    assert "didn't reach a clean answer" in out or "keep going" in out
-    assert len(llm.calls) == 3  # capped
+    assert out == "Best I can say: the fleet is mostly green."
+    assert len(llm.calls) == 4  # 3 loop iters + 1 forced synthesis
+
+
+@pytest.mark.asyncio
+async def test_identical_delegate_call_is_deduped(monkeypatch, registry):
+    """Re-asking an agent the exact same thing is refused (stall guard) — the
+    agent is only actually sent the query once."""
+    llm = _run(monkeypatch, registry, [
+        _msg(tool_calls=[_tool_call("c1", "delegate_to", {"target": "ava", "query": "status?"})]),
+        _msg(tool_calls=[_tool_call("c2", "delegate_to", {"target": "ava", "query": "status?"})]),
+        _msg(content="done"),
+    ])
+    out = await orch.run_orchestration("x", delegates=registry, client=llm, model="m")
+    assert out == "done"
+    assert _FakeA2AClient.constructed[0].sends == ["status?"]  # sent once, not twice
+
+
+@pytest.mark.asyncio
+async def test_acp_delegate_routes_through_dispatch(monkeypatch, registry):
+    """An acp (coding-agent) delegate is driven via the shared dispatch, not the
+    a2a sticky client."""
+    registry._items["proto"] = Delegate(
+        name="proto", description="coding agent", type="acp",
+        command="proto", args=["--acp"], workdir="/tmp",
+    )
+    seen = {}
+
+    async def fake_dispatch(delegate, query, **kw):
+        seen["target"] = delegate.name
+        seen["query"] = query
+        return "added the test"
+
+    monkeypatch.setattr(orch, "dispatch", fake_dispatch)
+    monkeypatch.setattr(orch, "A2AClient", _FakeA2AClient)
+    llm = _FakeLLM([
+        _msg(tool_calls=[_tool_call("c1", "delegate_to", {"target": "proto", "query": "add a test"})]),
+        _msg(content="proto added the test."),
+    ])
+    out = await orch.run_orchestration("code task", delegates=registry, client=llm, model="m")
+    assert out == "proto added the test."
+    assert seen == {"target": "proto", "query": "add a test"}
 
 
 @pytest.mark.asyncio
