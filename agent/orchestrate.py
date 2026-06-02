@@ -27,7 +27,7 @@ import os
 from collections.abc import Awaitable, Callable
 
 from a2a_outbound import A2AClient, A2ADispatchError
-from agent.delegates import DelegateRegistry
+from agent.delegates import DelegateError, DelegateRegistry, dispatch
 from agent.tools import build_text_tool_schemas, run_text_tool
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,8 @@ _ASK_USER_TOOL = {
 _MAX_ITER = int(os.environ.get("ORCHESTRATE_MAX_ITER", "6"))
 # Per-step wall-clock bound for one delegate hand-off.
 _STEP_TIMEOUT = float(os.environ.get("ORCHESTRATE_STEP_TIMEOUT", "120"))
+# acp coding-agent steps run longer (real edits / test runs).
+_ACP_STEP_TIMEOUT = float(os.environ.get("ORCHESTRATE_ACP_STEP_TIMEOUT", "300"))
 
 _SYSTEM = """\
 You are ORBIS, orchestrating a multi-step goal by delegating to the user's
@@ -148,6 +150,7 @@ async def run_orchestration(
         tools_openai = [*tools_openai, _ASK_USER_TOOL]
 
     final = ""
+    seen: set[str] = set()  # identical delegate_to signatures (stall guard)
     for step in range(max(1, max_iter)):
         kwargs: dict = {
             "model": model,
@@ -195,6 +198,21 @@ async def run_orchestration(
             except Exception:
                 args = {}
             name = tc.function.name
+            # Stall guard: refuse an identical delegate_to we've already run, so
+            # the model can't spin re-asking the same agent the same thing.
+            if name == "delegate_to":
+                sig = json.dumps(args, sort_keys=True, default=str)
+                if sig in seen:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": (
+                            "(you already asked that exact thing this run — use "
+                            "what you got, ask something different, or finish)"
+                        ),
+                    })
+                    continue
+                seen.add(sig)
             out = await _run_step(
                 name, args, delegates=delegates, client_for=_client_for,
                 progress=progress, step=step, announce=not preamble,
@@ -206,15 +224,57 @@ async def run_orchestration(
                 "content": out,
             })
     else:
+        # Fail-safe done: out of step budget — instead of a shrug, force one
+        # no-tools synthesis so the user still gets ORBIS's best answer from
+        # what it gathered.
         logger.warning(
-            f"[orchestrate] hit step limit ({max_iter}) without a final answer"
+            f"[orchestrate] hit step limit ({max_iter}) — forcing a synthesis"
         )
-        final = final or (
-            "I worked through several steps but didn't reach a clean answer "
-            "in the steps I allow myself — want me to keep going?"
-        )
+        if not final:
+            final = await _force_synthesis(
+                messages, client=client, model=model, extra_body=extra_body,
+                max_tokens=max_tokens, temperature=temperature,
+            )
 
     return final or "I wasn't able to get a useful result on that, sorry."
+
+
+async def _force_synthesis(
+    messages: list[dict],
+    *,
+    client,
+    model: str,
+    extra_body: dict | None,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    """One final NO-tools LLM call to synthesise an answer from what the run
+    gathered (the fail-safe-done guard). Returns '' on failure."""
+    msgs = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "You're out of steps. Give your best single spoken-aloud answer "
+                "from what you've gathered — 2-4 sentences, plain text, no tools, "
+                "no apologies. If you genuinely have nothing, say what's blocking."
+            ),
+        },
+    ]
+    kwargs: dict = {
+        "model": model,
+        "messages": msgs,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
+    try:
+        r = await client.chat.completions.create(**kwargs)
+        return (r.choices[0].message.content or "").strip()
+    except Exception as e:  # noqa: BLE001 — fail-safe; never raise from teardown
+        logger.warning(f"[orchestrate] forced synthesis failed: {e}")
+        return ""
 
 
 async def _run_step(
@@ -252,34 +312,50 @@ async def _run_step(
     if name == "delegate_to":
         target = (args.get("target") or "").strip()
         query = (args.get("query") or "").strip()
-        client = client_for(target)
-        if client is None:
+        delegate = delegates.get(target)
+        if delegate is None:
             return f"(no such agent: {target!r})"
         if not query:
             return f"(empty query for {target})"
-        logger.info(f"[orchestrate] step={step} delegate_to {target} q={query!r}")
+        logger.info(
+            f"[orchestrate] step={step} delegate_to {target} ({delegate.type}) q={query!r}"
+        )
         if announce and progress is not None:
             await _safe_progress(progress, f"checking with {target}")
-        # Reassure on a slow step so a 2-minute hand-off isn't dead air.
+        # Reassure on a slow step so a long hand-off isn't dead air.
         reassure = (
             asyncio.ensure_future(_reassure(progress, target))
             if progress is not None
             else None
         )
         try:
-            res = await asyncio.wait_for(client.send(query), timeout=_STEP_TIMEOUT)
+            if delegate.type == "a2a":
+                # Per-run sticky A2AClient — multi-turn continuity across steps.
+                client = client_for(target)
+                if client is None:
+                    return f"(can't reach {target})"
+                res = await asyncio.wait_for(client.send(query), timeout=_STEP_TIMEOUT)
+                if res.input_required:
+                    return f"[{target} needs more to proceed] {res.text}"
+                return res.text or f"({target} returned nothing)"
+            # acp coding agents (proto/opencode/…) + openai delegates → the shared
+            # dispatch, which owns the cached per-delegate client (acp keeps its
+            # sticky session across the run). acp steps get a longer budget.
+            timeout = _ACP_STEP_TIMEOUT if delegate.type == "acp" else _STEP_TIMEOUT
+            try:
+                text = await asyncio.wait_for(
+                    dispatch(delegate, query, timeout=timeout, progress_callback=progress),
+                    timeout=timeout + 30,
+                )
+            except DelegateError as e:
+                return f"({target} couldn't answer that step: {e})"
+            return text or f"({target} returned nothing)"
         except (A2ADispatchError, asyncio.TimeoutError) as e:
             logger.warning(f"[orchestrate] {target} step failed: {e}")
             return f"({target} couldn't answer that step: {e})"
         finally:
             if reassure is not None:
                 reassure.cancel()
-        if res.input_required:
-            # Surface the question back into the loop so the orchestrating model
-            # can answer it (the sticky context keeps it in the same A2A
-            # conversation). Full same-taskId continuation is a follow-up.
-            return f"[{target} needs more to proceed] {res.text}"
-        return res.text or f"({target} returned nothing)"
 
     # Read-only / local tools (calculator, datetime, web_search, …).
     return await run_text_tool(name, args, delegates=delegates)
