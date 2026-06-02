@@ -9,4 +9,6 @@ Task-oriented — a recipe for a specific goal. These assume you've done the
 - **[Customize your orb](./customize-your-orb)** — variant, palette, fine-tuning.
 - **[Personalize ORBIS](./personalize-orbis)** — names, persona voice, verbosity.
 - **[Run ORBIS as a menu-bar agent](./menu-bar-mode)** — show, hide, quit.
+- **[Choose a speech-to-text backend](./choose-speech-to-text)** — Whisper, Parakeet, hosted.
+- **[Choose a voice (TTS)](./choose-a-voice)** — backend + voice selection.
 - **[Voice isn't working](./voice-not-working)** — troubleshooting.
