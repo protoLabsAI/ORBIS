@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent.orchestrate as orch
-from a2a.client import A2AResult
+from a2a_outbound import A2AResult
 from agent.delegates import Delegate, DelegateRegistry
 
 

@@ -26,7 +26,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 
-from a2a.client import A2AClient, A2ADispatchError
+from a2a_outbound import A2AClient, A2ADispatchError
 from agent.delegates import DelegateRegistry
 from agent.tools import build_text_tool_schemas, run_text_tool
 

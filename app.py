@@ -98,7 +98,7 @@ from voice.native_bargein import NativeBargeInObserver
 from voice.sse_bus import sse_bus
 from pipecat.frames.frames import TTSSpeakFrame
 
-from a2a.server import register_a2a_routes
+from a2a_server import register_a2a_routes
 from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
@@ -831,16 +831,26 @@ _TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
 _A2A_USER_ID = os.environ.get("A2A_USER_ID", "default")
 
 
-async def text_agent(message: str, session_id: str) -> str:
-    """Text turn with a bounded ReAct loop — used by the A2A inbound
-    handler (both message/send and message/stream).
+async def text_stream_factory(
+    message: str,
+    context_id: str,
+    *,
+    resume: bool = False,
+    caller_trace: dict | None = None,
+):
+    """Inbound A2A turn as a producer-event stream for the a2a-sdk executor.
 
-    The text agent sees the same tool registry the voice side does
-    (calculator, datetime, web_search, delegate_to), minus async tools
-    like slow_research that need a live voice session to narrate back.
-    Loop is capped at TEXT_AGENT_MAX_ITER iterations (default 3) to
-    prevent runaway — on exhaustion we return whatever text the model
-    last produced (may be empty).
+    Bounded ReAct loop (same brain the voice side uses: calculator, datetime,
+    web_search, delegate_to, minus async tools that need a live voice session).
+    Yields ``(event_type, payload)`` tuples the ``OrbisAgentExecutor`` maps onto
+    the SDK event queue + the protoLabs extensions:
+
+      ("usage", {...})       per LLM call  → cost-v1
+      ("tool_start"/"tool_end", {...})     → tool-call-v1
+      ("done", reply)        terminal
+
+    Loop is capped at TEXT_AGENT_MAX_ITER (default 3); on exhaustion the last
+    text (possibly empty) is the answer.
     """
     import json as _json
 
@@ -849,14 +859,15 @@ async def text_agent(message: str, session_id: str) -> str:
     current_user_id.set(user_id)
     state = user_state_for(user_id)
     skill = _active_skill(user_id)
+    session_id = f"a2a:{context_id}"
     history = _A2A_CONTEXTS.setdefault(session_id, [])
     history.append({"role": "user", "content": message})
 
     # Respect per-skill delegate filter for inbound A2A too.
     session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
 
-    # System prompt shared with the voice path — blocks for TOOL USE,
-    # response shape, plan, repair all apply equally to a text reply.
+    # System prompt shared with the voice path — TOOL USE, response shape,
+    # plan, repair blocks all apply equally to a text reply.
     messages: list[dict] = [
         {
             "role": "system",
@@ -870,10 +881,8 @@ async def text_agent(message: str, session_id: str) -> str:
         *history[-(_A2A_MAX_TURNS * 2):],
     ]
     tools_openai = build_text_tool_schemas(session_delegates)
-    # Resolve persona.llm overrides — voice path and A2A path now share
-    # the same routing logic via _resolve_skill_llm. Closes R14: a user
-    # who configures a custom LLM in config/orbis.yaml gets that LLM for
-    # both voice turns AND inbound A2A turns.
+    # Resolve persona.llm overrides — voice + A2A share routing via
+    # _resolve_skill_llm so a custom config/orbis.yaml LLM applies to both.
     llm_cfg = _resolve_skill_llm(skill)
     client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
 
@@ -891,6 +900,16 @@ async def text_agent(message: str, session_id: str) -> str:
             kwargs["tools"] = tools_openai
             kwargs["tool_choice"] = "auto"
         r = await client.chat.completions.create(**kwargs)
+
+        # cost-v1: token usage per LLM call (previously discarded).
+        u = getattr(r, "usage", None)
+        if u is not None:
+            yield ("usage", {
+                "input_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+                "output_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+                "model": llm_cfg["model"],
+            })
+
         msg = r.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None) or []
 
@@ -921,11 +940,14 @@ async def text_agent(message: str, session_id: str) -> str:
             except Exception:
                 args = {}
             logger.info(f"[a2a/react] tool={tc.function.name} args={args!r}")
+            # tool-call-v1: started → completed around each tool.
+            yield ("tool_start", {"id": tc.id, "name": tc.function.name, "input": args})
             result = await run_text_tool(
                 tc.function.name,
                 args,
                 delegates=session_delegates,
             )
+            yield ("tool_end", {"id": tc.id, "name": tc.function.name, "output": result})
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -940,7 +962,7 @@ async def text_agent(message: str, session_id: str) -> str:
     history.append({"role": "assistant", "content": reply})
     if len(history) > _A2A_MAX_TURNS * 2:
         del history[: len(history) - _A2A_MAX_TURNS * 2]
-    return reply
+    yield ("done", reply)
 
 STATIC_DIR = Path(__file__).parent / "static"
 WEB_DIST = Path(__file__).parent / "web" / "dist"
@@ -3338,9 +3360,9 @@ if _serve_react():
 # A2A_USER_ID user; true per-caller A2A auth lives in a future phase.
 register_a2a_routes(
     app,
-    text_agent=text_agent,
+    text_stream_factory=text_stream_factory,
+    version=os.environ.get("AGENT_VERSION", "1.0.0"),
     delivery_provider=lambda: user_state_for(_A2A_USER_ID).active_delivery,
-    skill_slug_provider=lambda: get_active_persona().slug,
     user_id_provider=lambda: _A2A_USER_ID,
 )
 
