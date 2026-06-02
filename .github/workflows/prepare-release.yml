@@ -2,10 +2,12 @@ name: 'Prepare Release'
 
 # Runs after any non-release PR merges to main, OR manually.
 # Bumps the version in pyproject.toml, opens a prepare-release/vX.Y.Z
-# branch, commits it as "chore: release vX.Y.Z", auto-merges back to
-# main once CI passes, and pushes the semver tag. The tag push is what
-# triggers release.yml — it builds the stable semver Docker image,
-# creates the GitHub release.
+# branch, and commits it as "chore: release vX.Y.Z". It does NOT merge
+# or tag — a human merges the bump PR through the normal CI/review gate,
+# then dispatches release.yml (tag vX.Y.Z) which builds the stable semver
+# Docker image and creates the GitHub release. We do not auto-merge
+# (fleet policy, 2026-06-02: auto-merge fires on stale SHAs + breaks
+# stacked PRs).
 
 on:
   pull_request:
@@ -104,37 +106,12 @@ jobs:
             --base main \
             --head "${BRANCH}" \
             --title "chore: release v${VERSION}" \
-            --body "Automated version bump to \`v${VERSION}\`.")
-          echo "PR: ${PR_URL}"
+            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then dispatch release.yml (tag \`v${VERSION}\`) to tag main and cut the release.")
+          echo "Opened: ${PR_URL}"
 
-          # Try `--auto` first; fall back to direct squash if auto-merge
-          # isn't enabled (no branch protection / nothing to wait on).
-          if ! gh pr merge "${PR_URL}" --squash --auto 2>/tmp/merge-err; then
-            echo "Auto-merge not enabled (expected on repos without branch"
-            echo "protection or PRs with no pending checks):"
-            sed 's/^/  /' /tmp/merge-err
-            echo "Falling back to direct squash merge."
-            gh pr merge "${PR_URL}" --squash
-          fi
-
-          # Poll until merged (CI must pass first; timeout 10 min)
-          echo "Waiting for PR to merge…"
-          for i in $(seq 1 120); do
-            STATE=$(gh pr view "${PR_URL}" --json state -q .state)
-            if [ "$STATE" = "MERGED" ]; then
-              echo "PR merged."
-              break
-            fi
-            if [ "$i" -eq 120 ]; then
-              echo "Timeout waiting for PR to merge." && exit 1
-            fi
-            sleep 5
-          done
-
-          # Push the semver tag — this is what triggers release.yml.
-          # Tag is cut from the merged main commit (which already
-          # includes the bump), so release.yml sees the correct SHA.
-          git fetch origin main
-          git tag -a "v${VERSION}" "origin/main" -m "v${VERSION}"
-          git push origin "v${VERSION}"
-          echo "Tagged v${VERSION} → release.yml will fire"
+          # We do NOT auto-merge or tag here (fleet policy, 2026-06-02:
+          # auto-merge fires on stale SHAs + breaks stacked PRs). A human
+          # merges this bump PR through the normal CI/review gate, then
+          # dispatches release.yml with tag v${VERSION} to tag main and
+          # cut the GitHub release.
+          echo "Next: review + merge that PR (we do not auto-merge), then run release.yml (tag v${VERSION})."

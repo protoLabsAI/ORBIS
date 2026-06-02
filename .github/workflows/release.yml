@@ -189,7 +189,7 @@ jobs:
         continue-on-error: true
         # SHA-pinned because this action has access to release-channel
         # credentials and the parent job has contents:write.
-        uses: protoLabsAI/release-tools@060f55eda935bb534073e6e35ea674063b854a53 # v0.1.3
+        uses: protoLabsAI/release-tools@b7c3531dd67accb57ca09242f47d8c0eb1ace8eb # v1.1.0
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.prev_tag.outputs.tag }}
