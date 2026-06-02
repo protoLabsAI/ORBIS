@@ -63,3 +63,4 @@ docs/.vitepress/dist/
 
 # Brand marks synced into the docs by protolabs-sync-assets (generated)
 docs/public/protolabs-icon-outline.svg
+.orbis-license-key/

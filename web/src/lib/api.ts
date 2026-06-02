@@ -159,7 +159,15 @@ export type OrbisConfig = {
 };
 
 export type EntitlementState = {
-  customization: { active: boolean; configured: boolean; gate_mode?: 'open' | 'closed' };
+  customization: {
+    active: boolean;
+    /** A valid license key is on file (distinct from the dev open-gate). */
+    licensed: boolean;
+    gate_mode?: 'open' | 'closed';
+    /** Display-only license provenance, present when licensed. */
+    sub?: string;
+    lid?: string;
+  };
 };
 
 export type PersonalityAxis = {
@@ -338,7 +346,10 @@ export const api = {
   putConfig: (patch: OrbisConfig) =>
     postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string }>('/api/config', patch),
   entitlement: () => get<EntitlementState>('/api/entitlement'),
-  createCheckout: () => postJSON<{ url: string }>('/api/entitlement/checkout', {}),
+  activateLicense: (license_key: string) =>
+    postJSON<EntitlementState>('/api/entitlement/activate', { license_key }),
+  deactivateLicense: () =>
+    postJSON<EntitlementState>('/api/entitlement/deactivate', {}),
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),

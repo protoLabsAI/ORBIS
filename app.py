@@ -2038,23 +2038,9 @@ async def lifespan(app: FastAPI):
         _reminder_scheduler.run(), name="orbis-reminders"
     )
 
-    # Entitlement refresh — re-query Stripe for the owner's latest
-    # payment and extend the local cache. Runs once at boot, then
-    # every REFRESH_INTERVAL_HOURS (default 24). Runs even when Stripe
-    # is unconfigured — the function no-ops in that case.
-    async def _entitlement_refresh_loop() -> None:
-        from agent.entitlement import REFRESH_INTERVAL_HOURS, configured, refresh_from_stripe
-        while True:
-            if configured():
-                try:
-                    refresh_from_stripe(get_memory())
-                except Exception as e:
-                    logger.info(f"[entitlement] refresh failed: {e}")
-            await asyncio.sleep(REFRESH_INTERVAL_HOURS * 3600)
-
-    entitlement_task = asyncio.create_task(
-        _entitlement_refresh_loop(), name="orbis-entitlement"
-    )
+    # Entitlement needs no background loop: licenses are offline Ed25519 keys
+    # verified at activation + re-verified on each gate check (agent/license.py).
+    # Nothing to poll.
 
     from agent.delegates import health_loop as _delegate_health_loop
     delegate_health_task = asyncio.create_task(
@@ -2091,7 +2077,7 @@ async def lifespan(app: FastAPI):
                 pass
         _native_pipeline_task = None
         _native_transport = None
-        for t in (curator_task, reminder_task, entitlement_task, delegate_health_task):
+        for t in (curator_task, reminder_task, delegate_health_task):
             t.cancel()
             try:
                 await t
@@ -3233,47 +3219,30 @@ async def get_entitlement(user: User = Depends(require_user)):
     return entitlement_state(get_memory())
 
 
-@app.post("/api/entitlement/checkout")
-async def create_checkout(user: User = Depends(require_user)):
-    """Create a Stripe Checkout Session for the customization unlock.
-    Returns ``{"url": "<stripe-hosted checkout page>"}``. Client
-    redirects the user there; success/cancel URLs come back via
-    STRIPE_SUCCESS_URL / STRIPE_CANCEL_URL."""
-    from agent.entitlement import EntitlementError, configured, create_checkout_session
-    if not configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Stripe is not configured on this install.",
-        )
-    try:
-        url = create_checkout_session()
-    except EntitlementError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    except Exception as exc:
-        logger.exception("[entitlement] checkout session creation failed")
-        raise HTTPException(status_code=500, detail=f"checkout failed: {exc}")
-    return {"url": url}
+@app.post("/api/entitlement/activate")
+async def activate_entitlement(body: dict, user: User = Depends(require_user)):
+    """Activate a paid feature with a signed license key.
 
+    Body: ``{"license_key": "ORBIS-…"}``. The key is verified offline against
+    the build's bundled public key (no network, no Stripe secret). Returns the
+    post-activation entitlement state; 400 on a malformed/invalid key."""
+    from agent.entitlement import EntitlementError, activate_license
 
-@app.post("/api/stripe/webhook")
-async def stripe_webhook(request: Request):
-    """Stripe webhook endpoint. Verified via signature header. NOT auth-
-    gated — Stripe's webhook call doesn't carry our API key; the
-    signature check is the authentication. Configure this URL in the
-    Stripe dashboard + set STRIPE_WEBHOOK_SECRET in .env."""
-    from agent.entitlement import EntitlementError, configured, handle_webhook_event
-    if not configured():
-        raise HTTPException(
-            status_code=503, detail="Stripe is not configured."
-        )
-    payload = await request.body()
-    signature = request.headers.get("stripe-signature", "")
+    key = (body or {}).get("license_key", "")
+    if not isinstance(key, str) or not key.strip():
+        raise HTTPException(status_code=400, detail="license_key is required")
     try:
-        result = handle_webhook_event(payload, signature, get_memory())
+        return activate_license(get_memory(), key)
     except EntitlementError as exc:
-        # Signature failure → 400 (Stripe retries on non-2xx).
         raise HTTPException(status_code=400, detail=str(exc))
-    return result
+
+
+@app.post("/api/entitlement/deactivate")
+async def deactivate_entitlement(user: User = Depends(require_user)):
+    """Remove the stored license key (e.g. to move it to another machine)."""
+    from agent.entitlement import deactivate
+
+    return deactivate(get_memory())
 
 
 @app.post("/api/config")
