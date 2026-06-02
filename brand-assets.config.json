@@ -2,7 +2,7 @@
   "_comment": "Consumed by `protolabs-sync-assets` (bin from @protolabsai/design). Surfaces fan the brand marks out of the package's assets/ into served dirs at build time (generated, not committed). `protolabs-sync-assets docs` runs the docs surface; the docs:* npm scripts call it before VitePress.",
   "surfaces": {
     "docs": {
-      "docs/.vitepress/public": {
+      "docs/public": {
         "protolabs-icon-outline.svg": "protolabs-icon-outline.svg"
       }
     }

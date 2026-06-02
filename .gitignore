@@ -62,4 +62,4 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 
 # Brand marks synced into the docs by protolabs-sync-assets (generated)
-docs/.vitepress/public/protolabs-icon-outline.svg
+docs/public/protolabs-icon-outline.svg
