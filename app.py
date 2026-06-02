@@ -830,6 +830,30 @@ _TEXT_REACT_MAX_ITERATIONS = int(os.environ.get("TEXT_AGENT_MAX_ITER", "3"))
 # should read from.
 _A2A_USER_ID = os.environ.get("A2A_USER_ID", "default")
 
+# worldstate-delta-v1 source: state-mutating tools the inbound turn can call,
+# mapped to their (domain, op). Calling these changes ORBIS's world, which the
+# hub wants as telemetry. Read-only / delegating tools aren't here.
+_A2A_MUTATING_TOOLS = {
+    "schedule_reminder": ("reminders", "add"),
+    "schedule_recurring_reminder": ("reminders", "add"),
+    "cancel_reminder": ("reminders", "remove"),
+}
+# Substrings that mark a tool result as a failed mutation — skip the delta then.
+_A2A_MUTATION_FAIL_MARKERS = ("couldn't", "could not", "failed", "no reminder", "error")
+
+
+def _worldstate_delta_for(name: str, args: dict, result: str) -> dict | None:
+    """A worldstate-delta {domain, path, op, value} for a successful mutation,
+    or None for read-only tools / failed mutations."""
+    spec = _A2A_MUTATING_TOOLS.get(name)
+    if spec is None:
+        return None
+    if any(m in (result or "").lower() for m in _A2A_MUTATION_FAIL_MARKERS):
+        return None
+    domain, op = spec
+    path = str(args.get("text") or args.get("id") or args.get("query") or name)
+    return {"domain": domain, "path": path, "op": op, "value": args}
+
 
 async def text_stream_factory(
     message: str,
@@ -887,6 +911,7 @@ async def text_stream_factory(
     client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
 
     reply = ""
+    hit_max = False  # set in the loop's else when the step budget is exhausted
     for _ in range(max(1, _TEXT_REACT_MAX_ITERATIONS)):
         kwargs: dict = {
             "model": llm_cfg["model"],
@@ -948,12 +973,17 @@ async def text_stream_factory(
                 delegates=session_delegates,
             )
             yield ("tool_end", {"id": tc.id, "name": tc.function.name, "output": result})
+            # worldstate-delta-v1: a state-mutating tool changed ORBIS's world.
+            _delta = _worldstate_delta_for(tc.function.name, args, result)
+            if _delta is not None:
+                yield ("delta", _delta)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": result,
             })
     else:
+        hit_max = True
         logger.warning(
             f"[a2a/react] hit max iterations ({_TEXT_REACT_MAX_ITERATIONS}) — "
             "returning last partial"
@@ -962,6 +992,19 @@ async def text_stream_factory(
     history.append({"role": "assistant", "content": reply})
     if len(history) > _A2A_MAX_TURNS * 2:
         del history[: len(history) - _A2A_MAX_TURNS * 2]
+
+    # confidence-v1: a coarse, honest self-assessment of how cleanly this turn
+    # resolved (completion-based — ORBIS has no logprob/confidence signal, so
+    # this reflects whether it answered within its step budget).
+    if reply:
+        conf, expl = (
+            (0.5, "answered but hit the step limit")
+            if hit_max
+            else (0.9, "resolved within the step budget")
+        )
+    else:
+        conf, expl = 0.2, "produced no answer"
+    yield ("confidence", {"confidence": conf, "explanation": expl})
     yield ("done", reply)
 
 STATIC_DIR = Path(__file__).parent / "static"

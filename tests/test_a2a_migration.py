@@ -21,9 +21,13 @@ from a2a_server import register_a2a_routes
 
 
 async def _fake_stream(text, context_id, *, resume=False, caller_trace=None):
+    # Exercises all 4 extensions: cost (usage), tool-call, worldstate-delta,
+    # confidence — the executor must map each onto the wire without error.
     yield ("usage", {"input_tokens": 5, "output_tokens": 3, "model": "test-llm"})
-    yield ("tool_start", {"id": "t1", "name": "calculator", "input": {"x": 1}})
-    yield ("tool_end", {"id": "t1", "name": "calculator", "output": "2"})
+    yield ("tool_start", {"id": "t1", "name": "schedule_reminder", "input": {"text": "call mom"}})
+    yield ("tool_end", {"id": "t1", "name": "schedule_reminder", "output": "Reminder set."})
+    yield ("delta", {"domain": "reminders", "path": "call mom", "op": "add", "value": {"text": "call mom"}})
+    yield ("confidence", {"confidence": 0.9, "explanation": "resolved within the step budget"})
     yield ("done", f"echo: {text}")
 
 
@@ -62,3 +66,26 @@ async def test_closed_loop_send_returns_answer(monkeypatch):
     assert res.state == "completed"
     assert res.input_required is False
     assert res.task_id and res.context_id
+
+
+def test_terminal_parts_emits_cost_worldstate_confidence():
+    """The terminal artifact carries the cost / worldstate-delta / confidence
+    DataParts when there's data for them (the now-wired extensions)."""
+    import protolabs_a2a as pa
+    from a2a_executor import _terminal_parts
+
+    parts = _terminal_parts(
+        text="hi",
+        deltas=[{"domain": "reminders", "path": "call mom", "op": "add", "value": {}}],
+        usage={"input_tokens": 5, "output_tokens": 3},
+        cost_usd=0.0,
+        confidence=0.9,
+        confidence_expl="resolved",
+        success=True,
+    )
+    mimes = {p.metadata[pa.MIME_KEY] for p in parts if p.HasField("data")}
+    assert pa.WORLDSTATE_DELTA_MIME in mimes
+    assert pa.COST_MIME in mimes
+    assert pa.CONFIDENCE_MIME in mimes
+    # text part is present too (not a data part)
+    assert any(p.HasField("text") for p in parts)
