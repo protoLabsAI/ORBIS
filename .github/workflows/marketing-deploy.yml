@@ -1,10 +1,19 @@
 name: Deploy Marketing Site
 
+# Builds the Astro marketing site AND the VitePress docs, then deploys the
+# combined bundle to Cloudflare Pages (project: orbis-marketing →
+# https://orbis.protolabs.studio). The docs are served at /docs — built with
+# DOCS_BASE=/docs/ and copied into the Astro output's dist/docs before deploy,
+# so one Cloudflare Pages project serves both the landing page and the docs.
+
 on:
   push:
     branches: [main]
     paths:
       - 'sites/marketing/**'
+      - 'docs/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/marketing-deploy.yml'
   workflow_dispatch:
 
@@ -17,8 +26,9 @@ jobs:
     name: Build & deploy to Cloudflare Pages
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
+      # --- Marketing site (Astro / bun) ---
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -27,9 +37,26 @@ jobs:
         run: bun install
         working-directory: sites/marketing
 
-      - name: Build
+      - name: Build marketing site
         run: bun run build
         working-directory: sites/marketing
+
+      # --- Docs (VitePress / npm) served at /docs ---
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Build docs (base /docs/)
+        run: |
+          npm ci
+          DOCS_BASE=/docs/ npm run docs:build
+
+      - name: Fold docs into the marketing bundle at /docs
+        run: |
+          rm -rf sites/marketing/dist/docs
+          mkdir -p sites/marketing/dist/docs
+          cp -R docs/.vitepress/dist/. sites/marketing/dist/docs/
 
       - name: Deploy to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name=orbis-marketing --branch=main
