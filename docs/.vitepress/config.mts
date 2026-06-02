@@ -30,10 +30,15 @@ function sidebarFor(section: string) {
   }));
 }
 
+// GitHub project Pages serve under /<repo>/; override with DOCS_BASE for a
+// custom domain (set DOCS_BASE=/). Local `docs:dev` serves under it too.
+const BASE = process.env.DOCS_BASE ?? '/ORBIS/';
+
 export default defineConfig({
   title: 'ORBIS',
   description:
     'ORBIS — a voice-first AI companion for Apple Silicon. User documentation.',
+  base: BASE,
   cleanUrls: true,
   lastUpdated: true,
   // Internal dev/architecture notes live under docs/internal/ and are not
@@ -41,6 +46,7 @@ export default defineConfig({
   srcExclude: ['internal/**'],
 
   head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${BASE}favicon.svg` }],
     ['meta', { name: 'theme-color', content: '#9b87f2' }],
     ['meta', { property: 'og:title', content: 'ORBIS — docs' }],
     [
