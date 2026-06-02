@@ -23,6 +23,8 @@ dependencies = [
     "soxr",
     "numpy",
     "pyyaml",
+    # Offline license-key verification (Ed25519) — agent/license.py.
+    "cryptography>=42",
     # Observability
     "langfuse>=4,<5",
     # MLX-LM for native Apple Silicon LLM inference (Mac arm64 only).
