@@ -142,6 +142,39 @@ async def test_no_preamble_falls_back_to_generic_checking(monkeypatch, registry)
 
 
 @pytest.mark.asyncio
+async def test_ask_user_pauses_resumes_and_offers_tool(monkeypatch, registry):
+    """The model can call ask_user; the loop pauses, gets the answer, and feeds
+    it back as the tool result so the model continues with it."""
+    asked = []
+
+    async def fake_ask(question):
+        asked.append(question)
+        return "production"
+
+    llm = _run(monkeypatch, registry, [
+        _msg(tool_calls=[_tool_call("c1", "ask_user", {"question": "which environment?"})]),
+        _msg(content="Deploying to production."),
+    ])
+    out = await orch.run_orchestration(
+        "deploy the app", delegates=registry, client=llm, model="m", ask_user=fake_ask,
+    )
+    assert out == "Deploying to production."
+    assert asked == ["which environment?"]                         # paused + asked
+    tool_names = {t["function"]["name"] for t in llm.calls[0]["tools"]}
+    assert "ask_user" in tool_names                                # tool offered
+    assert any("production" in str(m.get("content", "")) for m in llm.calls[-1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_ask_user_tool_absent_without_callback(monkeypatch, registry):
+    """No ask_user callback → the model isn't offered the tool at all."""
+    llm = _run(monkeypatch, registry, [_msg(content="done")])
+    await orch.run_orchestration("x", delegates=registry, client=llm, model="m")
+    tool_names = {t["function"]["name"] for t in (llm.calls[0].get("tools") or [])}
+    assert "ask_user" not in tool_names
+
+
+@pytest.mark.asyncio
 async def test_same_delegate_reuses_one_sticky_client(monkeypatch, registry):
     # Two delegate_to calls to ava across two steps → ONE A2AClient (sticky ctx).
     llm = _run(monkeypatch, registry, [

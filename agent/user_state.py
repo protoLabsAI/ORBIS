@@ -14,6 +14,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_USER_ID = "default"
+
+
+@dataclass
+class PendingAsk:
+    """A paused orchestration run waiting on the user's spoken answer.
+
+    When set, the voice AskGate resolves ``future`` with the user's NEXT
+    transcript and swallows that frame, so the answer feeds the paused run
+    instead of starting a normal LLM turn. Cleared when the run resumes (or the
+    wait times out)."""
+    question: str
+    future: asyncio.Future
 
 
 @dataclass
@@ -40,6 +53,9 @@ class UserState:
     active_tracer: Any | None = None
     active_session_id: str | None = None
     active_tts: Any | None = None  # live TTS service (for runtime voice switch)
+
+    # HITL: a background orchestration run waiting on the user's spoken answer.
+    pending_ask: PendingAsk | None = None
 
 
 class UserStateRegistry:
@@ -76,3 +92,31 @@ def all_user_states() -> list[UserState]:
 
 def active_user_states() -> list[UserState]:
     return _REGISTRY.active_sessions()
+
+
+# --- HITL pending-ask routing (single-user: one active session, one ask) -----
+
+
+def set_pending_ask_on_active(ask: PendingAsk) -> bool:
+    """Park ``ask`` on the active voice session so the next user transcript
+    answers the paused run. Returns False if there's no live session."""
+    for st in _REGISTRY.active_sessions():
+        st.pending_ask = ask
+        return True
+    return False
+
+
+def take_pending_ask() -> PendingAsk | None:
+    """Return + CLEAR the active session's pending ask (None if none). The voice
+    AskGate calls this on a user transcript to route the answer to the run."""
+    for st in _REGISTRY.all():
+        if st.pending_ask is not None:
+            pa, st.pending_ask = st.pending_ask, None
+            return pa
+    return None
+
+
+def clear_pending_ask() -> None:
+    """Drop any pending ask (e.g. on timeout / run teardown)."""
+    for st in _REGISTRY.all():
+        st.pending_ask = None
