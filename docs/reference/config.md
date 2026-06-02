@@ -12,12 +12,43 @@ ORBIS reads `orbis.yaml` from the app's data directory (set up on first run).
 An **annotated example** with every option is in the repo:
 [`config/orbis.example.yaml`](https://github.com/protoLabsAI/ORBIS/blob/main/config/orbis.example.yaml).
 
+## A minimal config
+
+Everything has a sensible default — a working file can be tiny:
+
+```yaml
+persona:
+  name: ORBIS
+  user_name: Alex
+
+llm:
+  url: http://127.0.0.1:11434/v1   # local Ollama
+  model: gemma3n:e2b
+
+voice:
+  tts_backend: kokoro              # local, the default
+  voice: af_heart
+
+orb:
+  variant: fractal
+  palette: Aurora
+```
+
+Leave a section out to take its defaults.
+
 ## Environment overrides
 
-Most settings have an `ORBIS_*` / `LLM_*` / `STT_BACKEND` / `TTS_BACKEND` env-var
-equivalent that overrides the file. Where a section block is set in
-`orbis.yaml`, it takes precedence over the corresponding env vars; leave it out
-to fall back to env.
+Most settings have an env-var equivalent that overrides the file. Where a
+section block **is** set in `orbis.yaml`, it takes precedence over the
+corresponding env vars; leave the block out to fall back to env. Common ones:
+
+| Env var | Overrides |
+| --- | --- |
+| `LLM_URL` · `LLM_SERVED_NAME` · `LLM_API_KEY` | the `llm:` block |
+| `LLM_ROUTER_MODEL` · `LLM_CONTENT_MODEL` · `LLM_MICRO_MODEL` | two-model / micro routing |
+| `LLM_FALLBACK_URL` · `LLM_FALLBACK_MODEL` | the failover backup |
+| `STT_BACKEND` | `stt.backend` |
+| `TTS_BACKEND` · `KOKORO_VOICE` | `voice.tts_backend` · `voice.voice` |
 
 ## Sections
 
