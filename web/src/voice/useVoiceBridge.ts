@@ -18,6 +18,7 @@
  *   session    { event: 'start'|'end', session_id?: string }
  *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
  *   delegation-progress { type, source, text }
+ *   widget     { action: 'open'|'close', id, props? } — render_widget tool
  *   __connected — synthetic, emitted by the bridge on (re)connect
  *
  * Pre-2026-04-28 this was useNativeBridge gated behind a WebRTC path;
@@ -27,6 +28,7 @@
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
+import { widgetWorkspace } from '../widgets/store';
 
 interface SsePayload {
   event: string;
@@ -92,6 +94,22 @@ function handleSse(event: string, data: string): void {
     case 'delegation-progress': {
       if (typeof parsed.text === 'string') {
         voiceStore.update({ delegationProgress: parsed.text });
+      }
+      break;
+    }
+    case 'widget': {
+      // Voice-driven widget control (render_widget tool): open/close + seed state.
+      const id = parsed.id as string | undefined;
+      if (!id) break;
+      const action = (parsed.action as string | undefined) ?? 'open';
+      if (action === 'close') {
+        widgetWorkspace.close(id);
+      } else {
+        widgetWorkspace.openWidget(id);
+        const props = parsed.props;
+        if (props && typeof props === 'object') {
+          widgetWorkspace.setProps(id, props as Record<string, unknown>);
+        }
       }
       break;
     }

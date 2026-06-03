@@ -91,7 +91,7 @@ function DraggableWidget({
       onPointerCancel={endDrag}
     >
       <div className="relative rounded-xl bg-base/45 px-3 py-2 shadow-lg ring-1 ring-edge/40 backdrop-blur-xl">
-        <Body id={def.id} surface="dock" />
+        <Body id={def.id} surface="dock" props={entry.props} />
         <button
           type="button"
           onClick={() => widgetWorkspace.close(def.id)}
