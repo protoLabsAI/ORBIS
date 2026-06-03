@@ -74,6 +74,26 @@ impl VoiceProcessingInput {
             let input_node: Retained<AVAudioInputNode> = engine.inputNode();
             let _input_av_node: &AVAudioNode = &*input_node;
 
+            // Pin a specific input device (else system default) BEFORE enabling
+            // voice-processing — setting it AFTER doesn't rebind the already-
+            // realized input format (it stayed on the default 5ch aggregate).
+            // AVAudioEngine ignores device *names*, so set the AudioDeviceID on
+            // the input node's underlying AUHAL. orbis-zj5.
+            if let Some(dev_id) = input_device_id {
+                let au: *mut std::os::raw::c_void = objc2::msg_send![&*input_node, audioUnit];
+                if au.is_null() {
+                    log::warn!(
+                        "[voice-processing] input node has no audioUnit; using default device"
+                    );
+                } else if let Err(e) =
+                    super::coreaudio_devices::set_current_input_device(au, dev_id)
+                {
+                    log::warn!("[voice-processing] couldn't pin input device {dev_id}: {e} — using default");
+                } else {
+                    log::info!("[voice-processing] input device pinned: AudioDeviceID {dev_id}");
+                }
+            }
+
             // Enable voice processing — the whole point of Phase 2.
             // Returns an NSError if the audio session can't be put
             // into voice-processing mode (some older Macs, certain
@@ -120,25 +140,6 @@ impl VoiceProcessingInput {
                     None => {
                         log::info!("[voice-processing] other-audio ducking = default (Apple VoIP)");
                     }
-                }
-            }
-
-            // Pin a specific input device if the user chose one (else system
-            // default). AVAudioEngine ignores device *names*; we set the
-            // AudioDeviceID on the input node's underlying AUHAL. Must be before
-            // the engine starts. orbis-zj5.
-            if let Some(dev_id) = input_device_id {
-                let au: *mut std::os::raw::c_void = objc2::msg_send![&*input_node, audioUnit];
-                if au.is_null() {
-                    log::warn!(
-                        "[voice-processing] input node has no audioUnit; using default device"
-                    );
-                } else if let Err(e) =
-                    super::coreaudio_devices::set_current_input_device(au, dev_id)
-                {
-                    log::warn!("[voice-processing] couldn't pin input device {dev_id}: {e} — using default");
-                } else {
-                    log::info!("[voice-processing] input device pinned: AudioDeviceID {dev_id}");
                 }
             }
 
