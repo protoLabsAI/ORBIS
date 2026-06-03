@@ -91,7 +91,7 @@ function DraggableWidget({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
-      <div className="relative rounded-xl bg-raised px-3 py-2 shadow-lg ring-1 ring-edge">
+      <div className="relative rounded-xl bg-surface px-3 py-2 shadow-lg ring-1 ring-edge">
         <Body id={def.id} surface="dock" props={entry.props} />
         <div className="absolute -right-1.5 -top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover/w:opacity-100">
           <button

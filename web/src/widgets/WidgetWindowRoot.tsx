@@ -32,7 +32,7 @@ export function WidgetWindowRoot({ id }: { id: string }) {
   return (
     <div
       data-tauri-drag-region
-      className="group fixed inset-0 flex cursor-grab select-none items-center justify-center rounded-xl bg-raised ring-1 ring-edge"
+      className="group fixed inset-0 flex cursor-grab select-none items-center justify-center rounded-xl bg-surface ring-1 ring-edge"
     >
       {/* Pointer-transparent so the whole panel drags the window (widgets are
           display-only, per the voice-first model — no interactive content). */}
