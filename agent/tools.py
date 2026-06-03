@@ -656,6 +656,7 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
 def _delegate_to_handler(
     registry: DelegateRegistry,
     *,
+    delivery: "DeliveryController | None" = None,
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
 ):
@@ -663,11 +664,12 @@ def _delegate_to_handler(
     ``cancel_on_interruption=False``.
 
     Pipecat lets the LLM continue immediately (the opening filler is the single
-    ack), then we stream the delegate's REAL progress as intermediate
-    ``is_final=False`` results and deliver the answer as the final result. The
-    LLM narrates progress + answer in-context, gated by Pipecat's own
-    not-user-speaking / bot-speaking deferral. No DeliveryController, no manual
-    backgrounding, no second ack — that's what caused the out-of-order microack."""
+    ack), and we deliver the answer as the final result, which the LLM narrates
+    in-context. The delegate's REAL streamed progress ("routing to Quinn…") goes
+    to the VISUAL pill (the ``delegation-progress`` SSE via ``note_progress``) —
+    NOT spoken — so people can glance at progress without every step narrated, and
+    there's no second spoken turn to collide with the answer (no double-response).
+    The answer is the only spoken turn besides the opening ack."""
 
     async def _handler(params: FunctionCallParams) -> None:
         target = (params.arguments.get("target") or "").strip()
@@ -688,17 +690,19 @@ def _delegate_to_handler(
             f"[delegate_to] target={target} type={delegate.type} query={query!r}"
         )
 
-        # Real streamed progress → intermediate (is_final=False) developer
-        # messages the LLM narrates as the work happens. a2a_outbound yields the
-        # agent's own status text; bare heartbeats yield nothing → quiet.
+        # Real streamed progress → the VISUAL pill (delegation-progress SSE), NOT
+        # spoken. The StatusPill shows "asking ava… routing to Quinn" so people can
+        # glance at progress; the answer is the only spoken turn (besides the ack),
+        # so it can't double-narrate. a2a_outbound yields the agent's own status
+        # text; bare heartbeats yield nothing → pill just shows "asking ava…".
         async def _progress(text: str) -> None:
             text = (text or "").strip()
-            if not text:
+            if not text or delivery is None:
                 return
-            await params.result_callback(
-                {"progress": text},
-                properties=FunctionCallResultProperties(is_final=False),
-            )
+            try:
+                await delivery.note_progress(text, source=target)
+            except Exception:  # noqa: BLE001
+                pass
 
         try:
             result = await delegate_dispatch(
@@ -769,13 +773,15 @@ def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
 def _orchestrate_handler(
     registry: DelegateRegistry,
     *,
+    delivery: "DeliveryController | None" = None,
     runner: OrchestrateRunner,
 ):
     """Native async function-call handler (cancel_on_interruption=False). The LLM
-    continues immediately (the opening filler is the ack); per-step progress + the
-    final synthesis come back as is_final results the LLM narrates in-context.
-    HITL ask_user surfaces the question as an intermediate then waits on the
-    voice AskGate."""
+    continues immediately (the opening filler is the ack) and the final synthesis
+    comes back as the final result it narrates. Per-step progress goes to the
+    VISUAL pill (note_progress), NOT spoken — glanceable, no per-step narration.
+    HITL ask_user surfaces the question as an intermediate (spoken) then waits on
+    the voice AskGate."""
 
     async def _handler(params: FunctionCallParams) -> None:
         goal = (params.arguments.get("goal") or "").strip()
@@ -787,12 +793,12 @@ def _orchestrate_handler(
 
         async def _progress(text: str) -> None:
             text = (text or "").strip()
-            if not text:
+            if not text or delivery is None:
                 return
-            await params.result_callback(
-                {"progress": text},
-                properties=FunctionCallResultProperties(is_final=False),
-            )
+            try:
+                await delivery.note_progress(text, source="orchestrator")
+            except Exception:  # noqa: BLE001
+                pass
 
         async def _ask_user(question: str) -> str:
             # HITL: surface the question as an intermediate (the LLM speaks it),
@@ -953,6 +959,7 @@ def register_tools(
             "delegate_to",
             _wrap_sync(_delegate_to_handler(
                 delegates,
+                delivery=delivery,  # for note_progress → the StatusPill (visual)
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )),
@@ -961,13 +968,14 @@ def register_tools(
         standard.append(_delegate_to_schema(delegates))
 
         # orchestrate — multi-step delegation loop (D1). Native async; needs the
-        # injected runner (the loop + LLM client, built in app.py). Progress +
-        # synthesis come back as is_final results the LLM narrates in-context.
+        # injected runner (the loop + LLM client) + delivery for visual step
+        # progress on the pill and the HITL ask_user prompt.
         if orchestrate_runner is not None:
             llm.register_function(
                 "orchestrate",
                 _wrap_sync(_orchestrate_handler(
                     delegates,
+                    delivery=delivery,
                     runner=orchestrate_runner,
                 )),
                 cancel_on_interruption=False,

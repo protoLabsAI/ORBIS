@@ -45,6 +45,16 @@ class FakeRegistry:
         return [self._d.name]
 
 
+class FakeDelivery:
+    """Captures note_progress calls (the visual pill / delegation-progress SSE)."""
+
+    def __init__(self):
+        self.progress: list[tuple] = []
+
+    async def note_progress(self, text, *, source=None):
+        self.progress.append((text, source))
+
+
 def _delegate():
     return SimpleNamespace(name="ava", type="a2a", description="chief of staff")
 
@@ -70,24 +80,42 @@ async def test_returns_answer_as_single_final_result(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_streams_real_progress_then_final(monkeypatch) -> None:
+async def test_progress_goes_to_the_pill_not_spoken(monkeypatch) -> None:
+    # Real progress → the VISUAL pill (note_progress), NOT a spoken result. The
+    # ONLY spoken result is the final answer → no double-narration, glanceable
+    # progress while you wait.
+    delivery = FakeDelivery()
+
     async def fake_dispatch(d, query, *, progress_callback=None, **kw):
         await progress_callback("routing to Quinn")
         await progress_callback("")  # blank → ignored
-        await progress_callback("Quinn offline, retrying")
+        await progress_callback("checking CI")
         return "Here's the roster."
 
     monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
-    handler = _delegate_to_handler(FakeRegistry(_delegate()))
-    params = FakeParams({"target": "ava", "query": "fleet status?"})
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "sit rep?"})
     await handler(params)
 
-    # Intermediate progress (is_final=False) then the final answer (is_final=True).
-    assert params.results == [
-        ({"progress": "routing to Quinn"}, False),
-        ({"progress": "Quinn offline, retrying"}, False),
-        ("Here's the roster.", True),
-    ]
+    # Progress on the pill, attributed to the target.
+    assert delivery.progress == [("routing to Quinn", "ava"), ("checking CI", "ava")]
+    # Only the answer is a spoken result.
+    assert params.results == [("Here's the roster.", True)]
+
+
+@pytest.mark.asyncio
+async def test_progress_without_delivery_noops(monkeypatch) -> None:
+    # Text mode (no DeliveryController): progress no-ops; just the answer.
+    async def fake_dispatch(d, query, *, progress_callback=None, **kw):
+        await progress_callback("routing to Quinn")
+        return "done"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()))  # delivery=None
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    assert params.results == [("done", True)]
 
 
 @pytest.mark.asyncio
