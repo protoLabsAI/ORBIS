@@ -2612,6 +2612,17 @@ async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)
     return {"ok": True, "delegates": _decorate_delegates(entries)}
 
 
+@app.get("/api/delegate-types")
+async def delegate_types_endpoint(user: User = Depends(require_user)):
+    """The registered delegate types with their capabilities + field schema.
+
+    Drives the generic Settings New/Edit form and the delegation-monitor
+    widget (a type's ``capabilities`` decide what's renderable). Adding a
+    delegate type = register one adapter; it shows up here automatically."""
+    from agent.delegate_adapters import delegate_type_specs
+    return {"types": delegate_type_specs()}
+
+
 @app.post("/api/delegates/test")
 async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
     return await _probe_delegate(body or {})

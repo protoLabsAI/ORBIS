@@ -36,20 +36,14 @@ import os
 import random
 import re
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import httpx
 import yaml
 
-from a2a_outbound import (
-    A2AClient,
-    A2ADispatchError,
-    ProgressCallback,
-)
-from acp import AcpClient, AcpError
-from agent.tracing import active_trace, propagation_headers
+if TYPE_CHECKING:  # type-only — the runtime bodies live in delegate_adapters
+    from a2a_outbound import A2AClient, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -120,103 +114,39 @@ class Delegate:
 
 
 def _parse_entry(raw: dict) -> Delegate | None:
+    """Build a ``Delegate`` from a raw YAML entry, routing the type-specific
+    parse to the registered adapter. Returns ``None`` for a missing/unknown
+    type or a malformed entry — the registry silently skips those. The
+    per-type bodies live in ``agent/delegate_adapters.py``."""
     name = raw.get("name")
     dtype = (raw.get("type") or "").lower()
     desc = (raw.get("description") or "").strip()
     if not name or not dtype or not desc:
         logger.warning(f"[delegates] skipping entry missing name/type/description: {raw!r}")
         return None
-    if dtype not in ("a2a", "openai", "acp"):
+    from agent.delegate_adapters import get_adapter
+    try:
+        adapter = get_adapter(dtype)
+    except KeyError:
         logger.warning(f"[delegates] {name}: unknown type {dtype!r}; skipping")
         return None
-
-    # type=acp — launched local coding agent. Needs command + workdir, not a url.
-    if dtype == "acp":
-        command = _expand_env(str(raw.get("command", "")))
-        if not command:
-            logger.warning(f"[delegates] {name}: acp delegate requires command; skipping")
-            return None
-        workdir = _expand_env(str(raw.get("workdir", "")))
-        if not workdir:
-            logger.warning(f"[delegates] {name}: acp delegate requires workdir; skipping")
-            return None
-        raw_args = raw.get("args", [])
-        args = (
-            [_expand_env(str(a)) for a in raw_args] if isinstance(raw_args, list) else []
-        )
-        return Delegate(
-            name=name,
-            description=desc,
-            type=dtype,
-            command=command,
-            args=args,
-            workdir=workdir,
-        )
-
-    url = _expand_env(str(raw.get("url", "")))
-    if not url:
-        logger.warning(f"[delegates] {name}: url required; skipping")
-        return None
-
-    common = dict(name=name, description=desc, type=dtype, url=url)
-
-    if dtype == "a2a":
-        auth = raw.get("auth") or {}
-        scheme = auth.get("scheme")
-        cred_env = auth.get("credentialsEnv")
-        cred = os.environ.get(cred_env) if cred_env else None
-        if cred_env and not cred:
-            logger.warning(
-                f"[delegates] {name}: auth env {cred_env!r} unset (unauthenticated)"
-            )
-        return Delegate(
-            **common,
-            auth_scheme=scheme,
-            a2a_credential=cred,
-            a2a_headers=dict(raw.get("headers", {})),
-        )
-
-    # type=openai
-    model = raw.get("model")
-    if not model:
-        logger.warning(f"[delegates] {name}: openai delegate requires model; skipping")
-        return None
-    key_env = raw.get("api_key_env")
-    api_key = os.environ.get(key_env) if key_env else None
-    if key_env and not api_key:
-        logger.warning(
-            f"[delegates] {name}: api_key_env {key_env!r} unset (sending unauthenticated)"
-        )
-    return Delegate(
-        **common,
-        model=model,
-        openai_api_key=api_key or "not-needed",
-        system_prompt=raw.get("system_prompt"),
-        max_tokens=int(raw.get("max_tokens", 400)),
-        temperature=float(raw.get("temperature", 0.4)),
-    )
+    return adapter.parse(raw, name, desc)
 
 
 def _config_changed(a: "Delegate", b: "Delegate") -> bool:
-    """Did the dispatch-relevant config change between two registry
-    entries with the same name? Lightweight comparison — auth headers
-    are derived from credentialsEnv resolution at parse time, so
-    comparing the resolved values catches credential rotations too.
-
-    Description / system_prompt changes don't invalidate the health
-    cache because they don't affect reachability, only LLM picks.
-    """
-    if a.type != b.type or a.url != b.url:
+    """Did dispatch-relevant config change between two same-named entries
+    (→ invalidate the health cache)? A type change always counts; the rest is
+    the adapter's call (it compares url + its own auth/model fields). Auth
+    headers are resolved at parse time, so comparing the resolved values
+    catches credential rotations too. Description / system_prompt changes don't
+    invalidate — they affect LLM picks, not reachability."""
+    if a.type != b.type:
         return True
-    if a.type == "a2a":
-        return (
-            a.auth_scheme != b.auth_scheme
-            or a.a2a_credential != b.a2a_credential
-            or a.a2a_headers != b.a2a_headers
-        )
-    if a.type == "openai":
-        return a.model != b.model or a.openai_api_key != b.openai_api_key
-    return False
+    from agent.delegate_adapters import get_adapter
+    try:
+        return get_adapter(a.type).config_changed(a, b)
+    except KeyError:
+        return True
 
 
 @dataclass
@@ -392,215 +322,29 @@ async def dispatch(
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
 ) -> str:
-    """Dispatch `query` to the given delegate. For A2A delegates, prefer
-    SSE streaming so the voice layer can narrate intermediate status via
-    `progress_callback`. OpenAI delegates don't stream here (chat
-    completion non-stream); they're usually fast enough not to need it.
-    """
-    if delegate.type == "a2a":
-        return await _dispatch_a2a(
-            delegate, query,
-            timeout=timeout,
-            progress_callback=progress_callback,
-            push_notification_url=push_notification_url,
-            push_notification_token=push_notification_token,
-        )
-    if delegate.type == "openai":
-        return await _dispatch_openai(delegate, query, timeout=timeout)
-    if delegate.type == "acp":
-        return await _dispatch_acp(
-            delegate, query, timeout=timeout, progress_callback=progress_callback
-        )
-    raise DelegateError(f"unknown delegate type {delegate.type!r}")
-
-
-# Per-delegate AcpClient cache — one launched agent process + session per
-# delegate, reused across turns so follow-ups continue the thread (the sticky-
-# session analog of the A2A contextId). Keyed by the launch identity.
-_acp_clients: dict[tuple, AcpClient] = {}
-
-
-def _acp_client_for(delegate: Delegate) -> AcpClient:
-    key = (delegate.name, delegate.command, tuple(delegate.args), delegate.workdir)
-    client = _acp_clients.get(key)
-    if client is None:
-        client = AcpClient(
-            delegate.command,
-            delegate.args,
-            cwd=delegate.workdir,
-            name=delegate.name,
-        )
-        _acp_clients[key] = client
-    return client
-
-
-async def _dispatch_acp(
-    delegate: Delegate,
-    query: str,
-    *,
-    timeout: float,
-    progress_callback: ProgressCallback | None = None,
-) -> str:
-    """Drive a launched ACP coding agent for one turn. Coding turns are slow,
-    so the floor is generous regardless of the caller's default timeout."""
-    client = _acp_client_for(delegate)
+    """Dispatch ``query`` to ``delegate``, routing to the registered adapter.
+    The per-type dispatch bodies (a2a streaming/sync, openai chat-completion,
+    acp stdio) live in ``agent/delegate_adapters.py``."""
+    from agent.delegate_adapters import get_adapter
     try:
-        text = await client.prompt(
-            query,
-            progress_callback=progress_callback,
-            timeout=max(timeout, 600.0),
-        )
-    except AcpError as exc:
-        raise DelegateError(f"{delegate.name}: {exc}") from exc
-    if not text:
-        raise DelegateError(f"{delegate.name} finished but returned no text")
-    return text
-
-
-# Per-delegate A2AClient cache — reused across dispatches so the Agent Card
-# is fetched once. Keyed by (url, sorted auth headers) so an auth/url change
-# yields a fresh client. The dispatch path passes a FRESH contextId per call
-# (one-shot delegate_to/delegate_async have no multi-turn intent); the D1
-# orchestrate loop constructs its own per-run clients for sticky context.
-_a2a_clients: dict[tuple, A2AClient] = {}
+        adapter = get_adapter(delegate.type)
+    except KeyError:
+        raise DelegateError(f"unknown delegate type {delegate.type!r}")
+    return await adapter.dispatch(
+        delegate, query,
+        timeout=timeout,
+        progress_callback=progress_callback,
+        push_notification_url=push_notification_url,
+        push_notification_token=push_notification_token,
+    )
 
 
 def _client_for(delegate: Delegate) -> A2AClient:
-    key = (delegate.url, tuple(sorted(delegate.auth_headers().items())))
-    client = _a2a_clients.get(key)
-    if client is None:
-        client = A2AClient(
-            delegate.url,
-            headers=delegate.auth_headers(),
-            card_origin=delegate.origin(),
-            name=delegate.name,
-        )
-        _a2a_clients[key] = client
-    return client
-
-
-async def _dispatch_a2a(
-    delegate: Delegate,
-    query: str,
-    *,
-    timeout: float,
-    progress_callback: ProgressCallback | None = None,
-    push_notification_url: str | None = None,
-    push_notification_token: str | None = None,
-) -> str:
-    """Reliable synchronous `message/send` by default; opt into streaming
-    (progress narration) with ``A2A_STREAM=1``.
-
-    Streaming HANGS against servers that send their reply but never emit a
-    recognized terminal SSE event (no ``final: true`` / terminal status) —
-    the client waits for more lines until the httpx read timeout, and that
-    ``TimeoutException`` isn't an ``A2ADispatchError`` so the fallback never
-    fired and delegate_to looked dead. A2A push-back can't reach a 127.0.0.1
-    desktop app either, so the streaming path buys little here. Default to
-    sync; bound the opt-in stream with ``asyncio.wait_for``
-    (``A2A_STREAM_TIMEOUT``, default 20s) and fall back to sync on any
-    failure or timeout.
-
-    Streaming is used when EITHER ``A2A_STREAM=1`` (manual opt-in) OR a
-    ``progress_callback`` is supplied AND the delegate's card advertises
-    ``streaming`` — so a caller that wants the delegate's intermediate status
-    (for the visual rail) gets it when the agent actually supports it. The
-    hang-guard differs: the manual env path keeps the short ``A2A_STREAM_TIMEOUT``
-    distrust bound; a card-advertised status stream is trusted up to the full
-    request ``timeout`` (a slow-but-streaming agent like Ava is not a hang).
-    Any stream error/timeout falls back to one synchronous ``message/send``.
-    """
-    client = _client_for(delegate)
-    ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
-    env_stream = os.environ.get("A2A_STREAM", "0") == "1"
-    want_status = progress_callback is not None and await client.supports_streaming()
-    if env_stream or want_status:
-        # Trust a card-advertised status stream up to the full timeout; keep
-        # the short distrust bound only for the manual A2A_STREAM opt-in.
-        bound = (
-            float(os.environ.get("A2A_STREAM_TIMEOUT", "20")) if env_stream
-            else timeout
-        )
-        try:
-            res = await asyncio.wait_for(
-                client.send(
-                    query,
-                    context_id=ctx,
-                    progress_callback=progress_callback,
-                    prefer_stream=True,
-                    timeout=timeout,
-                    push_notification_url=push_notification_url,
-                    push_notification_token=push_notification_token,
-                ),
-                timeout=bound,
-            )
-            return res.text
-        except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
-            logger.warning(
-                f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
-                "falling back to message/send"
-            )
-    res = await client.send(query, context_id=ctx, prefer_stream=False, timeout=timeout)
-    return res.text
-
-
-async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) -> str:
-    """One-shot non-streaming chat completion via plain httpx.
-
-    We deliberately avoid the OpenAI SDK here — it adds `x-stainless-*`
-    fingerprint headers + a `user-agent: AsyncOpenAI/…` string that some
-    proxies (workstacean's WAF being the reason we found out) block. The
-    endpoint contract is simple enough that raw httpx is cleaner.
-    """
-    sys_prompt = delegate.system_prompt or (
-        "You are a research assistant. Answer thoroughly but concisely "
-        "(2-4 sentences). Plain text only — no markdown, no lists. "
-        "The answer will be spoken aloud verbatim."
-    )
-    headers = {"Content-Type": "application/json"}
-    # Cross-fleet trace propagation — harmless on vanilla OpenAI but
-    # stitches our trace if the endpoint is a fleet peer that speaks
-    # the contract (see docs/reference/tracing-contract.md).
-    headers.update(propagation_headers(trace=active_trace()))
-    if delegate.openai_api_key and delegate.openai_api_key != "not-needed":
-        # Both standard (Authorization: Bearer) and workstacean-style
-        # (X-API-Key) are accepted by the servers we target today.
-        # Bearer is the OpenAI contract; sticking with that.
-        headers["Authorization"] = f"Bearer {delegate.openai_api_key}"
-    payload = {
-        "model": delegate.model,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": query},
-        ],
-        "max_tokens": delegate.max_tokens,
-        "temperature": delegate.temperature,
-        "stream": False,
-        # vLLM-hosted Qwen3.5/3.6 models emit reasoning into a separate
-        # field unless this is off. Harmless for gateways that ignore it.
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(
-                f"{delegate.url.rstrip('/')}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-    except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
-        raise DelegateError(f"{delegate.name} unreachable: {e}") from e
-    except Exception as e:
-        raise DelegateError(f"{delegate.name}: {e}") from e
-
-    if r.status_code != 200:
-        raise DelegateError(
-            f"{delegate.name}: HTTP {r.status_code} — {r.text[:200]}"
-        )
-    try:
-        body = r.json()
-        return (body["choices"][0]["message"]["content"] or "").strip()
-    except Exception as e:
-        raise DelegateError(f"{delegate.name}: malformed response ({e})") from e
+    """The cached A2AClient for an a2a delegate. Kept as a module facade because
+    the D1 orchestrate loop imports it (``client_for=_client_for``) to share the
+    Agent-Card cache; the cache itself now lives on the A2A adapter."""
+    from agent.delegate_adapters import get_adapter
+    return get_adapter("a2a").client_for(delegate)
 
 
 # ---------------------------------------------------------------------------
@@ -609,78 +353,17 @@ async def _dispatch_openai(delegate: Delegate, query: str, *, timeout: float) ->
 
 
 async def probe(delegate: Delegate, *, timeout: float = 8.0) -> dict:
-    """Cheap reachability check for a delegate.
-
-    For ``a2a`` delegates: GET ``{origin}/.well-known/agent-card.json``
-    using the configured auth header. The card is an A2A spec
-    requirement (the same endpoint our own ``a2a/server.py`` exposes
-    at line 124-156), so it's the canonical "is this thing alive"
-    surface. 401/403 reported distinctly from "unreachable" so the
-    UI can show "your key is wrong" vs "delegate is down."
-
-    For ``openai`` delegates: a one-shot ``/chat/completions`` ping
-    via ``agent.llm_probe.ping_endpoint``, same as
-    ``/api/llm/test``. Error shapes line up with the LLM probe so
-    the Settings panel can render results identically across surfaces.
-
-    Returns ``{ok: bool, latency_ms?: int, error?: str, status?: int}``.
-    Never raises — every failure mode comes back as ``ok: False``.
-    """
-    if delegate.type == "a2a":
-        origin = delegate.origin()
-        if not origin:
-            return {"ok": False, "error": f"malformed url: {delegate.url!r}"}
-        card_url = f"{origin}/.well-known/agent-card.json"
-        headers = delegate.auth_headers()
-        t0 = time.monotonic()
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.get(card_url, headers=headers)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
-            return {"ok": False, "error": f"unreachable: {e}"}
-        except Exception as e:  # noqa: BLE001 — surface but don't raise
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        if r.status_code in (401, 403):
-            return {
-                "ok": False, "error": "auth rejected",
-                "status": r.status_code, "latency_ms": latency_ms,
-            }
-        if r.status_code != 200:
-            return {
-                "ok": False,
-                "error": f"agent card HTTP {r.status_code}",
-                "status": r.status_code, "latency_ms": latency_ms,
-            }
-        return {"ok": True, "latency_ms": latency_ms}
-
-    if delegate.type == "openai":
-        from agent.llm_probe import ping_endpoint
-        return await ping_endpoint(
-            url=delegate.url,
-            model=delegate.model or "",
-            api_key=delegate.openai_api_key
-            if delegate.openai_api_key and delegate.openai_api_key != "not-needed"
-            else "",
-        )
-
-    if delegate.type == "acp":
-        # No URL to ping — an acp agent is "reachable" if its binary is on PATH
-        # and its workdir exists (ORBIS launches it on demand).
-        import shutil
-        from pathlib import Path
-
-        cmd = (delegate.command or "").strip()
-        if not cmd:
-            return {"ok": False, "error": "no command configured"}
-        if shutil.which(cmd) is None:
-            return {"ok": False, "error": f"command not on PATH: {cmd}"}
-        wd = Path((delegate.workdir or "").strip()).expanduser()
-        if not wd.is_dir():
-            return {"ok": False, "error": f"workdir not found: {wd}"}
-        return {"ok": True}
-
-    return {"ok": False, "error": f"unknown delegate type {delegate.type!r}"}
+    """Cheap reachability check for a delegate, routed to the registered
+    adapter. Returns ``{ok: bool, latency_ms?: int, error?: str, status?: int}``
+    and never raises — every failure mode comes back as ``ok: False``. The
+    per-type probes (a2a agent-card GET, openai /chat/completions ping, acp
+    PATH+workdir check) live in ``agent/delegate_adapters.py``."""
+    from agent.delegate_adapters import get_adapter
+    try:
+        adapter = get_adapter(delegate.type)
+    except KeyError:
+        return {"ok": False, "error": f"unknown delegate type {delegate.type!r}"}
+    return await adapter.probe(delegate, timeout=timeout)
 
 
 # Default cadence — measured in seconds. Faster than the 30s personality
