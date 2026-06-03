@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { widgetRegistry } from './registry';
 import { widgetWorkspace } from './store';
+import { useSurfaceEnabled } from '../surface';
 
 /**
  * Ambient-presence bridge (main window). When ORBIS's main window is hidden,
@@ -12,9 +13,11 @@ import { widgetWorkspace } from './store';
  * `beforeunload` re-docks it). Manually popped-out widgets are left alone.
  */
 export function AmbientBridge() {
+  const enabled = useSurfaceEnabled();
   const autoPopped = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (!enabled) return;
     const unlisten = listen<boolean>('orbis-main-visibility', (e) => {
       const visible = e.payload;
       if (!visible) {
@@ -36,7 +39,7 @@ export function AmbientBridge() {
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [enabled]);
 
   return null;
 }

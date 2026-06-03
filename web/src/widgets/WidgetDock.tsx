@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { PictureInPicture2, X } from 'lucide-react';
 import { type WidgetDef, widgetRegistry } from './registry';
 import { type OpenWidget, widgetWorkspace } from './store';
+import { useSurfaceEnabled } from '../surface';
 
 /**
  * Widget layer — open ('dock'-surface) widgets float freely over the surface,
@@ -15,9 +16,10 @@ import { type OpenWidget, widgetWorkspace } from './store';
  * (double-click to toggle the mic); only the panels capture pointer events.
  */
 export function WidgetDock() {
+  const enabled = useSurfaceEnabled();
   const open = useSyncExternalStore(widgetWorkspace.subscribe, widgetWorkspace.getSnapshot);
   const docked = open.filter((w) => w.surface === 'dock');
-  if (docked.length === 0) return null;
+  if (!enabled || docked.length === 0) return null;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20">

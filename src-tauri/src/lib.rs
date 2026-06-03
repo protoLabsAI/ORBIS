@@ -400,6 +400,22 @@ fn show_main_window(app: &AppHandle) {
     exit_ambient_mode(app);
 }
 
+/// Experimental "surface" features (command bar, widgets, ambient mini-orb) are
+/// behind a flag while they bake — off unless `ORBIS_SURFACE` is 1/true/on.
+fn is_surface_enabled() -> bool {
+    matches!(
+        std::env::var("ORBIS_SURFACE").ok().as_deref(),
+        Some("1") | Some("true") | Some("on")
+    )
+}
+
+/// Lets the frontend gate the widget dock / launcher / ambient bridge on the
+/// same flag the Rust side uses.
+#[tauri::command]
+fn surface_enabled() -> bool {
+    is_surface_enabled()
+}
+
 /// Frontend-triggerable "bring ORBIS back" — invoked by the mini-orb click.
 #[tauri::command]
 fn show_main(app: tauri::AppHandle) {
@@ -1098,7 +1114,8 @@ pub fn run() {
                     open_widget_window,
                     open_command_bar,
                     show_main,
-                    close_widget_window
+                    close_widget_window,
+                    surface_enabled
                 ]
             }
             #[cfg(not(feature = "native-audio"))]
@@ -1115,7 +1132,8 @@ pub fn run() {
                     open_widget_window,
                     open_command_bar,
                     show_main,
-                    close_widget_window
+                    close_widget_window,
+                    surface_enabled
                 ]
             }
         })
@@ -1134,7 +1152,10 @@ pub fn run() {
                     api.prevent_close();
                     let app = window.app_handle().clone();
                     let _ = window.hide();
-                    enter_ambient_mode(&app);
+                    // Ambient presence (mini-orb + pop-out widgets) is gated.
+                    if is_surface_enabled() {
+                        enter_ambient_mode(&app);
+                    }
                 }
             }
         })
@@ -1159,9 +1180,10 @@ pub fn run() {
 
             // Global hotkey to summon the command bar (Raycast-style), even when
             // ORBIS is backgrounded. Cmd+Shift+O — distinctive enough to avoid
-            // the usual macOS clashes. Registered + handled Rust-side.
+            // the usual macOS clashes. Registered + handled Rust-side. Gated:
+            // the command bar is an experimental surface feature.
             #[cfg(desktop)]
-            {
+            if is_surface_enabled() {
                 use tauri_plugin_global_shortcut::{
                     Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
                 };

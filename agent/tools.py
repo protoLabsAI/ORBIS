@@ -601,6 +601,14 @@ async def render_widget_handler(params: FunctionCallParams) -> None:
         await params.result_callback(f"Here's the {widget}.")
 
 
+# render_widget is part of the experimental on-screen "surface" (command bar,
+# widgets, ambient mini-orb), gated behind ORBIS_SURFACE while it bakes. When
+# off, drop it from the registry so it isn't offered to the LLM — the frontend
+# widget dock is gated too, so a rendered widget wouldn't show anyway.
+if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
+    _TOOL_REGISTRY.pop("render_widget", None)
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).

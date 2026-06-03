@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Check, LayoutGrid } from 'lucide-react';
 import { widgetRegistry } from './registry';
 import { widgetWorkspace } from './store';
+import { useSurfaceEnabled } from '../surface';
 
 /**
  * Widget launcher — a chrome-rail button (below the mic toggle) that opens a
@@ -10,6 +11,7 @@ import { widgetWorkspace } from './store';
  * here.
  */
 export function WidgetLauncher() {
+  const enabled = useSurfaceEnabled();
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const defs = useSyncExternalStore(widgetRegistry.subscribe, widgetRegistry.all);
@@ -25,7 +27,7 @@ export function WidgetLauncher() {
     return () => document.removeEventListener('mousedown', onDown);
   }, [menuOpen]);
 
-  if (defs.length === 0) return null;
+  if (!enabled || defs.length === 0) return null;
 
   return (
     <div
