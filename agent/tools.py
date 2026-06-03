@@ -693,11 +693,21 @@ def _spawn_delegate_delivery(
             except asyncio.CancelledError:
                 pass
 
-        async def _progress(msg: str) -> None:
-            # Real-time progress from A2A status updates (visual rail, not spoken).
-            # No-op until the streaming dispatch lands; harmless to pass now.
+        async def _progress(_msg: str) -> None:
+            # Grounded progress: a real A2A WORKING heartbeat (streaming) means
+            # the delegate is genuinely still on it. Speak one short reassurance
+            # (once, via cooldown) + update the visual rail — replaces the old
+            # blind canned "Ava's checking…" filler with a real-event-driven one.
             try:
-                await delivery.note_progress(msg, source=target)
+                await delivery.note_progress(f"{target} working", source=target)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                await delivery.deliver(
+                    f"{target}'s still working on that",
+                    priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
+                    cooldown_key=f"delegate-working:{target}",
+                )
             except Exception:  # noqa: BLE001
                 pass
 

@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -30,6 +32,11 @@ from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+
+# Emit one grounded "still working" progress beat if a streaming hand-off is
+# still WORKING this many seconds in (skips the instant 0s heartbeat, so fast
+# replies stay quiet). Real status_update-driven, not a blind timer.
+_PROGRESS_AFTER_S = float(os.environ.get("A2A_PROGRESS_AFTER_S", "7"))
 
 _TERMINAL = {
     TaskState.TASK_STATE_COMPLETED,
@@ -119,13 +126,20 @@ def _task_answer_text(task: Task) -> str:
     return out
 
 
-def _status_text(task: Task) -> str:
-    """Text on the task's status message (the terminal answer for buffer-then-
-    answer agents, and where an input-required question lives)."""
+def _status_message_text(status) -> str:
+    """Text on a TaskStatus message — the terminal answer for buffer-then-answer
+    agents (Ava), and where an input-required question lives."""
     try:
-        return "".join(_part_text(p) for p in task.status.message.parts)
+        if hasattr(status, "HasField") and not status.HasField("message"):
+            return ""
+        return "".join(_part_text(p) for p in status.message.parts)
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _status_text(task: Task) -> str:
+    """Text on the task's status message (see _status_message_text)."""
+    return _status_message_text(task.status)
 
 
 class A2AClient:
@@ -157,16 +171,20 @@ class A2AClient:
         return self._context_id
 
     async def supports_streaming(self) -> bool:
-        # We drive non-streaming (poll/hold) for robustness on localhost/tailnet,
-        # matching the orchestrate loop's "never depend on push to progress".
-        return False
+        # Opt into streaming; the SDK still gates on the card's
+        # `capabilities.streaming` (base_client) and falls back to message/send
+        # for non-streaming agents, so this is "willing to stream", negotiated
+        # per-card. Streaming is client→server SSE (not push), so it keeps the
+        # "never depend on a push callback to progress" property on localhost/
+        # tailnet while giving real status_update heartbeats + clean termination.
+        return True
 
     async def _ensure_client(self):
         if self._client is not None:
             return self._client
         if self._httpx is None:
             self._httpx = httpx.AsyncClient(headers=self.headers, timeout=60.0)
-        factory = ClientFactory(ClientConfig(httpx_client=self._httpx, streaming=False))
+        factory = ClientFactory(ClientConfig(httpx_client=self._httpx, streaming=True))
         # The card lives at the origin's /.well-known/agent-card.json, not under
         # the /a2a JSON-RPC path — discover from card_origin (delegate.origin()),
         # falling back to deriving the origin from the JSON-RPC url.
@@ -202,21 +220,67 @@ class A2AClient:
             msg.task_id = task_id
         request = SendMessageRequest(message=msg)
 
+        # We may get either shape, negotiated per-card by the SDK:
+        #  - streaming: task(submitted) → status_update(working)* →
+        #    artifact_update(answer) → status_update(completed)  [no final task]
+        #  - non-streaming: a single terminal task snapshot
+        # Capture the answer + terminal state from whichever arrives, and emit
+        # one grounded "still working" beat off a real WORKING heartbeat.
         final_task: Task | None = None
+        artifact_text = ""
+        status_text = ""
         message_text = ""
+        final_state = None
+        resolved_task_id = task_id
+        resolved_ctx = ctx
+        started = time.monotonic()
+        beat_sent = False
 
         async def _consume() -> None:
-            nonlocal final_task, message_text
+            nonlocal final_task, artifact_text, status_text, message_text
+            nonlocal final_state, resolved_task_id, resolved_ctx, beat_sent
             async for resp in client.send_message(request):
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
-                if which == "task" or resp.HasField("task"):
+                if which == "task" or (which is None and resp.HasField("task")):
                     final_task = resp.task
+                    final_state = resp.task.status.state
+                    if resp.task.id:
+                        resolved_task_id = resp.task.id
+                    if resp.task.context_id:
+                        resolved_ctx = resp.task.context_id
+                elif which == "status_update":
+                    su = resp.status_update
+                    final_state = su.status.state
+                    if su.task_id:
+                        resolved_task_id = su.task_id
+                    if su.context_id:
+                        resolved_ctx = su.context_id
+                    if su.status.state == TaskState.TASK_STATE_WORKING:
+                        # Liveness heartbeat — fire one grounded progress beat
+                        # once the hand-off has clearly been running a while.
+                        if (
+                            progress_callback is not None
+                            and not beat_sent
+                            and time.monotonic() - started >= _PROGRESS_AFTER_S
+                        ):
+                            beat_sent = True
+                            try:
+                                await progress_callback("working")
+                            except Exception:  # noqa: BLE001
+                                pass
+                    else:
+                        t = _status_message_text(su.status)
+                        if t:
+                            status_text = t
+                elif which == "artifact_update":
+                    t = "".join(
+                        _part_text(p) for p in resp.artifact_update.artifact.parts
+                    )
+                    if t:
+                        artifact_text = t
                 elif which == "message" or (which is None and resp.HasField("message")):
                     for p in resp.message.parts:
                         message_text += _part_text(p)
-                # status_update / artifact_update: progress; final state comes
-                # from the terminal task below. Real-time progress narration from
-                # status updates rides the streaming path (supports_streaming()).
 
         # Enforce the wall-clock bound. A buffer-then-answer gateway (Ava routes
         # through the fleet) can hold the response; without this the await could
@@ -232,20 +296,30 @@ class A2AClient:
         except Exception as exc:  # noqa: BLE001
             raise A2ADispatchError(f"{self.name}: send failed: {exc}") from exc
 
-        if final_task is not None:
-            state = final_task.status.state
-            input_required = state == TaskState.TASK_STATE_INPUT_REQUIRED
-            text = _task_answer_text(final_task) or message_text
-            if input_required and not text:
-                text = _status_text(final_task)
-            return A2AResult(
-                text=text,
-                state=_STATE_NAMES.get(state),
-                task_id=final_task.id or None,
-                context_id=final_task.context_id or ctx,
-                input_required=input_required,
-            )
-        return A2AResult(text=message_text, state="completed", context_id=ctx)
+        # Latest state seen across ALL events wins — in the streaming shape the
+        # initial `task` is `submitted`, and the terminal state arrives later as
+        # a `status_update(completed)`. Don't let the stale submitted task win.
+        state = final_state if final_state is not None else TaskState.TASK_STATE_COMPLETED
+        input_required = state == TaskState.TASK_STATE_INPUT_REQUIRED
+        text = (
+            (_task_answer_text(final_task) if final_task is not None else "")
+            or artifact_text
+            or status_text
+            or message_text
+        )
+        return A2AResult(
+            text=text,
+            state=_STATE_NAMES.get(state),
+            task_id=(
+                final_task.id if final_task is not None and final_task.id
+                else resolved_task_id
+            ) or None,
+            context_id=(
+                final_task.context_id if final_task is not None and final_task.context_id
+                else resolved_ctx
+            ),
+            input_required=input_required,
+        )
 
     async def close(self) -> None:
         if self._httpx is not None and self._owns_httpx:

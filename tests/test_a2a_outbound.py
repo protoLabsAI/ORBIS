@@ -12,6 +12,7 @@ import asyncio
 
 import pytest
 
+import a2a_outbound
 from a2a_outbound import A2AClient, A2ADispatchError
 
 
@@ -71,6 +72,108 @@ async def test_send_returns_terminal_text(monkeypatch) -> None:
     res = await client.send("ping", timeout=5.0)
     assert res.state == "completed"
     assert res.task_id == "t-123"
+
+
+# --- streaming event shape (task → working* → artifact → completed) ---------
+
+
+class _Ev:
+    """Minimal stand-in for an SDK StreamResponse oneof payload."""
+
+    def __init__(self, kind, payload):
+        self._kind, self._payload = kind, payload
+
+    def WhichOneof(self, _):
+        return self._kind
+
+    def HasField(self, f):
+        return f == self._kind
+
+    def __getattr__(self, name):
+        payload = object.__getattribute__(self, "_payload")
+        kind = object.__getattribute__(self, "_kind")
+        if name == kind:
+            return payload
+        raise AttributeError(name)
+
+
+def _stream_events(answer: str):
+    from a2a.types import (
+        Artifact,
+        Part,
+        Task,
+        TaskArtifactUpdateEvent,
+        TaskState,
+        TaskStatusUpdateEvent,
+    )
+
+    t = Task()
+    t.id = "t-stream"
+    t.status.state = TaskState.TASK_STATE_SUBMITTED
+
+    working = TaskStatusUpdateEvent()
+    working.task_id = "t-stream"
+    working.status.state = TaskState.TASK_STATE_WORKING
+
+    au = TaskArtifactUpdateEvent()
+    au.task_id = "t-stream"
+    art = Artifact()
+    art.parts.append(Part(text=answer))
+    au.artifact.CopyFrom(art)
+
+    done = TaskStatusUpdateEvent()
+    done.task_id = "t-stream"
+    done.status.state = TaskState.TASK_STATE_COMPLETED
+    done.status.message.parts.append(Part(text=answer))
+
+    return [
+        _Ev("task", t),
+        _Ev("status_update", working),
+        _Ev("artifact_update", au),
+        _Ev("status_update", done),
+    ]
+
+
+def _stream_sdk(events):
+    class _Sdk:
+        async def send_message(self, _request):
+            for e in events:
+                yield e
+
+    async def _ensure():
+        return _Sdk()
+
+    return _ensure
+
+
+@pytest.mark.asyncio
+async def test_send_streaming_shape_extracts_answer(monkeypatch) -> None:
+    client = A2AClient(url="http://ava:3333/a2a", name="ava")
+    monkeypatch.setattr(
+        client, "_ensure_client", _stream_sdk(_stream_events("the streamed answer"))
+    )
+    res = await client.send("q", timeout=5.0)
+    assert res.state == "completed"  # terminal status_update wins over submitted
+    assert res.text == "the streamed answer"
+    assert res.task_id == "t-stream"
+
+
+@pytest.mark.asyncio
+async def test_send_streaming_emits_one_grounded_beat(monkeypatch) -> None:
+    # Force the "been working a while" gate open so the WORKING heartbeat fires.
+    monkeypatch.setattr(a2a_outbound, "_PROGRESS_AFTER_S", 0.0)
+    beats: list[str] = []
+
+    async def prog(msg):
+        beats.append(msg)
+
+    client = A2AClient(url="http://ava:3333/a2a", name="ava")
+    monkeypatch.setattr(
+        client, "_ensure_client", _stream_sdk(_stream_events("done"))
+    )
+    res = await client.send("q", timeout=5.0, progress_callback=prog)
+    assert res.text == "done"
+    assert beats == ["working"]  # exactly one grounded beat
 
 
 def test_answer_text_from_status_message() -> None:
