@@ -419,3 +419,61 @@ def test_merge_patch_creates_block_if_missing(tmp_path: Path):
     merge_patch({"orb": {"variant": "crystal", "palette": "Prism"}}, p)
     final = yaml.safe_load(p.read_text())
     assert final["orb"]["variant"] == "crystal"
+
+
+# --- wakeword ---------------------------------------------------------------
+
+
+def test_validate_wakeword_normalizes_types():
+    out = validate_and_normalize(
+        {"wakeword": {"enabled": 1, "model": "  hey_orbis  ", "threshold": "0.6"}}
+    )
+    assert out["wakeword"] == {
+        "enabled": True,
+        "model": "hey_orbis",
+        "threshold": 0.6,
+    }
+
+
+def test_validate_wakeword_clamps_threshold():
+    assert validate_and_normalize(
+        {"wakeword": {"threshold": 5}}
+    )["wakeword"]["threshold"] == 1.0
+    assert validate_and_normalize(
+        {"wakeword": {"threshold": -2}}
+    )["wakeword"]["threshold"] == 0.0
+
+
+def test_validate_wakeword_bad_threshold_raises():
+    with pytest.raises(ValueError):
+        validate_and_normalize({"wakeword": {"threshold": "loud"}})
+
+
+def test_validate_wakeword_drops_unknown_key(
+    caplog: pytest.LogCaptureFixture,
+):
+    out = validate_and_normalize(
+        {"wakeword": {"enabled": True, "bogus": "nope"}}
+    )
+    assert out["wakeword"] == {"enabled": True}
+    assert "bogus" in caplog.text
+
+
+def test_merge_patch_wakeword_preserves_other_blocks(tmp_path: Path):
+    p = _write(tmp_path / "orbis.yaml", """
+        persona:
+          slug: x
+          name: X
+        stt:
+          backend: parakeet
+    """)
+    merge_patch({"wakeword": {"enabled": True, "model": "hey_orbis"}}, p)
+    final = yaml.safe_load(p.read_text())
+    assert final["wakeword"] == {"enabled": True, "model": "hey_orbis"}
+    # Other blocks untouched.
+    assert final["persona"]["name"] == "X"
+    assert final["stt"]["backend"] == "parakeet"
+    # A follow-up patch shallow-merges onto the existing wakeword block.
+    merge_patch({"wakeword": {"enabled": False}}, p)
+    final2 = yaml.safe_load(p.read_text())
+    assert final2["wakeword"] == {"enabled": False, "model": "hey_orbis"}

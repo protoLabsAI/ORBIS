@@ -3179,6 +3179,57 @@ async def llm_detect_local():
     return await detect_local()
 
 
+@app.get("/api/wakeword/models")
+async def wakeword_models_list(user: User = Depends(require_user)):
+    """Wake-word model catalog with live download status — drives the picker."""
+    from voice.wakeword_models import catalog
+    return {"models": catalog()}
+
+
+@app.post("/api/wakeword/models/{model_id}/download")
+async def wakeword_model_download(model_id: str, user: User = Depends(require_user)):
+    """Download a wake-word model, awaited through the Rust ``api_request``
+    proxy (models are small — 0.2–1.7 MB — so a blocking POST is fine).
+
+    Progress is pushed to the ``/api/events`` SSE bus as ``wakeword-download``
+    ``{id, downloaded, total, pct}`` — the Rust ``bridge_sse`` re-emits the bus
+    as ``orbis-sse`` Tauri events, which is the reliable server→client channel
+    in the bundled Tahoe WKWebView (a streamed POST body is not). A final
+    ``{id, done: true}`` (or ``{id, error}``) marks completion."""
+    import time as _time
+
+    from voice.wakeword_models import get, iter_download
+
+    if get(model_id) is None:
+        return JSONResponse(
+            status_code=404, content={"error": f"unknown model {model_id!r}"}
+        )
+    last = 0.0
+    try:
+        async for p in iter_download(model_id):
+            now = _time.monotonic()
+            if now - last < 0.1 and p["downloaded"] < p["total"]:
+                continue  # throttle to ~10/s, but always emit the final tick
+            last = now
+            pct = (p["downloaded"] / p["total"] * 100) if p["total"] else 0
+            sse_bus.publish_sync(
+                "wakeword-download", {"id": model_id, "pct": pct, **p}
+            )
+    except Exception as e:  # noqa: BLE001
+        sse_bus.publish_sync("wakeword-download", {"id": model_id, "error": str(e)})
+        return JSONResponse(status_code=502, content={"error": str(e)})
+    sse_bus.publish_sync("wakeword-download", {"id": model_id, "done": True})
+    return {"ok": True}
+
+
+@app.delete("/api/wakeword/models/{model_id}")
+async def wakeword_model_delete(model_id: str, user: User = Depends(require_user)):
+    """Remove a downloaded wake-word model."""
+    from voice.wakeword_models import delete
+
+    return {"ok": delete(model_id)}
+
+
 @app.get("/api/tts/voices")
 async def tts_voices(
     backend: str = "kokoro",
