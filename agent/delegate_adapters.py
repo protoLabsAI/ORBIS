@@ -69,6 +69,7 @@ class FieldSpec:
     placeholder: str = ""
     help: str = ""
     options: list[str] | None = None  # for kind="select"
+    default: Any = None  # prefill for a new entry of this type
 
     def as_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -83,6 +84,8 @@ class FieldSpec:
             d["help"] = self.help
         if self.options is not None:
             d["options"] = self.options
+        if self.default is not None:
+            d["default"] = self.default
         return d
 
 
@@ -113,6 +116,10 @@ class DelegateAdapter:
     probe/config_schema."""
 
     type: str = ""
+    #: Human display copy for the Settings type-picker tile (surfaced via
+    #: ``/api/delegate-types`` so a new type brings its own UI copy).
+    label: str = ""
+    blurb: str = ""
     capabilities: Capabilities = Capabilities()
     #: YAML keys this type accepts beyond ``_COMMON_KEYS``.
     extra_keys: frozenset[str] = frozenset()
@@ -172,6 +179,8 @@ class DelegateAdapter:
 
 class A2AAdapter(DelegateAdapter):
     type = "a2a"
+    label = "A2A agent"
+    blurb = "JSON-RPC fleet peer"
     capabilities = Capabilities(stream=True, inject=True, session=True, oneshot=False)
     extra_keys = frozenset({"auth", "headers"})
 
@@ -355,6 +364,8 @@ class A2AAdapter(DelegateAdapter):
 
 class OpenAIAdapter(DelegateAdapter):
     type = "openai"
+    label = "OpenAI-compat"
+    blurb = "/v1 endpoint"
     capabilities = Capabilities(stream=False, inject=False, session=False, oneshot=True)
     extra_keys = frozenset(
         {"model", "api_key_env", "system_prompt", "max_tokens", "temperature"}
@@ -520,6 +531,8 @@ class OpenAIAdapter(DelegateAdapter):
 
 class AcpAdapter(DelegateAdapter):
     type = "acp"
+    label = "ACP coding agent"
+    blurb = "proto / opencode / codex"
     capabilities = Capabilities(stream=True, inject=True, session=True, oneshot=False)
     extra_keys = frozenset({"command", "args", "workdir"})
 
@@ -532,10 +545,10 @@ class AcpAdapter(DelegateAdapter):
     def config_schema(self) -> list[FieldSpec]:
         return [
             FieldSpec("command", "Command", "text", required=True, placeholder="proto",
-                      help="The agent binary on your PATH."),
+                      help="The agent binary on your PATH.", default="proto"),
             FieldSpec("args", "Args", "args", placeholder="--acp",
                       help="Args that start it in ACP mode "
-                           "(proto: --acp · opencode: acp)."),
+                           "(proto: --acp · opencode: acp).", default=["--acp"]),
             FieldSpec("workdir", "Workdir", "path", required=True, placeholder="~/dev/ORBIS",
                       help="The directory the agent reads, edits, and runs code in."),
         ]
@@ -663,6 +676,8 @@ def delegate_type_specs() -> list[dict[str, Any]]:
     return [
         {
             "type": a.type,
+            "label": a.label,
+            "blurb": a.blurb,
             "capabilities": a.capabilities.as_dict(),
             "fields": [f.as_dict() for f in a.config_schema()],
         }

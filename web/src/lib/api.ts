@@ -255,6 +255,36 @@ export type DelegateTestResult = {
   status?: number;
 };
 
+/** One field in a delegate type's config form (from GET /api/delegate-types).
+ *  Dotted `key` (e.g. "auth.scheme") maps to a nested path on the entry. */
+export interface DelegateFieldSpec {
+  key: string;
+  label: string;
+  kind: 'text' | 'secret-env' | 'args' | 'path' | 'number' | 'textarea' | 'select';
+  required: boolean;
+  placeholder?: string;
+  help?: string;
+  options?: string[];
+  default?: unknown;
+}
+
+export interface DelegateCapabilities {
+  stream: boolean;
+  inject: boolean;
+  session: boolean;
+  oneshot: boolean;
+}
+
+/** A registered delegate type — drives the generic New/Edit form + tile.
+ *  Adding a backend adapter makes a new entry appear here automatically. */
+export interface DelegateTypeSpec {
+  type: string;
+  label: string;
+  blurb: string;
+  capabilities: DelegateCapabilities;
+  fields: DelegateFieldSpec[];
+}
+
 /** Thrown when a response carries HTTP 401 — signals the key is wrong/missing. */
 export class UnauthorizedError extends Error {
   constructor(path: string) { super(`${path} → 401 unauthorized`); }
@@ -408,5 +438,8 @@ export const api = {
       ),
     test: (entry: Delegate) =>
       postJSON<DelegateTestResult>('/api/delegates/test', entry),
+    /** Registered delegate types + their capabilities/field schema. Drives the
+     *  generic New/Edit form, so a new backend adapter needs no UI change. */
+    types: () => get<{ types: DelegateTypeSpec[] }>('/api/delegate-types'),
   },
 };
