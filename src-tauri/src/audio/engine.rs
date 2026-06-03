@@ -103,7 +103,6 @@ impl AudioEngine {
     /// `input_device_name` — if `Some`, selects the named CPAL input
     ///   device; if `None`, uses the host default.
     pub fn new(
-        #[cfg_attr(feature = "voice-processing", allow(unused_variables))]
         input_device_name: Option<&str>,
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     ) -> Result<Self, String> {
@@ -169,7 +168,21 @@ impl AudioEngine {
         #[cfg(all(feature = "voice-processing", target_os = "macos"))]
         let _vp_input = {
             log::info!("[audio] input path: AVAudioEngine voice-processing");
-            super::voice_processing_input::VoiceProcessingInput::new(tx.clone(), Arc::clone(&rms))?
+            // Resolve the chosen device name → Core Audio AudioDeviceID (None =
+            // system default). orbis-zj5.
+            let dev_id =
+                input_device_name.and_then(super::coreaudio_devices::input_device_id_for_name);
+            if input_device_name.is_some() && dev_id.is_none() {
+                log::warn!(
+                    "[audio] input device '{}' not found in Core Audio — using default",
+                    input_device_name.unwrap_or("")
+                );
+            }
+            super::voice_processing_input::VoiceProcessingInput::new(
+                tx.clone(),
+                Arc::clone(&rms),
+                dev_id,
+            )?
         };
 
         Ok(Self {

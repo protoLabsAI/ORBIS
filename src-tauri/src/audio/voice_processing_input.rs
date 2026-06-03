@@ -61,6 +61,7 @@ impl VoiceProcessingInput {
     pub fn new(
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
         rms: Arc<AtomicU32>,
+        input_device_id: Option<u32>,
     ) -> Result<Self, String> {
         // SAFETY: AVAudioEngine, the input node, and tap installation
         // are all standard AVFAudio API surface. The tap block runs on
@@ -72,6 +73,26 @@ impl VoiceProcessingInput {
 
             let input_node: Retained<AVAudioInputNode> = engine.inputNode();
             let _input_av_node: &AVAudioNode = &*input_node;
+
+            // Pin a specific input device (else system default) BEFORE enabling
+            // voice-processing — setting it AFTER doesn't rebind the already-
+            // realized input format (it stayed on the default 5ch aggregate).
+            // AVAudioEngine ignores device *names*, so set the AudioDeviceID on
+            // the input node's underlying AUHAL. orbis-zj5.
+            if let Some(dev_id) = input_device_id {
+                let au: *mut std::os::raw::c_void = objc2::msg_send![&*input_node, audioUnit];
+                if au.is_null() {
+                    log::warn!(
+                        "[voice-processing] input node has no audioUnit; using default device"
+                    );
+                } else if let Err(e) =
+                    super::coreaudio_devices::set_current_input_device(au, dev_id)
+                {
+                    log::warn!("[voice-processing] couldn't pin input device {dev_id}: {e} — using default");
+                } else {
+                    log::info!("[voice-processing] input device pinned: AudioDeviceID {dev_id}");
+                }
+            }
 
             // Enable voice processing — the whole point of Phase 2.
             // Returns an NSError if the audio session can't be put
@@ -239,14 +260,27 @@ unsafe fn handle_tap(
             mono.push(unsafe { *chan0_ptr.add(i) });
         }
     } else {
-        // Average across channels for downmix.
-        for i in 0..frame_length {
-            let mut sum = 0.0_f32;
-            for ch in 0..native_channels {
-                let chan_ptr = unsafe { (*channel_data.add(ch)).as_ptr() };
-                sum += unsafe { *chan_ptr.add(i) };
+        // Some VP setups (esp. an aggregate default device) hand us a buffer
+        // with the mic on ONE channel and the rest silent/reference. Averaging
+        // diluted the voice by ~Nx into near-silence (the dead-meter bug) — pick
+        // the highest-energy channel (the active mic) and use it. orbis-zj5.
+        let mut best_ch = 0usize;
+        let mut best_energy = -1.0_f32;
+        for ch in 0..native_channels {
+            let chan_ptr = unsafe { (*channel_data.add(ch)).as_ptr() };
+            let mut e = 0.0_f32;
+            for i in 0..frame_length {
+                let s = unsafe { *chan_ptr.add(i) };
+                e += s * s;
             }
-            mono.push(sum / native_channels as f32);
+            if e > best_energy {
+                best_energy = e;
+                best_ch = ch;
+            }
+        }
+        let chan_ptr = unsafe { (*channel_data.add(best_ch)).as_ptr() };
+        for i in 0..frame_length {
+            mono.push(unsafe { *chan_ptr.add(i) });
         }
     }
 
