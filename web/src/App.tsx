@@ -7,6 +7,7 @@ import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
 import { OrbAccentBridge } from './plugins/orb/OrbAccentBridge';
 import { WidgetDock } from './widgets/WidgetDock';
+import { AmbientBridge } from './widgets/AmbientBridge';
 // Side-effect imports — each plugin registers at module load.
 import './plugins/orb';
 import './plugins/status-pill';
@@ -32,6 +33,7 @@ function App() {
     <>
       <VoiceStateBridge />
       <OrbAccentBridge />
+      <AmbientBridge />
       <LogsCollector />
       <div className="fixed inset-0 overflow-hidden bg-surface">
         <Slot name="stage" />
