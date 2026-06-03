@@ -40,7 +40,12 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import FunctionCallParams, LLMService
 
-from .delegates import DelegateError, DelegateRegistry, dispatch as delegate_dispatch
+from .delegates import (
+    Delegate,
+    DelegateError,
+    DelegateRegistry,
+    dispatch as delegate_dispatch,
+)
 from .delivery import DeliveryController, Priority
 from .filler import Latency
 
@@ -646,6 +651,90 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
     )
 
 
+def _spawn_delegate_delivery(
+    delegate: Delegate,
+    query: str,
+    *,
+    delivery: DeliveryController,
+    target: str,
+    push_notification_url: str | None = None,
+    push_notification_token: str | None = None,
+) -> None:
+    """Dispatch a delegate in the BACKGROUND and deliver its result through the
+    DeliveryController when it lands (TIME_SENSITIVE → spoken at the next natural
+    pause). Shared by delegate_async and by delegate_to's A2A path.
+
+    A2A delegates are async tasks — a buffer-then-answer gateway (Ava routes
+    through the fleet) can take seconds. Holding the voice turn on one made ORBIS
+    go silent mid-conversation and let context summarization collide with the
+    in-flight tool call. Backgrounding it is the A2A-native fix: the turn ends
+    immediately, the answer arrives as a fresh turn."""
+    # Read at call time so env overrides (and tests) take effect per dispatch.
+    bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
+    # Proactive follow-up (orbis-29q): nudge once if a hand-off outlives this so
+    # a slow delegate doesn't feel forgotten. Cancelled the moment it lands.
+    nudge_secs = float(os.environ.get("DELEGATE_NUDGE_SECS", "90"))
+
+    async def _run_and_deliver() -> None:
+        done = asyncio.Event()
+
+        async def _nudge_if_slow() -> None:
+            if nudge_secs <= 0:
+                return
+            try:
+                await asyncio.sleep(nudge_secs)
+                if not done.is_set():
+                    await delivery.deliver(
+                        f"still waiting to hear back from {target} on that",
+                        priority=Priority.TIME_SENSITIVE, source=target,
+                        kind="delegate",
+                        cooldown_key=f"delegate-nudge:{target}:{query[:40]}",
+                    )
+            except asyncio.CancelledError:
+                pass
+
+        async def _progress(msg: str) -> None:
+            # Real-time progress from A2A status updates (visual rail, not spoken).
+            # No-op until the streaming dispatch lands; harmless to pass now.
+            try:
+                await delivery.note_progress(msg, source=target)
+            except Exception:  # noqa: BLE001
+                pass
+
+        nudge = asyncio.create_task(_nudge_if_slow())
+        try:
+            result = await delegate_dispatch(
+                delegate, query,
+                timeout=bg_timeout,
+                progress_callback=_progress,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )
+            await delivery.deliver(
+                _strip_markdown_for_speech(result),
+                priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
+            )
+        except DelegateError as e:
+            logger.warning(f"[delegate.bg] {target} failed: {e}")
+            await delivery.deliver(
+                f"that thing I handed off to {target} didn't go through — {e}",
+                priority=Priority.TIME_SENSITIVE, source=target,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[delegate.bg] {target} errored: {e}")
+            await delivery.deliver(
+                f"that thing I handed off to {target} errored out.",
+                priority=Priority.TIME_SENSITIVE, source=target,
+            )
+        finally:
+            done.set()
+            nudge.cancel()
+
+    task = asyncio.create_task(_run_and_deliver())
+    _BG_DELEGATE_TASKS.add(task)
+    task.add_done_callback(_BG_DELEGATE_TASKS.discard)
+
+
 def _delegate_to_handler(
     registry: DelegateRegistry,
     *,
@@ -670,11 +759,27 @@ def _delegate_to_handler(
             return
         logger.info(f"[delegate_to] target={target} type={delegate.type} query={query!r}")
 
-        # Stream the delegate's intermediate status to the VISUAL rail (the
-        # StatusPill via delegation-progress SSE) — NOT spoken. The orb stays
-        # quiet while the user watches what the agent is doing; the sparse
-        # spoken fillers can ground a check-in in the accumulated status. Only
-        # A2A delegates stream status this way.
+        # A2A delegates are async tasks (Ava buffers-then-answers through the
+        # fleet). NEVER hold the voice turn on one: dispatch in the background
+        # and deliver the answer via the DeliveryController when it lands; end
+        # the turn now with a short ack. Holding the turn here is what made
+        # ORBIS go silent mid-conversation and let context summarization collide
+        # with the in-flight tool call.
+        if delegate.type == "a2a" and delivery is not None:
+            _spawn_delegate_delivery(
+                delegate, query, delivery=delivery, target=target,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )
+            await params.result_callback(
+                f"On it — asking {target} now; I'll tell you what they say."
+            )
+            return
+
+        # Synchronous relay for fast local delegates (ACP / OpenAI), or an A2A
+        # delegate with no delivery channel to surface an async result.
+        # Intermediate status streams to the VISUAL rail (StatusPill via
+        # delegation-progress SSE) — NOT spoken.
         progress_cb = None
         if delivery is not None and delegate.type == "a2a":
             async def _progress(msg: str) -> None:
@@ -746,12 +851,8 @@ def _delegate_async_handler(
 ):
     """Async tool: ack now, dispatch in the background, deliver the result
     through the DeliveryController (TIME_SENSITIVE → spoken at the next
-    natural pause) when the delegate finishes."""
-    bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
-    # Proactive follow-up (orbis-29q): if a hand-off runs longer than this,
-    # nudge the user once so a slow delegate doesn't feel forgotten. Cancelled
-    # the moment the result lands. 0 disables.
-    nudge_secs = float(os.environ.get("DELEGATE_NUDGE_SECS", "90"))
+    natural pause) when the delegate finishes. Shares the background-deliver
+    substrate with delegate_to's A2A path (`_spawn_delegate_delivery`)."""
 
     async def _handler(params: FunctionCallParams) -> None:
         target = (params.arguments.get("target") or "").strip()
@@ -770,57 +871,11 @@ def _delegate_async_handler(
             return
 
         logger.info(f"[delegate_async] target={target} query={query!r} (background)")
-
-        async def _run_and_deliver() -> None:
-            done = asyncio.Event()
-
-            async def _nudge_if_slow() -> None:
-                # One proactive status nudge if the delegate is taking a while.
-                if nudge_secs <= 0:
-                    return
-                try:
-                    await asyncio.sleep(nudge_secs)
-                    if not done.is_set():
-                        await delivery.deliver(
-                            f"still waiting to hear back from {target} on that",
-                            priority=Priority.TIME_SENSITIVE, source=target,
-                            kind="delegate",
-                            cooldown_key=f"delegate-nudge:{target}:{query[:40]}",
-                        )
-                except asyncio.CancelledError:
-                    pass
-
-            nudge = asyncio.create_task(_nudge_if_slow())
-            try:
-                result = await delegate_dispatch(
-                    delegate, query,
-                    timeout=bg_timeout,
-                    push_notification_url=push_notification_url,
-                    push_notification_token=push_notification_token,
-                )
-                await delivery.deliver(
-                    _strip_markdown_for_speech(result),
-                    priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
-                )
-            except DelegateError as e:
-                logger.warning(f"[delegate_async] {target} failed: {e}")
-                await delivery.deliver(
-                    f"that thing I handed off didn't go through — {e}",
-                    priority=Priority.TIME_SENSITIVE, source=target,
-                )
-            except Exception as e:
-                logger.exception(f"[delegate_async] {target} errored: {e}")
-                await delivery.deliver(
-                    f"that thing I handed off to {target} errored out.",
-                    priority=Priority.TIME_SENSITIVE, source=target,
-                )
-            finally:
-                done.set()
-                nudge.cancel()
-
-        task = asyncio.create_task(_run_and_deliver())
-        _BG_DELEGATE_TASKS.add(task)
-        task.add_done_callback(_BG_DELEGATE_TASKS.discard)
+        _spawn_delegate_delivery(
+            delegate, query, delivery=delivery, target=target,
+            push_notification_url=push_notification_url,
+            push_notification_token=push_notification_token,
+        )
 
         # Immediate ack — the LLM speaks this and the turn ends; the answer
         # arrives later via the DeliveryController.

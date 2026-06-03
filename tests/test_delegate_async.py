@@ -191,3 +191,58 @@ async def test_fast_delegation_does_not_nudge(monkeypatch) -> None:
     phrases = [c[0] for c in delivery.delivered]
     assert not any("still waiting" in p for p in phrases)  # nudge was cancelled
     assert phrases == ["quick result"]
+
+
+# --- delegate_to no longer blocks the voice turn on A2A delegates -----------
+# (the "ORBIS goes silent on a slow Ava round-trip" bug — A2A tasks are async,
+# so delegate_to backgrounds them too and delivers via the DeliveryController.)
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_a2a_is_nonblocking(monkeypatch) -> None:
+    from agent.tools import _delegate_to_handler
+
+    registry = FakeRegistry(_delegate())  # type="a2a"
+    delivery = FakeDelivery()
+
+    async def slow_dispatch(d, query, *, timeout, **kw):
+        await asyncio.sleep(0.05)  # the turn must NOT wait for this
+        return "Ava: the fleet is up."
+
+    monkeypatch.setattr(tools, "delegate_dispatch", slow_dispatch)
+    handler = _delegate_to_handler(registry, delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "who's online?"})
+    await handler(params)
+
+    # Returned immediately with an ack — did NOT hold the turn for the dispatch.
+    assert len(params.results) == 1
+    assert "ava" in params.results[0].lower()
+    assert not delivery.delivered  # answer not in yet
+
+    # The answer arrives via the DeliveryController when the bg task lands.
+    await asyncio.gather(*list(_BG_DELEGATE_TASKS))
+    phrases = [c[0] for c in delivery.delivered]
+    assert "Ava: the fleet is up." in phrases
+
+
+@pytest.mark.asyncio
+async def test_delegate_to_acp_stays_synchronous(monkeypatch) -> None:
+    from agent.tools import _delegate_to_handler
+
+    registry = FakeRegistry(
+        SimpleNamespace(name="codeBot", type="acp", description="coder")
+    )
+    delivery = FakeDelivery()
+
+    async def fast_dispatch(d, query, **kw):
+        return "Edited app.py."
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fast_dispatch)
+    handler = _delegate_to_handler(registry, delivery=delivery)
+    params = FakeParams({"target": "codeBot", "query": "fix it"})
+    await handler(params)
+
+    # Local agents relay synchronously: the answer is the turn's response, and
+    # nothing routes through the async DeliveryController.
+    assert params.results == ["Edited app.py."]
+    assert not delivery.delivered

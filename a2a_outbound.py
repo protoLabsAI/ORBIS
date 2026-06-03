@@ -16,6 +16,7 @@ glue builds the request Message and reads text/state off the terminal Task.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import uuid
@@ -85,23 +86,44 @@ def _part_text(part) -> str:
 
 
 def _task_answer_text(task: Task) -> str:
-    """The agent's answer = the last non-empty text part across the task's
-    artifacts (matches the executor's terminal-artifact ordering)."""
+    """The agent's answer text. A2A servers place it differently:
+
+    - ORBIS's own executor emits a terminal **artifact**.
+    - The workstacean gateway (Ava) puts it on the task's **status message**
+      and as the last agent turn in **history** — no artifacts.
+
+    Check all three (last-non-empty wins) so we never speak an empty
+    "<source> says —". Order: artifact → status.message → last agent history."""
     out = ""
     for art in task.artifacts:
         for p in art.parts:
             t = _part_text(p)
             if t:
                 out = t
+    if out:
+        return out
+    # Terminal status message (Ava / workstacean shape).
+    out = _status_text(task)
+    if out:
+        return out
+    # Last non-user message in history.
+    try:
+        for m in reversed(list(task.history)):
+            if m.role == Role.ROLE_USER:
+                continue
+            t = "".join(_part_text(p) for p in m.parts)
+            if t:
+                return t
+    except Exception:  # noqa: BLE001
+        pass
     return out
 
 
 def _status_text(task: Task) -> str:
-    """Text on the task's status message (where an input-required question
-    lives)."""
+    """Text on the task's status message (the terminal answer for buffer-then-
+    answer agents, and where an input-required question lives)."""
     try:
-        msg = task.status.update  # StatusUpdate carries the agent message
-        return "".join(_part_text(p) for p in msg.parts)
+        return "".join(_part_text(p) for p in task.status.message.parts)
     except Exception:  # noqa: BLE001
         return ""
 
@@ -182,7 +204,9 @@ class A2AClient:
 
         final_task: Task | None = None
         message_text = ""
-        try:
+
+        async def _consume() -> None:
+            nonlocal final_task, message_text
             async for resp in client.send_message(request):
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
                 if which == "task" or resp.HasField("task"):
@@ -191,8 +215,20 @@ class A2AClient:
                     for p in resp.message.parts:
                         message_text += _part_text(p)
                 # status_update / artifact_update: progress; final state comes
-                # from the terminal task below. (Narration via progress_callback
-                # is a follow-up — the orchestrate loop already narrates per step.)
+                # from the terminal task below. Real-time progress narration from
+                # status updates rides the streaming path (supports_streaming()).
+
+        # Enforce the wall-clock bound. A buffer-then-answer gateway (Ava routes
+        # through the fleet) can hold the response; without this the await could
+        # wedge the caller — which, on the voice loop, looked like ORBIS "going
+        # silent" mid-turn. The async/orchestrate paths run this in the
+        # background, so the cap just stops a runaway task, never the voice loop.
+        try:
+            await asyncio.wait_for(_consume(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise A2ADispatchError(
+                f"{self.name}: no response within {timeout:.0f}s"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise A2ADispatchError(f"{self.name}: send failed: {exc}") from exc
 
