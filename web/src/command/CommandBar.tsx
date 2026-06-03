@@ -84,8 +84,8 @@ export function CommandBar() {
   };
 
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden rounded-xl bg-base/70 ring-1 ring-edge/50 backdrop-blur-2xl">
-      <div className="flex items-center gap-2.5 border-b border-edge/60 px-4">
+    <div className="fixed inset-0 flex flex-col overflow-hidden rounded-xl bg-raised ring-1 ring-edge shadow-2xl">
+      <div className="flex items-center gap-2.5 border-b border-edge px-4">
         <Search className="h-4 w-4 shrink-0 text-fg-subtle" />
         <input
           ref={inputRef}

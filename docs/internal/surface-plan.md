@@ -206,11 +206,16 @@ widget work; can slot whenever.
 
 ### Backlog (captured, not yet scheduled)
 
-- **Widgets auto-pop on app-hide** (Josh, 2026-06-02) — when the main window is
-  hidden (it hides, not quits), docked widgets should pop out to their native
-  windows so they stay visible as ambient desktop panels, and re-dock when the
-  app is shown. Needs reliable Rust hide/show signals + a reconcile pass + race
-  handling against the `beforeunload` re-dock. Deferred from Stage 2b on purpose.
+- **Ambient presence when ORBIS is hidden** (Josh, 2026-06-02) — when the main
+  window is hidden (it hides, not quits):
+  - docked widgets pop out to their native windows so they stay visible as
+    ambient desktop panels, and re-dock when the app is shown;
+  - a **mini-orb anchored to the left edge** — a small always-on-top orb that
+    persists when the main window is hidden, as a glanceable presence / a handle
+    to click ORBIS (or its activity) back. Reuses the 2b transparent-window
+    machinery (a tiny `mini-orb` window).
+  Both need the same plumbing: reliable Rust main-window hide/show signals + a
+  reconcile pass, racing the `beforeunload` re-dock. Deferred from Stage 2b.
 - **Command bar** (Josh, 2026-06-02) — a Raycast / Script Kit-style global-hotkey
   palette to fire ORBIS skills, delegate to agents, run tools, open widgets. The
   keyboard complement to voice (still voice-first; this is the fast manual path).
