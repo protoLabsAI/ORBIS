@@ -156,7 +156,29 @@ export type OrbisConfig = {
         Record<string, number | string>>
     >;
   };
+  wakeword?: {
+    /** Hands-free wake-word listening on/off. */
+    enabled?: boolean;
+    /** Active wake-word model id (catalog id, e.g. 'hey_orbis'). */
+    model?: string;
+    /** Detection threshold 0..1 — higher = fewer false triggers. */
+    threshold?: number;
+  };
 };
+
+/** One entry in the wake-word model catalog (GET /api/wakeword/models). */
+export interface WakeModel {
+  id: string;
+  name: string;
+  description: string;
+  filename: string;
+  url: string;
+  size_kb: number;
+  /** 'shared' = melspec/embedding dep every wake word needs; 'wake' = a phrase. */
+  kind: 'shared' | 'wake';
+  recommended: boolean;
+  downloaded: boolean;
+}
 
 export type EntitlementState = {
   customization: {
@@ -441,5 +463,19 @@ export const api = {
     /** Registered delegate types + their capabilities/field schema. Drives the
      *  generic New/Edit form, so a new backend adapter needs no UI change. */
     types: () => get<{ types: DelegateTypeSpec[] }>('/api/delegate-types'),
+  },
+  wakeword: {
+    /** Catalog with live download status. */
+    models: () => get<{ models: WakeModel[] }>('/api/wakeword/models'),
+    /** Download one model. Resolves when complete; progress arrives on the
+     *  `orbis-sse` `wakeword-download` event (see useWakewordDownloads). */
+    download: (id: string) =>
+      postJSON<{ ok?: boolean; error?: string }>(
+        `/api/wakeword/models/${encodeURIComponent(id)}/download`, {},
+      ),
+    remove: (id: string) =>
+      deleteJSON<{ ok: boolean }>(
+        `/api/wakeword/models/${encodeURIComponent(id)}`,
+      ),
   },
 };
