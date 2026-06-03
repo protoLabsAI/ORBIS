@@ -1874,9 +1874,17 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 user_state.filler_settings.verbosity is not Verbosity.SILENT
                 and tier is not Latency.FAST
             ):
-                _t = asyncio.create_task(_emit_opening_ack(tier))
-                ack_tasks.add(_t)
-                _t.add_done_callback(ack_tasks.discard)
+                # Queue the opening ack SYNCHRONOUSLY (canned + instant) so it's
+                # in the TTS queue BEFORE the tool runs — hence before the
+                # result. The old fire-and-forget create_task could await the
+                # micro-LLM (now on the gateway → network latency) and lose the
+                # race, so the user heard the answer, THEN a pointless "on it".
+                # Variety still comes from the canned pool here + the slow-tool
+                # progress loop below. orbis: ack-leads.
+                _ack = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
+                _opening_ack["last"] = _ack
+                logger.info(f"[filler:opening] {_ack!r}")
+                await task.queue_frame(TTSSpeakFrame(_ack, append_to_context=False))
 
             # SLOW sync tools additionally get the progress narration loop
             # (~2 s / ~6 s "still working" lines). Async tools narrate
