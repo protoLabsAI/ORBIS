@@ -6,6 +6,7 @@ import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
 import { LogsCollector } from './plugins/logs-panel';
 import { OrbAccentBridge } from './plugins/orb/OrbAccentBridge';
+import { WidgetDock } from './widgets/WidgetDock';
 // Side-effect imports — each plugin registers at module load.
 import './plugins/orb';
 import './plugins/status-pill';
@@ -16,6 +17,8 @@ import './plugins/mic-toggle';
 import './plugins/setup-wizard';
 import './plugins/mood';
 import './plugins/dev-panel';
+// Widget runtime — registers the built-in widgets + the launcher.
+import './widgets';
 
 /**
  * Pre-2026-04-28 this was wrapped in PipecatClientProvider +
@@ -34,6 +37,7 @@ function App() {
         <Slot name="stage" />
         <Slot name="overlay-top" />
         <Slot name="overlay-bottom" />
+        <WidgetDock />
         <Drawer />
         <TitleBar />
       </div>
