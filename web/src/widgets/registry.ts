@@ -16,6 +16,8 @@ export type WidgetSurface = 'dock' | 'window';
 export interface WidgetProps {
   id: string;
   surface: WidgetSurface;
+  /** State set by voice (render_widget tool) — e.g. weather { location }. */
+  props?: Record<string, unknown>;
 }
 
 export interface WidgetDef {

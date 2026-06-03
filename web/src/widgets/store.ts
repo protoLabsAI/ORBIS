@@ -13,6 +13,8 @@ export interface OpenWidget {
   /** Dragged position (top-left, px). Undefined = let the host place it. */
   x?: number;
   y?: number;
+  /** Widget state set by voice (e.g. weather location). */
+  props?: Record<string, unknown>;
 }
 
 const STORAGE_KEY = 'orbis.widgets.v1';
@@ -34,6 +36,7 @@ function load(): OpenWidget[] {
           surface: w.surface,
           x: typeof w.x === 'number' ? w.x : undefined,
           y: typeof w.y === 'number' ? w.y : undefined,
+          props: w.props && typeof w.props === 'object' ? w.props : undefined,
         }));
     }
   } catch {
@@ -89,6 +92,15 @@ class WidgetWorkspace {
       return w;
     });
     if (changed) this.commit();
+  }
+
+  /** Merge widget state (e.g. set by voice via the render_widget tool). */
+  setProps(id: string, props: Record<string, unknown>): void {
+    if (!this.isOpen(id)) return;
+    this.open = this.open.map((w) =>
+      w.id === id ? { ...w, props: { ...(w.props ?? {}), ...props } } : w,
+    );
+    this.commit();
   }
 
   /** Persist where the user dragged a widget. */

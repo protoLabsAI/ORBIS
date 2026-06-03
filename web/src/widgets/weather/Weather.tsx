@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { WidgetProps } from '../registry';
 import {
   Cloud,
   CloudDrizzle,
@@ -53,16 +54,21 @@ interface Wx {
   city: string;
 }
 
-export function Weather() {
+export function Weather({ props }: WidgetProps) {
+  const city = typeof props?.location === 'string' && props.location.trim()
+    ? props.location.trim()
+    : DEFAULT_CITY;
   const [wx, setWx] = useState<Wx | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
     let alive = true;
+    setWx(null);
+    setError(false);
     (async () => {
       try {
         const g = await fetch(
-          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(DEFAULT_CITY)}&count=1&language=en&format=json`,
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`,
         );
         const loc = (await g.json())?.results?.[0];
         if (!loc) throw new Error('geo');
@@ -87,7 +93,7 @@ export function Weather() {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [city]);
 
   if (error) return <div className="text-helper text-fg-faint">weather unavailable</div>;
   if (!wx) return <div className="text-helper text-fg-faint">…</div>;

@@ -543,6 +543,65 @@ async def cancel_reminder_handler(params: FunctionCallParams) -> None:
 
 
 # ---------------------------------------------------------------------------
+# render_widget — show/hide a subtle on-screen widget by voice. ORBIS stays
+# voice-first; the widget is an ambient glance readout, not an app. The frontend
+# opens it (and seeds its state) off the SSE 'widget' event.
+# ---------------------------------------------------------------------------
+
+# What the model may render. Keep in step with the web/src/widgets registrations;
+# the description teaches the model each widget's settable props.
+_RENDERABLE_WIDGETS = "weather (props: location — a city name)"
+_KNOWN_WIDGETS = frozenset({"weather"})
+
+
+@tool(
+    "render_widget",
+    (
+        "Show or hide a small ambient on-screen widget for the user to glance at. "
+        "Use when they want to SEE something — 'show me the weather', 'pull up the "
+        "weather in Tokyo', 'hide the weather'. The widget is a subtle floating "
+        "readout, so still speak your normal short answer too. "
+        f"Available widgets: {_RENDERABLE_WIDGETS}."
+    ),
+    parameters={
+        "widget": {"type": "string", "description": "Widget id, e.g. 'weather'."},
+        "action": {
+            "type": "string",
+            "enum": ["open", "close"],
+            "description": "open (default) to show it, close to hide it.",
+        },
+        "location": {
+            "type": "string",
+            "description": "For the weather widget: the city to show (optional).",
+        },
+    },
+    required=["widget"],
+    latency=Latency.FAST,
+)
+async def render_widget_handler(params: FunctionCallParams) -> None:
+    from voice.sse_bus import sse_bus
+
+    widget = (params.arguments.get("widget") or "").strip().lower()
+    action = (params.arguments.get("action") or "open").strip().lower()
+    if widget not in _KNOWN_WIDGETS:
+        await params.result_callback(f"I don't have a {widget} widget to show.")
+        return
+    if action not in ("open", "close"):
+        action = "open"
+    props: dict[str, str] = {}
+    location = (params.arguments.get("location") or "").strip()
+    if location:
+        props["location"] = location
+    await sse_bus.publish("widget", {"action": action, "id": widget, "props": props})
+    if action == "close":
+        await params.result_callback(f"Hidden the {widget}.")
+    elif location:
+        await params.result_callback(f"Here's the {widget} for {location}.")
+    else:
+        await params.result_callback(f"Here's the {widget}.")
+
+
+# ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).
 # ---------------------------------------------------------------------------
