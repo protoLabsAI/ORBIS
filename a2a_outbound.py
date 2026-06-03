@@ -16,6 +16,7 @@ glue builds the request Message and reads text/state off the terminal Task.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import uuid
@@ -182,7 +183,9 @@ class A2AClient:
 
         final_task: Task | None = None
         message_text = ""
-        try:
+
+        async def _consume() -> None:
+            nonlocal final_task, message_text
             async for resp in client.send_message(request):
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
                 if which == "task" or resp.HasField("task"):
@@ -191,8 +194,20 @@ class A2AClient:
                     for p in resp.message.parts:
                         message_text += _part_text(p)
                 # status_update / artifact_update: progress; final state comes
-                # from the terminal task below. (Narration via progress_callback
-                # is a follow-up — the orchestrate loop already narrates per step.)
+                # from the terminal task below. Real-time progress narration from
+                # status updates rides the streaming path (supports_streaming()).
+
+        # Enforce the wall-clock bound. A buffer-then-answer gateway (Ava routes
+        # through the fleet) can hold the response; without this the await could
+        # wedge the caller — which, on the voice loop, looked like ORBIS "going
+        # silent" mid-turn. The async/orchestrate paths run this in the
+        # background, so the cap just stops a runaway task, never the voice loop.
+        try:
+            await asyncio.wait_for(_consume(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise A2ADispatchError(
+                f"{self.name}: no response within {timeout:.0f}s"
+            ) from exc
         except Exception as exc:  # noqa: BLE001
             raise A2ADispatchError(f"{self.name}: send failed: {exc}") from exc
 
