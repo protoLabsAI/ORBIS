@@ -50,11 +50,29 @@ preserve, the old delegate flows.
   no longer has to pick.
 - **`orchestrate`** → native async too: per-step `is_final=False` progress + final
   synthesis result; drop its DeliveryController path.
-- **`on_function_calls_started` opening filler** → removed for tool turns (the LLM
-  continues natively). Keep the result→LLM path for any genuinely sync tool.
+- **`on_function_calls_started` opening filler** → **KEPT as the single ack.**
+  Verified in source: an async in-progress does NOT auto-run an LLM ack turn, and
+  our decision turn is preamble-free (router-first), so nothing else acks. The
+  double-ack was *my immediate ack-string result* (a second `result_callback`),
+  not the filler — native-async removes it (the handler returns the *answer* as
+  the final result). The filler stays the instant, AEC-safe lead.
 - **`DeliveryController`** → retained ONLY for true out-of-band proactive delivery
   (reminders, push) — NOT function-call results. Remove `_spawn_delegate_delivery`,
   the delegate nudge, and the speak_now/deliver-for-delegate paths.
+
+## Verified in Pipecat 1.0.0 source (the politeness + narration questions)
+
+- **Intermediate `is_final=False` updates narrate**: `run_llm` defaults to `True`
+  when not in a call-group (`llm_response_universal._handle_function_call_result`),
+  injected as `role=developer`/`type=async_tool` messages → the LLM speaks them.
+- **Politeness/ordering is native**: narration runs only `if run_llm and not
+  self._user_speaking`; while the **bot** is speaking it defers via
+  `_push_context_on_bot_stopped_speaking`; multiple queued results bundle into one
+  LLM pass. This is exactly the `next_silence`/no-talk-over behaviour ORBIS's
+  DeliveryController hand-rolled — so we drop it for delegate results.
+- **Async contract**: on an async (`cancel_on_interruption=False`) in-progress,
+  Pipecat tells the LLM via a developer message that results stream later as
+  `async_tool` messages and the last has `status=finished`.
 
 ## Phases (each its own commit; systematic)
 
