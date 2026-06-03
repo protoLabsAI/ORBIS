@@ -1,10 +1,39 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-02 (A2A 1.0 + agent/orchestration/ACP round). On `main`,
+*Last updated 2026-06-02 (delegation → Pipecat-native async). On `main`,
 all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-02 (delegation → Pipecat-native async function calls)
+
+**Delegation reworked onto Pipecat 1.0's native async function-call flow** (#381,
+merged; plan: `docs/internal/delegation-native-async-refactor.md`). Replaces the
+custom DeliveryController backgrounding that fought the framework and caused the
+out-of-order microack.
+
+- `delegate_to` is now a **native async function** (`cancel_on_interruption=False`).
+  The LLM continues immediately → the opening filler is the **single ack**.
+  Progress + answer come back as `is_final` results the LLM narrates in-context;
+  Pipecat natively gates on not-user/not-bot-speaking. `delegate_async` dropped;
+  `orchestrate` ported to the same pattern. `DeliveryController` now serves only
+  proactive delivery (reminders), not function-call results.
+- **Live-verified:** single ack, non-blocking, answer delivered + logged
+  (`[delegate_to] ava → answered (N chars)`). `DELEGATE_TIMEOUT=300` (was a 60s
+  regression mid-refactor).
+- **Known gap (fleet-side, by decision):** a slow delegate's wait is *silent*
+  because Ava streams **bare heartbeats** (no `status.message` text). Left silent
+  on purpose — no generic filler. The fix is **protoWorkstacean#777** (Ava emits
+  real progress); then ORBIS narrates it natively, zero ORBIS change.
+- **Also open / parked:** A2A interop items filed at source — Ava agent-card
+  hostname (fixed via `WORKSTACEAN_PUBLIC_BASE_URL`), terminal-artifact
+  placement (**protoWorkstacean#773**), streaming progress (**#777**). Wake-word
+  detector (#36) foundation done + **stashed** (`git stash list` → "wakeword-
+  foundation"); pure-Rust `tract` confirmed, plan in `docs/internal/wake-word.md`.
+  Model picker shipped (#378).
 
 ---
 
