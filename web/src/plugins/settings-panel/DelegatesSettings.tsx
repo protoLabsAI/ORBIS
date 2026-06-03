@@ -6,35 +6,37 @@ import { Field } from '@/components/ui/field';
 import {
   api,
   type Delegate,
-  type DelegateA2A,
-  type DelegateACP,
-  type DelegateOpenAI,
+  type DelegateFieldSpec,
   type DelegateTestResult,
+  type DelegateTypeSpec,
   type DelegateWithStatus,
 } from '@/lib/api';
 
 /**
- * Delegates settings — manage the sub-agents the orb can route to via
- * the LLM's `delegate_to` tool. Mirrors LLMSettings posture: list view
- * with a slide-down editor; type-specific fields drive what's shown;
- * the Test button pings before save so users can verify reachability
- * without having to commit to the persisted YAML first.
+ * Delegates settings — manage the sub-agents the orb can route to via the
+ * LLM's `delegate_to` tool. The New/Edit form is rendered **generically** from
+ * `GET /api/delegate-types` (each backend `DelegateAdapter` declares its
+ * capabilities + field schema), so adding a delegate type needs no change
+ * here — its tile + fields appear from the contract.
  *
- * No credentials cross the wire. The schema only references env-var
- * *names* (``credentialsEnv`` / ``api_key_env``); the actual values
- * come from the process environment at registry-parse time. This is
- * the same posture as the rest of the settings panel — secrets stay
- * in .env, UI manipulates indirection.
+ * No credentials cross the wire. The schema only references env-var *names*
+ * (`credentialsEnv` / `api_key_env`); the actual values come from the process
+ * environment at registry-parse time.
  */
 export function DelegatesSettings() {
   const [items, setItems] = useState<DelegateWithStatus[] | null>(null);
+  const [types, setTypes] = useState<DelegateTypeSpec[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingState | null>(null);
 
   const reload = useCallback(async () => {
     try {
-      const r = await api.delegates.list();
-      setItems(r.delegates);
+      const [list, typeList] = await Promise.all([
+        api.delegates.list(),
+        api.delegates.types(),
+      ]);
+      setItems(list.delegates);
+      setTypes(typeList.types);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -45,30 +47,24 @@ export function DelegatesSettings() {
     reload();
   }, [reload]);
 
-  const onSaved = useCallback(
-    (next: DelegateWithStatus[]) => {
-      setItems(next);
-      setEditing(null);
-    },
-    [],
-  );
+  const onSaved = useCallback((next: DelegateWithStatus[]) => {
+    setItems(next);
+    setEditing(null);
+  }, []);
 
-  const onDelete = useCallback(
-    async (name: string) => {
-      // No fancy modal — settings is a power-user surface; the verbal
-      // "are you sure?" confirms intent without a layout shift.
-      if (!window.confirm(`Delete delegate ${name}?`)) return;
-      try {
-        const r = await api.delegates.remove(name);
-        setItems(r.delegates);
-      } catch (e) {
-        setError((e as Error).message);
-      }
-    },
-    [],
-  );
+  const onDelete = useCallback(async (name: string) => {
+    // No fancy modal — settings is a power-user surface; the verbal
+    // "are you sure?" confirms intent without a layout shift.
+    if (!window.confirm(`Delete delegate ${name}?`)) return;
+    try {
+      const r = await api.delegates.remove(name);
+      setItems(r.delegates);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
 
-  if (items === null && !error) {
+  if ((items === null || types === null) && !error) {
     return (
       <Panel title="Delegates">
         <div className="text-xs text-fg-subtle">Loading…</div>
@@ -76,17 +72,17 @@ export function DelegatesSettings() {
     );
   }
 
+  const typeSpecs = types ?? [];
+
   return (
     <Panel title="Delegates">
       <div className="space-y-3">
         <p className="text-sm text-fg-muted -mt-1">
-          Sub-agents the orb can route to. The LLM picks one based on
-          its description when it decides delegation is the right call.
+          Sub-agents the orb can route to. The LLM picks one based on its
+          description when it decides delegation is the right call.
         </p>
 
-        {error && (
-          <div className="text-xs text-danger break-words">{error}</div>
-        )}
+        {error && <div className="text-xs text-danger break-words">{error}</div>}
 
         {items && items.length === 0 && !editing && (
           <div className="text-xs text-fg-subtle italic">
@@ -106,7 +102,7 @@ export function DelegatesSettings() {
                     <span className="text-sm text-fg font-mono truncate">
                       {entry.name}
                     </span>
-                    <TypeBadge type={entry.type} />
+                    <TypeBadge type={entry.type} specs={typeSpecs} />
                     {!entry.configured && (
                       <span
                         className="text-helper uppercase tracking-wider text-brand"
@@ -146,6 +142,7 @@ export function DelegatesSettings() {
         {editing ? (
           <DelegateEditor
             state={editing}
+            specs={typeSpecs}
             onCancel={() => setEditing(null)}
             onSaved={onSaved}
           />
@@ -154,6 +151,7 @@ export function DelegatesSettings() {
             variant="secondary"
             size="sm"
             onClick={() => setEditing({ kind: 'create' })}
+            disabled={typeSpecs.length === 0}
           >
             <Plus className="h-3.5 w-3.5 mr-1" />
             Add delegate
@@ -165,6 +163,45 @@ export function DelegatesSettings() {
 }
 
 // ---------------------------------------------------------------------------
+// Dotted-path get/set — a field's `key` ("auth.scheme") maps to a nested path.
+// ---------------------------------------------------------------------------
+
+type Draft = Record<string, unknown>;
+
+function getPath(obj: Draft, path: string): unknown {
+  return path
+    .split('.')
+    .reduce<unknown>(
+      (o, k) => (o && typeof o === 'object' ? (o as Draft)[k] : undefined),
+      obj,
+    );
+}
+
+function setPath(obj: Draft, path: string, value: unknown): Draft {
+  const keys = path.split('.');
+  const next: Draft = { ...obj };
+  let cur = next;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i];
+    const child = cur[k];
+    cur[k] = child && typeof child === 'object' ? { ...(child as Draft) } : {};
+    cur = cur[k] as Draft;
+  }
+  cur[keys[keys.length - 1]] = value;
+  return next;
+}
+
+/** Fresh draft for a type: name/description carried by the caller, every field
+ *  seeded from its schema `default`. */
+function blankDraftFor(spec: DelegateTypeSpec, common: { name: string; description: string }): Draft {
+  let d: Draft = { name: common.name, description: common.description, type: spec.type };
+  for (const f of spec.fields) {
+    if (f.default !== undefined) d = setPath(d, f.key, f.default);
+  }
+  return d;
+}
+
+// ---------------------------------------------------------------------------
 // Editor (create + edit share the form; only the submit verb differs)
 // ---------------------------------------------------------------------------
 
@@ -172,62 +209,52 @@ type EditingState =
   | { kind: 'create' }
   | { kind: 'edit'; original: DelegateWithStatus };
 
-function defaultDelegate(): Delegate {
-  return {
-    name: '',
-    type: 'a2a',
-    description: '',
-    url: '',
-    auth: { scheme: 'apiKey', credentialsEnv: '' },
-    headers: {},
-  };
-}
-
 interface EditorProps {
   state: EditingState;
+  specs: DelegateTypeSpec[];
   onCancel: () => void;
   onSaved: (next: DelegateWithStatus[]) => void;
 }
 
-function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
+function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
   const isEdit = state.kind === 'edit';
-  const [draft, setDraft] = useState<Delegate>(
-    () => (isEdit ? state.original : defaultDelegate()),
+  const [draft, setDraft] = useState<Draft>(() =>
+    isEdit
+      ? ({ ...state.original } as Draft)
+      : blankDraftFor(specs[0], { name: '', description: '' }),
   );
   const [test, setTest] = useState<DelegateTestResult | 'checking' | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const activeSpec = specs.find((s) => s.type === draft.type) ?? specs[0];
+
+  const setField = useCallback((key: string, value: unknown) => {
+    setDraft((prev) => setPath(prev, key, value));
+    setTest(null);
+  }, []);
+
   const onSwitchType = useCallback(
-    (next: 'a2a' | 'openai' | 'acp') => {
-      // Type switch resets type-specific fields to safe defaults but keeps
-      // name + description so the user doesn't lose what they've typed.
-      setDraft((prev) => {
-        const common = { name: prev.name, description: prev.description };
-        const url = (prev as { url?: string }).url ?? '';
-        if (next === 'a2a') {
-          return {
-            ...common, type: 'a2a', url,
-            auth: { scheme: 'apiKey', credentialsEnv: '' },
-            headers: {},
-          };
-        }
-        if (next === 'openai') {
-          return { ...common, type: 'openai', url, model: '', api_key_env: '' };
-        }
-        // acp — a local coding agent ORBIS launches + drives (no url).
-        return { ...common, type: 'acp', command: 'proto', args: ['--acp'], workdir: '' };
-      });
+    (nextType: string) => {
+      const spec = specs.find((s) => s.type === nextType);
+      if (!spec) return;
+      // Reset type-specific fields to their defaults but keep name + description.
+      setDraft((prev) =>
+        blankDraftFor(spec, {
+          name: String(prev.name ?? ''),
+          description: String(prev.description ?? ''),
+        }),
+      );
       setTest(null);
     },
-    [],
+    [specs],
   );
 
   const onTest = useCallback(async () => {
     setError(null);
     setTest('checking');
     try {
-      const r = await api.delegates.test(draft);
+      const r = await api.delegates.test(draft as unknown as Delegate);
       setTest(r);
     } catch (e) {
       setTest({ ok: false, error: (e as Error).message });
@@ -238,9 +265,10 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
     setError(null);
     setSaving(true);
     try {
+      const entry = draft as unknown as Delegate;
       const r = isEdit
-        ? await api.delegates.update(state.original.name, draft)
-        : await api.delegates.create(draft);
+        ? await api.delegates.update(state.original.name, entry)
+        : await api.delegates.create(entry);
       onSaved(r.delegates);
     } catch (e) {
       setError((e as Error).message);
@@ -264,37 +292,27 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
         </button>
       </div>
 
-      {/* Type picker */}
-      <div className="grid grid-cols-3 gap-2">
-        <TypeTile
-          active={draft.type === 'a2a'}
-          label="A2A agent"
-          blurb="JSON-RPC fleet peer"
-          onClick={() => onSwitchType('a2a')}
-        />
-        <TypeTile
-          active={draft.type === 'openai'}
-          label="OpenAI-compat"
-          blurb="/v1 endpoint"
-          onClick={() => onSwitchType('openai')}
-        />
-        <TypeTile
-          active={draft.type === 'acp'}
-          label="ACP coding agent"
-          blurb="proto / opencode / codex"
-          onClick={() => onSwitchType('acp')}
-        />
+      {/* Type picker — tiles from the registered types. Switching type resets
+          the type-specific fields to their defaults but keeps name + description. */}
+      <div
+        className="grid gap-2"
+        style={{ gridTemplateColumns: `repeat(${Math.min(specs.length, 3)}, minmax(0, 1fr))` }}
+      >
+        {specs.map((s) => (
+          <TypeTile
+            key={s.type}
+            active={draft.type === s.type}
+            label={s.label || s.type}
+            blurb={s.blurb}
+            onClick={() => onSwitchType(s.type)}
+          />
+        ))}
       </div>
 
-      <Field
-        label="Name"
-        hint="Used in delegate_to(target=...). Lowercase, no spaces."
-      >
+      <Field label="Name" hint="Used in delegate_to(target=...). Lowercase, no spaces.">
         <input
-          value={draft.name}
-          onChange={(e) =>
-            setDraft({ ...draft, name: e.target.value } as Delegate)
-          }
+          value={String(draft.name ?? '')}
+          onChange={(e) => setField('name', e.target.value)}
           disabled={isEdit}
           placeholder="ava"
           className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono disabled:opacity-50"
@@ -307,57 +325,30 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
         hint="The LLM reads this to pick between delegates — be specific."
       >
         <input
-          value={draft.description}
-          onChange={(e) =>
-            setDraft({ ...draft, description: e.target.value } as Delegate)
-          }
+          value={String(draft.description ?? '')}
+          onChange={(e) => setField('description', e.target.value)}
           placeholder="Chief of staff — sitreps, planning, fleet delegation."
           className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted"
           spellCheck={false}
         />
       </Field>
 
-      {draft.type !== 'acp' && (
-        <Field
-          label="URL"
-          hint={
-            draft.type === 'a2a'
-              ? 'JSON-RPC endpoint, typically ending in /a2a. Supports ${VAR:-default}.'
-              : 'OpenAI-compat base URL ending in /v1.'
-          }
-        >
-          <input
-            value={draft.url}
-            onChange={(e) => setDraft({ ...draft, url: e.target.value } as Delegate)}
-            placeholder={draft.type === 'a2a' ? 'http://ava:3008/a2a' : 'http://gateway:4000/v1'}
-            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
-            spellCheck={false}
-          />
-        </Field>
-      )}
+      {/* Type-specific fields, driven entirely by the schema. */}
+      {activeSpec?.fields.map((f) => (
+        <DelegateField
+          key={f.key}
+          field={f}
+          value={getPath(draft, f.key)}
+          onChange={(v) => setField(f.key, v)}
+        />
+      ))}
 
-      {/* Type-specific fields */}
-      {draft.type === 'a2a' ? (
-        <A2AFields draft={draft} setDraft={setDraft} />
-      ) : draft.type === 'openai' ? (
-        <OpenAIFields draft={draft} setDraft={setDraft} />
-      ) : (
-        <ACPFields draft={draft} setDraft={setDraft} />
-      )}
-
-      {/* Test + save row. ACP agents launch a process (no URL to ping), so
-          there's nothing to Test before save. */}
+      {/* Test + save row. Probe works for every type (a2a card / openai ping /
+          acp PATH+workdir), so Test is available across the board. */}
       <div className="flex items-center gap-2 pt-1">
-        {draft.type !== 'acp' && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={onTest}
-            disabled={test === 'checking'}
-          >
-            {test === 'checking' ? 'Testing…' : 'Test'}
-          </Button>
-        )}
+        <Button variant="secondary" size="sm" onClick={onTest} disabled={test === 'checking'}>
+          {test === 'checking' ? 'Testing…' : 'Test'}
+        </Button>
         <Button size="sm" onClick={onSave} disabled={saving}>
           {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create'}
         </Button>
@@ -380,110 +371,97 @@ function DelegateEditor({ state, onCancel, onSaved }: EditorProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Type-specific field groups
+// Generic field renderer — one input per FieldSpec.kind.
 // ---------------------------------------------------------------------------
 
-function A2AFields({
-  draft, setDraft,
+const INPUT_CLS =
+  'w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono';
+
+function DelegateField({
+  field,
+  value,
+  onChange,
 }: {
-  draft: DelegateA2A;
-  setDraft: (d: Delegate) => void;
+  field: DelegateFieldSpec;
+  value: unknown;
+  onChange: (v: unknown) => void;
 }) {
-  const auth = draft.auth ?? {};
-  return (
-    <div className="space-y-3">
-      <Field
-        label="Auth scheme"
-        hint="How the delegate expects credentials, if any."
-      >
+  const label = field.required ? field.label : `${field.label} (optional)`;
+
+  if (field.kind === 'select') {
+    return (
+      <Field label={label} hint={field.help}>
         <select
-          value={auth.scheme ?? ''}
-          onChange={(e) =>
-            setDraft({
-              ...draft,
-              auth: {
-                ...auth,
-                scheme: (e.target.value || undefined) as 'apiKey' | 'bearer' | undefined,
-              },
-            } as Delegate)
-          }
+          value={String(value ?? '')}
+          // Empty option = "none" → omit the key entirely (undefined).
+          onChange={(e) => onChange(e.target.value || undefined)}
           className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body font-mono"
         >
-          <option value="">(none — public endpoint)</option>
-          <option value="apiKey">apiKey (X-API-Key header)</option>
-          <option value="bearer">bearer (Authorization: Bearer)</option>
+          {(field.options ?? []).map((opt) => (
+            <option key={opt} value={opt}>
+              {opt === '' ? '(none)' : opt}
+            </option>
+          ))}
         </select>
       </Field>
-      {auth.scheme && (
-        <Field
-          label="Credentials env var"
-          hint="Name of the env var holding the secret. Set it in .env on the host."
-        >
-          <input
-            value={auth.credentialsEnv ?? ''}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                auth: { ...auth, credentialsEnv: e.target.value },
-              } as Delegate)
-            }
-            placeholder="AVA_API_KEY"
-            className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
-            spellCheck={false}
-          />
-        </Field>
-      )}
-    </div>
-  );
-}
+    );
+  }
 
-function OpenAIFields({
-  draft, setDraft,
-}: {
-  draft: DelegateOpenAI;
-  setDraft: (d: Delegate) => void;
-}) {
-  return (
-    <div className="space-y-3">
-      <Field label="Model" hint="Provider-specific model id.">
-        <input
-          value={draft.model}
-          onChange={(e) => setDraft({ ...draft, model: e.target.value } as Delegate)}
-          placeholder="claude-opus-4-6"
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
-          spellCheck={false}
-        />
-      </Field>
-      <Field
-        label="API key env var"
-        hint="Optional. Leave empty for endpoints that don't need auth."
-      >
-        <input
-          value={draft.api_key_env ?? ''}
-          onChange={(e) =>
-            setDraft({ ...draft, api_key_env: e.target.value } as Delegate)
-          }
-          placeholder="LITELLM_MASTER_KEY"
-          className="w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono"
-          spellCheck={false}
-        />
-      </Field>
-      <Field
-        label="System prompt (optional)"
-        hint="Overrides the default 'spoken-aloud, plain-text' framing."
-      >
+  if (field.kind === 'textarea') {
+    return (
+      <Field label={label} hint={field.help}>
         <textarea
-          value={draft.system_prompt ?? ''}
-          onChange={(e) =>
-            setDraft({ ...draft, system_prompt: e.target.value } as Delegate)
-          }
-          placeholder="Answer thoroughly but concisely (2-4 sentences). Plain text only."
+          value={String(value ?? '')}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
           rows={2}
           className="w-full rounded-md border border-edge bg-raised/60 px-2.5 py-1.5 text-xs text-fg-body placeholder-fg-muted leading-snug"
           spellCheck={false}
         />
       </Field>
-    </div>
+    );
+  }
+
+  if (field.kind === 'args') {
+    const arr = Array.isArray(value) ? (value as string[]) : [];
+    return (
+      <Field label={label} hint={field.help}>
+        <input
+          value={arr.join(' ')}
+          onChange={(e) => onChange(e.target.value.split(/\s+/).filter(Boolean))}
+          placeholder={field.placeholder}
+          className={INPUT_CLS}
+          spellCheck={false}
+        />
+      </Field>
+    );
+  }
+
+  if (field.kind === 'number') {
+    return (
+      <Field label={label} hint={field.help}>
+        <input
+          type="number"
+          value={value === undefined || value === null ? '' : String(value)}
+          onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
+          placeholder={field.placeholder}
+          className={INPUT_CLS}
+        />
+      </Field>
+    );
+  }
+
+  // text | secret-env | path — all plain single-line inputs.
+  return (
+    <Field label={label} hint={field.help}>
+      <input
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={field.placeholder}
+        className={INPUT_CLS}
+        spellCheck={false}
+      />
+    </Field>
   );
 }
 
@@ -491,54 +469,9 @@ function OpenAIFields({
 // Tiny presentation helpers
 // ---------------------------------------------------------------------------
 
-function ACPFields({
-  draft, setDraft,
-}: {
-  draft: DelegateACP;
-  setDraft: (d: Delegate) => void;
-}) {
-  const inputCls =
-    'w-full h-9 rounded-md border border-edge bg-raised/60 px-2.5 text-xs text-fg-body placeholder-fg-muted font-mono';
-  return (
-    <div className="space-y-3">
-      <Field label="Command" hint="The agent binary on your PATH.">
-        <input
-          value={draft.command}
-          onChange={(e) => setDraft({ ...draft, command: e.target.value } as Delegate)}
-          placeholder="proto"
-          className={inputCls}
-          spellCheck={false}
-        />
-      </Field>
-      <Field label="Args" hint="Space-separated args that start it in ACP mode (proto: --acp · opencode: acp).">
-        <input
-          value={(draft.args ?? []).join(' ')}
-          onChange={(e) =>
-            setDraft({
-              ...draft,
-              args: e.target.value.split(/\s+/).filter(Boolean),
-            } as Delegate)
-          }
-          placeholder="--acp"
-          className={inputCls}
-          spellCheck={false}
-        />
-      </Field>
-      <Field label="Workdir" hint="The directory the agent reads, edits, and runs code in.">
-        <input
-          value={draft.workdir}
-          onChange={(e) => setDraft({ ...draft, workdir: e.target.value } as Delegate)}
-          placeholder="~/dev/ORBIS"
-          className={inputCls}
-          spellCheck={false}
-        />
-      </Field>
-    </div>
-  );
-}
-
-function TypeBadge({ type }: { type: 'a2a' | 'openai' | 'acp' }) {
-  const label = type === 'a2a' ? 'A2A' : type === 'openai' ? 'OpenAI' : 'ACP';
+function TypeBadge({ type, specs }: { type: string; specs: DelegateTypeSpec[] }) {
+  const spec = specs.find((s) => s.type === type);
+  const label = spec?.label || type.toUpperCase();
   return (
     <span className="text-helper uppercase tracking-wider text-fg-subtle border border-edge rounded px-1.5 py-0.5">
       {label}
@@ -547,7 +480,10 @@ function TypeBadge({ type }: { type: 'a2a' | 'openai' | 'acp' }) {
 }
 
 function TypeTile({
-  active, label, blurb, onClick,
+  active,
+  label,
+  blurb,
+  onClick,
 }: {
   active: boolean;
   label: string;

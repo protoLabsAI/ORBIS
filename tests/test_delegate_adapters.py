@@ -74,6 +74,7 @@ def test_delegate_type_specs_shape():
     specs = {s["type"]: s for s in delegate_type_specs()}
     assert set(specs) == {"a2a", "openai", "acp"}
     for s in specs.values():
+        assert s["label"] and s["blurb"]  # tile copy travels with the type
         assert set(s["capabilities"]) == {"stream", "inject", "session", "oneshot"}
         assert isinstance(s["fields"], list) and s["fields"]
         for f in s["fields"]:
