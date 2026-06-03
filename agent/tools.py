@@ -148,6 +148,13 @@ def tool(
 # progress streams via is_final results instead.
 _HANDWIRED_SLOW_NAMES = frozenset({"delegate_to"})
 
+# Wall-clock bound on a single delegation. Native async = non-blocking, so a
+# generous cap is fine: the answer narrates whenever it lands (up to this), and
+# only a genuinely stuck delegate gives up. The previous adapter default (60 s)
+# was too short for heavy fleet sit-reps — they'd return a premature "couldn't
+# reach" even though Ava was still working.
+_DELEGATE_TIMEOUT = float(os.environ.get("DELEGATE_TIMEOUT", "300"))
+
 
 def latency_for(tool_name: str) -> Latency:
     """Expected latency for a tool — reads the registry. ``delegate_to`` is
@@ -696,15 +703,20 @@ def _delegate_to_handler(
         try:
             result = await delegate_dispatch(
                 delegate, query,
+                timeout=_DELEGATE_TIMEOUT,
                 progress_callback=_progress,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
+            logger.info(
+                f"[delegate_to] {target} → answered ({len(result or '')} chars)"
+            )
             await params.result_callback(_strip_markdown_for_speech(result))
         except DelegateError as e:
+            logger.warning(f"[delegate_to] {target} failed: {e}")
             await params.result_callback(f"Couldn't reach {target}: {e}")
         except Exception as e:  # noqa: BLE001
-            logger.exception(f"[delegate_to] unexpected error: {e}")
+            logger.exception(f"[delegate_to] {target} errored: {e}")
             await params.result_callback(f"Delegation to {target} errored: {e}")
 
     return _handler
@@ -737,9 +749,10 @@ def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
             "Runs in the BACKGROUND: acknowledge you're on it and will report "
             "back; do NOT wait or invent the result. ORBIS chains the steps and "
             "speaks the synthesized answer when done.\n\n"
-            "Choose the right tool: `delegate_to` for a SINGLE quick question, "
-            "`delegate_async` for ONE longer hand-off, `orchestrate` only when "
-            "the goal genuinely needs MULTIPLE steps.\n\n"
+            "Choose the right tool: `delegate_to` for a single hand-off to one "
+            "agent (it runs in the background — acknowledge, don't wait), "
+            "`orchestrate` only when the goal genuinely needs MULTIPLE "
+            "coordinated steps across agents.\n\n"
             f"Available agents:\n{target_lines}\n\n"
             "Pass `goal` — the overall objective in plain language."
         ),
