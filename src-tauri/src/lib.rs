@@ -572,15 +572,19 @@ fn open_widget_window(app: tauri::AppHandle, id: String, title: String) {
         let _ = win.set_focus();
         return;
     }
-    match tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
-        .title(&title)
-        .inner_size(248.0, 112.0)
-        .min_inner_size(160.0, 84.0)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .resizable(true)
-        .build()
+    match tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title(&title)
+    .inner_size(248.0, 112.0)
+    .min_inner_size(160.0, 84.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(true)
+    .build()
     {
         Ok(_) => log::info!("[widget] opened window for {id}"),
         Err(e) => log::error!("[widget] couldn't open widget window for {id}: {e}"),
@@ -1088,11 +1092,14 @@ pub fn run() {
                 };
                 let cmd_bar = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyO);
                 let gs_handle = app.handle().clone();
-                if let Err(e) = app.global_shortcut().on_shortcut(cmd_bar, move |_app, _sc, event| {
-                    if event.state == ShortcutState::Pressed {
-                        toggle_command_bar(&gs_handle);
-                    }
-                }) {
+                if let Err(e) =
+                    app.global_shortcut()
+                        .on_shortcut(cmd_bar, move |_app, _sc, event| {
+                            if event.state == ShortcutState::Pressed {
+                                toggle_command_bar(&gs_handle);
+                            }
+                        })
+                {
                     log::error!("[cmdbar] failed to register global shortcut: {e}");
                 }
             }
