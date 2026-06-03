@@ -42,7 +42,6 @@ from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.llm_service import FunctionCallParams, LLMService
 
 from .delegates import (
-    Delegate,
     DelegateError,
     DelegateRegistry,
     dispatch as delegate_dispatch,
@@ -652,99 +651,6 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
     )
 
 
-def _spawn_delegate_delivery(
-    delegate: Delegate,
-    query: str,
-    *,
-    delivery: DeliveryController,
-    target: str,
-    push_notification_url: str | None = None,
-    push_notification_token: str | None = None,
-) -> None:
-    """Dispatch a delegate in the BACKGROUND and deliver its result through the
-    DeliveryController when it lands (TIME_SENSITIVE → spoken at the next natural
-    pause). Shared by delegate_async and by delegate_to's A2A path.
-
-    A2A delegates are async tasks — a buffer-then-answer gateway (Ava routes
-    through the fleet) can take seconds. Holding the voice turn on one made ORBIS
-    go silent mid-conversation and let context summarization collide with the
-    in-flight tool call. Backgrounding it is the A2A-native fix: the turn ends
-    immediately, the answer arrives as a fresh turn."""
-    # Read at call time so env overrides (and tests) take effect per dispatch.
-    bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
-    # Proactive follow-up (orbis-29q): nudge once if a hand-off outlives this so
-    # a slow delegate doesn't feel forgotten. Cancelled the moment it lands.
-    nudge_secs = float(os.environ.get("DELEGATE_NUDGE_SECS", "90"))
-
-    async def _run_and_deliver() -> None:
-        done = asyncio.Event()
-
-        async def _nudge_if_slow() -> None:
-            if nudge_secs <= 0:
-                return
-            try:
-                await asyncio.sleep(nudge_secs)
-                if not done.is_set():
-                    await delivery.deliver(
-                        f"still waiting to hear back from {target} on that",
-                        priority=Priority.TIME_SENSITIVE, source=target,
-                        kind="delegate",
-                        cooldown_key=f"delegate-nudge:{target}:{query[:40]}",
-                    )
-            except asyncio.CancelledError:
-                pass
-
-        async def _progress(text: str) -> None:
-            # Narrate the delegate's REAL streamed progress — a2a_outbound passes
-            # the agent's own status_update / tool-call text, NOT a generic
-            # filler. speak_now() is the in-flight progress path: verbatim (no
-            # announcer "reply from ava" framing, which made the earlier
-            # attributed deliver() sound like her answer arriving early / out of
-            # order) and it updates the visual rail. Stays silent when the agent
-            # sends no progress text (today Ava streams bare heartbeats — see the
-            # workstacean tracking issue).
-            text = (text or "").strip()
-            if not text:
-                return
-            try:
-                await delivery.speak_now(text)
-            except Exception:  # noqa: BLE001
-                pass
-
-        nudge = asyncio.create_task(_nudge_if_slow())
-        try:
-            result = await delegate_dispatch(
-                delegate, query,
-                timeout=bg_timeout,
-                progress_callback=_progress,
-                push_notification_url=push_notification_url,
-                push_notification_token=push_notification_token,
-            )
-            await delivery.deliver(
-                _strip_markdown_for_speech(result),
-                priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
-            )
-        except DelegateError as e:
-            logger.warning(f"[delegate.bg] {target} failed: {e}")
-            await delivery.deliver(
-                f"that thing I handed off to {target} didn't go through — {e}",
-                priority=Priority.TIME_SENSITIVE, source=target,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"[delegate.bg] {target} errored: {e}")
-            await delivery.deliver(
-                f"that thing I handed off to {target} errored out.",
-                priority=Priority.TIME_SENSITIVE, source=target,
-            )
-        finally:
-            done.set()
-            nudge.cancel()
-
-    task = asyncio.create_task(_run_and_deliver())
-    _BG_DELEGATE_TASKS.add(task)
-    task.add_done_callback(_BG_DELEGATE_TASKS.discard)
-
-
 def _delegate_to_handler(
     registry: DelegateRegistry,
     *,
@@ -805,89 +711,6 @@ def _delegate_to_handler(
         except Exception as e:  # noqa: BLE001
             logger.exception(f"[delegate_to] unexpected error: {e}")
             await params.result_callback(f"Delegation to {target} errored: {e}")
-
-    return _handler
-
-
-# ---------------------------------------------------------------------------
-# delegate_async — fire-and-forget delegation (orbis-1s0). Returns an
-# immediate verbal ack so the conversation keeps flowing, then surfaces the
-# delegate's answer through the DeliveryController when it lands. Use for
-# work that takes more than a few seconds; `delegate_to` stays for quick
-# questions whose answer you relay in the same breath.
-# ---------------------------------------------------------------------------
-
-def _delegate_async_schema(registry: DelegateRegistry) -> FunctionSchema:
-    items = registry.all()
-    target_lines = "\n".join(f"  - {d.name}: {d.description}" for d in items)
-    return FunctionSchema(
-        name="delegate_async",
-        description=(
-            "Hand off a task to one of the user's agents in the BACKGROUND. "
-            "Use this instead of `delegate_to` when the task will take more "
-            "than a few seconds (research, a multi-step job, 'go do X and "
-            "report back'). This returns immediately — acknowledge to the "
-            "user that you've sent it off and will tell them when it's done; "
-            "do NOT wait for or invent the answer. The real reply is spoken "
-            "automatically when the agent finishes.\n\n"
-            f"Available targets:\n{target_lines}\n\n"
-            "Pass `target` (one of the names above) and `query`."
-        ),
-        properties={
-            "target": {
-                "type": "string",
-                "enum": [d.name for d in items],
-                "description": "Which delegate to ask",
-            },
-            "query": {
-                "type": "string",
-                "description": "The task to hand off, phrased as you'd ask a person",
-            },
-        },
-        required=["target", "query"],
-    )
-
-
-def _delegate_async_handler(
-    registry: DelegateRegistry,
-    *,
-    delivery: DeliveryController,
-    push_notification_url: str | None = None,
-    push_notification_token: str | None = None,
-):
-    """Async tool: ack now, dispatch in the background, deliver the result
-    through the DeliveryController (TIME_SENSITIVE → spoken at the next
-    natural pause) when the delegate finishes. Shares the background-deliver
-    substrate with delegate_to's A2A path (`_spawn_delegate_delivery`)."""
-
-    async def _handler(params: FunctionCallParams) -> None:
-        target = (params.arguments.get("target") or "").strip()
-        query = (params.arguments.get("query") or "").strip()
-        if not target or not query:
-            await params.result_callback(
-                "I need both a target and a task to hand off."
-            )
-            return
-        delegate = registry.get(target)
-        if not delegate:
-            available = ", ".join(registry.names()) or "(none)"
-            await params.result_callback(
-                f"I don't know a delegate named '{target}'. Available: {available}."
-            )
-            return
-
-        logger.info(f"[delegate_async] target={target} query={query!r} (background)")
-        _spawn_delegate_delivery(
-            delegate, query, delivery=delivery, target=target,
-            push_notification_url=push_notification_url,
-            push_notification_token=push_notification_token,
-        )
-
-        # Immediate ack — the LLM speaks this and the turn ends; the answer
-        # arrives later via the DeliveryController.
-        await params.result_callback(
-            f"Sent that off to {target}. I'll let you know as soon as they're back."
-        )
 
     return _handler
 
