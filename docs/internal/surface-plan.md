@@ -204,6 +204,22 @@ where the keystone pays off. The full operator co-pilot.
 layer); then the wake-word spike (openWakeWord) → ARMED state. Independent of the
 widget work; can slot whenever.
 
+### Backlog (captured, not yet scheduled)
+
+- **Widgets auto-pop on app-hide** (Josh, 2026-06-02) — when the main window is
+  hidden (it hides, not quits), docked widgets should pop out to their native
+  windows so they stay visible as ambient desktop panels, and re-dock when the
+  app is shown. Needs reliable Rust hide/show signals + a reconcile pass + race
+  handling against the `beforeunload` re-dock. Deferred from Stage 2b on purpose.
+- **Command bar** (Josh, 2026-06-02) — a Raycast / Script Kit-style global-hotkey
+  palette to fire ORBIS skills, delegate to agents, run tools, open widgets. The
+  keyboard complement to voice (still voice-first; this is the fast manual path).
+  Natural fit for the provider/tool registries — it surfaces the SAME actions the
+  agent has (tools, delegates via the adapter registry, skills). Likely its own
+  epic: global shortcut (tauri-plugin-global-shortcut) → a transparent borderless
+  palette window (reuses the 2b window machinery) → an action registry unifying
+  tools + delegates + skills + widgets.
+
 ---
 
 ## Alignment with existing direction locks

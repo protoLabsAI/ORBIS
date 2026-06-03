@@ -65,7 +65,7 @@ def check_tauri_config() -> None:
 def check_tauri_cargo_manifest() -> None:
     cargo = TAURI / "Cargo.toml"
     required = (
-        'tauri = { version = "2", features = ["tray-icon", "image-png"] }',
+        'tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }',
         'tauri-plugin-shell = "2"',
         'tauri-plugin-dialog = "2"',
         'tauri-plugin-http = "2"',

@@ -557,6 +557,36 @@ fn open_or_focus_console(app: &AppHandle, id: &str, name: &str, base_url: &str) 
     }
 }
 
+/// Pop one of ORBIS's own widgets out into a floating native panel. Unlike the
+/// fleet console (which loads an external agent UI), this loads ORBIS's OWN
+/// bundle under the label `widget-<id>`; the React entry reads its window label
+/// and renders just that widget full-bleed (see WidgetWindowRoot). Borderless +
+/// transparent + always-on-top for the ambient, voice-first look. Reuses the
+/// window if it already exists.
+#[tauri::command]
+fn open_widget_window(app: tauri::AppHandle, id: String, title: String) {
+    let label = format!("widget-{id}");
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    match tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(&title)
+        .inner_size(248.0, 112.0)
+        .min_inner_size(160.0, 84.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .resizable(true)
+        .build()
+    {
+        Ok(_) => log::info!("[widget] opened window for {id}"),
+        Err(e) => log::error!("[widget] couldn't open widget window for {id}: {e}"),
+    }
+}
+
 /// Poll an agent's health endpoint until it answers `200`, then open its
 /// console window. `503` is treated as "still compiling" (protoAgent returns it
 /// until its graph is built), so we keep waiting. Gives up after ~60s.
@@ -949,7 +979,8 @@ pub fn run() {
                     set_mic_listening,
                     mic_listening,
                     api_request,
-                    boot_status
+                    boot_status,
+                    open_widget_window
                 ]
             }
             #[cfg(not(feature = "native-audio"))]
@@ -962,7 +993,8 @@ pub fn run() {
                     clear_browsing_data,
                     backend_url,
                     api_request,
-                    boot_status
+                    boot_status,
+                    open_widget_window
                 ]
             }
         })
