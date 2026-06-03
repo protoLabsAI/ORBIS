@@ -390,11 +390,80 @@ fn inject_backend_url(app: &AppHandle, url: &str) {
 
 /// Bring the main window back to the foreground — used by the tray (click or
 /// "Show ORBIS") since in menu-bar-only mode there's no dock icon to click.
+/// Also leaves ambient mode (hides the mini-orb, re-docks widgets).
 fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
+    }
+    exit_ambient_mode(app);
+}
+
+/// Frontend-triggerable "bring ORBIS back" — invoked by the mini-orb click.
+#[tauri::command]
+fn show_main(app: tauri::AppHandle) {
+    show_main_window(&app);
+}
+
+/// Close a popped-out widget window (used to re-dock on un-hide). The window's
+/// own `beforeunload` returns the widget to the dock.
+#[tauri::command]
+fn close_widget_window(app: tauri::AppHandle, id: String) {
+    if let Some(win) = app.get_webview_window(&format!("widget-{id}")) {
+        let _ = win.close();
+    }
+}
+
+/// Enter ambient mode — ORBIS's main window is hidden, so float a small orb on
+/// the left edge as a glanceable presence + a handle to click it back, and tell
+/// the (still-running) main window to pop its docked widgets out onto the
+/// desktop. Mirror of `exit_ambient_mode`.
+fn enter_ambient_mode(app: &AppHandle) {
+    use tauri::Emitter;
+    show_mini_orb(app);
+    let _ = app.emit("orbis-main-visibility", false);
+}
+
+fn exit_ambient_mode(app: &AppHandle) {
+    use tauri::Emitter;
+    if let Some(win) = app.get_webview_window("mini-orb") {
+        let _ = win.hide();
+    }
+    let _ = app.emit("orbis-main-visibility", true);
+}
+
+/// The mini-orb: a small, borderless, transparent, always-on-top window anchored
+/// to the left edge. Created on first hide, then shown/hidden thereafter.
+fn show_mini_orb(app: &AppHandle) {
+    let label = "mini-orb";
+    if let Some(win) = app.get_webview_window(label) {
+        let _ = win.show();
+        return;
+    }
+    let size = 72.0;
+    // Anchor to the left edge, vertically centered on the primary monitor.
+    let y = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| (m.size().height as f64 / m.scale_factor() - size) / 2.0)
+        .unwrap_or(360.0);
+    match tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
+        .title("ORBIS")
+        .inner_size(size, size)
+        .position(12.0, y)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .build()
+    {
+        Ok(win) => {
+            let _ = win.show();
+        }
+        Err(e) => log::error!("[mini-orb] couldn't open: {e}"),
     }
 }
 
@@ -1027,7 +1096,9 @@ pub fn run() {
                     api_request,
                     boot_status,
                     open_widget_window,
-                    open_command_bar
+                    open_command_bar,
+                    show_main,
+                    close_widget_window
                 ]
             }
             #[cfg(not(feature = "native-audio"))]
@@ -1042,7 +1113,9 @@ pub fn run() {
                     api_request,
                     boot_status,
                     open_widget_window,
-                    open_command_bar
+                    open_command_bar,
+                    show_main,
+                    close_widget_window
                 ]
             }
         })
@@ -1059,7 +1132,9 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
+                    let app = window.app_handle().clone();
                     let _ = window.hide();
+                    enter_ambient_mode(&app);
                 }
             }
         })

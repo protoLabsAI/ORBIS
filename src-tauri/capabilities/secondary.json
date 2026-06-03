@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "secondary-windows",
-  "description": "Capabilities for ORBIS's own floating panels — popped-out widget windows (widget-*) and the command bar. They need to close/hide/show/focus and drag their borderless windows; custom app commands (open_widget_window, set_mic_listening) are not ACL-gated.",
-  "windows": ["widget-*", "command-bar"],
+  "description": "Capabilities for ORBIS's own floating panels — popped-out widget windows (widget-*), the command bar, and the ambient mini-orb. They need to close/hide/show/focus and drag their borderless windows; custom app commands (open_widget_window, set_mic_listening, show_main) are not ACL-gated.",
+  "windows": ["widget-*", "command-bar", "mini-orb"],
   "local": true,
   "permissions": [
     "core:default",

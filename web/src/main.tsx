@@ -5,27 +5,35 @@ import './index.css'
 import App from './App.tsx'
 import { WidgetWindowRoot } from './widgets/WidgetWindowRoot'
 import { CommandBar } from './command/CommandBar'
+import { MiniOrb } from './widgets/MiniOrb'
 import './widgets' // register widgets so a popped-out window can render them
 
+// Secondary windows ride a transparent native window; index.css paints html/body
+// opaque (#0a0a0a), so clear those so the window's transparency shows through.
+function makeTransparent() {
+  document.documentElement.style.background = 'transparent'
+  document.body.style.background = 'transparent'
+}
+
 /**
- * Same bundle, two roots: the main window renders <App/> (orb + chrome); a
- * popped-out widget window (label "widget-<id>") renders just that widget
- * full-bleed. The window label is the routing signal — no query string needed.
+ * Same bundle, many roots, routed by window label: the main window renders
+ * <App/> (orb + chrome); a popped-out widget renders just that widget; the
+ * command bar and the ambient mini-orb get their own roots.
  */
 function rootFor() {
   try {
     const label = getCurrentWindow().label
-    // Both secondary windows ride a transparent native window; index.css paints
-    // html/body opaque (#0a0a0a), so clear those so the glass shows through.
     if (label.startsWith('widget-')) {
-      document.documentElement.style.background = 'transparent'
-      document.body.style.background = 'transparent'
+      makeTransparent()
       return <WidgetWindowRoot id={label.slice('widget-'.length)} />
     }
     if (label === 'command-bar') {
-      document.documentElement.style.background = 'transparent'
-      document.body.style.background = 'transparent'
+      makeTransparent()
       return <CommandBar />
+    }
+    if (label === 'mini-orb') {
+      makeTransparent()
+      return <MiniOrb />
     }
   } catch {
     // not running inside a Tauri window — fall through to the app
