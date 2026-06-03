@@ -15,6 +15,7 @@ import {
 } from '@/shared/audio/preferredDevice';
 import {
   getAudioInputMode,
+  setInputDevice,
   usesSelectableInputDevice,
   type AudioInputMode,
 } from '@/shared/audio/nativeAudio';
@@ -126,9 +127,13 @@ export function MicSettings() {
   const authorized = isMicrophoneAuthorized(permission);
   const selectableInput = usesSelectableInputDevice(audioInputMode);
 
+  const [needsRelaunch, setNeedsRelaunch] = useState(false);
   const onChange = (name: string) => {
     setDevice(name);
     setPreferredAudioDeviceId(name);
+    setInputDevice(name)
+      .then(() => setNeedsRelaunch(true))
+      .catch((e) => setError(String((e as Error).message ?? e)));
   };
 
   return (
@@ -185,6 +190,11 @@ export function MicSettings() {
                 ))}
               </SelectContent>
             </Select>
+            {needsRelaunch && (
+              <p className="text-helper text-fg-muted">
+                Takes effect when ORBIS next launches.
+              </p>
+            )}
           </div>
         )}
 

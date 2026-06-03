@@ -208,6 +208,42 @@ fn list_audio_inputs() -> Vec<String> {
     audio::engine::AudioEngine::list_input_devices()
 }
 
+/// File where the user's preferred input-device name is persisted, so the audio
+/// engine can pick it up at construction (the engine is built at boot, before
+/// the frontend loads). orbis-zj5.
+#[cfg(feature = "native-audio")]
+fn input_device_pref_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("input_device"))
+}
+
+#[cfg(feature = "native-audio")]
+fn persisted_input_device(app: &tauri::AppHandle) -> Option<String> {
+    let p = input_device_pref_path(app)?;
+    std::fs::read_to_string(p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Persist the user's chosen input device. Applied when the audio engine is next
+/// (re)built — i.e. on the next launch. orbis-zj5.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_input_device(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let p = input_device_pref_path(&app).ok_or("no app data dir")?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let name = name.trim();
+    std::fs::write(&p, name).map_err(|e| format!("persist input device: {e}"))?;
+    log::info!("[audio] preferred input device = '{name}' (applies on next launch)");
+    Ok(())
+}
+
 /// Return the active native input path so the frontend can avoid
 /// presenting controls that do not apply to the production macOS
 /// AVAudioEngine voice-processing build.
@@ -1099,6 +1135,7 @@ pub fn run() {
             {
                 tauri::generate_handler![
                     list_audio_inputs,
+                    set_input_device,
                     get_audio_level,
                     get_audio_levels,
                     get_audio_input_mode,
@@ -1334,7 +1371,11 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                         return;
                     }
                 }
-                match audio::engine::AudioEngine::new(None, mic_tx) {
+                let preferred = persisted_input_device(&app_handle);
+                if let Some(name) = preferred.as_deref() {
+                    log::info!("[audio] preferred input device from store: '{name}'");
+                }
+                match audio::engine::AudioEngine::new(preferred.as_deref(), mic_tx) {
                     Ok(engine) => {
                         let engine = Arc::new(engine);
                         if let Some(state) = app_handle.try_state::<AudioEngineState>() {

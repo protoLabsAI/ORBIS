@@ -19,3 +19,9 @@ pub mod socket;
 // tuned AEC + AGC + NS, per WWDC23-10235). Output stays on CPAL.
 #[cfg(all(feature = "voice-processing", target_os = "macos"))]
 pub mod voice_processing_input;
+
+// Core Audio input-device selection for the voice-processing path (orbis-zj5):
+// AVAudioEngine ignores a CPAL device name, so we pin the AudioDeviceID on its
+// input node's audio unit.
+#[cfg(all(feature = "voice-processing", target_os = "macos"))]
+pub mod coreaudio_devices;

@@ -61,6 +61,7 @@ impl VoiceProcessingInput {
     pub fn new(
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
         rms: Arc<AtomicU32>,
+        input_device_id: Option<u32>,
     ) -> Result<Self, String> {
         // SAFETY: AVAudioEngine, the input node, and tap installation
         // are all standard AVFAudio API surface. The tap block runs on
@@ -119,6 +120,25 @@ impl VoiceProcessingInput {
                     None => {
                         log::info!("[voice-processing] other-audio ducking = default (Apple VoIP)");
                     }
+                }
+            }
+
+            // Pin a specific input device if the user chose one (else system
+            // default). AVAudioEngine ignores device *names*; we set the
+            // AudioDeviceID on the input node's underlying AUHAL. Must be before
+            // the engine starts. orbis-zj5.
+            if let Some(dev_id) = input_device_id {
+                let au: *mut std::os::raw::c_void = objc2::msg_send![&*input_node, audioUnit];
+                if au.is_null() {
+                    log::warn!(
+                        "[voice-processing] input node has no audioUnit; using default device"
+                    );
+                } else if let Err(e) =
+                    super::coreaudio_devices::set_current_input_device(au, dev_id)
+                {
+                    log::warn!("[voice-processing] couldn't pin input device {dev_id}: {e} — using default");
+                } else {
+                    log::info!("[voice-processing] input device pinned: AudioDeviceID {dev_id}");
                 }
             }
 
