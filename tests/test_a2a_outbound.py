@@ -71,3 +71,48 @@ async def test_send_returns_terminal_text(monkeypatch) -> None:
     res = await client.send("ping", timeout=5.0)
     assert res.state == "completed"
     assert res.task_id == "t-123"
+
+
+def test_answer_text_from_status_message() -> None:
+    """Ava/workstacean return the answer on the task's status message (no
+    artifacts) — extraction must read it, not yield an empty 'ava says —'."""
+    from a2a.types import Part, Task, TaskState
+
+    from a2a_outbound import _task_answer_text
+
+    task = Task()
+    task.id = "t-1"
+    task.status.state = TaskState.TASK_STATE_COMPLETED
+    task.status.message.parts.append(Part(text="At standby — ready to route."))
+    assert _task_answer_text(task) == "At standby — ready to route."
+
+
+def test_answer_text_from_history_last_agent_turn() -> None:
+    from a2a.types import Message, Part, Role, Task, TaskState
+
+    from a2a_outbound import _task_answer_text
+
+    task = Task()
+    task.id = "t-2"
+    task.status.state = TaskState.TASK_STATE_COMPLETED
+    task.history.append(Message(role=Role.ROLE_USER, parts=[Part(text="q?")]))
+    task.history.append(
+        Message(role=Role.ROLE_AGENT, parts=[Part(text="the real answer")])
+    )
+    assert _task_answer_text(task) == "the real answer"
+
+
+def test_answer_text_prefers_artifact_when_present() -> None:
+    """Our own executor's terminal-artifact shape still wins (unchanged)."""
+    from a2a.types import Artifact, Part, Task, TaskState
+
+    from a2a_outbound import _task_answer_text
+
+    task = Task()
+    task.id = "t-3"
+    task.status.state = TaskState.TASK_STATE_COMPLETED
+    art = Artifact()
+    art.parts.append(Part(text="artifact answer"))
+    task.artifacts.append(art)
+    task.status.message.parts.append(Part(text="status answer"))
+    assert _task_answer_text(task) == "artifact answer"
