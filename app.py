@@ -1049,6 +1049,29 @@ class SseBusObserver(RTVIObserver):
     def __init__(self, rtvi, *, params: RTVIObserverParams | None = None) -> None:
         super().__init__(rtvi, params=params or RTVIObserverParams())
         self._bot_text_buf: list[str] = []
+        # Debounce the speaking→idle transition: the native output transport
+        # doesn't emit BotStarted/StoppedSpeakingFrame, so we derive "speaking"
+        # from the TTS lifecycle (BotTTSStarted/Stopped) — which fires per
+        # sentence. Without debounce the pill would flicker speaking↔idle
+        # between sentences mid-answer.
+        self._idle_task: asyncio.Task | None = None
+
+    def _cancel_idle(self) -> None:
+        if self._idle_task is not None and not self._idle_task.done():
+            self._idle_task.cancel()
+        self._idle_task = None
+
+    def _schedule_idle(self) -> None:
+        self._cancel_idle()
+
+        async def _go_idle() -> None:
+            try:
+                await asyncio.sleep(0.6)
+            except asyncio.CancelledError:
+                return
+            await sse_bus.publish("bot-state", {"state": "idle"})
+
+        self._idle_task = asyncio.create_task(_go_idle())
 
     async def send_rtvi_message(self, model, exclude_none: bool = True) -> None:
         # Skip the WebRTC transport push (no transport in native mode
@@ -1063,10 +1086,13 @@ class SseBusObserver(RTVIObserver):
             BotLLMTextMessage,
             BotStartedSpeakingMessage,
             BotStoppedSpeakingMessage,
+            BotTTSStartedMessage,
+            BotTTSStoppedMessage,
             UserStartedSpeakingMessage,
             UserTranscriptionMessage,
         )
         if isinstance(model, BotStartedSpeakingMessage):
+            self._cancel_idle()
             self._bot_text_buf.clear()
             await sse_bus.publish("bot-state", {"state": "speaking"})
         elif isinstance(model, BotStoppedSpeakingMessage):
@@ -1078,9 +1104,21 @@ class SseBusObserver(RTVIObserver):
                 )
                 self._bot_text_buf.clear()
             await sse_bus.publish("bot-state", {"state": "idle"})
+        elif isinstance(model, BotTTSStartedMessage):
+            # The native output transport (voice/local_transport.py) is a thin
+            # FrameProcessor, not BaseOutputTransport, so it never emits
+            # BotStarted/StoppedSpeakingFrame. Derive "speaking" from the TTS
+            # lifecycle instead; the debounced idle below bridges the
+            # per-sentence TTSStopped gaps so the pill doesn't flicker.
+            self._cancel_idle()
+            await sse_bus.publish("bot-state", {"state": "speaking"})
+        elif isinstance(model, BotTTSStoppedMessage):
+            self._schedule_idle()
         elif isinstance(model, UserStartedSpeakingMessage):
+            self._cancel_idle()
             await sse_bus.publish("bot-state", {"state": "listening"})
         elif isinstance(model, BotLLMStartedMessage):
+            self._cancel_idle()
             await sse_bus.publish("bot-state", {"state": "thinking"})
         elif isinstance(model, UserTranscriptionMessage):
             data = model.data

@@ -240,11 +240,16 @@ class A2AClient:
             nonlocal final_task, artifact_text, status_text, message_text
             nonlocal final_state, resolved_task_id, resolved_ctx
             nonlocal last_progress_at, last_progress
+            ev_count = 0
             async for resp in client.send_message(request):
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
+                ev_count += 1
                 if which == "task" or (which is None and resp.HasField("task")):
                     final_task = resp.task
                     final_state = resp.task.status.state
+                    logger.info(
+                        f"[a2a/{self.name}] ←#{ev_count} task state={_STATE_NAMES.get(resp.task.status.state, resp.task.status.state)}"
+                    )
                     if resp.task.id:
                         resolved_task_id = resp.task.id
                     if resp.task.context_id:
@@ -257,6 +262,11 @@ class A2AClient:
                     if su.context_id:
                         resolved_ctx = su.context_id
                     msg_text = _status_message_text(su.status)
+                    logger.info(
+                        f"[a2a/{self.name}] ←#{ev_count} status_update "
+                        f"state={_STATE_NAMES.get(su.status.state, su.status.state)} "
+                        f"text={(msg_text or '')[:90]!r}"
+                    )
                     if su.status.state == TaskState.TASK_STATE_WORKING:
                         # Narrate the agent's REAL streamed progress — the text it
                         # puts on an intermediate status message (and, when the
@@ -282,6 +292,7 @@ class A2AClient:
                     t = "".join(
                         _part_text(p) for p in resp.artifact_update.artifact.parts
                     )
+                    logger.info(f"[a2a/{self.name}] ←#{ev_count} artifact_update +{len(t)} chars")
                     if t:
                         artifact_text = t
                 elif which == "message" or (which is None and resp.HasField("message")):
