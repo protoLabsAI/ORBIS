@@ -31,6 +31,9 @@ tauri-plugin-dialog = "2"
 # uses reqwest under the hood. Allowed origins are scoped to localhost
 # in capabilities/default.json.
 tauri-plugin-http = "2"
+# Global hotkey to summon the command bar (Raycast-style) even when ORBIS is
+# backgrounded. Registered + handled Rust-side in the setup hook.
+tauri-plugin-global-shortcut = "2"
 # Rust HTTP client for the IPC API proxy + SSE bridge. macOS Tahoe's
 # WKWebView can't reliably stream/read HTTP bodies, so all sidecar
 # traffic is routed through `api_request` / `bridge_sse` over reqwest

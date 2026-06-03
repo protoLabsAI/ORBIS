@@ -7,9 +7,9 @@ import { type OpenWidget, widgetWorkspace } from './store';
 /**
  * Widget layer — open ('dock'-surface) widgets float freely over the surface,
  * each draggable and remembering where the user put it. Deliberately minimal
- * (JARVIS, not a window manager): a translucent blurred panel, no title bar,
- * a close affordance that only appears on hover. The orb stays voice-first; the
- * widgets are ambient glanceable readouts.
+ * (JARVIS, not a window manager): a solid panel (no glassmorphism), no title
+ * bar, a close affordance that only appears on hover. The orb stays voice-first;
+ * the widgets are ambient glanceable readouts.
  *
  * The layer itself is pointer-transparent so empty space still reaches the orb
  * (double-click to toggle the mic); only the panels capture pointer events.
@@ -91,7 +91,7 @@ function DraggableWidget({
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
     >
-      <div className="relative rounded-xl bg-base/45 px-3 py-2 shadow-lg ring-1 ring-edge/40 backdrop-blur-xl">
+      <div className="relative rounded-xl bg-surface px-3 py-2 shadow-lg ring-1 ring-edge">
         <Body id={def.id} surface="dock" props={entry.props} />
         <div className="absolute -right-1.5 -top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover/w:opacity-100">
           <button
@@ -102,7 +102,7 @@ function DraggableWidget({
                 .catch(() => {});
             }}
             aria-label={`Pop out ${def.title}`}
-            className="grid h-5 w-5 place-items-center rounded-full bg-base/80 text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
+            className="grid h-5 w-5 place-items-center rounded-full bg-raised text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
           >
             <PictureInPicture2 className="h-2.5 w-2.5" />
           </button>
@@ -110,7 +110,7 @@ function DraggableWidget({
             type="button"
             onClick={() => widgetWorkspace.close(def.id)}
             aria-label={`Close ${def.title}`}
-            className="grid h-5 w-5 place-items-center rounded-full bg-base/80 text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
+            className="grid h-5 w-5 place-items-center rounded-full bg-raised text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
           >
             <X className="h-3 w-3" />
           </button>

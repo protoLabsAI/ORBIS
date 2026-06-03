@@ -572,19 +572,63 @@ fn open_widget_window(app: tauri::AppHandle, id: String, title: String) {
         let _ = win.set_focus();
         return;
     }
-    match tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
-        .title(&title)
-        .inner_size(248.0, 112.0)
-        .min_inner_size(160.0, 84.0)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .resizable(true)
-        .build()
+    match tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title(&title)
+    .inner_size(248.0, 112.0)
+    .min_inner_size(160.0, 84.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(true)
+    .build()
     {
         Ok(_) => log::info!("[widget] opened window for {id}"),
         Err(e) => log::error!("[widget] couldn't open widget window for {id}: {e}"),
     }
+}
+
+/// Show/hide the command bar — a centered, borderless, transparent palette
+/// window summoned by the global hotkey (Raycast-style). Created on first use,
+/// then toggled, so the hotkey both opens and dismisses it. Always-on-top +
+/// skip-taskbar so it floats over everything even when ORBIS is backgrounded.
+fn toggle_command_bar(app: &AppHandle) {
+    let label = "command-bar";
+    if let Some(win) = app.get_webview_window(label) {
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+        } else {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        return;
+    }
+    match tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
+        .title("ORBIS Command")
+        .inner_size(600.0, 380.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .center()
+        .resizable(false)
+        .skip_taskbar(true)
+        .build()
+    {
+        Ok(win) => {
+            let _ = win.set_focus();
+            log::info!("[cmdbar] opened command bar");
+        }
+        Err(e) => log::error!("[cmdbar] couldn't open command bar: {e}"),
+    }
+}
+
+/// Frontend-triggerable command-bar toggle (same effect as the global hotkey).
+#[tauri::command]
+fn open_command_bar(app: tauri::AppHandle) {
+    toggle_command_bar(&app);
 }
 
 /// Poll an agent's health endpoint until it answers `200`, then open its
@@ -946,6 +990,8 @@ pub fn run() {
         // `fetch` from `@tauri-apps/plugin-http`. Origin allow-list
         // is in capabilities/default.json.
         .plugin(tauri_plugin_http::init())
+        // Global hotkey for the command bar — registered + handled in setup().
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // macOS WKWebView drops keyboard first-responder when the
         // webview navigates to a new origin (startup splash -> the
         // sidecar backend URL). Until focus is restored the setup
@@ -980,7 +1026,8 @@ pub fn run() {
                     mic_listening,
                     api_request,
                     boot_status,
-                    open_widget_window
+                    open_widget_window,
+                    open_command_bar
                 ]
             }
             #[cfg(not(feature = "native-audio"))]
@@ -994,7 +1041,8 @@ pub fn run() {
                     backend_url,
                     api_request,
                     boot_status,
-                    open_widget_window
+                    open_widget_window,
+                    open_command_bar
                 ]
             }
         })
@@ -1032,6 +1080,28 @@ pub fn run() {
                     }
                 }
                 Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
+            }
+
+            // Global hotkey to summon the command bar (Raycast-style), even when
+            // ORBIS is backgrounded. Cmd+Shift+O — distinctive enough to avoid
+            // the usual macOS clashes. Registered + handled Rust-side.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{
+                    Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+                };
+                let cmd_bar = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyO);
+                let gs_handle = app.handle().clone();
+                if let Err(e) =
+                    app.global_shortcut()
+                        .on_shortcut(cmd_bar, move |_app, _sc, event| {
+                            if event.state == ShortcutState::Pressed {
+                                toggle_command_bar(&gs_handle);
+                            }
+                        })
+                {
+                    log::error!("[cmdbar] failed to register global shortcut: {e}");
+                }
             }
 
             let handle = app.handle().clone();
