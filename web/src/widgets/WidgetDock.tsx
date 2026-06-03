@@ -1,5 +1,6 @@
 import { type PointerEvent, useRef, useState, useSyncExternalStore } from 'react';
-import { X } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { PictureInPicture2, X } from 'lucide-react';
 import { type WidgetDef, widgetRegistry } from './registry';
 import { type OpenWidget, widgetWorkspace } from './store';
 
@@ -92,14 +93,28 @@ function DraggableWidget({
     >
       <div className="relative rounded-xl bg-base/45 px-3 py-2 shadow-lg ring-1 ring-edge/40 backdrop-blur-xl">
         <Body id={def.id} surface="dock" props={entry.props} />
-        <button
-          type="button"
-          onClick={() => widgetWorkspace.close(def.id)}
-          aria-label={`Close ${def.title}`}
-          className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-base/80 text-fg-subtle opacity-0 ring-1 ring-edge transition-opacity hover:text-fg-body group-hover/w:opacity-100"
-        >
-          <X className="h-3 w-3" />
-        </button>
+        <div className="absolute -right-1.5 -top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover/w:opacity-100">
+          <button
+            type="button"
+            onClick={() => {
+              void invoke('open_widget_window', { id: def.id, title: def.title })
+                .then(() => widgetWorkspace.setSurface(def.id, 'window'))
+                .catch(() => {});
+            }}
+            aria-label={`Pop out ${def.title}`}
+            className="grid h-5 w-5 place-items-center rounded-full bg-base/80 text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
+          >
+            <PictureInPicture2 className="h-2.5 w-2.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => widgetWorkspace.close(def.id)}
+            aria-label={`Close ${def.title}`}
+            className="grid h-5 w-5 place-items-center rounded-full bg-base/80 text-fg-subtle ring-1 ring-edge transition-colors hover:text-fg-body"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
       </div>
     </div>
   );

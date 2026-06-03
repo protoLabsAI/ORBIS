@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 cc = "1"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 # Sidecar spawn + stdout-line parsing lives in the shell plugin.
 # Without this plugin `ShellExt::shell().sidecar(...)` isn't available.
 tauri-plugin-shell = "2"

@@ -49,6 +49,20 @@ class WidgetWorkspace {
   private open: OpenWidget[] = load();
   private listeners = new Set<Listener>();
 
+  constructor() {
+    // Cross-window sync: a popped-out widget window and the main window share
+    // localStorage. When one writes (drag, voice props, dock/undock), the other
+    // gets a `storage` event — reload + notify so both stay in step.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (e) => {
+        if (e.key === STORAGE_KEY) {
+          this.open = load();
+          this.listeners.forEach((l) => l());
+        }
+      });
+    }
+  }
+
   getSnapshot = (): OpenWidget[] => this.open;
 
   subscribe = (l: Listener): (() => void) => {
