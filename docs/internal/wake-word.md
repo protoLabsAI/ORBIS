@@ -66,20 +66,29 @@ app-data `models/` dir, and a small Tauri command set + a picker UI. Seed it wit
 The user enables one (or several) wake words; the detector loads each enabled
 wake `.onnx` against the shared embedding ring.
 
-### ❓ What the lab node must export (the one thing I need from you)
-Please confirm what your "Hey Orbis" training pipeline produces, so I match the
-runtime exactly:
-- The **wake model** as `hey_orbis.onnx` (oWW-standard: input = embedding window
-  `[1,16,96]`, output = score `[1,1]`)? Or a different I/O shape?
-- Do you also have the **shared `melspectrogram.onnx` + `embedding_model.onnx`**
-  (the standard oWW ones), or should I pull them from the openWakeWord release?
-- Training **sample rate / mel params** — standard oWW (16 kHz, 32 mel, 76-frame
-  window)? If your pipeline customized these, I need the constants.
-- A couple of **test clips** (positive "Hey Orbis" + hard negatives) to tune the
-  threshold + verify the Rust pipeline matches your Python eval.
+### ✅ Model I/O — verified (2026-06-02, by ONNX inspection)
+Downloaded all three `.onnx` from the HF + openWakeWord releases and read their
+graph I/O with onnxruntime. **Hey Orbis is the *exact* standard openWakeWord
+pipeline** — no custom shapes:
+- `melspectrogram.onnx` — in `[batch, samples]` (raw 16 kHz), out `[time,1,*,32]`
+  → **32 mel bins**. Standard, shared.
+- `embedding_model.onnx` — in `[*,76,32,1]` (**76-mel-frame** window × 32 bins),
+  out `[*,1,1,96]` → **96-dim** embedding. Standard, shared.
+- `hey_orbis.onnx` — in `x [1,16,96]` (**16-embedding** window), out
+  `sigmoid [1,1]` (score 0–1). Standard oWW classifier I/O.
 
-Drop the model(s) in `src-tauri/models/`; I'll bundle them via tauri.conf
-`resources` and resolve at runtime.
+So the runtime constants are the documented oWW defaults (16 kHz · 32 mel ·
+76-frame mel window → embedding · 16-embedding window → wake). The Rust detector
+can be built against the stock oWW buffering with confidence; the picker already
+fetches all three models.
+
+### ❓ Still needed from the lab node (the one remaining thing)
+- A couple of **test clips** — positive "Hey Orbis" + hard negatives — to tune
+  the fire threshold and verify the Rust pipeline matches the Python eval. Until
+  these land we ship the oWW default threshold (~0.5) and tune live.
+
+(Models no longer need to be hand-dropped — the picker downloads `hey_orbis.onnx`
++ the shared models into the app-data `models/` dir the detector reads.)
 
 ## Gate-open + the listen window (the "listen then stop")
 

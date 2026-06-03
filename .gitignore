@@ -50,6 +50,12 @@ src-tauri/gen/
 /dist/
 dist-sdist/
 
+# Wake-word ONNX models downloaded at runtime by the model picker
+# (voice/wakeword_models.py). The bundled app writes these to app-data via
+# ORBIS_MODELS_DIR; in dev they fall back to this repo-local dir. Never
+# version the model binaries.
+/models/
+
 # Claude Code agent state — per-machine scratch (scheduled task locks,
 # subagent metadata, settings.local.json). Should never be versioned.
 # .claude/skills/ is the documented exception: project-level skills
