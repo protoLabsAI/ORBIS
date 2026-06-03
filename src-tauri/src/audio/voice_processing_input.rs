@@ -260,14 +260,27 @@ unsafe fn handle_tap(
             mono.push(unsafe { *chan0_ptr.add(i) });
         }
     } else {
-        // Average across channels for downmix.
-        for i in 0..frame_length {
-            let mut sum = 0.0_f32;
-            for ch in 0..native_channels {
-                let chan_ptr = unsafe { (*channel_data.add(ch)).as_ptr() };
-                sum += unsafe { *chan_ptr.add(i) };
+        // Some VP setups (esp. an aggregate default device) hand us a buffer
+        // with the mic on ONE channel and the rest silent/reference. Averaging
+        // diluted the voice by ~Nx into near-silence (the dead-meter bug) — pick
+        // the highest-energy channel (the active mic) and use it. orbis-zj5.
+        let mut best_ch = 0usize;
+        let mut best_energy = -1.0_f32;
+        for ch in 0..native_channels {
+            let chan_ptr = unsafe { (*channel_data.add(ch)).as_ptr() };
+            let mut e = 0.0_f32;
+            for i in 0..frame_length {
+                let s = unsafe { *chan_ptr.add(i) };
+                e += s * s;
             }
-            mono.push(sum / native_channels as f32);
+            if e > best_energy {
+                best_energy = e;
+                best_ch = ch;
+            }
+        }
+        let chan_ptr = unsafe { (*channel_data.add(best_ch)).as_ptr() };
+        for i in 0..frame_length {
+            mono.push(unsafe { *chan_ptr.add(i) });
         }
     }
 
