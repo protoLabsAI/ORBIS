@@ -33,10 +33,10 @@ logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 
-# Emit one grounded "still working" progress beat if a streaming hand-off is
-# still WORKING this many seconds in (skips the instant 0s heartbeat, so fast
-# replies stay quiet). Real status_update-driven, not a blind timer.
-_PROGRESS_AFTER_S = float(os.environ.get("A2A_PROGRESS_AFTER_S", "7"))
+# Min gap between spoken progress lines, so a chatty agent's status_updates
+# don't flood. We only narrate the agent's REAL streamed status text (the
+# status_update message / tool-call frames it emits) — never a generic filler.
+_PROGRESS_MIN_GAP = float(os.environ.get("A2A_PROGRESS_MIN_GAP_S", "5"))
 
 _TERMINAL = {
     TaskState.TASK_STATE_COMPLETED,
@@ -233,12 +233,13 @@ class A2AClient:
         final_state = None
         resolved_task_id = task_id
         resolved_ctx = ctx
-        started = time.monotonic()
-        beat_sent = False
+        last_progress_at = 0.0
+        last_progress = ""
 
         async def _consume() -> None:
             nonlocal final_task, artifact_text, status_text, message_text
-            nonlocal final_state, resolved_task_id, resolved_ctx, beat_sent
+            nonlocal final_state, resolved_task_id, resolved_ctx
+            nonlocal last_progress_at, last_progress
             async for resp in client.send_message(request):
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
                 if which == "task" or (which is None and resp.HasField("task")):
@@ -255,23 +256,28 @@ class A2AClient:
                         resolved_task_id = su.task_id
                     if su.context_id:
                         resolved_ctx = su.context_id
+                    msg_text = _status_message_text(su.status)
                     if su.status.state == TaskState.TASK_STATE_WORKING:
-                        # Liveness heartbeat — fire one grounded progress beat
-                        # once the hand-off has clearly been running a while.
+                        # Narrate the agent's REAL streamed progress — the text it
+                        # puts on an intermediate status message (and, when the
+                        # fleet emits it, its tool-call-v1 frames). NOT a generic
+                        # "still working" filler: if a heartbeat carries no text
+                        # we stay quiet. Throttled so a chatty agent can't flood.
+                        now = time.monotonic()
                         if (
                             progress_callback is not None
-                            and not beat_sent
-                            and time.monotonic() - started >= _PROGRESS_AFTER_S
+                            and msg_text
+                            and msg_text != last_progress
+                            and now - last_progress_at >= _PROGRESS_MIN_GAP
                         ):
-                            beat_sent = True
+                            last_progress_at = now
+                            last_progress = msg_text
                             try:
-                                await progress_callback("working")
+                                await progress_callback(msg_text)
                             except Exception:  # noqa: BLE001
                                 pass
-                    else:
-                        t = _status_message_text(su.status)
-                        if t:
-                            status_text = t
+                    elif msg_text:
+                        status_text = msg_text  # terminal / input-required text
                 elif which == "artifact_update":
                     t = "".join(
                         _part_text(p) for p in resp.artifact_update.artifact.parts

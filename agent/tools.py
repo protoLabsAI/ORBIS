@@ -693,21 +693,20 @@ def _spawn_delegate_delivery(
             except asyncio.CancelledError:
                 pass
 
-        async def _progress(_msg: str) -> None:
-            # Grounded progress: a real A2A WORKING heartbeat (streaming) means
-            # the delegate is genuinely still on it. Speak one short reassurance
-            # (once, via cooldown) + update the visual rail — replaces the old
-            # blind canned "Ava's checking…" filler with a real-event-driven one.
+        async def _progress(text: str) -> None:
+            # Narrate the delegate's REAL streamed progress — a2a_outbound passes
+            # the agent's own status_update / tool-call text, NOT a generic
+            # filler. speak_now() is the in-flight progress path: verbatim (no
+            # announcer "reply from ava" framing, which made the earlier
+            # attributed deliver() sound like her answer arriving early / out of
+            # order) and it updates the visual rail. Stays silent when the agent
+            # sends no progress text (today Ava streams bare heartbeats — see the
+            # workstacean tracking issue).
+            text = (text or "").strip()
+            if not text:
+                return
             try:
-                await delivery.note_progress(f"{target} working", source=target)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                await delivery.deliver(
-                    f"{target}'s still working on that",
-                    priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
-                    cooldown_key=f"delegate-working:{target}",
-                )
+                await delivery.speak_now(text)
             except Exception:  # noqa: BLE001
                 pass
 

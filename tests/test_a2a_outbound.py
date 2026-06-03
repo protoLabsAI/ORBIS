@@ -97,7 +97,7 @@ class _Ev:
         raise AttributeError(name)
 
 
-def _stream_events(answer: str):
+def _stream_events(answer: str, progress: str | None = None):
     from a2a.types import (
         Artifact,
         Part,
@@ -111,7 +111,7 @@ def _stream_events(answer: str):
     t.id = "t-stream"
     t.status.state = TaskState.TASK_STATE_SUBMITTED
 
-    working = TaskStatusUpdateEvent()
+    working = TaskStatusUpdateEvent()  # bare keepalive heartbeat (no text)
     working.task_id = "t-stream"
     working.status.state = TaskState.TASK_STATE_WORKING
 
@@ -126,12 +126,15 @@ def _stream_events(answer: str):
     done.status.state = TaskState.TASK_STATE_COMPLETED
     done.status.message.parts.append(Part(text=answer))
 
-    return [
-        _Ev("task", t),
-        _Ev("status_update", working),
-        _Ev("artifact_update", au),
-        _Ev("status_update", done),
-    ]
+    events = [_Ev("task", t), _Ev("status_update", working)]
+    if progress:  # a WORKING update carrying REAL status text (tool-call frame)
+        wp = TaskStatusUpdateEvent()
+        wp.task_id = "t-stream"
+        wp.status.state = TaskState.TASK_STATE_WORKING
+        wp.status.message.parts.append(Part(text=progress))
+        events.append(_Ev("status_update", wp))
+    events += [_Ev("artifact_update", au), _Ev("status_update", done)]
+    return events
 
 
 def _stream_sdk(events):
@@ -159,9 +162,31 @@ async def test_send_streaming_shape_extracts_answer(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_streaming_emits_one_grounded_beat(monkeypatch) -> None:
-    # Force the "been working a while" gate open so the WORKING heartbeat fires.
-    monkeypatch.setattr(a2a_outbound, "_PROGRESS_AFTER_S", 0.0)
+async def test_send_streaming_narrates_real_progress_text(monkeypatch) -> None:
+    # A WORKING update carrying real status text is narrated verbatim — NOT a
+    # generic "still working" filler.
+    monkeypatch.setattr(a2a_outbound, "_PROGRESS_MIN_GAP", 0.0)
+    beats: list[str] = []
+
+    async def prog(msg):
+        beats.append(msg)
+
+    client = A2AClient(url="http://ava:3333/a2a", name="ava")
+    monkeypatch.setattr(
+        client,
+        "_ensure_client",
+        _stream_sdk(_stream_events("done", progress="routing to Quinn")),
+    )
+    res = await client.send("q", timeout=5.0, progress_callback=prog)
+    assert res.text == "done"
+    assert beats == ["routing to Quinn"]  # the REAL streamed status text
+
+
+@pytest.mark.asyncio
+async def test_send_streaming_bare_heartbeats_stay_silent(monkeypatch) -> None:
+    # Bare WORKING keepalives (no text — today's Ava) produce NO spoken progress:
+    # we narrate real data or nothing, never a generic filler.
+    monkeypatch.setattr(a2a_outbound, "_PROGRESS_MIN_GAP", 0.0)
     beats: list[str] = []
 
     async def prog(msg):
@@ -173,7 +198,7 @@ async def test_send_streaming_emits_one_grounded_beat(monkeypatch) -> None:
     )
     res = await client.send("q", timeout=5.0, progress_callback=prog)
     assert res.text == "done"
-    assert beats == ["working"]  # exactly one grounded beat
+    assert beats == []  # no generic filler
 
 
 def test_answer_text_from_status_message() -> None:
