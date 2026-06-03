@@ -47,9 +47,8 @@ def test_lists_registered_action_tools() -> None:
     # the @tool surface
     for name in ("schedule_reminder", "cancel_reminder", "check_inbox"):
         assert f"`{name}`" in block
-    # the dynamic delegate tools
+    # the dynamic delegate tool (native async — delegate_async was removed)
     assert "`delegate_to`" in block
-    assert "`delegate_async`" in block
 
 
 def test_includes_the_call_dont_narrate_instruction() -> None:

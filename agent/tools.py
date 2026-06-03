@@ -3,13 +3,12 @@
 ORBIS's tool surface is deliberately narrow:
 
   - ``delegate_to(target, query)`` — hand off to a user-configured agent
-    (A2A or OpenAI-compat), blocking for the reply you relay in the same
-    breath. The user's configured agents are where heavy reasoning lives;
-    ORBIS is the voice frontend for them.
-  - ``delegate_async(target, query)`` — fire-and-forget variant for longer
-    work: acks immediately, dispatches in the background, and speaks the
-    answer via the DeliveryController when the delegate finishes. Only
-    registered when a DeliveryController is available.
+    (A2A or OpenAI-compat). A native Pipecat async function call
+    (``cancel_on_interruption=False``): the LLM continues immediately (the
+    opening filler is the ack), and the delegate's progress + answer stream
+    back as ``is_final`` results the LLM narrates in-context. The user's
+    configured agents are where heavy reasoning lives; ORBIS is their voice
+    frontend. See docs/internal/delegation-native-async-refactor.md.
   - ``schedule_reminder`` / ``schedule_recurring_reminder`` /
     ``list_reminders`` / ``cancel_reminder`` — set, review, and cancel
     time-based spoken reminders (one-time and recurring).
@@ -38,15 +37,15 @@ from typing import Any, Callable
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.frames.frames import FunctionCallResultProperties
 from pipecat.services.llm_service import FunctionCallParams, LLMService
 
 from .delegates import (
-    Delegate,
     DelegateError,
     DelegateRegistry,
     dispatch as delegate_dispatch,
 )
-from .delivery import DeliveryController, Priority
+from .delivery import DeliveryController
 from .filler import Latency
 
 logger = logging.getLogger(__name__)
@@ -84,16 +83,12 @@ def _strip_markdown_for_speech(text: str) -> str:
     return text.strip()
 
 
-# Hand-wired tools (built per-session, not via @tool) that should still be
-# treated as async — they ack immediately and surface their real result
-# later via the DeliveryController, so the progress-narration loop must NOT
-# run for them. ``_AsyncToolNames`` checks this set in addition to the
-# @tool registry.
-_HANDWIRED_ASYNC_NAMES = frozenset({"delegate_async", "orchestrate"})
-
-# Strong refs to in-flight background delegation tasks so the event loop
-# can't GC them mid-flight (asyncio holds only weak refs to bare tasks).
-_BG_DELEGATE_TASKS: set[asyncio.Task] = set()
+# Hand-wired tools (built per-session, not via @tool) registered as native
+# async function calls (cancel_on_interruption=False): the LLM continues
+# immediately and their results stream back as is_final messages it narrates,
+# so the legacy progress-narration loop must NOT run for them. ``_AsyncToolNames``
+# checks this set in addition to the @tool registry.
+_HANDWIRED_ASYNC_NAMES = frozenset({"delegate_to", "orchestrate"})
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +141,19 @@ def tool(
     return decorator
 
 
-# Hand-wired tools whose real latency the registry can't see. delegate_to is
-# a synchronous network round-trip to an external agent — it can take tens of
-# seconds (Ava ~60s observed) — so it's SLOW: that's what arms the progress-
-# narration loop ("still working on that…") so a slow delegate doesn't leave
-# the user in dead air after the opening ack.
+# Hand-wired SLOW tier (the registry can't see it): delegate_to is an external
+# agent round-trip that can take tens of seconds (Ava ~60s observed). SLOW arms
+# the opening filler ("okay, on it") — the single ack. delegate_to is also a
+# native async tool, so the legacy progress-narration loop SKIPS it; its real
+# progress streams via is_final results instead.
 _HANDWIRED_SLOW_NAMES = frozenset({"delegate_to"})
+
+# Wall-clock bound on a single delegation. Native async = non-blocking, so a
+# generous cap is fine: the answer narrates whenever it lands (up to this), and
+# only a genuinely stuck delegate gives up. The previous adapter default (60 s)
+# was too short for heavy fleet sit-reps — they'd return a premature "couldn't
+# reach" even though Ava was still working.
+_DELEGATE_TIMEOUT = float(os.environ.get("DELEGATE_TIMEOUT", "300"))
 
 
 def latency_for(tool_name: str) -> Latency:
@@ -651,97 +653,22 @@ def _delegate_to_schema(registry: DelegateRegistry) -> FunctionSchema:
     )
 
 
-def _spawn_delegate_delivery(
-    delegate: Delegate,
-    query: str,
-    *,
-    delivery: DeliveryController,
-    target: str,
-    push_notification_url: str | None = None,
-    push_notification_token: str | None = None,
-) -> None:
-    """Dispatch a delegate in the BACKGROUND and deliver its result through the
-    DeliveryController when it lands (TIME_SENSITIVE → spoken at the next natural
-    pause). Shared by delegate_async and by delegate_to's A2A path.
-
-    A2A delegates are async tasks — a buffer-then-answer gateway (Ava routes
-    through the fleet) can take seconds. Holding the voice turn on one made ORBIS
-    go silent mid-conversation and let context summarization collide with the
-    in-flight tool call. Backgrounding it is the A2A-native fix: the turn ends
-    immediately, the answer arrives as a fresh turn."""
-    # Read at call time so env overrides (and tests) take effect per dispatch.
-    bg_timeout = float(os.environ.get("DELEGATE_ASYNC_TIMEOUT", "300"))
-    # Proactive follow-up (orbis-29q): nudge once if a hand-off outlives this so
-    # a slow delegate doesn't feel forgotten. Cancelled the moment it lands.
-    nudge_secs = float(os.environ.get("DELEGATE_NUDGE_SECS", "90"))
-
-    async def _run_and_deliver() -> None:
-        done = asyncio.Event()
-
-        async def _nudge_if_slow() -> None:
-            if nudge_secs <= 0:
-                return
-            try:
-                await asyncio.sleep(nudge_secs)
-                if not done.is_set():
-                    await delivery.deliver(
-                        f"still waiting to hear back from {target} on that",
-                        priority=Priority.TIME_SENSITIVE, source=target,
-                        kind="delegate",
-                        cooldown_key=f"delegate-nudge:{target}:{query[:40]}",
-                    )
-            except asyncio.CancelledError:
-                pass
-
-        async def _progress(msg: str) -> None:
-            # Real-time progress from A2A status updates (visual rail, not spoken).
-            # No-op until the streaming dispatch lands; harmless to pass now.
-            try:
-                await delivery.note_progress(msg, source=target)
-            except Exception:  # noqa: BLE001
-                pass
-
-        nudge = asyncio.create_task(_nudge_if_slow())
-        try:
-            result = await delegate_dispatch(
-                delegate, query,
-                timeout=bg_timeout,
-                progress_callback=_progress,
-                push_notification_url=push_notification_url,
-                push_notification_token=push_notification_token,
-            )
-            await delivery.deliver(
-                _strip_markdown_for_speech(result),
-                priority=Priority.TIME_SENSITIVE, source=target, kind="delegate",
-            )
-        except DelegateError as e:
-            logger.warning(f"[delegate.bg] {target} failed: {e}")
-            await delivery.deliver(
-                f"that thing I handed off to {target} didn't go through — {e}",
-                priority=Priority.TIME_SENSITIVE, source=target,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"[delegate.bg] {target} errored: {e}")
-            await delivery.deliver(
-                f"that thing I handed off to {target} errored out.",
-                priority=Priority.TIME_SENSITIVE, source=target,
-            )
-        finally:
-            done.set()
-            nudge.cancel()
-
-    task = asyncio.create_task(_run_and_deliver())
-    _BG_DELEGATE_TASKS.add(task)
-    task.add_done_callback(_BG_DELEGATE_TASKS.discard)
-
-
 def _delegate_to_handler(
     registry: DelegateRegistry,
     *,
-    delivery: "DeliveryController | None" = None,
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
 ):
+    """Native Pipecat async function-call handler — registered
+    ``cancel_on_interruption=False``.
+
+    Pipecat lets the LLM continue immediately (the opening filler is the single
+    ack), then we stream the delegate's REAL progress as intermediate
+    ``is_final=False`` results and deliver the answer as the final result. The
+    LLM narrates progress + answer in-context, gated by Pipecat's own
+    not-user-speaking / bot-speaking deferral. No DeliveryController, no manual
+    backgrounding, no second ack — that's what caused the out-of-order microack."""
+
     async def _handler(params: FunctionCallParams) -> None:
         target = (params.arguments.get("target") or "").strip()
         query = (params.arguments.get("query") or "").strip()
@@ -757,131 +684,40 @@ def _delegate_to_handler(
                 f"I don't know a delegate named '{target}'. Available: {available}."
             )
             return
-        logger.info(f"[delegate_to] target={target} type={delegate.type} query={query!r}")
+        logger.info(
+            f"[delegate_to] target={target} type={delegate.type} query={query!r}"
+        )
 
-        # A2A delegates are async tasks (Ava buffers-then-answers through the
-        # fleet). NEVER hold the voice turn on one: dispatch in the background
-        # and deliver the answer via the DeliveryController when it lands; end
-        # the turn now with a short ack. Holding the turn here is what made
-        # ORBIS go silent mid-conversation and let context summarization collide
-        # with the in-flight tool call.
-        if delegate.type == "a2a" and delivery is not None:
-            _spawn_delegate_delivery(
-                delegate, query, delivery=delivery, target=target,
-                push_notification_url=push_notification_url,
-                push_notification_token=push_notification_token,
-            )
+        # Real streamed progress → intermediate (is_final=False) developer
+        # messages the LLM narrates as the work happens. a2a_outbound yields the
+        # agent's own status text; bare heartbeats yield nothing → quiet.
+        async def _progress(text: str) -> None:
+            text = (text or "").strip()
+            if not text:
+                return
             await params.result_callback(
-                f"On it — asking {target} now; I'll tell you what they say."
+                {"progress": text},
+                properties=FunctionCallResultProperties(is_final=False),
             )
-            return
-
-        # Synchronous relay for fast local delegates (ACP / OpenAI), or an A2A
-        # delegate with no delivery channel to surface an async result.
-        # Intermediate status streams to the VISUAL rail (StatusPill via
-        # delegation-progress SSE) — NOT spoken.
-        progress_cb = None
-        if delivery is not None and delegate.type == "a2a":
-            async def _progress(msg: str) -> None:
-                await delivery.note_progress(msg, source=target)
-            progress_cb = _progress
 
         try:
             result = await delegate_dispatch(
                 delegate, query,
-                progress_callback=progress_cb,
+                timeout=_DELEGATE_TIMEOUT,
+                progress_callback=_progress,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
+            logger.info(
+                f"[delegate_to] {target} → answered ({len(result or '')} chars)"
+            )
             await params.result_callback(_strip_markdown_for_speech(result))
         except DelegateError as e:
+            logger.warning(f"[delegate_to] {target} failed: {e}")
             await params.result_callback(f"Couldn't reach {target}: {e}")
-        except Exception as e:
-            logger.exception(f"[delegate_to] unexpected error: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[delegate_to] {target} errored: {e}")
             await params.result_callback(f"Delegation to {target} errored: {e}")
-
-    return _handler
-
-
-# ---------------------------------------------------------------------------
-# delegate_async — fire-and-forget delegation (orbis-1s0). Returns an
-# immediate verbal ack so the conversation keeps flowing, then surfaces the
-# delegate's answer through the DeliveryController when it lands. Use for
-# work that takes more than a few seconds; `delegate_to` stays for quick
-# questions whose answer you relay in the same breath.
-# ---------------------------------------------------------------------------
-
-def _delegate_async_schema(registry: DelegateRegistry) -> FunctionSchema:
-    items = registry.all()
-    target_lines = "\n".join(f"  - {d.name}: {d.description}" for d in items)
-    return FunctionSchema(
-        name="delegate_async",
-        description=(
-            "Hand off a task to one of the user's agents in the BACKGROUND. "
-            "Use this instead of `delegate_to` when the task will take more "
-            "than a few seconds (research, a multi-step job, 'go do X and "
-            "report back'). This returns immediately — acknowledge to the "
-            "user that you've sent it off and will tell them when it's done; "
-            "do NOT wait for or invent the answer. The real reply is spoken "
-            "automatically when the agent finishes.\n\n"
-            f"Available targets:\n{target_lines}\n\n"
-            "Pass `target` (one of the names above) and `query`."
-        ),
-        properties={
-            "target": {
-                "type": "string",
-                "enum": [d.name for d in items],
-                "description": "Which delegate to ask",
-            },
-            "query": {
-                "type": "string",
-                "description": "The task to hand off, phrased as you'd ask a person",
-            },
-        },
-        required=["target", "query"],
-    )
-
-
-def _delegate_async_handler(
-    registry: DelegateRegistry,
-    *,
-    delivery: DeliveryController,
-    push_notification_url: str | None = None,
-    push_notification_token: str | None = None,
-):
-    """Async tool: ack now, dispatch in the background, deliver the result
-    through the DeliveryController (TIME_SENSITIVE → spoken at the next
-    natural pause) when the delegate finishes. Shares the background-deliver
-    substrate with delegate_to's A2A path (`_spawn_delegate_delivery`)."""
-
-    async def _handler(params: FunctionCallParams) -> None:
-        target = (params.arguments.get("target") or "").strip()
-        query = (params.arguments.get("query") or "").strip()
-        if not target or not query:
-            await params.result_callback(
-                "I need both a target and a task to hand off."
-            )
-            return
-        delegate = registry.get(target)
-        if not delegate:
-            available = ", ".join(registry.names()) or "(none)"
-            await params.result_callback(
-                f"I don't know a delegate named '{target}'. Available: {available}."
-            )
-            return
-
-        logger.info(f"[delegate_async] target={target} query={query!r} (background)")
-        _spawn_delegate_delivery(
-            delegate, query, delivery=delivery, target=target,
-            push_notification_url=push_notification_url,
-            push_notification_token=push_notification_token,
-        )
-
-        # Immediate ack — the LLM speaks this and the turn ends; the answer
-        # arrives later via the DeliveryController.
-        await params.result_callback(
-            f"Sent that off to {target}. I'll let you know as soon as they're back."
-        )
 
     return _handler
 
@@ -913,9 +749,10 @@ def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
             "Runs in the BACKGROUND: acknowledge you're on it and will report "
             "back; do NOT wait or invent the result. ORBIS chains the steps and "
             "speaks the synthesized answer when done.\n\n"
-            "Choose the right tool: `delegate_to` for a SINGLE quick question, "
-            "`delegate_async` for ONE longer hand-off, `orchestrate` only when "
-            "the goal genuinely needs MULTIPLE steps.\n\n"
+            "Choose the right tool: `delegate_to` for a single hand-off to one "
+            "agent (it runs in the background — acknowledge, don't wait), "
+            "`orchestrate` only when the goal genuinely needs MULTIPLE "
+            "coordinated steps across agents.\n\n"
             f"Available agents:\n{target_lines}\n\n"
             "Pass `goal` — the overall objective in plain language."
         ),
@@ -932,11 +769,13 @@ def _orchestrate_schema(registry: DelegateRegistry) -> FunctionSchema:
 def _orchestrate_handler(
     registry: DelegateRegistry,
     *,
-    delivery: DeliveryController,
     runner: OrchestrateRunner,
 ):
-    """Async tool: ack now, run the bounded orchestration loop in the
-    background, deliver the synthesized result via the DeliveryController."""
+    """Native async function-call handler (cancel_on_interruption=False). The LLM
+    continues immediately (the opening filler is the ack); per-step progress + the
+    final synthesis come back as is_final results the LLM narrates in-context.
+    HITL ask_user surfaces the question as an intermediate then waits on the
+    voice AskGate."""
 
     async def _handler(params: FunctionCallParams) -> None:
         goal = (params.arguments.get("goal") or "").strip()
@@ -944,23 +783,22 @@ def _orchestrate_handler(
             await params.result_callback("I need a goal to work toward.")
             return
 
-        logger.info(f"[orchestrate] goal={goal!r} (background)")
+        logger.info(f"[orchestrate] goal={goal!r}")
 
         async def _progress(text: str) -> None:
-            # One short "still working" style step note. The DeliveryController
-            # gates timing; the cooldown_key collapses identical step notes.
-            await delivery.deliver(
-                text,
-                priority=Priority.TIME_SENSITIVE,
-                source="orchestrator",
-                kind="orchestrate",
-                cooldown_key=f"orchestrate-step:{text[:40]}",
+            text = (text or "").strip()
+            if not text:
+                return
+            await params.result_callback(
+                {"progress": text},
+                properties=FunctionCallResultProperties(is_final=False),
             )
 
         async def _ask_user(question: str) -> str:
-            # HITL: speak the question, park a pending-ask on the live session,
-            # and wait for the voice AskGate to resolve it with the user's next
-            # transcript. Times out so a walked-away user can't wedge the run.
+            # HITL: surface the question as an intermediate (the LLM speaks it),
+            # park a pending-ask on the live session, and wait for the voice
+            # AskGate to resolve it with the user's next transcript. Times out so
+            # a walked-away user can't wedge the run.
             from agent.user_state import (
                 PendingAsk,
                 set_pending_ask_on_active,
@@ -970,41 +808,23 @@ def _orchestrate_handler(
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             if not set_pending_ask_on_active(PendingAsk(question=question, future=fut)):
                 return "(no live session to ask the user — proceed from the goal)"
-            await delivery.deliver(
-                question,
-                priority=Priority.TIME_SENSITIVE,
-                source="orchestrator",
-                kind="orchestrate-ask",
+            await params.result_callback(
+                {"ask_user": question},
+                properties=FunctionCallResultProperties(is_final=False),
             )
             try:
                 return await asyncio.wait_for(fut, timeout=_ASK_USER_TIMEOUT_S)
             finally:
                 take_pending_ask()  # clear if it timed out / wasn't answered
 
-        async def _run_and_deliver() -> None:
-            try:
-                result = await runner(goal, progress=_progress, ask_user=_ask_user)
-                await delivery.deliver(
-                    _strip_markdown_for_speech(result),
-                    priority=Priority.TIME_SENSITIVE,
-                    source="orchestrator",
-                    kind="orchestrate",
-                )
-            except Exception as e:
-                logger.exception(f"[orchestrate] goal failed: {e}")
-                await delivery.deliver(
-                    "that multi-step thing I was working on ran into trouble.",
-                    priority=Priority.TIME_SENSITIVE,
-                    kind="orchestrate",
-                )
-
-        task = asyncio.create_task(_run_and_deliver())
-        _BG_DELEGATE_TASKS.add(task)
-        task.add_done_callback(_BG_DELEGATE_TASKS.discard)
-
-        await params.result_callback(
-            "On it — I'll work through that and let you know what I find."
-        )
+        try:
+            result = await runner(goal, progress=_progress, ask_user=_ask_user)
+            await params.result_callback(_strip_markdown_for_speech(result))
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[orchestrate] goal failed: {e}")
+            await params.result_callback(
+                "that multi-step thing I was working on ran into trouble."
+            )
 
     return _handler
 
@@ -1034,8 +854,12 @@ async def run_text_tool(
         def __init__(self, args: dict) -> None:
             self.arguments = args
             self._out: str = ""
-        async def result_callback(self, text: Any) -> None:
-            self._out = "" if text is None else str(text)
+        async def result_callback(self, text: Any, *, properties: Any = None) -> None:
+            # Keep only the FINAL result; ignore async intermediate (is_final=
+            # False) progress updates — text mode wants the answer string.
+            is_final = getattr(properties, "is_final", True) if properties else True
+            if is_final:
+                self._out = "" if text is None else str(text)
     params = _P(arguments)
 
     spec = _TOOL_REGISTRY.get(name)
@@ -1044,9 +868,11 @@ async def run_text_tool(
         return params._out
 
     if name == "delegate_to" and delegates is not None:
+        # Text mode (A2A inbound ReAct): the handler's intermediate is_final=False
+        # progress callbacks no-op without a voice pipeline, and the _P stand-in
+        # just keeps the last result — so we get the final answer string.
         handler = _delegate_to_handler(
             delegates,
-            delivery=None,                      # no voice session; skip progress
             push_notification_url=push_notification_url,
             push_notification_token=push_notification_token,
         )
@@ -1117,52 +943,35 @@ def register_tools(
         )
         standard.append(_schema_for(spec))
 
-    # delegate_to — dynamic schema built per-session from the delegate
-    # registry, so it stays out of the @tool registry.
+    # delegate_to — dynamic schema built per-session from the delegate registry.
+    # Native async function call (cancel_on_interruption=False): the LLM continues
+    # immediately (the opening filler is the single ack), and the delegate's
+    # progress + answer arrive as is_final results the LLM narrates in-context.
+    # See docs/internal/delegation-native-async-refactor.md.
     if delegates and delegates.names():
         llm.register_function(
             "delegate_to",
             _wrap_sync(_delegate_to_handler(
                 delegates,
-                delivery=delivery,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )),
-            cancel_on_interruption=True,
+            cancel_on_interruption=False,
         )
         standard.append(_delegate_to_schema(delegates))
 
-        # delegate_async — fire-and-forget variant (orbis-1s0). Only
-        # registered when a DeliveryController exists to surface the result
-        # later; without one there'd be no way to speak the answer.
-        # async tool → cancel_on_interruption=False so barge-in doesn't kill
-        # the in-flight background task; on_finish still fires via _wrap_sync.
-        if delivery is not None:
+        # orchestrate — multi-step delegation loop (D1). Native async; needs the
+        # injected runner (the loop + LLM client, built in app.py). Progress +
+        # synthesis come back as is_final results the LLM narrates in-context.
+        if orchestrate_runner is not None:
             llm.register_function(
-                "delegate_async",
-                _wrap_sync(_delegate_async_handler(
+                "orchestrate",
+                _wrap_sync(_orchestrate_handler(
                     delegates,
-                    delivery=delivery,
-                    push_notification_url=push_notification_url,
-                    push_notification_token=push_notification_token,
+                    runner=orchestrate_runner,
                 )),
                 cancel_on_interruption=False,
             )
-            standard.append(_delegate_async_schema(delegates))
-
-            # orchestrate — multi-step delegation loop (D1). Needs both a
-            # DeliveryController (to speak the synthesis) and the injected
-            # runner (the loop + LLM client, built in app.py).
-            if orchestrate_runner is not None:
-                llm.register_function(
-                    "orchestrate",
-                    _wrap_sync(_orchestrate_handler(
-                        delegates,
-                        delivery=delivery,
-                        runner=orchestrate_runner,
-                    )),
-                    cancel_on_interruption=False,
-                )
-                standard.append(_orchestrate_schema(delegates))
+            standard.append(_orchestrate_schema(delegates))
 
     return ToolsSchema(standard_tools=standard)
