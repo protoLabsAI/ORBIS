@@ -45,6 +45,12 @@ export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
   const [progress, setProgress] = useState(0.05);
   const [ready, setReady] = useState(false);
+  // Only show the "first launch loads local models" caveat when an on-device
+  // model is ACTUALLY loading. If the user opted for cloud/BYO — or hasn't
+  // chosen yet (new user) — the sidecar defers the load and boot is quick, so
+  // claiming otherwise contradicts the wizard's own "download these models?"
+  // step. We infer it from the backend's stage detail ("Loading X model…").
+  const [loadingModels, setLoadingModels] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -53,7 +59,11 @@ export function BootStatus() {
     const apply = (raw: string) => {
       const s = parseBoot(raw);
       if (!s || cancelled) return;
-      if (s.detail) setDetail(s.detail);
+      if (s.detail) {
+        setDetail(s.detail);
+        // "Loading Parakeet speech model…" → real load; "…loads on first use" → deferred.
+        if (/loading\b.*\bmodel/i.test(s.detail)) setLoadingModels(true);
+      }
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
       if (s.stage === 'ready') setReady(true);
@@ -90,10 +100,12 @@ export function BootStatus() {
           style={{ width: `${Math.round(progress * 100)}%` }}
         />
       </div>
-      <div className="max-w-xs text-center text-sm text-fg-muted">
-        First launch loads local speech + language models — this can take a
-        minute or two. Later launches are quick.
-      </div>
+      {loadingModels && (
+        <div className="max-w-xs text-center text-sm text-fg-muted">
+          First launch loads local speech models — this can take a minute or
+          two. Later launches are quick.
+        </div>
+      )}
     </div>
   );
 }
