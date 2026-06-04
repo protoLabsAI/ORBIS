@@ -404,16 +404,17 @@ jobs:
           archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).split()
           assert archs == ["arm64"], archs
 
-          contents = app / "Contents"
-          sidecars = [
-              p for p in contents.rglob("orbis-aarch64-apple-darwin")
-              if p.is_file() and os.access(p, os.X_OK)
-          ]
-          assert sidecars, "bundled aarch64 sidecar missing"
-          for sidecar in sidecars:
-              assert sidecar.stat().st_size > 1_000_000, sidecar
-              sidecar_archs = subprocess.check_output(["lipo", "-archs", str(sidecar)], text=True).split()
-              assert sidecar_archs == ["arm64"], sidecar_archs
+          # The PyApp sidecar (externalBin "binaries/orbis") is bundled as
+          # Contents/MacOS/orbis — tauri strips the target-triple suffix from
+          # external binaries (the shell is Contents/MacOS/orbis-tauri). The old
+          # check looked for the staged name "orbis-aarch64-apple-darwin", which
+          # never exists in the bundle.
+          sidecar = app / "Contents" / "MacOS" / "orbis"
+          assert sidecar.is_file() and os.access(sidecar, os.X_OK), \
+              f"bundled sidecar missing or not executable: {sidecar}"
+          assert sidecar.stat().st_size > 1_000_000, sidecar
+          sidecar_archs = subprocess.check_output(["lipo", "-archs", str(sidecar)], text=True).split()
+          assert sidecar_archs == ["arm64"], sidecar_archs
 
           resources = app / "Contents" / "Resources"
           assert (resources / "config" / "orbis.example.yaml").is_file()
