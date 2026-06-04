@@ -93,6 +93,7 @@ from pipecat.utils.context.llm_context_summarization import (
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.ask_gate import AskGate
+from voice.cancel_gate import CancelGate
 from voice.llm import make_llm
 from voice.local_transport import LocalAudioTransport, audio_runtime_info
 from voice.native_bargein import NativeBargeInObserver
@@ -1596,6 +1597,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # the LLM what to do with the [audio] line and forbids
         # parroting it.
         audio_tags,
+        # CancelGate — a bare "cancel" / "never mind" / "stop listening"
+        # swallows the turn and closes the listening window (CTRL_STOP_LISTENING
+        # → Rust mutes; wake mode re-arms). Normal turns pass through.
+        CancelGate(transport),
         # AskGate — if a background orchestration run is paused on ask_user,
         # the next user transcript answers it (and is swallowed) instead of
         # starting a fresh turn. No-op when nothing's waiting.

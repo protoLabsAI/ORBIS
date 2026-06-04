@@ -313,7 +313,15 @@ pub fn spawn_detector(
                         }
                     }
                     State::Listening => {
-                        if det.is_recent_silence() {
+                        if !engine.is_listening() {
+                            // Window closed externally — a "cancel"/"stop listening"
+                            // phrase (CTRL_STOP_LISTENING) or a manual mute. Re-arm
+                            // immediately so the wake word reopens it.
+                            det.rearm();
+                            emit("armed");
+                            state = State::Armed;
+                            log::info!("[wake] window closed externally → armed");
+                        } else if det.is_recent_silence() {
                             if last_voice.elapsed() >= window {
                                 engine.set_listening(false);
                                 det.rearm();

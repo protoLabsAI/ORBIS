@@ -1439,6 +1439,13 @@ fn wake_config(
     let phrase = wake_phrase(&model);
     let app2 = app.clone();
     let emit: audio::wake_word::WakeStateEmitter = Box::new(move |s: &str| {
+        if s == "listening" {
+            // "Hey Orbis" summons the window — show + focus it even when hidden
+            // or in ambient mode. Runs on the detector thread, so hop to the
+            // main thread for the UI ops.
+            let app3 = app2.clone();
+            let _ = app2.run_on_main_thread(move || show_main_window(&app3));
+        }
         let _ = app2.emit(
             "wake-state",
             serde_json::json!({ "state": s, "phrase": phrase }),

@@ -44,6 +44,10 @@ const ECHO_GUARD_MS: u64 = 400;
 // Control codes.
 pub const CTRL_BARGE_IN: u16 = 0x0001;
 pub const CTRL_TTS_END: u16 = 0x0002;
+/// Python → Rust: the user said a cancel/dismiss phrase ("cancel", "never mind",
+/// "stop listening") — close the listening window. Mutes the mic; in wake mode
+/// the detector re-arms back to waiting for the phrase.
+pub const CTRL_STOP_LISTENING: u16 = 0x0003;
 
 const HEADER_LEN: usize = 8;
 
@@ -218,6 +222,10 @@ impl SocketServer {
                             }
                             CTRL_TTS_END => {
                                 log::debug!("[audio/socket] TTS stream ended");
+                            }
+                            CTRL_STOP_LISTENING => {
+                                log::info!("[audio/socket] stop-listening — closing window");
+                                engine.set_listening(false);
                             }
                             _ => {
                                 log::warn!("[audio/socket] unknown control code 0x{code:04x}");
