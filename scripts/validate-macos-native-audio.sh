@@ -196,7 +196,7 @@ validate_dmg_contents() {
       fail "DMG app Info.plist missing"
     fi
 
-    local dmg_sidecar="$dmg_app/Contents/MacOS/orbis-aarch64-apple-darwin"
+    local dmg_sidecar="$dmg_app/Contents/MacOS/orbis"
     if [ -x "$dmg_sidecar" ]; then
       local dmg_sidecar_archs
       dmg_sidecar_archs="$(lipo -archs "$dmg_sidecar" 2>/dev/null || true)"
@@ -403,7 +403,7 @@ else
   fail "built Info.plist missing"
 fi
 
-SIDECAR="$APP/Contents/MacOS/orbis-aarch64-apple-darwin"
+SIDECAR="$APP/Contents/MacOS/orbis"
 if [ -x "$SIDECAR" ]; then
   SIDECAR_BYTES="$(wc -c < "$SIDECAR" | tr -d ' ')"
   if [ "${SIDECAR_BYTES:-0}" -gt 1000000 ]; then
