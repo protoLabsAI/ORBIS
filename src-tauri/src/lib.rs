@@ -1146,6 +1146,9 @@ pub fn run() {
                     backend_url,
                     set_mic_listening,
                     mic_listening,
+                    get_activation_config,
+                    set_activation_config,
+                    open_url,
                     api_request,
                     boot_status,
                     open_widget_window,
@@ -1164,6 +1167,7 @@ pub fn run() {
                     get_audio_input_mode,
                     clear_browsing_data,
                     backend_url,
+                    open_url,
                     api_request,
                     boot_status,
                     open_widget_window,
@@ -1282,14 +1286,131 @@ pub fn run() {
 /// Spawn the Python sidecar, watch its stdout/stderr, and either
 /// navigate the main webview on `ORBIS_READY` or surface an error
 /// dialog on a bad exit. Single-shot: one sidecar per app run.
-/// Resolve the wake-word detector config, or `None` to leave it off. v1 is
-/// env-driven (the Settings UI for activation style lands in the
-/// engagement-modes pass — docs/internal/wake-word.md step 3); default
-/// push-to-talk is unchanged unless `ORBIS_WAKE_ENABLED=1`. The models dir
-/// matches the picker's `<app_data>/models/wakeword/` layout.
+/// The activation layer's persisted settings (engagement-modes Axis 1): how the
+/// mic gets hot. Stored at `<app_data>/activation.json`, read by the audio
+/// supervisor at launch. Applies on next launch (like the input-device pref) —
+/// the detector spawns once in `accept_and_run`.
 #[cfg(feature = "native-audio")]
-fn wake_config(app: &AppHandle) -> Option<audio::wake_word::WakeConfig> {
-    if std::env::var("ORBIS_WAKE_ENABLED").ok().as_deref() != Some("1") {
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(default)]
+struct ActivationConfig {
+    /// "push_to_talk" (default) | "wake_word" | "open_mic"
+    style: String,
+    /// wake model id — the picker's `<id>.onnx` (e.g. "hey_orbis")
+    model: String,
+    /// fire threshold 0..1
+    threshold: f32,
+    /// auto-close the listening window after this many seconds of silence
+    listen_window_s: f32,
+}
+
+#[cfg(feature = "native-audio")]
+impl Default for ActivationConfig {
+    fn default() -> Self {
+        Self {
+            style: "push_to_talk".into(),
+            model: "hey_orbis".into(),
+            threshold: 0.5,
+            listen_window_s: 12.0,
+        }
+    }
+}
+
+#[cfg(feature = "native-audio")]
+fn activation_config_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("activation.json"))
+}
+
+#[cfg(feature = "native-audio")]
+fn read_activation_config(app: &AppHandle) -> ActivationConfig {
+    activation_config_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Read the activation config for the Settings UI.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn get_activation_config(app: AppHandle) -> serde_json::Value {
+    serde_json::to_value(read_activation_config(&app)).unwrap_or(serde_json::Value::Null)
+}
+
+/// Persist the activation config (applies on next launch).
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_activation_config(
+    app: AppHandle,
+    style: String,
+    model: String,
+    threshold: f32,
+    listen_window_s: f32,
+) -> Result<(), String> {
+    let cfg = ActivationConfig {
+        style,
+        model,
+        threshold,
+        listen_window_s,
+    };
+    let p = activation_config_path(&app).ok_or("no app data dir")?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&p, json).map_err(|e| format!("persist activation config: {e}"))?;
+    log::info!(
+        "[wake] activation set: style={} model={} threshold={:.2} window={:.0}s (applies next launch)",
+        cfg.style,
+        cfg.model,
+        cfg.threshold,
+        cfg.listen_window_s
+    );
+    Ok(())
+}
+
+/// Open a URL in the user's default browser (docs / help links from the UI).
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.shell().open(url, None).map_err(|e| e.to_string())
+}
+
+/// Display phrase for a wake model id — `"hey_orbis"` → `"Hey Orbis"`.
+#[cfg(feature = "native-audio")]
+fn wake_phrase(model: &str) -> String {
+    model
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Build the wake-word detector config + its state-event emitter, or `None` to
+/// leave the detector off (push-to-talk / open-mic styles). The emitter is a
+/// boxed closure that fans ARMED/LISTENING transitions to the `wake-state`
+/// Tauri event (keeping the audio modules Tauri-free). `ORBIS_WAKE_ENABLED=1`
+/// forces it on for dev regardless of the persisted style.
+#[cfg(feature = "native-audio")]
+fn wake_config(
+    app: &AppHandle,
+) -> Option<(
+    audio::wake_word::WakeConfig,
+    audio::wake_word::WakeStateEmitter,
+)> {
+    use tauri::{Emitter, Manager};
+    let cfg = read_activation_config(app);
+    let env_on = std::env::var("ORBIS_WAKE_ENABLED").ok().as_deref() == Some("1");
+    if cfg.style != "wake_word" && !env_on {
         return None;
     }
     let models_dir = app
@@ -1298,17 +1419,47 @@ fn wake_config(app: &AppHandle) -> Option<audio::wake_word::WakeConfig> {
         .ok()?
         .join("models")
         .join("wakeword");
-    let model = std::env::var("ORBIS_WAKE_MODEL").unwrap_or_else(|_| "hey_orbis".into());
+    let ActivationConfig {
+        model,
+        threshold,
+        listen_window_s,
+        ..
+    } = cfg;
+    let model = std::env::var("ORBIS_WAKE_MODEL").unwrap_or(model);
     let threshold = std::env::var("ORBIS_WAKE_THRESHOLD")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0.5);
-    log::info!("[wake] enabled via env: model={model} threshold={threshold:.2}");
-    Some(audio::wake_word::WakeConfig {
-        models_dir,
-        model,
-        threshold,
-    })
+        .unwrap_or(threshold);
+    let listen_window_s = listen_window_s.max(1.0);
+    log::info!(
+        "[wake] enabled: model={model} threshold={threshold:.2} window={listen_window_s:.0}s"
+    );
+    // The display phrase travels with the state so the pill can show the chosen
+    // wake word (e.g. "Hey Orbis") rather than a generic label.
+    let phrase = wake_phrase(&model);
+    let app2 = app.clone();
+    let emit: audio::wake_word::WakeStateEmitter = Box::new(move |s: &str| {
+        if s == "listening" {
+            // "Hey Orbis" summons the window — show + focus it even when hidden
+            // or in ambient mode. Runs on the detector thread, so hop to the
+            // main thread for the UI ops.
+            let app3 = app2.clone();
+            let _ = app2.run_on_main_thread(move || show_main_window(&app3));
+        }
+        let _ = app2.emit(
+            "wake-state",
+            serde_json::json!({ "state": s, "phrase": phrase }),
+        );
+    });
+    Some((
+        audio::wake_word::WakeConfig {
+            models_dir,
+            model,
+            threshold,
+            listen_window_s,
+        },
+        emit,
+    ))
 }
 
 async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
@@ -1411,6 +1562,12 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                             state.store(Arc::clone(&engine));
                         }
                         log::info!("[audio] native engine online");
+                        // open-mic activation style: mic hot from launch, no
+                        // auto-close (the user-driven "always listening" mode).
+                        if read_activation_config(&app_handle).style == "open_mic" {
+                            engine.set_listening(true);
+                            log::info!("[wake] activation=open_mic → mic hot at launch");
+                        }
                         let wake = wake_config(&app_handle);
                         // Accept loop runs in a background task.
                         tauri::async_runtime::spawn(async move {

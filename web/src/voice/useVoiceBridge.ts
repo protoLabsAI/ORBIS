@@ -118,6 +118,7 @@ function handleSse(event: string, data: string): void {
 
 export function useVoiceBridge(): void {
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const unlistenWakeRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,11 +138,32 @@ export function useVoiceBridge(): void {
         // listen() unavailable (non-Tauri dev) — voice state stays idle.
       });
 
+    // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
+    // independent of the Python SSE bridge (it fires while the mic is muted,
+    // before Python sees any audio). Payload: { state, phrase }.
+    listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
+      const s = e.payload?.state;
+      const a = s === 'armed' || s === 'listening' ? s : null;
+      voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlistenWakeRef.current = fn;
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
+      }
+      if (unlistenWakeRef.current) {
+        unlistenWakeRef.current();
+        unlistenWakeRef.current = null;
       }
       voiceStore.update({ connected: false });
     };

@@ -43,6 +43,8 @@ DIR_CONTROL: int = 0x0010
 
 CTRL_BARGE_IN: int = 0x0001
 CTRL_TTS_END: int = 0x0002
+# Python → Rust: user said a cancel/dismiss phrase — close the listening window.
+CTRL_STOP_LISTENING: int = 0x0003
 
 HEADER_FMT = "<4H"   # 4 × u16 LE = 8 bytes
 HEADER_LEN = struct.calcsize(HEADER_FMT)  # 8

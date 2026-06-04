@@ -40,10 +40,20 @@ const WAKE_WINDOW: usize = 16; // embeddings per wake score
 /// New samples between scores: 1280 = 80 ms = 4× 320-sample (20 ms) mic frames.
 const TICK_SAMPLES: usize = 1_280;
 /// VAD floor (i16-RMS over the last ~320 ms) below which we skip the ~130 ms
-/// pipeline. The CPAL mic noise floor sits well under this; any speech is far
-/// above it — so an armed detector stays near-idle in a quiet room without
-/// risking a missed phrase. Raw mic level (pre-`MIC_GAIN`); conservative.
-const DEFAULT_ENERGY_FLOOR: f32 = 60.0;
+/// pipeline. The CPAL mic noise floor sits well under this; any speech is above
+/// it — so an armed detector stays near-idle in a quiet room without risking a
+/// missed phrase. Raw mic level (pre-gain); deliberately low so quiet/distant
+/// speech still scores.
+const DEFAULT_ENERGY_FLOOR: f32 = 25.0;
+/// Max auto-normalization gain. The detector tees the RAW CPAL frames (the gain
+/// that feeds STT is applied Python-side, downstream), and the M1 mic (no AGC)
+/// is very quiet, so we scale each window's RMS up to `TARGET_RMS` — capped here
+/// so a near-silent window isn't blown up into noise. NOT applied to the oracle
+/// test (which feeds loud audio directly).
+const DEFAULT_MIC_GAIN: f32 = 100.0;
+/// Target RMS the score window is normalized to — roughly natural speech level
+/// in int16 range, where openWakeWord recognizes the phrase.
+const TARGET_RMS: f32 = 2500.0;
 
 type Model = TypedRunnableModel<TypedModel>;
 
@@ -76,6 +86,7 @@ pub struct WakeWord {
     rearmed: bool,
     last_score: f32,
     energy_floor: f32,
+    mic_gain: f32,
 }
 
 impl WakeWord {
@@ -105,6 +116,7 @@ impl WakeWord {
             rearmed: true,
             last_score: 0.0,
             energy_floor: DEFAULT_ENERGY_FLOOR,
+            mic_gain: DEFAULT_MIC_GAIN,
         })
     }
 
@@ -145,15 +157,38 @@ impl WakeWord {
             return false;
         }
         // VAD gate: a quiet room never triggers the expensive pipeline.
-        if self.recent_rms() < self.energy_floor {
+        let rms = self.recent_rms();
+        if rms < self.energy_floor {
             self.last_score = 0.0;
             self.rearmed = true;
             return false;
         }
-        let audio: Vec<f32> = self.ring.iter().map(|&s| s as f32).collect();
+        // Auto-normalize the window to a consistent speech level. The M1 mic
+        // (no AGC) is very quiet and varies a lot, so a fixed gain can't track
+        // it — instead scale the whole window's RMS to TARGET_RMS (capped at
+        // MIC_MAX_GAIN so near-silence isn't blown up). This is what the model
+        // needs: int16-range audio at the level it was trained on.
+        let win_rms = window_rms(self.ring.iter().copied());
+        let scale = if win_rms > 1.0 {
+            (TARGET_RMS / win_rms).clamp(1.0, self.mic_gain)
+        } else {
+            1.0
+        };
+        let audio: Vec<f32> = self
+            .ring
+            .iter()
+            .map(|&s| (s as f32 * scale).clamp(-32768.0, 32767.0))
+            .collect();
         match score_window(&self.mel, &self.emb, &self.wake, &audio) {
             Ok(Some(score)) => {
                 self.last_score = score;
+                // Per-tick scores are a threshold-tuning aid — debug, not info,
+                // so an armed detector doesn't spam the log while you talk.
+                log::debug!(
+                    "[wake] score={score:.4} (rms={rms:.0}→{:.0} scale={scale:.0} thr={:.2})",
+                    win_rms * scale,
+                    self.threshold
+                );
                 if score >= self.threshold {
                     if self.rearmed {
                         self.rearmed = false;
@@ -177,17 +212,39 @@ impl WakeWord {
     pub fn last_score(&self) -> f32 {
         self.last_score
     }
+
+    /// True when the recent audio is below the VAD floor — the trailing-silence
+    /// signal the listening window uses to auto-close.
+    pub fn is_recent_silence(&self) -> bool {
+        self.recent_rms() < self.energy_floor
+    }
+
+    /// Re-arm the fire debounce after a listening window closes, so the next
+    /// "Hey Orbis" can fire again.
+    pub fn rearm(&mut self) {
+        self.rearmed = true;
+    }
 }
 
 /// What the detector thread needs to run: where the `.onnx` files live (the
-/// picker's `<models_dir>/wakeword/` layout), which wake word, and the fire
-/// threshold. Built in `lib.rs` from the app-data dir + persona config.
+/// picker's `<models_dir>/wakeword/` layout), which wake word, the fire
+/// threshold, and the auto-close window. Built in `lib.rs` from the app-data
+/// dir + the persisted activation config.
 #[derive(Clone)]
 pub struct WakeConfig {
     pub models_dir: PathBuf,
     pub model: String,
     pub threshold: f32,
+    /// Auto-close the listening window after this many seconds of trailing
+    /// silence → back to ARMED (the engagement-modes listen-window timer,
+    /// distinct from the ~0.4 s end-of-utterance VAD).
+    pub listen_window_s: f32,
 }
+
+/// Sink for ARMED/LISTENING transitions. `lib.rs` wires this to a Tauri event
+/// (`wake-state`); keeping it an opaque closure keeps `socket.rs`/this module
+/// free of any Tauri coupling (they survive the Phase-3 socket retirement).
+pub type WakeStateEmitter = Box<dyn Fn(&str) + Send>;
 
 /// Spawn the detector on a dedicated OS thread (the ~130 ms melspec must never
 /// block the mic→Python writer). Returns a sender the socket writer tees every
@@ -195,7 +252,13 @@ pub struct WakeConfig {
 /// backlog into the ring, score the freshest 2 s, and arm a listening window on
 /// a fire. A model-load failure logs and exits the thread (frames then drop
 /// harmlessly) — wake mode simply doesn't engage.
-pub fn spawn_detector(config: WakeConfig, engine: Arc<AudioEngine>) -> Sender<Vec<i16>> {
+pub fn spawn_detector(
+    config: WakeConfig,
+    engine: Arc<AudioEngine>,
+    emit: WakeStateEmitter,
+) -> Sender<Vec<i16>> {
+    use std::time::{Duration, Instant};
+
     let (tx, rx) = channel::<Vec<i16>>();
     std::thread::Builder::new()
         .name("orbis-wakeword".into())
@@ -212,27 +275,88 @@ pub fn spawn_detector(config: WakeConfig, engine: Arc<AudioEngine>) -> Sender<Ve
                 }
             };
             log::info!(
-                "[wake] detector armed: model={} threshold={:.2} dir={}",
+                "[wake] detector armed: model={} threshold={:.2} window={:.0}s dir={}",
                 config.model,
                 config.threshold,
+                config.listen_window_s,
                 config.models_dir.display()
             );
+            emit("armed");
+
+            // ARMED: score the ring for the phrase. LISTENING (post-fire): stop
+            // scoring (the mic's already open + flowing to Python), just watch
+            // for trailing silence to auto-close back to ARMED.
+            #[derive(PartialEq)]
+            enum State {
+                Armed,
+                Listening,
+            }
+            let mut state = State::Armed;
+            let mut last_voice = Instant::now();
+            let window = Duration::from_secs_f32(config.listen_window_s.max(1.0));
+
             while let Ok(frame) = rx.recv() {
                 det.feed(&frame);
-                // Drain any backlog accrued during the last score so we always
-                // score the freshest audio (the recv/try_recv pacing self-limits
-                // to ~score-rate; no unbounded queue growth).
+                // Drain backlog so the next score sees the freshest audio (the
+                // recv/try_recv pacing self-limits to ~score-rate; no unbounded
+                // queue growth).
                 while let Ok(f) = rx.try_recv() {
                     det.feed(&f);
                 }
-                if det.tick_score() {
-                    engine.arm_listening_window();
+                match state {
+                    State::Armed => {
+                        if det.tick_score() {
+                            engine.arm_listening_window();
+                            emit("listening");
+                            last_voice = Instant::now();
+                            state = State::Listening;
+                        }
+                    }
+                    State::Listening => {
+                        if !engine.is_listening() {
+                            // Window closed externally — a "cancel"/"stop listening"
+                            // phrase (CTRL_STOP_LISTENING) or a manual mute. Re-arm
+                            // immediately so the wake word reopens it.
+                            det.rearm();
+                            emit("armed");
+                            state = State::Armed;
+                            log::info!("[wake] window closed externally → armed");
+                        } else if det.is_recent_silence() {
+                            if last_voice.elapsed() >= window {
+                                engine.set_listening(false);
+                                det.rearm();
+                                emit("armed");
+                                state = State::Armed;
+                                log::info!(
+                                    "[wake] auto-closed after {:.0}s trailing silence → armed",
+                                    config.listen_window_s
+                                );
+                            }
+                        } else {
+                            last_voice = Instant::now();
+                        }
+                    }
                 }
             }
             log::info!("[wake] detector thread exiting (frame channel closed)");
         })
         .expect("spawn orbis-wakeword thread");
     tx
+}
+
+/// RMS of an i16 sample stream (used to normalize the score window).
+fn window_rms(samples: impl Iterator<Item = i16>) -> f32 {
+    let mut sum = 0f64;
+    let mut n = 0u64;
+    for s in samples {
+        sum += (s as f64) * (s as f64);
+        n += 1;
+    }
+    if n == 0 {
+        0.0
+    } else {
+        (sum / n as f64).sqrt() as f32
+    }
 }
 
 /// Stateless pipeline — shared by the live detector and the oracle test.

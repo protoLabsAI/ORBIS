@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
@@ -32,11 +33,14 @@ from pipecat.frames.frames import (
     FunctionCallsStartedFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    InterruptionFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+from .user_state import turn_cancelled_since
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,7 @@ class StallWatchdog(FrameProcessor):
         self._timer: asyncio.Task | None = None
         self._responding = False  # any sign of work since the user stopped
         self._last_line: str | None = None
+        self._armed_at = 0.0  # monotonic time of the last arm (cancel check)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -88,13 +93,17 @@ class StallWatchdog(FrameProcessor):
             # Placed after the LLM, these all flow downstream to here.
             self._responding = True
             self._cancel()
-        elif isinstance(frame, UserStartedSpeakingFrame):
+        elif isinstance(frame, (UserStartedSpeakingFrame, InterruptionFrame)):
+            # Next turn started, or the turn was aborted (a "cancel" / "stop
+            # listening" swallowed upstream by CancelGate) — stand down so we
+            # don't speak a recovery line into an intentionally-empty turn.
             self._cancel()
 
         await self.push_frame(frame, direction)
 
     def _arm(self) -> None:
         self._cancel()
+        self._armed_at = time.monotonic()
         if self._enabled and self._stall_secs > 0:
             self._timer = asyncio.create_task(self._fire_after_delay())
 
@@ -116,6 +125,12 @@ class StallWatchdog(FrameProcessor):
         try:
             await asyncio.sleep(self._stall_secs)
             if self._responding:
+                return
+            if self._armed_at and turn_cancelled_since(self._armed_at):
+                # The user dismissed this turn ("cancel" / "stop listening") —
+                # it's intentionally empty, not a stall. Stay quiet. Guard on
+                # _armed_at: an unarmed watchdog (0.0 sentinel) has no arm to
+                # cancel against, so the signal must not suppress its fire.
                 return
             line = self._pick()
             logger.warning(

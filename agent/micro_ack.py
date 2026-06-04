@@ -68,6 +68,7 @@ from pipecat.frames.frames import (
     FunctionCallsStartedFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
+    InterruptionFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -258,9 +259,10 @@ class MicroAckInjector(FrameProcessor):
             self._function_calls_in_progress = max(
                 0, self._function_calls_in_progress - 1
             )
-        elif isinstance(frame, UserStartedSpeakingFrame):
-            # User is still talking — cancel any pending ack.
-            logger.debug("[micro-ack] UserStarted (cancel timer)")
+        elif isinstance(frame, (UserStartedSpeakingFrame, InterruptionFrame)):
+            # User is still talking, or the turn was aborted (CancelGate's
+            # "stop listening") — cancel any pending ack.
+            logger.debug("[micro-ack] UserStarted/Interruption (cancel timer)")
             self._cancel_timer()
         elif isinstance(frame, UserStoppedSpeakingFrame):
             logger.debug(
