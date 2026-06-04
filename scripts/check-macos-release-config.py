@@ -419,8 +419,9 @@ def check_workflow() -> None:
     )
     require_contains(
         workflow,
-        "DMG upload would be missing from the GitHub release",
-        "desktop release upload must fail instead of silently dropping the DMG",
+        'gh release upload "${TAG}" "${ARTIFACTS[@]}" --repo',
+        "desktop release upload must fail instead of silently dropping the DMG "
+        "(set -euo pipefail makes a failed upload fail the job)",
     )
     require_contains(
         workflow,
