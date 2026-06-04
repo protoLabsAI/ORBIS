@@ -305,7 +305,17 @@ pub fn spawn_detector(
                 }
                 match state {
                     State::Armed => {
-                        if det.tick_score() {
+                        if engine.is_listening() {
+                            // Window opened externally (double-click / open-mic /
+                            // any set_mic_listening) while we were armed. The mic is
+                            // already hot, so reconcile to LISTENING and hand off to
+                            // the auto-close timer. Symmetric to the external-close
+                            // handling below; without it the detector + pill stay
+                            // stuck on "armed" while the agent is actually listening.
+                            emit("listening");
+                            last_voice = Instant::now();
+                            state = State::Listening;
+                        } else if det.tick_score() {
                             engine.arm_listening_window();
                             emit("listening");
                             last_voice = Instant::now();
