@@ -18,6 +18,8 @@ export interface VoiceSnapshot {
   state: VoiceState;
   /** Wake-word activation state, or null when not in wake mode. */
   activation: ActivationState;
+  /** Display phrase for the active wake word (e.g. "Hey Orbis"), or null. */
+  wakePhrase: string | null;
   /** Push-to-talk: true when the mic is forwarding audio (double-click the orb to toggle). */
   micListening: boolean;
   /** True once the SSE bridge has received its first event from the sidecar. */
@@ -36,6 +38,7 @@ export interface VoiceSnapshot {
 const INITIAL: VoiceSnapshot = {
   state: 'idle',
   activation: null,
+  wakePhrase: null,
   micListening: false,
   connected: false,
   lastUserTranscript: null,

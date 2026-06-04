@@ -1148,6 +1148,7 @@ pub fn run() {
                     mic_listening,
                     get_activation_config,
                     set_activation_config,
+                    open_url,
                     api_request,
                     boot_status,
                     open_widget_window,
@@ -1166,6 +1167,7 @@ pub fn run() {
                     get_audio_input_mode,
                     clear_browsing_data,
                     backend_url,
+                    open_url,
                     api_request,
                     boot_status,
                     open_widget_window,
@@ -1370,6 +1372,29 @@ fn set_activation_config(
     Ok(())
 }
 
+/// Open a URL in the user's default browser (docs / help links from the UI).
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    app.shell().open(url, None).map_err(|e| e.to_string())
+}
+
+/// Display phrase for a wake model id — `"hey_orbis"` → `"Hey Orbis"`.
+#[cfg(feature = "native-audio")]
+fn wake_phrase(model: &str) -> String {
+    model
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Build the wake-word detector config + its state-event emitter, or `None` to
 /// leave the detector off (push-to-talk / open-mic styles). The emitter is a
 /// boxed closure that fans ARMED/LISTENING transitions to the `wake-state`
@@ -1409,9 +1434,15 @@ fn wake_config(
     log::info!(
         "[wake] enabled: model={model} threshold={threshold:.2} window={listen_window_s:.0}s"
     );
+    // The display phrase travels with the state so the pill can show the chosen
+    // wake word (e.g. "Hey Orbis") rather than a generic label.
+    let phrase = wake_phrase(&model);
     let app2 = app.clone();
     let emit: audio::wake_word::WakeStateEmitter = Box::new(move |s: &str| {
-        let _ = app2.emit("wake-state", s.to_string());
+        let _ = app2.emit(
+            "wake-state",
+            serde_json::json!({ "state": s, "phrase": phrase }),
+        );
     });
     Some((
         audio::wake_word::WakeConfig {

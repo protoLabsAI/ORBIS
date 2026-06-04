@@ -14,6 +14,7 @@ import { statusPillStore } from './store';
 export function StatusPill() {
   const connected = useVoiceStateSelector((s) => s.connected);
   const activation = useVoiceStateSelector((s) => s.activation);
+  const wakePhrase = useVoiceStateSelector((s) => s.wakePhrase);
   const micListening = useVoiceStateSelector((s) => s.micListening);
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
   const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
@@ -51,7 +52,9 @@ export function StatusPill() {
     ?? (!connected
       ? 'starting up…'
       : activation === 'armed'
-        ? 'armed · say “Hey Orbis”'
+        ? wakePhrase
+          ? `“${wakePhrase}”`
+          : 'listening for wake word'
         : activation === 'listening' || micListening
           ? 'listening…'
           : 'double-click to talk');

@@ -331,6 +331,18 @@ export function WakeWordSettings() {
           })}
         </div>
 
+        <button
+          type="button"
+          onClick={() =>
+            invoke('open_url', {
+              url: 'https://orbis.protolabs.studio/docs/how-to/train-a-wake-word',
+            }).catch(() => {})
+          }
+          className="text-left text-helper text-brand/80 underline-offset-2 hover:text-brand hover:underline"
+        >
+          Train your own wake word →
+        </button>
+
         {sharedDeps.length > 0 && (
           <Hint className="text-fg-faint">
             {sharedReady ? '✓ ' : ''}Shared models ({sharedDeps.map((d) => d.name).join(' + ')}) ·{' '}

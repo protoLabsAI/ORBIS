@@ -140,10 +140,11 @@ export function useVoiceBridge(): void {
 
     // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
     // independent of the Python SSE bridge (it fires while the mic is muted,
-    // before Python sees any audio). 'armed' | 'listening'.
-    listen<string>('wake-state', (e) => {
-      const a = e.payload === 'armed' || e.payload === 'listening' ? e.payload : null;
-      voiceStore.update({ activation: a });
+    // before Python sees any audio). Payload: { state, phrase }.
+    listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
+      const s = e.payload?.state;
+      const a = s === 'armed' || s === 'listening' ? s : null;
+      voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
     })
       .then((fn) => {
         if (cancelled) {
