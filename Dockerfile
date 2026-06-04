@@ -62,7 +62,9 @@ RUN pip install --no-cache-dir \
     https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
 COPY app.py ./
-COPY a2a/ ./a2a/
+# A2A 1.0 (#354) replaced the hand-rolled `a2a/` package with flat
+# `a2a_*.py` modules (import a2a = the a2a-sdk pip dep). Copy those.
+COPY a2a_*.py ./
 COPY agent/ ./agent/
 COPY auth/ ./auth/
 COPY config/ ./config/
