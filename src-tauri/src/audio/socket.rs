@@ -169,8 +169,15 @@ impl SocketServer {
                         if let Some(ref dtx) = det_tx {
                             let _ = dtx.send(samples.clone());
                         }
-                        if !eng.is_listening() || eng.echo_guard_active(ECHO_GUARD_MS) {
-                            continue; // muted, or she's speaking — drop the frame
+                        // Push-to-talk gate always applies. The half-duplex
+                        // echo mute applies only in CPAL mode; in
+                        // voice-processing mode the VPIO unit cancels the echo
+                        // in hardware, so the mic stays open during playback to
+                        // allow real barge-in (interrupting her mid-utterance).
+                        if !eng.is_listening()
+                            || (eng.half_duplex() && eng.echo_guard_active(ECHO_GUARD_MS))
+                        {
+                            continue; // muted, or (half-duplex) she's speaking
                         }
                         let frame = encode_frame(DIR_MIC_TO_PYTHON, MIC_SAMPLE_RATE, &samples);
                         if writer.write_all(&frame).await.is_err() {
