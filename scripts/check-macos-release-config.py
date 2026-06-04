@@ -538,7 +538,7 @@ def check_workflow() -> None:
     )
     require_contains(
         live_validation,
-        "orbis-aarch64-apple-darwin",
+        "Contents/MacOS/orbis",
         "live validation must verify the bundled arm64 PyApp sidecar",
     )
     require_contains(
