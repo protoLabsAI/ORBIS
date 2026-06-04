@@ -408,8 +408,9 @@ def check_workflow() -> None:
     )
     require_contains(
         workflow,
-        "seq 1 180",
-        "desktop release upload must wait for the parallel release workflow",
+        "protoLabsAI/orbis-releases",
+        "desktop release must upload the DMG to the public orbis-releases repo "
+        "(the private main repo's assets 404 publicly)",
     )
     require_contains(
         workflow,
