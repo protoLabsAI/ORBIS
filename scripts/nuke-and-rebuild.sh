@@ -79,6 +79,12 @@ warn() { printf '\033[1;33m[%s] ⚠\033[0m %s\n' "$(ts)" "$*"; }
 START_TS=$(date +%s)
 cleanup() {
   status=$?
+  # Restore the in-tree tauri.conf.json version. We stamp the real version in
+  # before the build so the in-app About card is correct, but the file stays
+  # 0.0.0 in-tree (CI stamps per-tag). Restore even on failure.
+  if [ -n "${TAURI_CONF_BAK:-}" ] && [ -f "${TAURI_CONF_BAK}" ]; then
+    mv -f "${TAURI_CONF_BAK}" "${ROOT}/src-tauri/tauri.conf.json"
+  fi
   if [ -n "${DMG_STAGE:-}" ] && [ -d "${DMG_STAGE}" ]; then
     rm -rf "${DMG_STAGE}"
   fi
@@ -216,6 +222,21 @@ ok "sidecar staged: src-tauri/binaries/orbis-${TARGET} ($(du -h "${ROOT}/src-tau
 # ---------------------------------------------------------------------------
 # 6. Tauri bundle
 # ---------------------------------------------------------------------------
+# Stamp the real version into tauri.conf.json so the in-app About card shows it
+# (getVersion() reads the bundled tauri.conf). CI does this per-tag in
+# desktop-build.yml; in-tree the file stays 0.0.0, so stamp here and let the
+# EXIT trap restore it. jq is the same tool CI uses.
+TAURI_CONF="${ROOT}/src-tauri/tauri.conf.json"
+if command -v jq >/dev/null 2>&1; then
+  TAURI_CONF_BAK="$(mktemp)"
+  cp "${TAURI_CONF}" "${TAURI_CONF_BAK}"
+  jq --arg v "${VERSION}" '.version = $v' "${TAURI_CONF}" > "${TAURI_CONF}.tmp" \
+    && mv "${TAURI_CONF}.tmp" "${TAURI_CONF}"
+  ok "stamped tauri.conf.json version=${VERSION} (About card; restored on exit)"
+else
+  warn "jq not found — About card will read 0.0.0 (brew install jq to stamp the dev version)"
+fi
+
 log "building Tauri bundle (--features ${CARGO_FEATURES}, --bundles ${BUNDLE_TARGETS})…"
 cargo tauri build --features "${CARGO_FEATURES}" --bundles "${BUNDLE_TARGETS}"
 APP="${ROOT}/src-tauri/target/release/bundle/macos/ORBIS.app"
