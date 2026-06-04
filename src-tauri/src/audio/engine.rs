@@ -127,10 +127,12 @@ impl AudioEngine {
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
         let rms = Arc::new(AtomicU32::new(0));
         let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: muted by default
-        // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
-        // it on for testing; the persisted Settings toggle sets it at startup.
+                                                          // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
+                                                          // it on for testing; the persisted Settings toggle sets it at startup.
         let full_duplex = Arc::new(AtomicBool::new(
-            std::env::var("ORBIS_FULL_DUPLEX").map(|v| v == "1").unwrap_or(false),
+            std::env::var("ORBIS_FULL_DUPLEX")
+                .map(|v| v == "1")
+                .unwrap_or(false),
         ));
         let last_play_ms = Arc::new(AtomicU64::new(0)); // half-duplex echo guard
         let playback_rms = Arc::new(AtomicU32::new(0)); // TTS level for orb reactivity
