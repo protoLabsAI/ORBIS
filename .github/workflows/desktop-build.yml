@@ -514,15 +514,52 @@ jobs:
           echo "installer_name=$OUT" >> "$GITHUB_ENV"
           ls -la "$OUT"
 
-      - name: Verify macOS installer notarization
-        if: github.event_name == 'push'
+      - name: Notarize + staple the DMG
         shell: bash
+        # Tauri notarizes + staples the .app INSIDE the dmg, but NOT the dmg
+        # container — so a downloaded dmg reads as "Unnotarized Developer ID"
+        # and Gatekeeper blocks opening it. Notarize the dmg (its contents are
+        # already signed + notarized) and staple the ticket so a downloaded dmg
+        # opens cleanly. Self-gates on creds so unsigned dev builds skip.
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
         run: |
           set -euo pipefail
-          test -f "${installer:?installer env missing}"
+          DMG="${installer:?installer env missing}"
+          if [ -z "${APPLE_API_KEY:-}" ] || [ -z "${APPLE_API_ISSUER:-}" ] || [ -z "${APPLE_API_KEY_PATH:-}" ]; then
+            echo "No notarization creds — skipping DMG notarization (unsigned dev build)."
+            exit 0
+          fi
+          # APPLE_API_KEY_PATH secret is the base64-encoded .p8 key — decode it.
+          KEYFILE="$(mktemp -t orbis-apple-api-XXXXXX).p8"
+          python3 -c 'import base64,os,sys; open(sys.argv[1],"wb").write(base64.b64decode(os.environ["APPLE_API_KEY_PATH"]))' "$KEYFILE"
+          echo "Submitting $DMG to the Apple notary service…"
+          xcrun notarytool submit "$DMG" \
+            --key "$KEYFILE" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$DMG"
+          echo "DMG notarized + stapled."
+
+      - name: Verify macOS installer notarization
+        shell: bash
+        # No longer push-only — runs on dispatch too so the notarized dmg is
+        # validated before a real release. Self-gates on a signed dmg so
+        # unsigned dev builds skip.
+        run: |
+          set -euo pipefail
+          DMG="${installer:?installer env missing}"
+          test -f "$DMG"
+          if ! codesign -dv "$DMG" 2>&1 | grep -q "Authority=Developer ID"; then
+            echo "Unsigned dmg — skipping installer notarization checks (dev build)."
+            exit 0
+          fi
           spctl --assess --type open --context context:primary-signature \
-            --verbose=4 "${installer}"
-          xcrun stapler validate "${installer}"
+            --verbose=4 "$DMG"
+          xcrun stapler validate "$DMG"
 
       - name: Run macOS validation harness
         shell: bash
