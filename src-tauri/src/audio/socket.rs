@@ -126,6 +126,7 @@ impl SocketServer {
         &self,
         engine: Arc<AudioEngine>,
         mut mic_rx: mpsc::UnboundedReceiver<AudioMsg>,
+        wake: Option<super::wake_word::WakeConfig>,
     ) -> Result<(), String> {
         log::info!("[audio/socket] waiting for Python to connect…");
         let (stream, _addr) = self
@@ -145,11 +146,21 @@ impl SocketServer {
         // hallucinates on silence.
         let eng = Arc::clone(&engine);
 
+        // Wake-word detector (only in wake_word activation mode). Runs on its
+        // own OS thread; the writer tees every mic frame to it BEFORE the gate,
+        // so it can listen for the phrase while the mic is otherwise muted.
+        let det_tx = wake.map(|cfg| super::wake_word::spawn_detector(cfg, Arc::clone(&engine)));
+
         // Writer task: take mic frames from the channel and send to Python.
         let write_task = tokio::spawn(async move {
             while let Some(msg) = mic_rx.recv().await {
                 match msg {
                     AudioMsg::MicFrame(samples) => {
+                        // Feed the detector regardless of the gate — wake mode
+                        // listens for "Hey Orbis" while muted. Cheap (~640 B).
+                        if let Some(ref dtx) = det_tx {
+                            let _ = dtx.send(samples.clone());
+                        }
                         if !eng.is_listening() || eng.echo_guard_active(ECHO_GUARD_MS) {
                             continue; // muted, or she's speaking — drop the frame
                         }

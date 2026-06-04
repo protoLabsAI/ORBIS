@@ -219,6 +219,18 @@ impl AudioEngine {
         self.listening.load(Ordering::Relaxed)
     }
 
+    /// Open a listening window from a wake-word fire (the ARMED → LISTENING
+    /// transition). Idempotent while already listening, so a burst of fires is
+    /// one open. For now this just unmutes the mic — the same gate a manual
+    /// double-click opens; the auto-close timer + orb ARMED cue land in the
+    /// engagement-modes UX pass (docs/internal/wake-word.md, build step 3).
+    pub fn arm_listening_window(&self) {
+        if !self.is_listening() {
+            self.set_listening(true);
+            log::info!("[wake] fired → listening window opened");
+        }
+    }
+
     /// Half-duplex echo guard: true if real TTS audio played within the
     /// last `guard_ms`, so the mic should stay muted (her voice bleeds
     /// into the mic acoustically and would otherwise be transcribed).

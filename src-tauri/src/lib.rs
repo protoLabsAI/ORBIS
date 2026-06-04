@@ -1282,6 +1282,35 @@ pub fn run() {
 /// Spawn the Python sidecar, watch its stdout/stderr, and either
 /// navigate the main webview on `ORBIS_READY` or surface an error
 /// dialog on a bad exit. Single-shot: one sidecar per app run.
+/// Resolve the wake-word detector config, or `None` to leave it off. v1 is
+/// env-driven (the Settings UI for activation style lands in the
+/// engagement-modes pass — docs/internal/wake-word.md step 3); default
+/// push-to-talk is unchanged unless `ORBIS_WAKE_ENABLED=1`. The models dir
+/// matches the picker's `<app_data>/models/wakeword/` layout.
+#[cfg(feature = "native-audio")]
+fn wake_config(app: &AppHandle) -> Option<audio::wake_word::WakeConfig> {
+    if std::env::var("ORBIS_WAKE_ENABLED").ok().as_deref() != Some("1") {
+        return None;
+    }
+    let models_dir = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("models")
+        .join("wakeword");
+    let model = std::env::var("ORBIS_WAKE_MODEL").unwrap_or_else(|_| "hey_orbis".into());
+    let threshold = std::env::var("ORBIS_WAKE_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.5);
+    log::info!("[wake] enabled via env: model={model} threshold={threshold:.2}");
+    Some(audio::wake_word::WakeConfig {
+        models_dir,
+        model,
+        threshold,
+    })
+}
+
 async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     let shell = app.shell();
 
@@ -1382,9 +1411,10 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                             state.store(Arc::clone(&engine));
                         }
                         log::info!("[audio] native engine online");
+                        let wake = wake_config(&app_handle);
                         // Accept loop runs in a background task.
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = sock_server.accept_and_run(engine, mic_rx).await {
+                            if let Err(e) = sock_server.accept_and_run(engine, mic_rx, wake).await {
                                 log::error!("[audio/socket] accept_and_run failed: {e}");
                             }
                         });
@@ -1428,6 +1458,13 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // `delegate_to` is never registered and there's nothing to delegate to.
     if let Some(p) = delegates_path.as_ref() {
         command = command.env("DELEGATES_YAML", p);
+    }
+    // Wake-word models: the picker downloads into <app_data>/models/wakeword/;
+    // the Rust detector reads the same dir. Tell the sidecar where that is so
+    // both sides agree (without it the picker falls back to a cwd-relative
+    // "models/" the installed app can't find).
+    if let Ok(models) = app.path().app_data_dir() {
+        command = command.env("ORBIS_MODELS_DIR", models.join("models"));
     }
     // Pass AUDIO_TRANSPORT=native + socket path to Python. Python reads
     // both to activate the native socket pipeline and to report the

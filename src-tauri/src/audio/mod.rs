@@ -13,6 +13,7 @@
 pub mod aec;
 pub mod engine;
 pub mod socket;
+pub mod wake_word;
 
 // Phase 2 — opt-in via the `voice-processing` Cargo feature. Replaces
 // the CPAL input path with AVAudioEngine voice-processing IO (Apple-
