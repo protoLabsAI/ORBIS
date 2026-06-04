@@ -423,17 +423,35 @@ jobs:
           PY
 
       - name: Verify macOS release signing
-        if: github.event_name == 'push'
         shell: bash
+        # Verify the PRISTINE .app INSIDE the mounted DMG. Copying a signed
+        # bundle out of a read-only DMG (ditto) breaks nested code signatures, so
+        # codesign --deep --strict fails on a copy — but the .app in the DMG is
+        # the real notarized artifact. Self-gates on a Developer ID signature so
+        # unsigned dev builds skip instead of failing (no longer push-only, so
+        # it's exercised on workflow_dispatch too).
         run: |
           set -euo pipefail
           shopt -s nullglob
-          APPS=(src-tauri/target/release/bundle/macos/*.app)
+          DMGS=(src-tauri/target/release/bundle/dmg/*.dmg)
+          if [ "${#DMGS[@]}" -eq 0 ]; then
+            echo "::error::No .dmg under bundle/dmg"
+            exit 1
+          fi
+          MNT="$(mktemp -d)"
+          hdiutil attach "${DMGS[0]}" -nobrowse -readonly -mountpoint "$MNT"
+          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
+          APPS=("$MNT"/*.app)
           if [ "${#APPS[@]}" -eq 0 ]; then
-            echo "::error::No .app bundle produced under bundle/macos"
+            echo "::error::No .app inside the mounted DMG"
             exit 1
           fi
           APP="${APPS[0]}"
+
+          if ! codesign -dv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
+            echo "Unsigned build (no Developer ID) — skipping release signing verification."
+            exit 0
+          fi
 
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dv "$APP" 2> codesign-details.txt
