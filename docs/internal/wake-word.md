@@ -37,8 +37,8 @@ openWakeWord is three ONNX models in sequence (no Python needed at runtime):
 3. **wake model** — a sliding window of embeddings → score 0–1. *("Hey Orbis",
    from the lab node.)*
 
-Runtime (new `src-tauri/src/audio/wake_word.rs`, via the **`ort`** crate — ONNX
-Runtime, no Python):
+Runtime (new `src-tauri/src/audio/wake_word.rs`, via the **`tract`** crate —
+pure-Rust ONNX, no onnxruntime to bundle; see "Verified pipeline" below for why):
 - Accumulate 4× 320-sample frames → 1280 samples (80 ms) → melspec → embedding →
   push into the embedding ring → wake model → score. Fire when score > threshold
   for a debounce window. (This mirrors oWW's `Model.predict` buffering; the
@@ -46,6 +46,37 @@ Runtime, no Python):
 - Load the 3 models at engine start from the bundled `models/` dir.
 - Cheap: melspec+embedding are tiny; the wake model is a small classifier. Runs
   in the socket-writer tokio task, off the audio callback.
+
+## Verified pipeline + constants (2026-06-02)
+
+Cracked the exact pipeline by inspecting the ONNX models + building a Python
+reference (`scripts/wakeword_reference.py`, the oracle the Rust port matches).
+**Runtime decision: `tract` (pure-Rust ONNX), not `ort`** — model-op inspection
+showed melspec/embedding/wake use only Conv/MatMul/Gemm/Mul/Clip/Pow/Log/
+Sigmoid/LayerNormalization/Relu/MaxPool (no STFT/DFT/custom ops), all
+tract-supported. So no ~15 MB onnxruntime to bundle — fits the lean-native
+direction.
+
+Exact pipeline (Hey Orbis = stock openWakeWord I/O, verified):
+1. **Input:** 16 kHz, fed as **int16-range float32** (NOT normalized to
+   [-1,1] — the melspec model was trained on the int16 range).
+2. **melspectrogram.onnx** — internal STFT, **hop=160 (10 ms), win=640 (40 ms)**
+   → `[1,1,F,32]`. Squeeze → **`mel/10 + 2`** (the oWW normalization — easy to
+   miss, breaks matching if omitted).
+3. **embedding_model.onnx** — sliding **76-mel-frame** window, **step 8**
+   (= 1280 samples = 80 ms), input `[1,76,32,1]` → 96-dim embedding.
+4. **`<wake>.onnx`** — last **16 embeddings** `[1,16,96]` → **sigmoid** 0..1.
+
+**Strategy: full-window recompute**, not oWW's incremental per-chunk mel
+buffering — melspec the whole ~2 s ring each 80 ms tick. The models are tiny
+(runs comfortably at cadence) and it sidesteps the STFT chunk-boundary-overlap
+bug a naive streaming port would hit. **~31360 samples (1.96 s)** produce the
+first 16 embeddings → one score.
+
+Reference scores (onnxruntime, non-wake inputs, all near 0 — the Rust/tract
+port must match within tolerance): `zeros→0.000309`, `sine440→0.000420`,
+`prng(seed42)→0.000376`. A real "Hey Orbis" clip is still needed to set the
+fire threshold (the one remaining lab-node ask) — default oWW threshold ~0.5.
 
 ## Model catalog + picker (Josh, 2026-06-02)
 
