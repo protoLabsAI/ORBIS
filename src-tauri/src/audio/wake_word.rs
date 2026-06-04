@@ -177,17 +177,39 @@ impl WakeWord {
     pub fn last_score(&self) -> f32 {
         self.last_score
     }
+
+    /// True when the recent audio is below the VAD floor — the trailing-silence
+    /// signal the listening window uses to auto-close.
+    pub fn is_recent_silence(&self) -> bool {
+        self.recent_rms() < self.energy_floor
+    }
+
+    /// Re-arm the fire debounce after a listening window closes, so the next
+    /// "Hey Orbis" can fire again.
+    pub fn rearm(&mut self) {
+        self.rearmed = true;
+    }
 }
 
 /// What the detector thread needs to run: where the `.onnx` files live (the
-/// picker's `<models_dir>/wakeword/` layout), which wake word, and the fire
-/// threshold. Built in `lib.rs` from the app-data dir + persona config.
+/// picker's `<models_dir>/wakeword/` layout), which wake word, the fire
+/// threshold, and the auto-close window. Built in `lib.rs` from the app-data
+/// dir + the persisted activation config.
 #[derive(Clone)]
 pub struct WakeConfig {
     pub models_dir: PathBuf,
     pub model: String,
     pub threshold: f32,
+    /// Auto-close the listening window after this many seconds of trailing
+    /// silence → back to ARMED (the engagement-modes listen-window timer,
+    /// distinct from the ~0.4 s end-of-utterance VAD).
+    pub listen_window_s: f32,
 }
+
+/// Sink for ARMED/LISTENING transitions. `lib.rs` wires this to a Tauri event
+/// (`wake-state`); keeping it an opaque closure keeps `socket.rs`/this module
+/// free of any Tauri coupling (they survive the Phase-3 socket retirement).
+pub type WakeStateEmitter = Box<dyn Fn(&str) + Send>;
 
 /// Spawn the detector on a dedicated OS thread (the ~130 ms melspec must never
 /// block the mic→Python writer). Returns a sender the socket writer tees every
@@ -195,7 +217,13 @@ pub struct WakeConfig {
 /// backlog into the ring, score the freshest 2 s, and arm a listening window on
 /// a fire. A model-load failure logs and exits the thread (frames then drop
 /// harmlessly) — wake mode simply doesn't engage.
-pub fn spawn_detector(config: WakeConfig, engine: Arc<AudioEngine>) -> Sender<Vec<i16>> {
+pub fn spawn_detector(
+    config: WakeConfig,
+    engine: Arc<AudioEngine>,
+    emit: WakeStateEmitter,
+) -> Sender<Vec<i16>> {
+    use std::time::{Duration, Instant};
+
     let (tx, rx) = channel::<Vec<i16>>();
     std::thread::Builder::new()
         .name("orbis-wakeword".into())
@@ -212,21 +240,59 @@ pub fn spawn_detector(config: WakeConfig, engine: Arc<AudioEngine>) -> Sender<Ve
                 }
             };
             log::info!(
-                "[wake] detector armed: model={} threshold={:.2} dir={}",
+                "[wake] detector armed: model={} threshold={:.2} window={:.0}s dir={}",
                 config.model,
                 config.threshold,
+                config.listen_window_s,
                 config.models_dir.display()
             );
+            emit("armed");
+
+            // ARMED: score the ring for the phrase. LISTENING (post-fire): stop
+            // scoring (the mic's already open + flowing to Python), just watch
+            // for trailing silence to auto-close back to ARMED.
+            #[derive(PartialEq)]
+            enum State {
+                Armed,
+                Listening,
+            }
+            let mut state = State::Armed;
+            let mut last_voice = Instant::now();
+            let window = Duration::from_secs_f32(config.listen_window_s.max(1.0));
+
             while let Ok(frame) = rx.recv() {
                 det.feed(&frame);
-                // Drain any backlog accrued during the last score so we always
-                // score the freshest audio (the recv/try_recv pacing self-limits
-                // to ~score-rate; no unbounded queue growth).
+                // Drain backlog so the next score sees the freshest audio (the
+                // recv/try_recv pacing self-limits to ~score-rate; no unbounded
+                // queue growth).
                 while let Ok(f) = rx.try_recv() {
                     det.feed(&f);
                 }
-                if det.tick_score() {
-                    engine.arm_listening_window();
+                match state {
+                    State::Armed => {
+                        if det.tick_score() {
+                            engine.arm_listening_window();
+                            emit("listening");
+                            last_voice = Instant::now();
+                            state = State::Listening;
+                        }
+                    }
+                    State::Listening => {
+                        if det.is_recent_silence() {
+                            if last_voice.elapsed() >= window {
+                                engine.set_listening(false);
+                                det.rearm();
+                                emit("armed");
+                                state = State::Armed;
+                                log::info!(
+                                    "[wake] auto-closed after {:.0}s trailing silence → armed",
+                                    config.listen_window_s
+                                );
+                            }
+                        } else {
+                            last_voice = Instant::now();
+                        }
+                    }
                 }
             }
             log::info!("[wake] detector thread exiting (frame channel closed)");
