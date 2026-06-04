@@ -72,10 +72,11 @@ def check_tauri_cargo_manifest() -> None:
         'tauri-plugin-log = "2"',
         'cpal   = { version = "0.17", optional = true }',
         'rubato = { version = "0.15", optional = true }',
+        'tract-onnx = { version = "0.21", optional = true }',
         'tokio  = { version = "1", features = ["net", "io-util", "sync", "rt", "time"] }',
         '[target.\'cfg(target_os = "macos")\'.dependencies.objc2-avf-audio]',
         'features = [\n  "AVAudioEngine",',
-        'native-audio = ["dep:cpal", "dep:rubato"]',
+        'native-audio = ["dep:cpal", "dep:rubato", "dep:tract-onnx"]',
         'voice-processing = [\n  "native-audio",\n  "dep:objc2",\n  "dep:objc2-foundation",\n  "dep:objc2-avf-audio",\n  "dep:block2",\n]',
     )
     for needle in required:
