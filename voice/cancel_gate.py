@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import logging
 
-from pipecat.frames.frames import Frame, InterruptionFrame, TranscriptionFrame
+from pipecat.frames.frames import Frame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
+from agent.user_state import note_turn_cancel
 from voice.local_transport import CTRL_STOP_LISTENING
 
 logger = logging.getLogger(__name__)
@@ -79,10 +80,11 @@ class CancelGate(FrameProcessor):
                 await self._transport._send_control(CTRL_STOP_LISTENING)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[cancel-gate] send_control failed: %s", e)
-            # Tell downstream turn-watchers (stall watchdog / micro-ack) the turn
-            # was aborted, so they don't fire a "still working" filler into the
-            # now-empty turn.
-            await self.push_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+            # Tell the stall watchdog the turn was intentionally dismissed, so it
+            # doesn't speak a "still working" recovery line into the now-empty
+            # turn. (A shared signal, not a frame — frames get consumed before
+            # reaching the end-of-pipeline watchdog.)
+            note_turn_cancel()
             return  # swallow the transcript — do not start an LLM turn
 
         await self.push_frame(frame, direction)

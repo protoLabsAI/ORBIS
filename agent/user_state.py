@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,6 +121,26 @@ def take_pending_ask() -> PendingAsk | None:
             pa, st.pending_ask = st.pending_ask, None
             return pa
     return None
+
+
+# Turn-cancel signal — set when the user dismisses a turn ("cancel" / "stop
+# listening", caught by CancelGate). The stall watchdog checks this before
+# speaking its recovery line: a swallowed turn is intentionally empty, not a
+# stall. Module-level (single active turn) and reliable — frame propagation
+# from CancelGate to the end-of-pipeline watchdog isn't (system frames get
+# consumed by the LLM/aggregators in between).
+_last_turn_cancel: float = 0.0
+
+
+def note_turn_cancel() -> None:
+    """Record that the user just dismissed the current turn."""
+    global _last_turn_cancel
+    _last_turn_cancel = time.monotonic()
+
+
+def turn_cancelled_since(t: float) -> bool:
+    """True if a turn-cancel was signalled at or after monotonic time ``t``."""
+    return _last_turn_cancel >= t
 
 
 def clear_pending_ask() -> None:
