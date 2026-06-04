@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.2.117",
+    "date": "2026-06-04",
+    "changes": [
+      "Barge-in — interrupt ORBIS mid-sentence (headphones)",
+      "\"Hey Orbis\" wake-word activation, fully on-device",
+      "Choose on-device or cloud speech models during setup",
+      "Signed + notarized — the app opens cleanly on download"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.117/ORBIS-0.2.117-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.1.41",
     "date": "2026-04-26",
     "changes": [
