@@ -43,7 +43,7 @@ const DEFAULT_LLM_PRESET =
 
 const STORAGE_COMPLETE = 'orbis.setupComplete';
 
-type Step = 'welcome' | 'names' | 'llm' | 'pick' | 'mic' | 'done' | 'hatching';
+type Step = 'welcome' | 'mic' | 'models' | 'names' | 'llm' | 'pick' | 'done' | 'hatching';
 
 /**
  * First-run setup wizard. Detects "no setup done yet" via a
@@ -96,14 +96,20 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
           {step === 'welcome' && <WelcomeStep onNext={() => setStep('mic')} />}
           {step === 'mic' && (
             <MicStep
-              onNext={() => setStep('names')}
+              onNext={() => setStep('models')}
               onBack={() => setStep('welcome')}
+            />
+          )}
+          {step === 'models' && (
+            <VoiceModelsStep
+              onNext={() => setStep('names')}
+              onBack={() => setStep('mic')}
             />
           )}
           {step === 'names' && (
             <NamesStep
               onNext={() => setStep('llm')}
-              onBack={() => setStep('mic')}
+              onBack={() => setStep('models')}
             />
           )}
           {step === 'llm' && (
@@ -130,7 +136,7 @@ function WizardFlow({ onFinish }: { onFinish: () => void }) {
 // ── Indicator ──────────────────────────────────────────────────────────────
 
 function StepIndicator({ current }: { current: Step }) {
-  const order: Step[] = ['welcome', 'mic', 'names', 'llm', 'pick', 'done'];
+  const order: Step[] = ['welcome', 'mic', 'models', 'names', 'llm', 'pick', 'done'];
   const idx = Math.max(0, order.indexOf(current));
   return (
     <div className="flex items-center gap-2 justify-center">
@@ -162,6 +168,79 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
         A few quick steps: mic access, the basics, then pick your orb.
       </p>
       <Button onClick={onNext}>Let's go</Button>
+    </div>
+  );
+}
+
+function VoiceModelsStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
+  const [saving, setSaving] = useState<'on_device' | 'byo' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const choose = async (choice: 'on_device' | 'byo') => {
+    setSaving(choice);
+    setError(null);
+    try {
+      await api.putConfig({ voice: { local_models: choice } } as never);
+      onNext();
+    } catch (e) {
+      setSaving(null);
+      setError(String((e as Error).message ?? e));
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="text-center space-y-2">
+        <h2 className="text-lg text-fg-body">On-device voice</h2>
+        <p className="text-base text-fg-muted max-w-md mx-auto">
+          ORBIS runs speech entirely on your Mac — nothing leaves the device. It
+          uses <span className="text-fg-body">Parakeet</span> to hear you and{' '}
+          <span className="text-fg-body">Kokoro</span> to speak — a one-time
+          download of about <span className="text-fg-body">900&nbsp;MB</span>.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => choose('on_device')}
+          disabled={saving !== null}
+          className="w-full rounded-lg border border-brand/50 bg-brand/5 p-4 text-left transition-colors hover:bg-brand/10 disabled:opacity-50"
+        >
+          <div className="text-sm text-fg">
+            Install on-device models{' '}
+            <span className="text-helper text-brand">· recommended</span>
+          </div>
+          <p className="mt-1 text-helper text-fg-muted">
+            Private + offline.{' '}
+            {saving === 'on_device' ? 'Saving…' : 'Downloads in the background.'}
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => choose('byo')}
+          disabled={saving !== null}
+          className="w-full rounded-lg border border-edge bg-raised/40 p-4 text-left transition-colors hover:bg-raised/70 disabled:opacity-50"
+        >
+          <div className="text-sm text-fg-body">Skip — I&apos;ll set up my own</div>
+          <p className="mt-1 text-helper text-fg-muted">
+            No download.{' '}
+            <span className="text-danger/90">
+              You&apos;ll need to configure a speech-to-text and voice backend in
+              Settings → Voice before ORBIS can talk.
+            </span>
+          </p>
+        </button>
+      </div>
+
+      {error && <p className="text-center text-xs text-danger">{error}</p>}
+
+      <div className="flex justify-start">
+        <Button variant="ghost" onClick={onBack} disabled={saving !== null}>
+          Back
+        </Button>
+      </div>
     </div>
   );
 }

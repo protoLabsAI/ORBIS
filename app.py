@@ -2098,11 +2098,31 @@ def prewarm_all() -> None:
     tts_detail = (
         "Loading Kokoro voice…" if TTS_BACKEND == "kokoro" else "Loading speech synthesis…"
     )
+    # Defer the on-device STT/TTS download until the user opts in via the setup
+    # wizard's "voice models" step (voice.local_models == "on_device"). Keeps a
+    # fresh boot from silently pulling ~900 MB before the user has chosen; "byo"
+    # means they'll configure their own backend in Settings. Cloud backends
+    # (openai/elevenlabs/fish) carry no big local download, so they always warm.
+    try:
+        from agent.config_store import read_config
+
+        _vm = (read_config().get("voice") or {}).get("local_models")
+    except Exception:  # noqa: BLE001
+        _vm = None
+    _opted_in = _vm == "on_device"
+    _local_stt = STT_BACKEND in ("local", "parakeet", "sensevoice")
+    _local_tts = TTS_BACKEND == "kokoro"
+
     for stage, detail, fn in (
         ("stt", stt_detail, prewarm_stt),
         ("tts", tts_detail, prewarm_tts),
         ("llm", "Warming up the language model…", prewarm_llm),
     ):
+        is_local = (stage == "stt" and _local_stt) or (stage == "tts" and _local_tts)
+        if is_local and not _opted_in:
+            logger.info(f"prewarm {stage} deferred — on-device models not opted in")
+            _emit_boot(stage, "On-device speech loads on first use…")
+            continue
         _emit_boot(stage, detail)
         try:
             fn()
