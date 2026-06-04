@@ -1,14 +1,17 @@
 """NativeBargeInObserver — flushes the Rust CPAL playback ring on barge-in.
 
 When the user interrupts the bot (or the pipeline is cancelled), Pipecat
-cancels the TTS task and emits BotStoppedSpeakingFrame. Without this
+broadcasts an InterruptionFrame and cancels the TTS task. Without this
 observer the Rust CPAL playback ring still contains queued TTS audio and
-will keep playing for up to a ring-buffer's worth of time after the
-pipeline stops.
+will keep playing for up to a ring-buffer's worth of time — talking over
+the user who just barged in.
 
-This observer watches the pipeline for BotStoppedSpeakingFrame and
-CancelFrame, then immediately sends control frame 0x0001 (CTRL_BARGE_IN)
-over the Unix socket so the Rust engine calls flush_playback().
+This observer watches the pipeline for InterruptionFrame (a real barge-in)
+and CancelFrame (pipeline teardown), then immediately sends control frame
+0x0001 (CTRL_BARGE_IN) over the Unix socket so the Rust engine calls
+flush_playback(). It deliberately does NOT flush on a normal
+BotStoppedSpeakingFrame — that fires at the end of every turn, when the
+ring is already draining naturally, so flushing there is the wrong signal.
 
 Placement: added to the native desktop PipelineTask observers list.
 """
@@ -16,10 +19,11 @@ Placement: added to the native desktop PipelineTask observers list.
 from __future__ import annotations
 
 import logging
+import time
 import weakref
 from typing import TYPE_CHECKING
 
-from pipecat.frames.frames import BotStoppedSpeakingFrame, CancelFrame
+from pipecat.frames.frames import CancelFrame, InterruptionFrame
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
 if TYPE_CHECKING:
@@ -35,19 +39,29 @@ class NativeBargeInObserver(BaseObserver):
     prevent GC if the transport is torn down before the observer.
 
     Reacts to:
-      - BotStoppedSpeakingFrame — bot was interrupted or finished; flush ring
-        so residual queued TTS doesn't keep playing
+      - InterruptionFrame — the user barged in; flush the ring so residual
+        queued TTS stops immediately instead of talking over the user
       - CancelFrame — pipeline is being torn down; flush ring immediately
     """
+
+    # An InterruptionFrame is broadcast up + downstream through EVERY processor,
+    # so a single barge-in shows up here ~N times (N = pipeline depth). One ring
+    # flush is all the Rust side needs — debounce the duplicates.
+    _DEBOUNCE_S = 0.2
 
     def __init__(self, transport: "LocalAudioTransport") -> None:
         super().__init__()
         # Weak ref so observer doesn't hold the transport alive.
         self._transport_ref: weakref.ref["LocalAudioTransport"] = weakref.ref(transport)
+        self._last_flush = 0.0
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
-        if isinstance(frame, (BotStoppedSpeakingFrame, CancelFrame)):
+        if isinstance(frame, (InterruptionFrame, CancelFrame)):
+            now = time.monotonic()
+            if now - self._last_flush < self._DEBOUNCE_S:
+                return  # same interrupt fanning out across the pipeline
+            self._last_flush = now
             await self._flush(reason=type(frame).__name__)
 
     async def _flush(self, reason: str) -> None:

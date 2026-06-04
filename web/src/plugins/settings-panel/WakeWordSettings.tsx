@@ -18,6 +18,7 @@ interface ActivationConfig {
   model: string;
   threshold: number;
   listen_window_s: number;
+  full_duplex: boolean;
 }
 
 const DEFAULTS: ActivationConfig = {
@@ -25,6 +26,7 @@ const DEFAULTS: ActivationConfig = {
   model: 'hey_orbis',
   threshold: 0.5,
   listen_window_s: 12,
+  full_duplex: false,
 };
 
 const STYLES: { id: Style; label: string; hint: string }[] = [
@@ -103,6 +105,17 @@ export function WakeWordSettings() {
         listenWindowS: next.listen_window_s,
       });
       setNeedsRelaunch(true);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    }
+  };
+
+  // Full-duplex / barge-in applies LIVE (the engine reads it per frame) — its
+  // own Tauri command, so no relaunch banner.
+  const saveFullDuplex = async (on: boolean) => {
+    setCfg((c) => ({ ...c, full_duplex: on }));
+    try {
+      await invoke('set_full_duplex', { on });
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }
@@ -191,6 +204,35 @@ export function WakeWordSettings() {
             Download and select a wake word below to enable hands-free listening.
           </Hint>
         )}
+
+        {/* Barge-in (full-duplex) — applies live, all activation styles */}
+        <div className="flex items-start justify-between gap-3 rounded-md border border-edge bg-raised/40 p-2.5">
+          <span className="min-w-0">
+            <span className="text-sm text-fg-body">Allow interruptions</span>
+            <Hint className="mt-0.5">
+              Keep the mic open while she speaks so you can cut in mid-sentence. Use with
+              headphones — on speakers she may hear herself and interrupt her own reply.
+            </Hint>
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={cfg.full_duplex}
+            aria-label="Allow interruptions (full-duplex)"
+            onClick={() => saveFullDuplex(!cfg.full_duplex)}
+            className={cn(
+              'mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors',
+              cfg.full_duplex ? 'border-brand bg-brand/80' : 'border-edge bg-raised',
+            )}
+          >
+            <span
+              className={cn(
+                'inline-block size-4 rounded-full bg-fg transition-transform',
+                cfg.full_duplex ? 'translate-x-4' : 'translate-x-0.5',
+              )}
+            />
+          </button>
+        </div>
 
         {/* Wake-word tuning — only relevant in wake-word style */}
         {wakeSelected && (

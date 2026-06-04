@@ -1,7 +1,9 @@
 """Tests for voice/native_bargein.py
 
 Verifies that NativeBargeInObserver sends CTRL_BARGE_IN (0x0001) to the
-LocalAudioTransport within 50 ms of BotStoppedSpeakingFrame or CancelFrame.
+LocalAudioTransport within 50 ms of InterruptionFrame (a real barge-in) or
+CancelFrame — and that a normal BotStoppedSpeakingFrame (which fires at the
+end of EVERY turn) does NOT trigger a flush.
 """
 
 import asyncio
@@ -11,7 +13,11 @@ import tempfile
 import time
 import pytest
 
-from pipecat.frames.frames import BotStoppedSpeakingFrame, CancelFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    CancelFrame,
+    InterruptionFrame,
+)
 from pipecat.observers.base_observer import FramePushed
 
 from voice.local_transport import (
@@ -77,8 +83,8 @@ class _PipeServer:
 
 
 @pytest.mark.asyncio
-async def test_barge_in_on_bot_stopped_speaking():
-    """BotStoppedSpeakingFrame → CTRL_BARGE_IN written within 50ms."""
+async def test_barge_in_on_interruption():
+    """InterruptionFrame → CTRL_BARGE_IN written within 50ms."""
     with tempfile.TemporaryDirectory() as tmp:
         sock_path = os.path.join(tmp, "bargein-t1.sock")
         srv = _PipeServer()
@@ -90,7 +96,7 @@ async def test_barge_in_on_bot_stopped_speaking():
 
         observer = NativeBargeInObserver(transport)
         t0 = time.monotonic()
-        await observer.on_push_frame(_make_frame_pushed(BotStoppedSpeakingFrame()))
+        await observer.on_push_frame(_make_frame_pushed(InterruptionFrame()))
         elapsed_ms = (time.monotonic() - t0) * 1000
 
         await asyncio.sleep(0.1)  # let OS flush
@@ -139,12 +145,46 @@ async def test_barge_in_on_cancel_frame():
 
 
 @pytest.mark.asyncio
+async def test_burst_interruptions_debounced():
+    """A single InterruptionFrame fans out across the pipeline (~N pushes); the
+    observer must flush the Rust ring ONCE, not N times."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sock_path = os.path.join(tmp, "bargein-t6.sock")
+        srv = _PipeServer()
+        await srv.start(sock_path)
+
+        transport = LocalAudioTransport(sock_path=sock_path)
+        await transport._connect()
+        await asyncio.sleep(0.03)
+
+        observer = NativeBargeInObserver(transport)
+        for _ in range(20):
+            await observer.on_push_frame(_make_frame_pushed(InterruptionFrame()))
+        await asyncio.sleep(0.1)
+        await transport._disconnect()
+        srv.stop()
+        await asyncio.sleep(0.05)
+
+        data = srv.received_bytes()
+        # Exactly ONE control frame, not 20 — debounced. Decode ns from the
+        # single header and assert the total is exactly one frame's worth.
+        assert len(data) >= HEADER_LEN, f"no flush at all (got {len(data)} bytes)"
+        direction, _, _, ns = _decode_header(data[:HEADER_LEN])
+        assert len(data) == HEADER_LEN + ns * 2, (
+            f"expected ONE debounced flush ({HEADER_LEN + ns * 2} bytes), got {len(data)}"
+        )
+        assert direction == DIR_CONTROL
+        code = struct.unpack_from("<H", data[HEADER_LEN:HEADER_LEN + 2])[0]
+        assert code == CTRL_BARGE_IN
+
+
+@pytest.mark.asyncio
 async def test_noop_when_transport_disconnected():
     """Observer does not raise when transport writer is None."""
     transport = LocalAudioTransport(sock_path="/tmp/nonexistent-orbis.sock")
     observer = NativeBargeInObserver(transport)
     # Must not raise even though _writer is None.
-    await observer.on_push_frame(_make_frame_pushed(BotStoppedSpeakingFrame()))
+    await observer.on_push_frame(_make_frame_pushed(InterruptionFrame()))
 
 
 @pytest.mark.asyncio
@@ -153,12 +193,15 @@ async def test_noop_when_transport_gc_d():
     transport = LocalAudioTransport(sock_path="/tmp/nonexistent-orbis2.sock")
     observer = NativeBargeInObserver(transport)
     del transport  # drop strong ref
-    await observer.on_push_frame(_make_frame_pushed(BotStoppedSpeakingFrame()))
+    await observer.on_push_frame(_make_frame_pushed(InterruptionFrame()))
 
 
 @pytest.mark.asyncio
-async def test_unrelated_frame_is_ignored():
-    """BotStartedSpeakingFrame does not trigger a flush write."""
+async def test_unrelated_frames_are_ignored():
+    """Neither BotStartedSpeakingFrame nor a normal BotStoppedSpeakingFrame
+    (which fires at the end of every turn) triggers a flush — only a real
+    InterruptionFrame / CancelFrame does. Guards against re-introducing the
+    flush-on-every-turn-end behavior."""
     from pipecat.frames.frames import BotStartedSpeakingFrame
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -172,6 +215,7 @@ async def test_unrelated_frame_is_ignored():
 
         observer = NativeBargeInObserver(transport)
         await observer.on_push_frame(_make_frame_pushed(BotStartedSpeakingFrame()))
+        await observer.on_push_frame(_make_frame_pushed(BotStoppedSpeakingFrame()))
         await asyncio.sleep(0.15)  # longer than any write delay
 
         await transport._disconnect()

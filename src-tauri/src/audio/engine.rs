@@ -67,6 +67,12 @@ pub struct AudioEngine {
     /// always-listening behavior and Whisper hallucinations on silence.
     /// Toggled by double-clicking the orb via `set_mic_listening`.
     pub listening: Arc<AtomicBool>,
+    /// Full-duplex override. When true, the socket writer keeps the mic open
+    /// while she speaks (instead of the half-duplex echo mute) so the user can
+    /// barge in. Safe only with echo cancellation (VPIO) OR headphones (no
+    /// acoustic bleed) — default false. Toggled live via `set_full_duplex`
+    /// (Settings → Activation → "Allow interruptions").
+    pub full_duplex: Arc<AtomicBool>,
     /// Monotonic-ms timestamp of the last real TTS audio frame sent to the
     /// speaker. Half-duplex echo guard: the socket writer drops mic frames
     /// while (and just after) she's speaking. Confirmed needed by mic-diag
@@ -121,6 +127,13 @@ impl AudioEngine {
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
         let rms = Arc::new(AtomicU32::new(0));
         let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: muted by default
+                                                          // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
+                                                          // it on for testing; the persisted Settings toggle sets it at startup.
+        let full_duplex = Arc::new(AtomicBool::new(
+            std::env::var("ORBIS_FULL_DUPLEX")
+                .map(|v| v == "1")
+                .unwrap_or(false),
+        ));
         let last_play_ms = Arc::new(AtomicU64::new(0)); // half-duplex echo guard
         let playback_rms = Arc::new(AtomicU32::new(0)); // TTS level for orb reactivity
         let output_rate = Arc::new(AtomicU32::new(TTS_SAMPLE_RATE)); // set by the output stream
@@ -191,6 +204,7 @@ impl AudioEngine {
             aec,
             rms,
             listening,
+            full_duplex,
             last_play_ms,
             playback_rms,
             output_rate,
@@ -236,6 +250,33 @@ impl AudioEngine {
     /// into the mic acoustically and would otherwise be transcribed).
     pub fn echo_guard_active(&self, guard_ms: u64) -> bool {
         now_ms().saturating_sub(self.last_play_ms.load(Ordering::Relaxed)) < guard_ms
+    }
+
+    /// Whether the mic must be hard-muted while TTS plays (half-duplex).
+    ///
+    /// True in CPAL mode: there's no echo cancellation, so an open mic
+    /// during playback would transcribe the bot's own voice and she'd
+    /// interrupt herself. False in voice-processing mode: the AVAudioEngine
+    /// VPIO unit cancels the speaker echo in hardware, so the mic can stay
+    /// open during playback for real barge-in — Python's `BargeInGate`
+    /// (grace window + transcription confirmation) filters any residual.
+    /// `cfg!` is a compile-time constant, so the first term folds at compile
+    /// time; the `full_duplex` override then lets headphone users open the mic
+    /// during playback on the CPAL build (no AEC, but no acoustic echo either).
+    pub fn half_duplex(&self) -> bool {
+        !cfg!(feature = "voice-processing") && !self.full_duplex.load(Ordering::Relaxed)
+    }
+
+    /// Toggle the full-duplex override live (Settings → Activation). When on,
+    /// the socket writer stops muting the mic during playback so the user can
+    /// barge in. The writer reads `half_duplex()` per frame, so this is instant.
+    pub fn set_full_duplex(&self, on: bool) {
+        self.full_duplex.store(on, Ordering::Relaxed);
+        log::info!("[audio] full_duplex = {on} (mic open during playback for barge-in)");
+    }
+
+    pub fn is_full_duplex(&self) -> bool {
+        self.full_duplex.load(Ordering::Relaxed)
     }
 
     /// Current TTS playback level (0.0–1.0) for orb audio-reactivity.

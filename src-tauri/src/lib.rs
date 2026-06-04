@@ -1148,6 +1148,7 @@ pub fn run() {
                     mic_listening,
                     get_activation_config,
                     set_activation_config,
+                    set_full_duplex,
                     open_url,
                     api_request,
                     boot_status,
@@ -1302,6 +1303,9 @@ struct ActivationConfig {
     threshold: f32,
     /// auto-close the listening window after this many seconds of silence
     listen_window_s: f32,
+    /// keep the mic open during playback so the user can barge in (full-duplex).
+    /// default false (half-duplex). safe with headphones or hardware AEC.
+    full_duplex: bool,
 }
 
 #[cfg(feature = "native-audio")]
@@ -1312,6 +1316,7 @@ impl Default for ActivationConfig {
             model: "hey_orbis".into(),
             threshold: 0.5,
             listen_window_s: 12.0,
+            full_duplex: false,
         }
     }
 }
@@ -1350,11 +1355,13 @@ fn set_activation_config(
     threshold: f32,
     listen_window_s: f32,
 ) -> Result<(), String> {
+    // Preserve full_duplex (owned by the separate set_full_duplex toggle).
     let cfg = ActivationConfig {
         style,
         model,
         threshold,
         listen_window_s,
+        ..read_activation_config(&app)
     };
     let p = activation_config_path(&app).ok_or("no app data dir")?;
     if let Some(parent) = p.parent() {
@@ -1369,6 +1376,36 @@ fn set_activation_config(
         cfg.threshold,
         cfg.listen_window_s
     );
+    Ok(())
+}
+
+/// Toggle full-duplex (keep the mic open during playback so the user can barge
+/// in). Applies LIVE to the running engine and persists for next launch.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_full_duplex(
+    on: bool,
+    app: AppHandle,
+    state: tauri::State<AudioEngineState>,
+) -> Result<(), String> {
+    // Live — the socket writer reads half_duplex() per frame.
+    if let Ok(g) = state.engine.lock() {
+        if let Some(e) = g.as_ref() {
+            e.set_full_duplex(on);
+        }
+    }
+    // Persist into activation.json, preserving the wake-word fields.
+    let cfg = ActivationConfig {
+        full_duplex: on,
+        ..read_activation_config(&app)
+    };
+    let p = activation_config_path(&app).ok_or("no app data dir")?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&p, json).map_err(|e| format!("persist full_duplex: {e}"))?;
+    log::info!("[audio] full_duplex set to {on} (live + persisted)");
     Ok(())
 }
 
@@ -1564,10 +1601,13 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                         log::info!("[audio] native engine online");
                         // open-mic activation style: mic hot from launch, no
                         // auto-close (the user-driven "always listening" mode).
-                        if read_activation_config(&app_handle).style == "open_mic" {
+                        let act = read_activation_config(&app_handle);
+                        if act.style == "open_mic" {
                             engine.set_listening(true);
                             log::info!("[wake] activation=open_mic → mic hot at launch");
                         }
+                        // Restore the persisted full-duplex (barge-in) preference.
+                        engine.set_full_duplex(act.full_duplex);
                         let wake = wake_config(&app_handle);
                         // Accept loop runs in a background task.
                         tauri::async_runtime::spawn(async move {
