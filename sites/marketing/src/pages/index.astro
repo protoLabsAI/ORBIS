@@ -49,7 +49,10 @@ import { OrbHero } from '../components/OrbHero';
     </div>
 
     <div class="flex flex-col items-center gap-4 max-w-2xl">
-      <span class="text-accent font-mono text-sm uppercase tracking-widest">Voice + Personality for your agents</span>
+      <div class="flex items-center gap-3">
+        <span class="text-accent font-mono text-sm uppercase tracking-widest">Voice + Personality for your agents</span>
+        <span class="px-2 py-0.5 rounded-full text-[11px] font-mono uppercase tracking-wider text-accent border border-indigo-400/40" style="background: rgba(129,140,248,0.10)">Beta</span>
+      </div>
 
       <h1 class="text-4xl md:text-6xl font-bold leading-[1.1] tracking-tight text-white">
         Give your AI a <span style="color: #818cf8;">voice.</span><br />
@@ -60,8 +63,7 @@ import { OrbHero } from '../components/OrbHero';
         ORBIS sits between you and your agents — listening, routing, and responding with a presence that feels native to your workflow.
       </p>
 
-      {/* <!-- Coming soon — restore when ready to launch:
-      <div class="flex flex-col sm:flex-row gap-3 mt-2">
+      <div class="flex flex-col sm:flex-row items-center gap-3 mt-2">
         <a
           href="/download"
           class="px-6 py-3 rounded-lg font-medium text-white transition-colors"
@@ -69,24 +71,16 @@ import { OrbHero } from '../components/OrbHero';
           onmouseover="this.style.background='#6366f1'"
           onmouseout="this.style.background='#818cf8'"
         >
-          Download
+          Download for Mac
         </a>
         <a
-          href="https://github.com/protoLabsAI/ORBIS"
-          target="_blank"
-          rel="noopener noreferrer"
+          href="/docs"
           class="px-6 py-3 rounded-lg font-medium text-zinc-300 border border-white/10 hover:border-white/20 transition-colors"
         >
-          View on GitHub
+          Read the docs
         </a>
       </div>
-      <span class="text-zinc-500 text-sm">Windows · macOS · Linux · Free</span>
-      --> */}
-
-      <div class="mt-2 px-5 py-2.5 rounded-lg border border-white/10 text-zinc-400 text-sm font-mono tracking-wide"
-           style="background: rgba(255,255,255,0.03)">
-        Coming soon
-      </div>
+      <span class="text-zinc-500 text-sm">macOS 13+ · Apple Silicon · Free public beta</span>
     </div>
   </section>
 
@@ -96,15 +90,15 @@ import { OrbHero } from '../components/OrbHero';
       {[
         {
           heading: 'Voice-native',
-          body: 'Wake word → speak → done. No typing, no switching windows. ORBIS hears you.',
+          body: 'Say “Hey Orbis,” speak naturally, even interrupt her mid-sentence. No typing, no window-switching — just talk.',
         },
         {
-          heading: 'Runs locally',
-          body: 'Local-first by default. Your conversations stay on your machine — no cloud required.',
+          heading: 'On-device or cloud',
+          body: 'Local speech models by default (Apple MLX) — your conversations stay on your Mac — or bring your own cloud models. Your call.',
         },
         {
           heading: 'Delegates anywhere',
-          body: 'Connect any OpenAI-compatible agent, A2A endpoint, or local model. ORBIS routes the right request to the right brain.',
+          body: 'Route to any OpenAI-compatible agent, A2A endpoint, or local model. ORBIS orchestrates the right brain for the job.',
         },
       ].map(({ heading, body }) => (
         <div class="border border-white/5 rounded-xl p-6" style="background: rgba(255,255,255,0.02)">
@@ -142,8 +136,7 @@ import { OrbHero } from '../components/OrbHero';
   <!-- CTA banner -->
   <section class="border-t border-b border-white/5 py-20" style="background: rgba(255,255,255,0.015)">
     <div class="max-w-5xl mx-auto px-6 flex flex-col items-center gap-4 text-center">
-      <h2 class="text-2xl md:text-3xl font-bold text-white">Something's coming.</h2>
-      {/* <!-- Restore when ready to launch:
+      <h2 class="text-2xl md:text-3xl font-bold text-white">Give your agents a voice.</h2>
       <a
         href="/download"
         class="px-6 py-3 rounded-lg font-medium text-white transition-colors"
@@ -151,11 +144,9 @@ import { OrbHero } from '../components/OrbHero';
         onmouseover="this.style.background='#6366f1'"
         onmouseout="this.style.background='#818cf8'"
       >
-        Download
+        Download for Mac
       </a>
-      <p class="text-zinc-500 text-sm">Windows · macOS · Linux · Free</p>
-      --> */}
-      <p class="text-zinc-500 text-sm">Windows · macOS · Linux · Coming soon</p>
+      <p class="text-zinc-500 text-sm">macOS 13+ · Apple Silicon · Free public beta</p>
     </div>
   </section>
 

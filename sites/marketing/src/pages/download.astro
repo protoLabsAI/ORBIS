@@ -5,7 +5,7 @@ import changelog from '../../data/changelog.json';
 const latest = changelog[0];
 ---
 
-<BaseLayout title="Download ORBIS" description="Download ORBIS — the voice-first AI companion for Mac. Free for Apple Silicon and Intel.">
+<BaseLayout title="Download ORBIS" description="Download ORBIS — the voice-first AI companion for Mac. Free public beta for Apple Silicon.">
   <div class="max-w-2xl mx-auto px-6 py-24">
     <div class="mb-10">
       <h1 class="text-4xl font-bold text-white mb-3">Download ORBIS</h1>
@@ -13,6 +13,7 @@ const latest = changelog[0];
         <span class="px-2 py-0.5 rounded text-sm font-mono border border-white/[0.08]" style="background: #18181b; color: #818cf8;">
           {latest.version}
         </span>
+        <span class="px-2 py-0.5 rounded text-xs font-mono uppercase tracking-wider border border-indigo-400/40" style="color: #818cf8;">Beta</span>
         <span class="text-zinc-500 text-sm">{latest.date}</span>
       </div>
     </div>
@@ -38,7 +39,7 @@ const latest = changelog[0];
       {[
         {
           label: 'Minimum',
-          items: ['macOS 13 Ventura', '8 GB RAM', 'Intel or Apple Silicon'],
+          items: ['macOS 13 Ventura', 'Apple Silicon (M1 or later)', '8 GB RAM'],
         },
         {
           label: 'Recommended',
@@ -77,10 +78,10 @@ const latest = changelog[0];
       </ol>
     </div>
 
-    <!-- Gatekeeper note -->
+    <!-- Signed + beta note -->
     <div class="border-l-2 border-indigo-400/40 pl-4 mb-10">
       <p class="text-zinc-400 text-sm">
-        <strong class="text-zinc-200">Intel note:</strong> ORBIS is unsigned on Intel — macOS will show a Gatekeeper warning. Right-click → Open to proceed.
+        <strong class="text-zinc-200">Signed &amp; notarized by Apple</strong> — opens cleanly, no Gatekeeper workarounds. ORBIS is in <strong class="text-zinc-200">public beta</strong>; expect rough edges and frequent updates.
       </p>
     </div>
 
