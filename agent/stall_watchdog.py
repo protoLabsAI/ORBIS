@@ -32,6 +32,7 @@ from pipecat.frames.frames import (
     FunctionCallsStartedFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    InterruptionFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -88,7 +89,10 @@ class StallWatchdog(FrameProcessor):
             # Placed after the LLM, these all flow downstream to here.
             self._responding = True
             self._cancel()
-        elif isinstance(frame, UserStartedSpeakingFrame):
+        elif isinstance(frame, (UserStartedSpeakingFrame, InterruptionFrame)):
+            # Next turn started, or the turn was aborted (a "cancel" / "stop
+            # listening" swallowed upstream by CancelGate) — stand down so we
+            # don't speak a recovery line into an intentionally-empty turn.
             self._cancel()
 
         await self.push_frame(frame, direction)
