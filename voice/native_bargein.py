@@ -19,6 +19,7 @@ Placement: added to the native desktop PipelineTask observers list.
 from __future__ import annotations
 
 import logging
+import time
 import weakref
 from typing import TYPE_CHECKING
 
@@ -43,14 +44,24 @@ class NativeBargeInObserver(BaseObserver):
       - CancelFrame — pipeline is being torn down; flush ring immediately
     """
 
+    # An InterruptionFrame is broadcast up + downstream through EVERY processor,
+    # so a single barge-in shows up here ~N times (N = pipeline depth). One ring
+    # flush is all the Rust side needs — debounce the duplicates.
+    _DEBOUNCE_S = 0.2
+
     def __init__(self, transport: "LocalAudioTransport") -> None:
         super().__init__()
         # Weak ref so observer doesn't hold the transport alive.
         self._transport_ref: weakref.ref["LocalAudioTransport"] = weakref.ref(transport)
+        self._last_flush = 0.0
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
         if isinstance(frame, (InterruptionFrame, CancelFrame)):
+            now = time.monotonic()
+            if now - self._last_flush < self._DEBOUNCE_S:
+                return  # same interrupt fanning out across the pipeline
+            self._last_flush = now
             await self._flush(reason=type(frame).__name__)
 
     async def _flush(self, reason: str) -> None:

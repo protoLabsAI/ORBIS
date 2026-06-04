@@ -145,6 +145,40 @@ async def test_barge_in_on_cancel_frame():
 
 
 @pytest.mark.asyncio
+async def test_burst_interruptions_debounced():
+    """A single InterruptionFrame fans out across the pipeline (~N pushes); the
+    observer must flush the Rust ring ONCE, not N times."""
+    with tempfile.TemporaryDirectory() as tmp:
+        sock_path = os.path.join(tmp, "bargein-t6.sock")
+        srv = _PipeServer()
+        await srv.start(sock_path)
+
+        transport = LocalAudioTransport(sock_path=sock_path)
+        await transport._connect()
+        await asyncio.sleep(0.03)
+
+        observer = NativeBargeInObserver(transport)
+        for _ in range(20):
+            await observer.on_push_frame(_make_frame_pushed(InterruptionFrame()))
+        await asyncio.sleep(0.1)
+        await transport._disconnect()
+        srv.stop()
+        await asyncio.sleep(0.05)
+
+        data = srv.received_bytes()
+        # Exactly ONE control frame, not 20 — debounced. Decode ns from the
+        # single header and assert the total is exactly one frame's worth.
+        assert len(data) >= HEADER_LEN, f"no flush at all (got {len(data)} bytes)"
+        direction, _, _, ns = _decode_header(data[:HEADER_LEN])
+        assert len(data) == HEADER_LEN + ns * 2, (
+            f"expected ONE debounced flush ({HEADER_LEN + ns * 2} bytes), got {len(data)}"
+        )
+        assert direction == DIR_CONTROL
+        code = struct.unpack_from("<H", data[HEADER_LEN:HEADER_LEN + 2])[0]
+        assert code == CTRL_BARGE_IN
+
+
+@pytest.mark.asyncio
 async def test_noop_when_transport_disconnected():
     """Observer does not raise when transport writer is None."""
     transport = LocalAudioTransport(sock_path="/tmp/nonexistent-orbis.sock")
