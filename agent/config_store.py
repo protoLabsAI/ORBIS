@@ -38,6 +38,10 @@ _ALLOWED_PERSONA_KEYS = {
 }
 _ALLOWED_VOICE_KEYS = {
     "tts_backend", "voice", "tts_url", "tts_model", "tts_api_key",
+    # Setup-wizard "voice models" choice: "on_device" (download Parakeet +
+    # Kokoro) | "byo" (skip; user configures their own backend). Gates the
+    # eager prewarm in app.py:prewarm_all.
+    "local_models",
 }
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
 _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
@@ -125,6 +129,11 @@ def _validate_voice(block: Any) -> dict:
             else:
                 trimmed = str(v).strip()
                 out[k] = trimmed if trimmed else None
+        elif k == "local_models":
+            val = str(v).strip().lower()
+            if val not in ("on_device", "byo"):
+                raise ValueError("voice.local_models must be 'on_device' or 'byo'")
+            out[k] = val
     return out
 
 
