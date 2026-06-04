@@ -81,7 +81,10 @@ pub struct WakeWord {
 impl WakeWord {
     /// Load `<wake>.onnx` + the shared melspec/embedding models from `dir`.
     pub fn load_from_dir(dir: &Path, wake_model: &str, threshold: f32) -> TractResult<Self> {
-        let mel = load_model(&dir.join("melspectrogram.onnx"), &[1, WINDOW_SAMPLES as i32])?;
+        let mel = load_model(
+            &dir.join("melspectrogram.onnx"),
+            &[1, WINDOW_SAMPLES as i32],
+        )?;
         // Batch all 16 embedding windows in ONE inference (input [16,76,32,1]),
         // not 16 sequential calls — the embedding's batch dim is dynamic and
         // this is ~16× fewer tract invocations.
@@ -197,14 +200,17 @@ pub fn spawn_detector(config: WakeConfig, engine: Arc<AudioEngine>) -> Sender<Ve
     std::thread::Builder::new()
         .name("orbis-wakeword".into())
         .spawn(move || {
-            let mut det =
-                match WakeWord::load_from_dir(&config.models_dir, &config.model, config.threshold) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        log::error!("[wake] detector disabled — model load failed: {e}");
-                        return;
-                    }
-                };
+            let mut det = match WakeWord::load_from_dir(
+                &config.models_dir,
+                &config.model,
+                config.threshold,
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    log::error!("[wake] detector disabled — model load failed: {e}");
+                    return;
+                }
+            };
             log::info!(
                 "[wake] detector armed: model={} threshold={:.2} dir={}",
                 config.model,
@@ -260,7 +266,8 @@ fn score_window(mel: &Model, emb: &Model, wake: &Model, audio: &[f32]) -> TractR
         }
     }
     let emb_in: Tensor =
-        tract_ndarray::Array4::from_shape_vec((WAKE_WINDOW, MEL_WINDOW, MEL_BINS, 1), batch)?.into();
+        tract_ndarray::Array4::from_shape_vec((WAKE_WINDOW, MEL_WINDOW, MEL_BINS, 1), batch)?
+            .into();
     let emb_out = emb.run(tvec!(emb_in.into()))?;
     // [16,1,1,96] row-major → 16×96, already in window order → wake input.
     let embs: Vec<f32> = emb_out[0].to_array_view::<f32>()?.iter().copied().collect();
@@ -317,7 +324,10 @@ mod tests {
         let s = score_window(&det.mel, &det.emb, &det.wake, &sine)
             .unwrap()
             .unwrap();
-        assert!((s - 0.000420).abs() < 5e-4, "sine440 score {s} != ~0.000420");
+        assert!(
+            (s - 0.000420).abs() < 5e-4,
+            "sine440 score {s} != ~0.000420"
+        );
     }
 
     /// Per-score latency. The detector runs on a DEDICATED thread that always
@@ -342,8 +352,14 @@ mod tests {
             let _ = score_window(&det.mel, &det.emb, &det.wake, &audio).unwrap();
         }
         let per = t0.elapsed() / iters;
-        eprintln!("[wake] per-score latency: {per:?} (~{:.1} scores/s)", 1000.0 / per.as_millis().max(1) as f64);
+        eprintln!(
+            "[wake] per-score latency: {per:?} (~{:.1} scores/s)",
+            1000.0 / per.as_millis().max(1) as f64
+        );
         // ≥ ~3 scores/s keeps detection responsive on the dedicated thread.
-        assert!(per.as_millis() < 300, "per-score {per:?} — detection too slow to catch a phrase");
+        assert!(
+            per.as_millis() < 300,
+            "per-score {per:?} — detection too slow to catch a phrase"
+        );
     }
 }
