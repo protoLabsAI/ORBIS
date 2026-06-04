@@ -126,9 +126,11 @@ class StallWatchdog(FrameProcessor):
             await asyncio.sleep(self._stall_secs)
             if self._responding:
                 return
-            if turn_cancelled_since(self._armed_at):
+            if self._armed_at and turn_cancelled_since(self._armed_at):
                 # The user dismissed this turn ("cancel" / "stop listening") —
-                # it's intentionally empty, not a stall. Stay quiet.
+                # it's intentionally empty, not a stall. Stay quiet. Guard on
+                # _armed_at: an unarmed watchdog (0.0 sentinel) has no arm to
+                # cancel against, so the signal must not suppress its fire.
                 return
             line = self._pick()
             logger.warning(
