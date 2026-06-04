@@ -600,35 +600,30 @@ jobs:
 
       # ── Release asset attachment (both binary + installer) ─────────────────
 
-      - name: Attach artifacts to GitHub release
+      - name: Attach DMG to the public orbis-releases repo
         if: github.event_name == 'push'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Cross-repo write: GITHUB_TOKEN is scoped to this (private) repo, so
+          # use the org GH_PAT to write to protoLabsAI/orbis-releases.
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
-        # Also uploads the updater signature alongside each installer
-        # when it exists (created by `cargo tauri build` only when
-        # TAURI_SIGNING_PRIVATE_KEY is set). Tauri's updater plugin
-        # fetches these later to verify the update bundle.
+        # The main repo is PRIVATE, so its release assets 404 for the public.
+        # Host the downloadable dmg in the PUBLIC protoLabsAI/orbis-releases repo
+        # (source + paywall stay private). Create that release if it doesn't
+        # exist yet, then upload the dmg (+ updater .sig if present). The
+        # marketing site's /download links here. Also uploads the updater
+        # signature when present (cargo tauri build emits it only when
+        # TAURI_SIGNING_PRIVATE_KEY is set).
         run: |
+          set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
-          # Collect the set of artifacts — installer is required, its
-          # .sig is optional (only produced when signing is configured).
-          # installer_sig is set by the "Locate installer artifact" step
-          # only when the updater key produced a sibling signature.
-          ARTIFACTS=("${{ env.artifact }}" "${{ env.installer }}")
+          REPO="protoLabsAI/orbis-releases"
+          ARTIFACTS=("${{ env.installer }}")
           if [ -n "${{ env.installer_sig }}" ] && [ -f "${{ env.installer_sig }}" ]; then
             ARTIFACTS+=("${{ env.installer_sig }}")
           fi
-          # release.yml creates the release on tag push after the
-          # Docker image build. This job runs in parallel and can
-          # finish first, so wait long enough for a slow Docker release
-          # instead of stranding the DMG as only a workflow artifact.
-          for _ in $(seq 1 180); do
-            if gh release view "${TAG}" >/dev/null 2>&1; then
-              gh release upload "${TAG}" "${ARTIFACTS[@]}" --clobber
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::Release ${TAG} did not appear within 30 min; DMG upload would be missing from the GitHub release."
-          exit 1
+          gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1 \
+            || gh release create "${TAG}" --repo "${REPO}" --title "ORBIS ${TAG}" \
+                 --notes "Beta — signed + notarized macOS app (Apple Silicon). Source: private protoLabsAI/ORBIS."
+          gh release upload "${TAG}" "${ARTIFACTS[@]}" --repo "${REPO}" --clobber
+          echo "Uploaded $(basename "${{ env.installer }}") to ${REPO} ${TAG}."
