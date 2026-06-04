@@ -338,6 +338,41 @@ jobs:
           echo "Signing mode: ${SIGNED}"
           cargo tauri build --features native-audio,voice-processing
 
+      - name: Restore .app from DMG for verification
+        shell: bash
+        # Tauri's DMG bundler DELETES bundle/macos/*.app after packaging it into
+        # the .dmg, but the verify steps below introspect that .app. Mount the
+        # signed+notarized DMG and ditto the .app back out (ditto preserves the
+        # code signature + xattrs) so the existing checks pass. Without this the
+        # job dies on the next step and the release-upload never runs — which is
+        # exactly why no release has ever shipped a downloadable .dmg.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          APPS=(src-tauri/target/release/bundle/macos/*.app)
+          if [ "${#APPS[@]}" -gt 0 ]; then
+            echo "App still present under bundle/macos — no restore needed."
+            exit 0
+          fi
+          DMGS=(src-tauri/target/release/bundle/dmg/*.dmg)
+          if [ "${#DMGS[@]}" -eq 0 ]; then
+            echo "::error::No .dmg under bundle/dmg — cannot restore .app for verification"
+            find src-tauri/target/release/bundle -maxdepth 3 2>/dev/null || true
+            exit 1
+          fi
+          DMG="${DMGS[0]}"
+          MNT="$(mktemp -d)"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT"
+          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
+          INNER=("$MNT"/*.app)
+          if [ "${#INNER[@]}" -eq 0 ]; then
+            echo "::error::No .app inside the mounted DMG"
+            exit 1
+          fi
+          mkdir -p src-tauri/target/release/bundle/macos
+          ditto "${INNER[0]}" "src-tauri/target/release/bundle/macos/$(basename "${INNER[0]}")"
+          echo "Restored $(basename "${INNER[0]}") from $(basename "$DMG") for verification."
+
       - name: Verify built macOS app metadata
         shell: bash
         run: |
@@ -369,16 +404,17 @@ jobs:
           archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).split()
           assert archs == ["arm64"], archs
 
-          contents = app / "Contents"
-          sidecars = [
-              p for p in contents.rglob("orbis-aarch64-apple-darwin")
-              if p.is_file() and os.access(p, os.X_OK)
-          ]
-          assert sidecars, "bundled aarch64 sidecar missing"
-          for sidecar in sidecars:
-              assert sidecar.stat().st_size > 1_000_000, sidecar
-              sidecar_archs = subprocess.check_output(["lipo", "-archs", str(sidecar)], text=True).split()
-              assert sidecar_archs == ["arm64"], sidecar_archs
+          # The PyApp sidecar (externalBin "binaries/orbis") is bundled as
+          # Contents/MacOS/orbis — tauri strips the target-triple suffix from
+          # external binaries (the shell is Contents/MacOS/orbis-tauri). The old
+          # check looked for the staged name "orbis-aarch64-apple-darwin", which
+          # never exists in the bundle.
+          sidecar = app / "Contents" / "MacOS" / "orbis"
+          assert sidecar.is_file() and os.access(sidecar, os.X_OK), \
+              f"bundled sidecar missing or not executable: {sidecar}"
+          assert sidecar.stat().st_size > 1_000_000, sidecar
+          sidecar_archs = subprocess.check_output(["lipo", "-archs", str(sidecar)], text=True).split()
+          assert sidecar_archs == ["arm64"], sidecar_archs
 
           resources = app / "Contents" / "Resources"
           assert (resources / "config" / "orbis.example.yaml").is_file()
