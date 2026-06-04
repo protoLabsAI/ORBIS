@@ -155,9 +155,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes "${{ steps.notes.outputs.notes }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          # Idempotent: re-running the release (e.g. to re-fire the Discord
+          # post after fixing the webhook) must not die on an already-existing
+          # release. Edit it in place instead of erroring.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes "${{ steps.notes.outputs.notes }}"
+          else
+            gh release create "$TAG" --title "$TAG" --notes "${{ steps.notes.outputs.notes }}"
+          fi
 
       # ── Polished release notes via the shared release-tools action ──────────
 
@@ -182,9 +188,11 @@ jobs:
           fi
 
       - name: Polish release notes + post to Discord
+        id: discord
         # Best-effort: if GATEWAY_API_KEY or DISCORD_RELEASE_WEBHOOK isn't
         # set, or the LLM call fails, the release itself still shipped above
-        # — we just skip the polished announcement.
+        # — we just skip the polished announcement. The next step makes a
+        # failure LOUD so it can't pass silently (see its comment).
         if: steps.prev_tag.outputs.tag != ''
         continue-on-error: true
         # SHA-pinned because this action has access to release-channel
@@ -196,6 +204,24 @@ jobs:
         env:
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+
+      - name: Alert if the Discord notes post failed
+        # The post is best-effort (continue-on-error above), so without this a
+        # dead webhook passes GREEN and fails SILENTLY — exactly what bit
+        # v0.2.113 (a stale repo-level DISCORD_RELEASE_WEBHOOK shadowed the org
+        # one → 404 Unknown Webhook, and the release looked fine). Surface it on
+        # the dev channel + as a CI warning, without failing the shipped release.
+        if: steps.discord.outcome == 'failure'
+        env:
+          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "::warning::Release ${TAG} shipped but the Discord notes post FAILED — check the DISCORD_RELEASE_WEBHOOK secret."
+          if [ -n "${DISCORD_DEV_WEBHOOK}" ]; then
+            MSG="⚠️ ORBIS ${TAG} released, but the release-notes Discord post FAILED (check the DISCORD_RELEASE_WEBHOOK secret). Run: ${RUN_URL}"
+            curl -sf -H 'Content-Type: application/json' -d "{\"content\": \"${MSG}\"}" "${DISCORD_DEV_WEBHOOK}" || true
+          fi
 
       # ── Failure alert ─────────────────────────────────────────────────────────
 
