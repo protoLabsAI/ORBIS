@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
-import { devModeStore, useDevMode } from '@/shared/devMode';
+import { DEVTOOLS_ENABLED, devModeStore, useDevMode } from '@/shared/devMode';
 import { ApiKeyField } from './ApiKeyField';
 import { Diagnostics } from './Diagnostics';
 import { AboutPanel } from './AboutPanel';
@@ -50,18 +50,22 @@ export function SystemPanel() {
 
         <AboutPanel />
 
-        {/* Developer mode — demoted to a quiet footer; reveals the Dev tab. */}
-        <div className="flex items-center justify-between gap-3 border-t border-edge pt-3">
-          <span className="text-helper text-fg-subtle">Developer mode</span>
-          <button
-            type="button"
-            onClick={() => devModeStore.toggle()}
-            aria-pressed={devMode}
-            className="text-helper text-fg-subtle hover:text-fg-body transition-colors"
-          >
-            {devMode ? 'On' : 'Off'}
-          </button>
-        </div>
+        {/* Developer mode is a build-time capability (VITE_ORBIS_DEVTOOLS), not
+            a user setting — never offered in a shipped build, so the Dev/Orb
+            tabs + premium-orb picker can't be reached for free. */}
+        {DEVTOOLS_ENABLED && (
+          <div className="flex items-center justify-between gap-3 border-t border-edge pt-3">
+            <span className="text-helper text-fg-subtle">Developer mode</span>
+            <button
+              type="button"
+              onClick={() => devModeStore.toggle()}
+              aria-pressed={devMode}
+              className="text-helper text-fg-subtle hover:text-fg-body transition-colors"
+            >
+              {devMode ? 'On' : 'Off'}
+            </button>
+          </div>
+        )}
       </div>
     </CollapsiblePanelProvider>
   );
