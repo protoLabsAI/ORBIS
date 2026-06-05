@@ -16,8 +16,8 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'orb' | 'voice' | 'agent' | 'system' | 'dev';
-const ALL_TABS: readonly TabName[] = ['orb', 'voice', 'agent', 'system', 'dev'];
+type TabName = 'quick' | 'voice' | 'brain' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['quick', 'voice', 'brain', 'settings', 'dev'];
 const isTabName = (value: string): value is TabName =>
   (ALL_TABS as readonly string[]).includes(value);
 
@@ -32,9 +32,11 @@ export function Drawer() {
     } catch {
       // localStorage can be unavailable in restricted webviews.
     }
-    return 'agent';
+    // Interim landing until the Quick tab gets its content (next PR), then
+    // this flips to 'quick'.
+    return 'voice';
   });
-  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'agent' : tab;
+  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'voice' : tab;
 
   useEffect(() => {
     try {
@@ -102,23 +104,23 @@ export function Drawer() {
           )}
         >
           <TabsList className={cn('grid w-full', devMode ? 'grid-cols-5' : 'grid-cols-4')}>
-            <TabsTrigger value="orb">Orb</TabsTrigger>
+            <TabsTrigger value="quick">Quick</TabsTrigger>
             <TabsTrigger value="voice">Voice</TabsTrigger>
-            <TabsTrigger value="agent">Agent</TabsTrigger>
-            <TabsTrigger value="system">System</TabsTrigger>
+            <TabsTrigger value="brain">Brain</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
-          <TabsContent value="orb" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-            <Slot name="drawer-orb" />
+          <TabsContent value="quick" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-quick" />
           </TabsContent>
           <TabsContent value="voice" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-voice" />
           </TabsContent>
-          <TabsContent value="agent" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-            <Slot name="drawer-agent" />
+          <TabsContent value="brain" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-brain" />
           </TabsContent>
-          <TabsContent value="system" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-            <Slot name="drawer-system" />
+          <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-settings" />
           </TabsContent>
           {devMode && (
             <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">

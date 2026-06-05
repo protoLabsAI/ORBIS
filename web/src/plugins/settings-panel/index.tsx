@@ -3,14 +3,14 @@ import { AgentPanel } from './AgentPanel';
 import { SystemPanel } from './SystemPanel';
 import { VoicePanel } from './VoicePanel';
 
-// The former single "Settings" tab is now three logical drawer tabs:
-// Voice (audio I/O), Agent (brain + delegates + reminders + behavior), and
-// System (access + diagnostics + dev toggle). Personality moved to the Dev tab.
+// Three logical drawer tabs: Voice (audio I/O), Brain (LLM + delegates +
+// replies), and Settings (access + setup + diagnostics + about). Personality
+// lives in the Dev tab; the Quick landing tab is its own plugin.
 registerPlugin({
   id: 'settings-panel',
   slots: {
     'drawer-voice': VoicePanel,
-    'drawer-agent': AgentPanel,
-    'drawer-system': SystemPanel,
+    'drawer-brain': AgentPanel,
+    'drawer-settings': SystemPanel,
   },
 });

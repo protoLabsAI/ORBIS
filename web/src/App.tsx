@@ -12,6 +12,7 @@ import { AmbientBridge } from './widgets/AmbientBridge';
 import './plugins/orb';
 import './plugins/status-pill';
 import './plugins/orb-settings';
+import './plugins/quick-panel';
 import './plugins/settings-panel';
 import './plugins/reminders-bell';
 import './plugins/mic-toggle';
