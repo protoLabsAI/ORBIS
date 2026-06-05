@@ -14,3 +14,4 @@ import './galaxy';
 // Premium / beta-gated variants (register behind BETA_ORBS + the paywall).
 import './edison';
 import './reactor';
+import './disco';
