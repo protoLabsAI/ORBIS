@@ -201,7 +201,8 @@ export function WakeWordSettings() {
         </div>
         {!canWake && (
           <Hint className="text-fg-faint">
-            Download and select a wake word below to enable hands-free listening.
+            Open “Wake words &amp; tuning” below to download a wake word and enable
+            hands-free listening.
           </Hint>
         )}
 
@@ -233,6 +234,15 @@ export function WakeWordSettings() {
             />
           </button>
         </div>
+
+        {/* Advanced — folded so the common push-to-talk / open-mic choice
+            isn't buried under wake-word setup + tuning. */}
+        <details className="group rounded-md border border-edge bg-raised/30">
+          <summary className="flex cursor-pointer select-none items-center justify-between px-3 py-2 text-helper uppercase tracking-wider text-fg-muted hover:text-fg-body">
+            <span>Wake words &amp; tuning</span>
+            <span className="text-fg-faint transition-transform group-open:rotate-90">›</span>
+          </summary>
+          <div className="space-y-3 px-3 pb-3 pt-1">
 
         {/* Wake-word tuning — only relevant in wake-word style */}
         {wakeSelected && (
@@ -391,6 +401,9 @@ export function WakeWordSettings() {
             {sharedReady ? 'installed' : 'downloaded automatically with your first wake word'}
           </Hint>
         )}
+          </div>
+        </details>
+
         {needsRelaunch && (
           <Hint className="text-brand/70">Takes effect when ORBIS next launches.</Hint>
         )}
