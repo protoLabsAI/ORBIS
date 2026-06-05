@@ -1,11 +1,11 @@
 import { Bloom } from '@react-three/postprocessing';
 import { useOrbState } from '../../useOrbState';
-import type { DiscoPreset } from './presets';
+import type { ReactorPreset } from './presets';
 
-/** Per-variant bloom for the disco fractal (rendered in OrbStage's composer). */
-export function DiscoPost() {
+/** Per-variant bloom for the reactor fractal (rendered in OrbStage's composer). */
+export function ReactorPost() {
   const { params } = useOrbState();
-  const base = params as unknown as DiscoPreset;
+  const base = params as unknown as ReactorPreset;
   return (
     <Bloom
       intensity={base.bloom ?? 1.0}

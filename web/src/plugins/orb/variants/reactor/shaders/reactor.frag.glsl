@@ -1,4 +1,4 @@
-// Disco ball — a KIFS (kaleidoscopic IFS) fractal raymarched inside the orb's
+// Reactor — a KIFS (kaleidoscopic IFS) fractal raymarched inside the orb's
 // hollow glass shell. Adapted from the screen-space lil-gui prototype to the
 // shared sphere-mesh ray setup: ray origin = uLocalCamPos, direction = toward
 // the fragment's local position; the mesh transform handles rotation, so no

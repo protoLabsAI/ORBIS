@@ -1,15 +1,15 @@
 import * as THREE from 'three';
 import { shaderMaterial } from '@react-three/drei';
 import { extend } from '@react-three/fiber';
-import discoVert from '../../shared/shaders/sphere.vert.glsl';
-import discoFrag from './shaders/disco.frag.glsl';
+import reactorVert from '../../shared/shaders/sphere.vert.glsl';
+import reactorFrag from './shaders/reactor.frag.glsl';
 
 /**
- * Disco core material — a KIFS fractal raymarched inside the orb's glass shell.
+ * Reactor core material — a KIFS fractal raymarched inside the orb's glass shell.
  * Uniforms drive the fold geometry, glow, and morph; colour comes from the
  * state snapshot (primary × colorBoost) per frame.
  */
-export const DiscoMaterial = shaderMaterial(
+export const ReactorMaterial = shaderMaterial(
   {
     uTime: 0,
     uLocalCamPos: new THREE.Vector3(),
@@ -25,14 +25,14 @@ export const DiscoMaterial = shaderMaterial(
     uAutoRotationSpeed: 1.0,
     uShellInner: 1.82,
   },
-  discoVert,
-  discoFrag,
+  reactorVert,
+  reactorFrag,
 );
 
-extend({ DiscoMaterial });
+extend({ ReactorMaterial });
 
 declare module '@react-three/fiber' {
   interface ThreeElements {
-    discoMaterial: import('@react-three/fiber').ThreeElements['shaderMaterial'];
+    reactorMaterial: import('@react-three/fiber').ThreeElements['shaderMaterial'];
   }
 }

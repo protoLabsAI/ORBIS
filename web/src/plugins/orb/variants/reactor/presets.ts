@@ -1,11 +1,11 @@
 /**
- * Disco variant palettes — a kaleidoscopic KIFS fractal caged in the orb's
+ * Reactor variant palettes — a kaleidoscopic KIFS fractal caged in the orb's
  * glass shell. `primaryEnergy` is the fractal's emissive tint (boosted by
  * `colorBoost`); `secondaryEnergy` tints the rim glint. Seeded from the
  * lil-gui prototype.
  */
 
-export interface DiscoPreset {
+export interface ReactorPreset {
   // --- shared base (read by stateSnapshot) ---
   primaryEnergy: string;
   secondaryEnergy: string;
@@ -16,7 +16,7 @@ export interface DiscoPreset {
   asymmetry: number;
   orbRotation: number;
   dpr: number;
-  // --- disco-specific (KIFS) ---
+  // --- reactor-specific (KIFS) ---
   foldSteps: number;
   kifsScale: number;
   kifsOffset: number;
@@ -30,9 +30,9 @@ export interface DiscoPreset {
   bloom: number;
 }
 
-export const DISCO_PRESETS: Record<string, DiscoPreset> = {
+export const REACTOR_PRESETS: Record<string, ReactorPreset> = {
   // The prototype look — periwinkle fractal, cyan rim.
-  Disco: {
+  Reactor: {
     primaryEnergy: '#7780ff', secondaryEnergy: '#00e5ff',
     density: 1.0, atmosphereGlow: 0.30, speed: 1.0, chromaticAberration: 0.012,
     asymmetry: 0.30, orbRotation: 0.25, dpr: 0.8,
@@ -40,8 +40,8 @@ export const DISCO_PRESETS: Record<string, DiscoPreset> = {
     brightness: 1.42, colorBoost: 3.0, lightSpeed: 5.5, maxSteps: 110,
     autoRotationSpeed: 1.0, shellInner: 1.82, bloom: 1.0,
   },
-  // Mirrorball — near-white, tight folds, fast glint.
-  Mirrorball: {
+  // Fusion — near-white, tight folds, fast glint.
+  Fusion: {
     primaryEnergy: '#dbe4ff', secondaryEnergy: '#ffffff',
     density: 1.0, atmosphereGlow: 0.34, speed: 1.1, chromaticAberration: 0.016,
     asymmetry: 0.35, orbRotation: 0.30, dpr: 0.8,
@@ -78,4 +78,4 @@ export const DISCO_PRESETS: Record<string, DiscoPreset> = {
   },
 };
 
-export type DiscoPaletteName = keyof typeof DISCO_PRESETS;
+export type ReactorPaletteName = keyof typeof REACTOR_PRESETS;

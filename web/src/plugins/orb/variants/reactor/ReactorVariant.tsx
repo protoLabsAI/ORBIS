@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
-import { DiscoMaterial } from './materials';
-import type { DiscoPreset } from './presets';
+import { ReactorMaterial } from './materials';
+import type { ReactorPreset } from './presets';
 import { useAudioEnvelopes } from '../../shared/hooks/useAudioEnvelopes';
 import { useStateCrossfade } from '../../shared/hooks/useStateCrossfade';
 import { useIdleBreath } from '../../shared/hooks/useIdleBreath';
@@ -12,17 +12,17 @@ import { BREATH_AMP, MAX_DELTA_S, ROT_WRAP, ROTATION_SCALE, TIME_WRAP } from '..
 import type { VariantProps } from '../registry';
 
 /**
- * Disco variant — a KIFS fractal raymarched inside the orb's glass shell.
+ * Reactor variant — a KIFS fractal raymarched inside the orb's glass shell.
  * Mirrors the fractal driver: shared hooks own state/audio/breath/pointer, the
  * sphere mesh's rotation drives the spin (so the shader needs no rotation
- * matrix), and only the KIFS uniforms are disco-specific. Bloom via DiscoPost.
+ * matrix), and only the KIFS uniforms are reactor-specific. Bloom via ReactorPost.
  */
-export function DiscoVariant({ voiceState, botStream, localStream }: VariantProps) {
+export function ReactorVariant({ voiceState, botStream, localStream }: VariantProps) {
   const { camera, gl } = useThree();
   const meshRef = useRef<THREE.Mesh>(null);
-  const matRef = useRef<InstanceType<typeof DiscoMaterial>>(null);
+  const matRef = useRef<InstanceType<typeof ReactorMaterial>>(null);
 
-  const { base, effectiveState } = useComposedBase<DiscoPreset>(voiceState);
+  const { base, effectiveState } = useComposedBase<ReactorPreset>(voiceState);
   const { dBotRef, dUserRef } = useAudioEnvelopes({ botStream, localStream });
   const { snapRef } = useStateCrossfade(effectiveState, base);
   const { breathNormRef } = useIdleBreath();
@@ -91,7 +91,7 @@ export function DiscoVariant({ voiceState, botStream, localStream }: VariantProp
 
   return (
     <mesh ref={meshRef} geometry={geometry}>
-      <discoMaterial
+      <reactorMaterial
         ref={matRef}
         transparent
         side={THREE.DoubleSide}

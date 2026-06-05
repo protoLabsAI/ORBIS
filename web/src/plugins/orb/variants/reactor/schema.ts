@@ -1,7 +1,7 @@
 import type { FieldSpec } from '../../shared/field-types';
 
-/** Disco variant field schema — consumed by the customization panel. */
-export const DISCO_FIELDS: FieldSpec[] = [
+/** Reactor variant field schema — consumed by the customization panel. */
+export const REACTOR_FIELDS: FieldSpec[] = [
   { kind: 'color',  key: 'primaryEnergy',       label: 'Core',          section: 'color' },
   { kind: 'color',  key: 'secondaryEnergy',     label: 'Rim',           section: 'color' },
 
