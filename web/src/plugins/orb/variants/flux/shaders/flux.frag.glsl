@@ -81,7 +81,10 @@ void main() {
     if (t > tExit) break;
 
     vec3 tint = uColorBase;
-    tint *= exp(0.14 * t);
+    // Distance-into-volume, NOT absolute ray length: the orb camera sits ~13
+    // units out (vs the prototype's ~4.5), so exp(0.14 * t) inflated the glow
+    // ~3×. Measure the exponential build-up from the volume entry instead.
+    tint *= exp(0.14 * (t - tEnter));
     tint *= exp(1.0 * length(pos));
     tint /= (80.0 + d * 1500.0);
 

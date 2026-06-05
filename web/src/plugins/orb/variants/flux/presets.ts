@@ -34,7 +34,7 @@ export const FLUX_PRESETS: Record<string, FluxPreset> = {
     density: 1.0, atmosphereGlow: 0.30, speed: 1.0, chromaticAberration: 0.014,
     asymmetry: 0.30, orbRotation: 0.18, dpr: 0.8,
     iterations: 20, distortion: 2.2, pulseIntensity: 2.5, fractalScale: 0.16,
-    brightness: 0.6, cycleSpeed: 0.14, bloom: 1.0,
+    brightness: 0.5, cycleSpeed: 0.14, bloom: 1.0,
   },
   // Ember — red/orange/gold, dense + warm.
   Ember: {
@@ -42,7 +42,7 @@ export const FLUX_PRESETS: Record<string, FluxPreset> = {
     density: 1.0, atmosphereGlow: 0.28, speed: 0.9, chromaticAberration: 0.012,
     asymmetry: 0.25, orbRotation: 0.16, dpr: 0.8,
     iterations: 18, distortion: 2.0, pulseIntensity: 3.0, fractalScale: 0.15,
-    brightness: 0.62, cycleSpeed: 0.10, bloom: 0.95,
+    brightness: 0.5, cycleSpeed: 0.10, bloom: 0.95,
   },
   // Tide — teal/cyan/blue, slow + cool.
   Tide: {
@@ -50,7 +50,7 @@ export const FLUX_PRESETS: Record<string, FluxPreset> = {
     density: 1.0, atmosphereGlow: 0.32, speed: 0.95, chromaticAberration: 0.014,
     asymmetry: 0.30, orbRotation: 0.18, dpr: 0.8,
     iterations: 20, distortion: 2.3, pulseIntensity: 2.2, fractalScale: 0.17,
-    brightness: 0.6, cycleSpeed: 0.12, bloom: 1.05,
+    brightness: 0.5, cycleSpeed: 0.12, bloom: 1.05,
   },
   // Toxic — acid green/lime/chartreuse, fast cycle.
   Toxic: {
@@ -58,7 +58,7 @@ export const FLUX_PRESETS: Record<string, FluxPreset> = {
     density: 1.0, atmosphereGlow: 0.30, speed: 1.05, chromaticAberration: 0.018,
     asymmetry: 0.35, orbRotation: 0.20, dpr: 0.8,
     iterations: 22, distortion: 2.4, pulseIntensity: 2.8, fractalScale: 0.18,
-    brightness: 0.58, cycleSpeed: 0.20, bloom: 1.0,
+    brightness: 0.48, cycleSpeed: 0.20, bloom: 1.0,
   },
   // Nova — white/blue/pink, bright + dreamy.
   Nova: {
@@ -66,7 +66,7 @@ export const FLUX_PRESETS: Record<string, FluxPreset> = {
     density: 1.0, atmosphereGlow: 0.36, speed: 1.0, chromaticAberration: 0.020,
     asymmetry: 0.40, orbRotation: 0.18, dpr: 0.8,
     iterations: 20, distortion: 2.2, pulseIntensity: 2.4, fractalScale: 0.16,
-    brightness: 0.66, cycleSpeed: 0.16, bloom: 1.1,
+    brightness: 0.55, cycleSpeed: 0.16, bloom: 1.1,
   },
 };
 
