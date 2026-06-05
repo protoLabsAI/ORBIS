@@ -8,7 +8,16 @@
 //!
 //! Hand-rolled FFI (no bindgen dep) — the surface is tiny: enumerate input
 //! devices, and set the current device on an audio unit.
-#![cfg(all(feature = "voice-processing", target_os = "macos"))]
+//!
+//! The *enumeration* half (`input_devices` / `list_input_device_names`) is pure
+//! `AudioObjectGetPropertyData` property reads — no stream/IOProc is ever
+//! opened, so it never lights the macOS mic indicator. That's why
+//! `AudioEngine::list_input_devices` routes through here on macOS instead of
+//! CPAL's `input_devices()`, which probes each device (opening it) and so
+//! flickered the mic indicator + stalled the Voice tab. The AudioUnit *setter*
+//! half stays behind `voice-processing` (it needs the AVAudioEngine input
+//! node's AUHAL).
+#![cfg(target_os = "macos")]
 
 use std::os::raw::c_void;
 
@@ -27,7 +36,9 @@ const K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL: u32 = fourcc(b"glob");
 const K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT: u32 = fourcc(b"inpt");
 const K_AUDIO_OBJECT_PROPERTY_NAME: u32 = fourcc(b"lnam");
 const K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION: u32 = fourcc(b"slay");
+#[cfg(feature = "voice-processing")]
 const K_AUDIO_OUTPUT_UNIT_PROPERTY_CURRENT_DEVICE: u32 = 2000;
+#[cfg(feature = "voice-processing")]
 const K_AUDIO_UNIT_SCOPE_GLOBAL: u32 = 0;
 const K_CFSTRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
@@ -70,6 +81,7 @@ extern "C" {
     ) -> OSStatus;
 }
 
+#[cfg(feature = "voice-processing")]
 #[link(name = "AudioToolbox", kind = "framework")]
 extern "C" {
     fn AudioUnitSetProperty(
@@ -147,6 +159,13 @@ fn input_devices() -> Vec<(AudioDeviceID, String)> {
     out
 }
 
+/// Input device names only — for the mic picker. Pure HAL property reads; no
+/// audio stream is opened, so the macOS mic indicator stays dark (unlike CPAL's
+/// `input_devices()` probing, which opens each device).
+pub fn list_input_device_names() -> Vec<String> {
+    input_devices().into_iter().map(|(_, name)| name).collect()
+}
+
 /// Input channel count for a device (0 = not an input device).
 unsafe fn device_input_channel_count(id: AudioDeviceID) -> u32 {
     let cfg_addr = addr(
@@ -214,6 +233,7 @@ unsafe fn device_name(id: AudioDeviceID) -> Option<String> {
 }
 
 /// Resolve a device name (as listed to the user) to its AudioDeviceID.
+#[cfg(feature = "voice-processing")]
 pub fn input_device_id_for_name(name: &str) -> Option<AudioDeviceID> {
     input_devices()
         .into_iter()
@@ -223,6 +243,7 @@ pub fn input_device_id_for_name(name: &str) -> Option<AudioDeviceID> {
 
 /// Set the current input device on an audio unit (the AVAudioEngine input
 /// node's AUHAL). `unit` is the raw `AudioUnit` from `-[AVAudioIONode audioUnit]`.
+#[cfg(feature = "voice-processing")]
 pub fn set_current_input_device(unit: *mut c_void, device_id: AudioDeviceID) -> Result<(), String> {
     let status = unsafe {
         AudioUnitSetProperty(
