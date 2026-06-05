@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.2.120",
+    "date": "2026-06-05",
+    "changes": [
+      "Opening Voice settings no longer flickers the microphone indicator",
+      "Polished the on/off toggle switches throughout settings"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.120/ORBIS-0.2.120-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.119",
     "date": "2026-06-05",
     "changes": [
