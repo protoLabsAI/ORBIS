@@ -183,7 +183,10 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 cd "${ROOT}/web"
 bun install --silent
-bun run build
+# Local dev builds get the developer tools (Dev/Orb tabs, premium-orb picker).
+# CI release builds do NOT set this, so the dev surface — and the paywall
+# bypass it would open — never ships. See web/src/shared/devMode.ts.
+VITE_ORBIS_DEVTOOLS=1 bun run build
 [ -f "${ROOT}/web/dist/index.html" ] || { echo "bun build produced no dist/index.html" >&2; exit 3; }
 ok "frontend built ($(stat -f %m "${ROOT}/web/dist/index.html"))"
 cd "${ROOT}"
