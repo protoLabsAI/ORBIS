@@ -12,6 +12,7 @@ registerVariant({
   palettes: SPECTRUM_PRESETS as unknown as Record<string, Record<string, unknown>>,
   fields: SPECTRUM_FIELDS,
   defaultPalette: 'Rainbow',
+  premium: true,
   moodDefaults: withSharedMoodDefaults({
     // Spectrum-specific: the soft fade boundary + smoothing carry the
     // mood feel. Aroused = sharper boundary + brighter glow; valence =

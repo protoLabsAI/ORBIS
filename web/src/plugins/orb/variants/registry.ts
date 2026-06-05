@@ -40,6 +40,13 @@ export interface VariantSpec {
    * without this still react via the user-authored override path.
    */
   moodDefaults?: MoodOverrides;
+  /** Paid/premium variant — gated behind the customization unlock + beta flag. */
+  premium?: boolean;
+  /**
+   * Optional postprocessing rendered inside OrbStage's EffectComposer while
+   * this variant is active (e.g. a bloom pass). Other variants are untouched.
+   */
+  PostEffects?: ComponentType;
 }
 
 type Listener = () => void;

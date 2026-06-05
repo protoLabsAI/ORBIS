@@ -12,6 +12,7 @@ registerVariant({
   palettes: GALAXY_PRESETS as unknown as Record<string, Record<string, unknown>>,
   fields: GALAXY_FIELDS,
   defaultPalette: 'Andromeda',
+  premium: true,
   moodDefaults: withSharedMoodDefaults({
     // Galaxy-specific: plasma brightness + voids carry mood. Aroused
     // = brighter, denser plasma + more voice-tint bleed; valence =

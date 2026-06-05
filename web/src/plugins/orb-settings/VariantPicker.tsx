@@ -34,7 +34,16 @@ export function VariantPicker() {
           </SelectTrigger>
           <SelectContent>
             {variants.map((v) => (
-              <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+              <SelectItem key={v.id} value={v.id}>
+                <span className="flex items-center gap-2">
+                  {v.name}
+                  {v.premium && (
+                    <span className="text-micro uppercase tracking-wider text-brand">
+                      Premium
+                    </span>
+                  )}
+                </span>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>

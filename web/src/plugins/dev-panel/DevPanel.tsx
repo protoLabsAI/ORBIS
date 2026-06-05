@@ -1,5 +1,6 @@
 import { Panel } from '@/components/ui/panel';
 import { LogsPanel } from '@/plugins/logs-panel/LogsPanel';
+import { BetaOrbsPanel } from './BetaOrbsPanel';
 
 /**
  * Developer drawer tab — feature flags and the live native event log. The
@@ -16,6 +17,7 @@ export function DevPanel() {
           Runtime flags will live here. None defined yet.
         </p>
       </Panel>
+      <BetaOrbsPanel />
       <details className="group rounded-lg border border-edge bg-raised/30">
         <summary className="flex cursor-pointer select-none items-center justify-between px-3 py-2 font-mono text-xs uppercase tracking-wider text-fg-muted hover:text-fg-body">
           <span>Event log</span>
