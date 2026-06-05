@@ -1,0 +1,27 @@
+name = "orbis-license-issuer"
+main = "src/index.js"
+compatibility_date = "2026-04-26"
+workers_dev = true
+
+# Stripe → mint Ed25519 license → store here → email + success page.
+# Create the namespace once and paste the id below:
+#   wrangler kv namespace create LICENSES
+[[kv_namespaces]]
+binding = "LICENSES"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+STRIPE_PRICE_ID = "REPLACE_WITH_STRIPE_PRICE_ID"   # the $9 one-time price
+SUCCESS_URL = "https://orbis.protolabs.studio/unlock/success"
+CANCEL_URL = "https://orbis.protolabs.studio/unlock"
+EMAIL_FROM = "ORBIS <licenses@orbis.protolabs.studio>"
+ALLOW_ORIGIN = "*"
+# Flip to "true" only AFTER enabling Stripe Tax on the account, else Checkout
+# creation errors.
+STRIPE_AUTOMATIC_TAX = "false"
+
+# Secrets (never in this file) — set with `wrangler secret put <NAME>`:
+#   STRIPE_SECRET_KEY      sk_live_… / sk_test_…
+#   STRIPE_WEBHOOK_SECRET  whsec_…  (from the webhook endpoint you point at /webhook)
+#   LICENSE_PRIVATE_KEY    the Ed25519 JWK from `npm run gen-keypair`
+#   RESEND_API_KEY         re_…     (optional; key still shows on the success page)

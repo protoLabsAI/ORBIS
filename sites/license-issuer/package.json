@@ -1,0 +1,16 @@
+{
+  "name": "orbis-license-issuer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ORBIS paid-unlock issuer: Stripe Checkout → mint Ed25519 license → deliver. Cloudflare Worker.",
+  "scripts": {
+    "gen-keypair": "node scripts/gen-keypair.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

@@ -1,0 +1,12 @@
+# Copy to .dev.vars for `wrangler dev` (gitignored). These mirror the production
+# secrets/vars so you can exercise the full flow locally with Stripe test keys.
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+LICENSE_PRIVATE_KEY={"kty":"OKP","crv":"Ed25519","d":"...","x":"..."}
+RESEND_API_KEY=
+STRIPE_PRICE_ID=price_xxx
+SUCCESS_URL=http://localhost:8787/success
+CANCEL_URL=http://localhost:8787/
+EMAIL_FROM=ORBIS <licenses@orbis.protolabs.studio>
+ALLOW_ORIGIN=*
+STRIPE_AUTOMATIC_TAX=false
