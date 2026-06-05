@@ -36,6 +36,8 @@ import {
 } from '../orb/broadcast';
 import { useActiveVariant, useOrbOverrides, useOrbState } from '../orb/useOrbState';
 import { simulationStore } from '../orb/simulationStore';
+import { useEntitlement } from './useEntitlement';
+import { UnlockCustomization } from './UnlockCustomization';
 
 export function OrbSettingsPanel() {
   const variant = useActiveVariant();
@@ -54,6 +56,10 @@ export function OrbSettingsPanel() {
   // about "which context is active" — it just reads current state/mood.
   const [ctx, setCtx] = useState<AuthoringContext>({ kind: 'base' });
   const [simulate, setSimulate] = useState(false);
+
+  // Paid-unlock gate. When locked, the editor below is replaced by the unlock
+  // CTA; when licensed, a compact "unlocked / deactivate" footer is appended.
+  const ent = useEntitlement();
 
   // Release simulation pins on unmount and flush any pending save.
   useEffect(() => () => {
@@ -159,6 +165,12 @@ export function OrbSettingsPanel() {
 
   if (!variant) return null;
 
+  // Locked: the whole editor is the paid feature — swap it for the unlock CTA.
+  // (Starter-orb selection is free and lives in the setup wizard / select_starter.)
+  if (ent.locked) {
+    return <UnlockCustomization customization={ent.customization} onChange={ent.refresh} />;
+  }
+
   const paletteNames = Object.keys(variant.palettes);
 
   // Resolve the active override bucket for the current context.
@@ -247,6 +259,10 @@ export function OrbSettingsPanel() {
             Reset all deltas for this context
           </button>
         </div>
+      )}
+
+      {ent.customization?.licensed && (
+        <UnlockCustomization customization={ent.customization} onChange={ent.refresh} />
       )}
       </div>
     </CollapsiblePanelProvider>
