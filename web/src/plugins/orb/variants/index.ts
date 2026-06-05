@@ -11,3 +11,5 @@ import './tetra';
 import './lattice';
 import './spectrum';
 import './galaxy';
+// Premium / beta-gated variants (register behind BETA_ORBS + the paywall).
+import './edison';

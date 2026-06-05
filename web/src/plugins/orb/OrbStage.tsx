@@ -51,6 +51,7 @@ export function OrbStage() {
   }
 
   const Variant = variant.Component;
+  const Post = variant.PostEffects;
 
   return (
     <div
@@ -67,6 +68,7 @@ export function OrbStage() {
         <Variant voiceState={voiceState} botStream={botStream} localStream={localStream} />
         <EffectComposer enabled>
           <CADriver />
+          {Post ? <Post /> : <></>}
         </EffectComposer>
       </Canvas>
     </div>
