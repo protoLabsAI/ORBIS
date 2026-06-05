@@ -4,6 +4,7 @@ import { Check, Download, Loader2, Trash2 } from 'lucide-react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { Hint } from '@/components/ui/hint';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { api, type WakeModel } from '@/lib/api';
 import { useWakewordDownloads } from '@/shared/wakeword/useWakewordDownloads';
@@ -215,24 +216,12 @@ export function WakeWordSettings() {
               headphones — on speakers she may hear herself and interrupt her own reply.
             </Hint>
           </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={cfg.full_duplex}
+          <Switch
+            className="mt-0.5"
+            checked={cfg.full_duplex}
+            onCheckedChange={saveFullDuplex}
             aria-label="Allow interruptions (full-duplex)"
-            onClick={() => saveFullDuplex(!cfg.full_duplex)}
-            className={cn(
-              'mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors',
-              cfg.full_duplex ? 'border-brand bg-brand/80' : 'border-edge bg-raised',
-            )}
-          >
-            <span
-              className={cn(
-                'inline-block size-4 rounded-full bg-fg transition-transform',
-                cfg.full_duplex ? 'translate-x-4' : 'translate-x-0.5',
-              )}
-            />
-          </button>
+          />
         </div>
 
         {/* Advanced — folded so the common push-to-talk / open-mic choice

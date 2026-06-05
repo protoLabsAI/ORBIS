@@ -6,6 +6,7 @@ import { api, type OrbisConfig, type StarterOrb } from '@/lib/api';
 import { VerbositySelector } from '@/plugins/settings-panel/VerbositySelector';
 import { SectionLabel } from '@/components/ui/section-label';
 import { Hint } from '@/components/ui/hint';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -96,8 +97,8 @@ export function QuickPanel() {
       <div className="space-y-3.5">
         <SectionLabel>Quick controls</SectionLabel>
 
-        <Switch label="Microphone" on={micListening} onToggle={toggleMic} />
-        <Switch label="Allow interruptions" on={act.full_duplex} onToggle={() => act.setFullDuplex(!act.full_duplex)} />
+        <SwitchRow label="Microphone" on={micListening} onToggle={toggleMic} />
+        <SwitchRow label="Allow interruptions" on={act.full_duplex} onToggle={() => act.setFullDuplex(!act.full_duplex)} />
 
         <OrbSwitcher />
 
@@ -148,7 +149,7 @@ function StatusRow({
   );
 }
 
-function Switch({
+function SwitchRow({
   label,
   on,
   onToggle,
@@ -160,24 +161,7 @@ function Switch({
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-fg-body">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        aria-label={label}
-        onClick={onToggle}
-        className={cn(
-          'relative h-5 w-9 shrink-0 rounded-full border transition-colors',
-          on ? 'border-brand bg-brand/80' : 'border-edge bg-raised',
-        )}
-      >
-        <span
-          className={cn(
-            'absolute top-0.5 h-3.5 w-3.5 rounded-full bg-fg transition-transform',
-            on ? 'translate-x-4' : 'translate-x-0.5',
-          )}
-        />
-      </button>
+      <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
     </div>
   );
 }
