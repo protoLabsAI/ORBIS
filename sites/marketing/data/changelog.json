@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.2.118",
+    "date": "2026-06-04",
+    "changes": [
+      "Redesigned settings — a Quick tab with at-a-glance status and your most-used controls",
+      "Switch between orb presets right from the Quick tab",
+      "Tidier voice settings — wake-word setup folds out of the way"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.118/ORBIS-0.2.118-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.117",
     "date": "2026-06-04",
     "changes": [
