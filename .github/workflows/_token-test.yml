@@ -1,0 +1,17 @@
+name: _token-test
+on: { workflow_dispatch: {} }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Can GH_PAT write to orbis-releases?
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          echo "ok $(date)" > check.txt
+          gh release view _token-check --repo protoLabsAI/orbis-releases >/dev/null 2>&1 \
+            || gh release create _token-check --repo protoLabsAI/orbis-releases --title "token check" --notes "write test"
+          gh release upload _token-check check.txt --repo protoLabsAI/orbis-releases --clobber
+          echo "SUCCESS: GH_PAT can write to protoLabsAI/orbis-releases"
+          gh release delete _token-check --repo protoLabsAI/orbis-releases --yes --cleanup-tag

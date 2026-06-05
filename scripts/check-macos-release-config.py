@@ -408,8 +408,9 @@ def check_workflow() -> None:
     )
     require_contains(
         workflow,
-        "seq 1 180",
-        "desktop release upload must wait for the parallel release workflow",
+        "protoLabsAI/orbis-releases",
+        "desktop release must upload the DMG to the public orbis-releases repo "
+        "(the private main repo's assets 404 publicly)",
     )
     require_contains(
         workflow,
@@ -418,8 +419,9 @@ def check_workflow() -> None:
     )
     require_contains(
         workflow,
-        "DMG upload would be missing from the GitHub release",
-        "desktop release upload must fail instead of silently dropping the DMG",
+        'gh release upload "${TAG}" "${ARTIFACTS[@]}" --repo',
+        "desktop release upload must fail instead of silently dropping the DMG "
+        "(set -euo pipefail makes a failed upload fail the job)",
     )
     require_contains(
         workflow,
