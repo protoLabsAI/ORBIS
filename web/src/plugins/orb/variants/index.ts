@@ -24,4 +24,3 @@ import './galaxy';
 import './edison';
 import './reactor';
 import './flux';
-import './geode';
