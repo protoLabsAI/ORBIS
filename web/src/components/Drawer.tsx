@@ -32,11 +32,9 @@ export function Drawer() {
     } catch {
       // localStorage can be unavailable in restricted webviews.
     }
-    // Interim landing until the Quick tab gets its content (next PR), then
-    // this flips to 'quick'.
-    return 'voice';
+    return 'quick';
   });
-  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'voice' : tab;
+  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'quick' : tab;
 
   useEffect(() => {
     try {
