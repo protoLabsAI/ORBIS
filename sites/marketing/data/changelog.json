@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.2.121",
+    "date": "2026-06-05",
+    "changes": [
+      "Packaging fix — developer-only tools are no longer included in the released app"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.121/ORBIS-0.2.121-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.120",
     "date": "2026-06-05",
     "changes": [
