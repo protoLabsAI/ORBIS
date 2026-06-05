@@ -8,10 +8,11 @@ export type UISlotName =
   | 'stage' // primary visual area (orb)
   | 'overlay-top' // floating top, e.g. status chip, trace chip
   | 'overlay-bottom' // floating bottom, e.g. status pill, transcript strip
-  | 'drawer-orb' // drawer tab: orb controls (palette, sliders)
-  | 'drawer-voice' // drawer tab: audio I/O (mic, STT, TTS)
-  | 'drawer-agent' // drawer tab: brain LLM, delegates, reminders, behavior
-  | 'drawer-system' // drawer tab: access, diagnostics, dev toggle
+  | 'drawer-quick' // drawer tab: at-a-glance status + most-used toggles (landing)
+  | 'drawer-orb' // drawer tab: orb customization editor (disabled for beta — tab not rendered)
+  | 'drawer-voice' // drawer tab: audio I/O (mic, activation, STT, TTS)
+  | 'drawer-brain' // drawer tab: LLM, delegates, replies
+  | 'drawer-settings' // drawer tab: access, setup, diagnostics, about
   | 'drawer-dev'; // drawer tab: developer observability
 
 export interface Plugin {
