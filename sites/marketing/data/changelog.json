@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.2.119",
+    "date": "2026-06-05",
+    "changes": [
+      "Edison — a new premium orb: a living filament bulb of writhing light",
+      "Reactor — a new premium orb: a kaleidoscopic energy core caged in glass",
+      "Flux — a new premium orb: a fluid, ever-shifting plasma bloom"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.119/ORBIS-0.2.119-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.118",
     "date": "2026-06-04",
     "changes": [
