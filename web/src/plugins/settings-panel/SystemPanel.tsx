@@ -6,9 +6,10 @@ import { Diagnostics } from './Diagnostics';
 import { AboutPanel } from './AboutPanel';
 
 /**
- * System tab — operational/admin: owner API key (access), the WKWebView
- * cache-clear diagnostic, and the developer-mode toggle that reveals the Dev
- * tab. Not part of normal day-to-day use.
+ * Settings tab — owner access, setup, diagnostics, and about. The developer-mode
+ * toggle (which reveals the Dev tab) is demoted to a quiet footer line rather
+ * than a section of its own, so the tab reads as four real settings instead of
+ * a grab-bag.
  */
 export function SystemPanel() {
   const devMode = useDevMode();
@@ -19,7 +20,7 @@ export function SystemPanel() {
         <Panel title="Access">
           <ApiKeyField />
         </Panel>
-        <Diagnostics />
+
         <Panel title="Setup">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
@@ -44,19 +45,23 @@ export function SystemPanel() {
             </Button>
           </div>
         </Panel>
-        <Panel title="Developer">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xs text-fg-body">Developer mode</div>
-            <Button
-              size="sm"
-              variant={devMode ? 'default' : 'secondary'}
-              onClick={() => devModeStore.toggle()}
-            >
-              {devMode ? 'On' : 'Off'}
-            </Button>
-          </div>
-        </Panel>
+
+        <Diagnostics />
+
         <AboutPanel />
+
+        {/* Developer mode — demoted to a quiet footer; reveals the Dev tab. */}
+        <div className="flex items-center justify-between gap-3 border-t border-edge pt-3">
+          <span className="text-helper text-fg-subtle">Developer mode</span>
+          <button
+            type="button"
+            onClick={() => devModeStore.toggle()}
+            aria-pressed={devMode}
+            className="text-helper text-fg-subtle hover:text-fg-body transition-colors"
+          >
+            {devMode ? 'On' : 'Off'}
+          </button>
+        </div>
       </div>
     </CollapsiblePanelProvider>
   );
