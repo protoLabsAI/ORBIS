@@ -40,6 +40,10 @@ jobs:
       - name: Build marketing site
         run: bun run build
         working-directory: sites/marketing
+        env:
+          # The deployed license-issuer Worker URL, baked into /unlock + the
+          # in-app purchase flow. A repo variable — it's just a public URL.
+          PUBLIC_LICENSE_ISSUER_URL: ${{ vars.PUBLIC_LICENSE_ISSUER_URL }}
 
       # --- Docs (VitePress / npm) served at /docs ---
       - uses: actions/setup-node@v6
