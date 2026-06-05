@@ -181,7 +181,8 @@ with `ORBIS_DB_PATH`). Tables:
   independent↔clingy, curious↔bored)
 - `personality_events` — append-only drift log
 - `mood` — short-term (valence / arousal / guardedness)
-- `entitlement_cache` — local mirror of Stripe verification
+- `entitlement_cache` — the stored offline license key, re-verified
+  against the build's public key on every gate check
 
 No graph DB. No Neo4j. No vector DB. The "poor-man's Graphiti on
 SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
@@ -202,25 +203,30 @@ SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
 - `config/delegates.yaml` — A2A / OpenAI-compat endpoints the
   `delegate_to` tool can reach.
 
-## Paid unlock (optional)
+## Paid unlock — orb customization ($9 one-time)
 
-The orb's full customization editor (change variant, palette,
-shader params, save presets) is behind a one-time Stripe payment.
-Without Stripe env vars set, customization is open by default
-(dev mode). With Stripe configured:
+ORBIS is free to download. The orb's full customization editor (variant,
+palette, shader params, saved presets) is a one-time **$9** unlock. Persona
+and voice settings are always free, and starter orbs are free at setup.
 
-- `POST /api/entitlement/checkout` — creates a Stripe Checkout
-  Session, returns the URL.
-- `POST /api/stripe/webhook` — verifies the signature and grants
-  the entitlement on `checkout.session.completed` / revokes on
-  `charge.refunded`.
-- Local SQLite cache tolerates offline periods up to
-  `ENTITLEMENT_CACHE_DAYS` (default 7); a daily lifespan task
-  re-queries Stripe to extend.
+The unlock is an **offline Ed25519-signed license key** — no Stripe secret and
+no network call ship in the app. Issuance is owned end to end by a Cloudflare
+Worker (`sites/license-issuer/`):
 
-Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and
-`STRIPE_PRICE_CUSTOMIZATION` in `.env` to enable. Point the Stripe
-dashboard webhook at `POST https://<your-host>/api/stripe/webhook`.
+```
+Buyer → Stripe Checkout ($9) → Worker /webhook
+            (verify signature → mint Ed25519 license → email key + success page)
+Buyer pastes the key into ORBIS  (Settings → Orb → Unlock)
+            → verified offline against the build's public key → unlocked (perpetual)
+```
+
+- App side: `agent/license.py` (offline verify) + `agent/entitlement.py` (the
+  `ORBIS_GATE` open|closed gate) + `POST /api/entitlement/activate`. The `orb`
+  block of `POST /api/config` returns 403 without a valid license.
+- The gate is **open** in dev/local builds and **closed** in distribution
+  builds compiled with the production license public key (`ORBIS_LICENSE_PUBKEY`,
+  set from a repo variable — see `.github/workflows/desktop-build.yml`).
+- Issuer setup + the full go-live runbook: `sites/license-issuer/README.md`.
 
 ## Testing
 
