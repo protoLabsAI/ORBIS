@@ -319,17 +319,33 @@ impl AudioEngine {
         }
     }
 
-    /// List all available CPAL input device names.
+    /// List available input device names for the mic picker.
+    ///
+    /// On macOS this goes through the Core Audio HAL
+    /// (`coreaudio_devices::list_input_device_names`) — pure property reads, no
+    /// stream is opened — so enumerating never lights the mic indicator. CPAL's
+    /// `input_devices()` *probes* (opens) each device on recent macOS, which
+    /// made the indicator flicker on/off and stalled the Voice tab on mount.
+    /// CPAL stays the path on other platforms (Linux CI).
     pub fn list_input_devices() -> Vec<String> {
+        #[cfg(target_os = "macos")]
+        {
+            let names = super::coreaudio_devices::list_input_device_names();
+            if !names.is_empty() {
+                return names;
+            }
+            // HAL found nothing — fall through to the CPAL probe below as a
+            // last resort (rare; e.g. an empty HAL device list).
+        }
+
         let host = cpal::default_host();
         let mut names: Vec<String> = host
             .input_devices()
             .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
             .unwrap_or_default();
-        // macOS (hardened runtime / Tahoe) sometimes returns an empty
-        // input_devices() enumeration even when a usable default input
-        // exists — which left the mic picker blank. Always surface the
-        // default device so the list is never empty.
+        // Some hosts return an empty input_devices() enumeration even when a
+        // usable default input exists — surface the default so the list is
+        // never blank.
         if let Some(default_name) = host.default_input_device().and_then(|d| d.name().ok()) {
             if !names.iter().any(|n| n == &default_name) {
                 names.insert(0, default_name);

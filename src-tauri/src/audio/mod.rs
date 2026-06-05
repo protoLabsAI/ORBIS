@@ -21,8 +21,9 @@ pub mod wake_word;
 #[cfg(all(feature = "voice-processing", target_os = "macos"))]
 pub mod voice_processing_input;
 
-// Core Audio input-device selection for the voice-processing path (orbis-zj5):
-// AVAudioEngine ignores a CPAL device name, so we pin the AudioDeviceID on its
-// input node's audio unit.
-#[cfg(all(feature = "voice-processing", target_os = "macos"))]
+// Core Audio device enumeration for the mic picker (pure property reads — no
+// mic indicator, unlike CPAL's device probing) + input-device selection for the
+// voice-processing path (orbis-zj5: AVAudioEngine ignores a CPAL device name,
+// so we pin the AudioDeviceID on its input node's audio unit).
+#[cfg(target_os = "macos")]
 pub mod coreaudio_devices;
