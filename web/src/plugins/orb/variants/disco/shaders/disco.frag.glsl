@@ -52,17 +52,34 @@ float fractalNoise(vec2 uv) {
   return o;
 }
 
-// Procedural neon environment reflected by the facets.
+// Procedural neon environment reflected by the facets. Modelled as a *lit*
+// room: every reflection direction catches a smooth blend of the three neon
+// colours (so the mirror ball reads as shiny, not black), with bright glints —
+// the actual "lights" — layered on top. Without the smooth base the facets
+// reflect a near-black void and the ball disappears on the dark canvas.
 vec3 sampleAtmosphere(vec3 dir, float t) {
   float f1 = fractalNoise(dir.xy * uFractalScale + t * uBgSpeed);
   float f2 = fractalNoise(dir.yz * (uFractalScale + 1.0) - t * (uBgSpeed * 1.5));
-  float redGlow = smoothstep(0.85, 1.0, sin(dir.x * 12.0 + f1 * 8.0));
-  float cyanGlow = smoothstep(0.90, 1.0, cos(dir.y * 15.0 + f2 * 10.0));
-  float purpGlow = smoothstep(0.85, 1.0, sin(dir.z * 10.0 + (f1 + f2) * 4.0));
-  vec3 bg = vec3(0.04, 0.015, 0.04);
-  bg += uColor1 * 2.0 * redGlow * 1.5;
-  bg += uColor2 * 2.0 * cyanGlow * 1.5;
-  bg += uColor3 * 2.0 * purpGlow * 1.5;
+  float f3 = fractalNoise(dir.zx * (uFractalScale + 0.5) + t * (uBgSpeed * 0.8));
+
+  // Smooth neon field — soft weights across the sphere of directions so the
+  // whole ball is bathed in colour, each facet catching a different mix.
+  float w1 = 0.5 + 0.5 * sin(dir.x * 3.0 + f1 * 4.0);
+  float w2 = 0.5 + 0.5 * cos(dir.y * 3.5 + f2 * 4.0);
+  float w3 = 0.5 + 0.5 * sin(dir.z * 2.5 + f3 * 4.0);
+  vec3 bg = vec3(0.02, 0.01, 0.03);
+  bg += uColor1 * w1 * 0.9;
+  bg += uColor2 * w2 * 0.9;
+  bg += uColor3 * w3 * 0.9;
+
+  // Bright glints — the lights the facets flash back.
+  float redGlow = smoothstep(0.6, 1.0, sin(dir.x * 12.0 + f1 * 8.0));
+  float cyanGlow = smoothstep(0.6, 1.0, cos(dir.y * 15.0 + f2 * 10.0));
+  float purpGlow = smoothstep(0.6, 1.0, sin(dir.z * 10.0 + (f1 + f2) * 4.0));
+  bg += uColor1 * redGlow * 2.5;
+  bg += uColor2 * cyanGlow * 2.5;
+  bg += uColor3 * purpGlow * 2.5;
+
   return bg;
 }
 

@@ -15,3 +15,4 @@ import './galaxy';
 import './edison';
 import './reactor';
 import './disco';
+import './flux';
