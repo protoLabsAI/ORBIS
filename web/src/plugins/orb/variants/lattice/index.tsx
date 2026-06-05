@@ -12,6 +12,7 @@ registerVariant({
   palettes: LATTICE_PRESETS as unknown as Record<string, Record<string, unknown>>,
   fields: LATTICE_FIELDS,
   defaultPalette: 'Glasshouse',
+  premium: true,
   moodDefaults: withSharedMoodDefaults({
     // Lattice-specific: distortion + grid scale carry the mood feel.
     // Aroused = denser grid + more wobble; valence = brighter glow;

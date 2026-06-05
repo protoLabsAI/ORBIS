@@ -12,6 +12,7 @@ registerVariant({
   palettes: TETRA_PRESETS as unknown as Record<string, Record<string, unknown>>,
   fields: TETRA_FIELDS,
   defaultPalette: 'Drift',
+  premium: true,
   moodDefaults: withSharedMoodDefaults({
     // Tetra-specific: glow intensity and base mod the volumetric
     // accumulator directly, so they're the most "you can feel it" knobs.

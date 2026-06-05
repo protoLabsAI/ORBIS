@@ -6,10 +6,9 @@ import { setVariant, applyPreset } from '@/plugins/orb/broadcast';
 import { useActiveVariant } from '@/plugins/orb/useOrbState';
 
 /**
- * Dev-only picker for the premium / beta-gated orb variants. They register
- * behind BETA_ORBS and aren't in the free starter pool, so this is how you
- * actually see + tune them in development. Self-hides when none are registered
- * (so it never shows in a shipped beta build).
+ * Dev-only picker for the premium (paid) orb variants. They aren't in the free
+ * starter pool, and the paid Orb editor is off during beta, so this is how you
+ * see + tune them in development. Self-hides when none are registered.
  */
 export function BetaOrbsPanel() {
   const all = useSyncExternalStore(variantRegistry.subscribe, variantRegistry.all);
@@ -20,7 +19,7 @@ export function BetaOrbsPanel() {
   const activeSpec = premium.find((v) => v.id === active?.id);
 
   return (
-    <Panel title="Beta orbs">
+    <Panel title="Premium orbs">
       <div className="space-y-2.5">
         <div className="flex flex-wrap gap-1.5">
           {premium.map((v) => (
@@ -47,7 +46,7 @@ export function BetaOrbsPanel() {
           </div>
         )}
         <p className="text-helper text-fg-faint">
-          Premium variants — gated behind the paywall + BETA_ORBS, never shown to free users.
+          Premium variants — gated behind the customization paywall, never shown to free users.
         </p>
       </div>
     </Panel>
