@@ -1,0 +1,114 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+
+// The deployed license-issuer Worker base URL (no trailing slash needed).
+// Set as a repo variable PUBLIC_LICENSE_ISSUER_URL; baked in at build time.
+// Until it's set, the page renders but checkout shows a "not live yet" note.
+const issuerUrl = import.meta.env.PUBLIC_LICENSE_ISSUER_URL ?? '';
+---
+
+<BaseLayout
+  title="Unlock ORBIS customization"
+  description="Make the orb yours — a one-time $9 unlock for the full customization editor."
+>
+  <div class="max-w-2xl mx-auto px-6 py-24">
+    <div class="mb-8">
+      <div class="flex items-center gap-3 mb-3">
+        <h1 class="text-4xl font-bold text-white">Unlock orb customization</h1>
+      </div>
+      <span
+        class="inline-block px-2 py-0.5 rounded text-sm font-mono border border-white/[0.08]"
+        style="background: #18181b; color: #818cf8;"
+      >
+        $9 · one-time
+      </span>
+    </div>
+
+    <p class="text-lg text-zinc-400 mb-8">
+      ORBIS is free to download. This unlocks the full customization editor —
+      <span class="text-zinc-200">variants, palettes, shader params, and saved presets</span>
+      — so the orb looks exactly the way you want. One payment, perpetual, works
+      on any machine you own.
+    </p>
+
+    <!-- Buy -->
+    <button
+      id="buy"
+      type="button"
+      class="flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl font-semibold text-white text-lg mb-3 transition-colors disabled:opacity-60"
+      style="background: #818cf8;"
+      onmouseover="this.style.background='#6366f1'"
+      onmouseout="this.style.background='#818cf8'"
+    >
+      Unlock for $9
+    </button>
+    <p id="buy-error" class="text-sm mb-10" style="display: none; color: #f87171;"></p>
+
+    <!-- How it works -->
+    <div class="mb-10">
+      <h2 class="text-lg font-semibold text-white mb-5">How it works</h2>
+      <ol class="space-y-4">
+        {[
+          'Pay securely with Stripe — $9, one time.',
+          'We email you a license key (and show it on the confirmation page).',
+          'In ORBIS, open Settings → Orb → Unlock and paste the key. Done.',
+        ].map((step, i) => (
+          <li class="flex gap-4 items-start">
+            <span class="font-mono text-sm w-5 shrink-0 pt-0.5" style="color: #818cf8;">{i + 1}</span>
+            <span class="text-zinc-300 text-sm">{step}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    <!-- Trust note -->
+    <div class="border-l-2 pl-4 mb-10" style="border-color: rgba(129,140,248,0.4);">
+      <p class="text-zinc-400 text-sm">
+        The key is an <strong class="text-zinc-200">offline Ed25519 license</strong> —
+        ORBIS verifies it locally, with no phone-home. Your unlock keeps working
+        even fully offline.
+      </p>
+    </div>
+
+    <div class="flex flex-col sm:flex-row gap-x-6 gap-y-2 text-sm">
+      <a href="/download" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">
+        Don't have ORBIS yet? Download it free →
+      </a>
+      <span class="text-zinc-500">Already paid? Paste your key in ORBIS → Settings → Orb → Unlock.</span>
+    </div>
+  </div>
+
+  <script define:vars={{ issuerUrl }}>
+    const btn = document.getElementById('buy');
+    const err = document.getElementById('buy-error');
+    const showError = (msg) => {
+      err.textContent = msg;
+      err.style.display = 'block';
+    };
+    btn?.addEventListener('click', async () => {
+      err.style.display = 'none';
+      if (!issuerUrl) {
+        showError("Checkout isn't live yet — please check back soon.");
+        return;
+      }
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Redirecting to checkout…';
+      try {
+        const res = await fetch(issuerUrl.replace(/\/$/, '') + '/checkout', {
+          method: 'POST',
+        });
+        const data = await res.json();
+        if (data && data.url) {
+          window.location.href = data.url;
+          return;
+        }
+        throw new Error('no checkout url');
+      } catch {
+        btn.disabled = false;
+        btn.textContent = original;
+        showError('Could not start checkout. Please try again.');
+      }
+    });
+  </script>
+</BaseLayout>
