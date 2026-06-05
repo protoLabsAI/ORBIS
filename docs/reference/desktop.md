@@ -41,9 +41,9 @@ is **Quit** from the menu bar and relaunch.
 
 ## Installing
 
-The current path is a build from source — see
-[Getting started](/tutorials/getting-started). Signed `.dmg` releases are the
-distribution target.
+Download the signed, notarized `.dmg` from
+[orbis.protolabs.studio/download](https://orbis.protolabs.studio/download) and
+drag ORBIS into Applications — see [Getting started](/tutorials/getting-started).
 
 ## See also
 
