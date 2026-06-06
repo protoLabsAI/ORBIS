@@ -75,8 +75,22 @@ features = [
   "AVAudioBuffer",
   "AVAudioTime",
   "AVAudioTypes",
+  # Unified VPIO output (speaker barge-in): render TTS through the same engine
+  # so Apple's AEC gets the playback reference. AVAudioSourceNode's render block
+  # needs the core-audio-types (AudioBufferList/AudioTimeStamp) + mixing.
+  "AVAudioSourceNode",
+  "AVAudioMixing",
+  # Muted sink mixer that pulls the input node into the running graph so its
+  # tap fires once an output graph exists (AVAudioEngine won't render a
+  # tapped-but-unconnected input node).
+  "AVAudioMixerNode",
+  "objc2-core-audio-types",
   "block2",
 ]
+[target.'cfg(target_os = "macos")'.dependencies.objc2-core-audio-types]
+version = "0.3"
+optional = true
+features = ["objc2", "CoreAudioBaseTypes"]
 [target.'cfg(target_os = "macos")'.dependencies.block2]
 version = "0.6"
 optional = true
@@ -94,6 +108,7 @@ voice-processing = [
   "dep:objc2",
   "dep:objc2-foundation",
   "dep:objc2-avf-audio",
+  "dep:objc2-core-audio-types",
   "dep:block2",
 ]
 

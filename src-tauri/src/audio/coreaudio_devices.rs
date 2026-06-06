@@ -40,6 +40,16 @@ const K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION: u32 = fourcc(b"slay");
 const K_AUDIO_OUTPUT_UNIT_PROPERTY_CURRENT_DEVICE: u32 = 2000;
 #[cfg(feature = "voice-processing")]
 const K_AUDIO_UNIT_SCOPE_GLOBAL: u32 = 0;
+// VPIO clock-unification (speaker AEC): force the output device's nominal rate
+// to match the mic so the single VoiceProcessingIO unit has one sample rate.
+#[cfg(feature = "voice-processing")]
+const K_AUDIO_HARDWARE_PROPERTY_DEFAULT_INPUT_DEVICE: u32 = fourcc(b"dIn ");
+#[cfg(feature = "voice-processing")]
+const K_AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE: u32 = fourcc(b"dOut");
+#[cfg(feature = "voice-processing")]
+const K_AUDIO_DEVICE_PROPERTY_NOMINAL_SAMPLE_RATE: u32 = fourcc(b"nsrt");
+#[cfg(feature = "voice-processing")]
+const K_AUDIO_DEVICE_PROPERTY_AVAILABLE_NOMINAL_SAMPLE_RATES: u32 = fourcc(b"nsr#");
 const K_CFSTRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
 #[repr(C)]
@@ -91,6 +101,26 @@ extern "C" {
         element: u32,
         data: *const c_void,
         data_size: u32,
+    ) -> OSStatus;
+}
+
+#[cfg(feature = "voice-processing")]
+#[repr(C)]
+struct AudioValueRange {
+    minimum: f64,
+    maximum: f64,
+}
+
+#[cfg(feature = "voice-processing")]
+#[link(name = "CoreAudio", kind = "framework")]
+extern "C" {
+    fn AudioObjectSetPropertyData(
+        object: AudioObjectID,
+        address: *const AudioObjectPropertyAddress,
+        qualifier_data_size: u32,
+        qualifier_data: *const c_void,
+        data_size: u32,
+        data: *const c_void,
     ) -> OSStatus;
 }
 
@@ -232,6 +262,12 @@ unsafe fn device_name(id: AudioDeviceID) -> Option<String> {
     String::from_utf8(buf[..end].to_vec()).ok()
 }
 
+/// Human-readable name for any device id (input or output).
+#[cfg(feature = "voice-processing")]
+pub fn device_name_for_id(id: AudioDeviceID) -> Option<String> {
+    unsafe { device_name(id) }
+}
+
 /// Resolve a device name (as listed to the user) to its AudioDeviceID.
 #[cfg(feature = "voice-processing")]
 pub fn input_device_id_for_name(name: &str) -> Option<AudioDeviceID> {
@@ -262,4 +298,147 @@ pub fn set_current_input_device(unit: *mut c_void, device_id: AudioDeviceID) -> 
             "AudioUnitSetProperty(CurrentDevice) failed: {status}"
         ))
     }
+}
+
+/// The system default output/input device's AudioDeviceID (0 → None).
+#[cfg(feature = "voice-processing")]
+fn default_device_id(selector: u32) -> Option<AudioDeviceID> {
+    unsafe {
+        let a = addr(selector, K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL);
+        let mut id: AudioDeviceID = 0;
+        let mut io = std::mem::size_of::<AudioDeviceID>() as u32;
+        if AudioObjectGetPropertyData(
+            K_AUDIO_OBJECT_SYSTEM_OBJECT,
+            &a,
+            0,
+            std::ptr::null(),
+            &mut io,
+            &mut id as *mut _ as *mut c_void,
+        ) != 0
+            || id == 0
+        {
+            None
+        } else {
+            Some(id)
+        }
+    }
+}
+
+/// System default output device.
+#[cfg(feature = "voice-processing")]
+pub fn default_output_device_id() -> Option<AudioDeviceID> {
+    default_device_id(K_AUDIO_HARDWARE_PROPERTY_DEFAULT_OUTPUT_DEVICE)
+}
+
+/// System default input device.
+#[cfg(feature = "voice-processing")]
+pub fn default_input_device_id() -> Option<AudioDeviceID> {
+    default_device_id(K_AUDIO_HARDWARE_PROPERTY_DEFAULT_INPUT_DEVICE)
+}
+
+/// A device's current nominal sample rate in Hz.
+#[cfg(feature = "voice-processing")]
+pub fn device_nominal_sample_rate(id: AudioDeviceID) -> Option<f64> {
+    unsafe {
+        let a = addr(
+            K_AUDIO_DEVICE_PROPERTY_NOMINAL_SAMPLE_RATE,
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
+        );
+        let mut rate: f64 = 0.0;
+        let mut io = std::mem::size_of::<f64>() as u32;
+        if AudioObjectGetPropertyData(
+            id,
+            &a,
+            0,
+            std::ptr::null(),
+            &mut io,
+            &mut rate as *mut _ as *mut c_void,
+        ) != 0
+            || rate <= 0.0
+        {
+            None
+        } else {
+            Some(rate)
+        }
+    }
+}
+
+/// Whether a device can run at `rate` (reads AvailableNominalSampleRates).
+#[cfg(feature = "voice-processing")]
+pub fn device_supports_sample_rate(id: AudioDeviceID, rate: f64) -> bool {
+    unsafe {
+        let a = addr(
+            K_AUDIO_DEVICE_PROPERTY_AVAILABLE_NOMINAL_SAMPLE_RATES,
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
+        );
+        let mut size: u32 = 0;
+        if AudioObjectGetPropertyDataSize(id, &a, 0, std::ptr::null(), &mut size) != 0 || size == 0 {
+            return false;
+        }
+        let n = size as usize / std::mem::size_of::<AudioValueRange>();
+        let mut ranges: Vec<AudioValueRange> = (0..n)
+            .map(|_| AudioValueRange {
+                minimum: 0.0,
+                maximum: 0.0,
+            })
+            .collect();
+        let mut io = size;
+        if AudioObjectGetPropertyData(
+            id,
+            &a,
+            0,
+            std::ptr::null(),
+            &mut io,
+            ranges.as_mut_ptr() as *mut c_void,
+        ) != 0
+        {
+            return false;
+        }
+        // Ranges are usually discrete (min == max); 1 Hz tolerance for safety.
+        ranges
+            .iter()
+            .any(|r| rate >= r.minimum - 1.0 && rate <= r.maximum + 1.0)
+    }
+}
+
+/// Set a device's nominal sample rate and block until the change actually
+/// takes effect. `AudioObjectSetPropertyData` is asynchronous — starting an
+/// AVAudioEngine before the HAL has switched races straight into -10875 — so we
+/// poll the read-back (up to ~500 ms). Returns the PREVIOUS rate so the caller
+/// can restore it on teardown (the change is system-global).
+#[cfg(feature = "voice-processing")]
+pub fn set_device_nominal_sample_rate(id: AudioDeviceID, rate: f64) -> Result<f64, String> {
+    let prev = device_nominal_sample_rate(id)
+        .ok_or_else(|| "couldn't read current nominal rate".to_string())?;
+    if (prev - rate).abs() < 1.0 {
+        return Ok(prev); // already there
+    }
+    let status = unsafe {
+        let a = addr(
+            K_AUDIO_DEVICE_PROPERTY_NOMINAL_SAMPLE_RATE,
+            K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
+        );
+        AudioObjectSetPropertyData(
+            id,
+            &a,
+            0,
+            std::ptr::null(),
+            std::mem::size_of::<f64>() as u32,
+            &rate as *const f64 as *const c_void,
+        )
+    };
+    if status != 0 {
+        return Err(format!(
+            "AudioObjectSetPropertyData(NominalSampleRate={rate}) failed: {status}"
+        ));
+    }
+    for _ in 0..20 {
+        if let Some(cur) = device_nominal_sample_rate(id) {
+            if (cur - rate).abs() < 1.0 {
+                return Ok(prev);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err(format!("device {id} did not switch to {rate} Hz within 500 ms"))
 }

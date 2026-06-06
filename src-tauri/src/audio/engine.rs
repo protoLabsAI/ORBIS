@@ -93,6 +93,10 @@ pub struct AudioEngine {
     // AVAudioEngine takes its place as the input source.
     #[cfg(not(feature = "voice-processing"))]
     _input_stream: Stream,
+    // CPAL output — gated off in the voice-processing build, where TTS renders
+    // through the AVAudioEngine VPIO source node (unified I/O so Apple's AEC has
+    // the playback reference).
+    #[cfg(not(feature = "voice-processing"))]
     _output_stream: Stream,
     /// AVAudioEngine voice-processing input (Phase 2). Only present
     /// when the `voice-processing` Cargo feature is enabled.
@@ -112,12 +116,17 @@ impl AudioEngine {
         input_device_name: Option<&str>,
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     ) -> Result<Self, String> {
+        #[cfg(not(feature = "voice-processing"))]
         let host = cpal::default_host();
 
-        // --- Output device (always CPAL — Phase 2 only swaps input) ---
+        // Output device: CPAL in the legacy build. The voice-processing build
+        // renders TTS through the AVAudioEngine VPIO (unified I/O) so Apple's AEC
+        // has the playback reference — there's no separate CPAL output device.
+        #[cfg(not(feature = "voice-processing"))]
         let output_device = host
             .default_output_device()
             .ok_or_else(|| "no default output device".to_string())?;
+        #[cfg(not(feature = "voice-processing"))]
         log::info!(
             "[audio] output device: {}",
             output_device.name().unwrap_or_default()
@@ -138,16 +147,19 @@ impl AudioEngine {
         let playback_rms = Arc::new(AtomicU32::new(0)); // TTS level for orb reactivity
         let output_rate = Arc::new(AtomicU32::new(TTS_SAMPLE_RATE)); // set by the output stream
 
-        let output_stream = build_output_stream(
-            &output_device,
-            Arc::clone(&playback_ring),
-            Arc::clone(&last_play_ms),
-            Arc::clone(&playback_rms),
-            Arc::clone(&output_rate),
-        )?;
-        output_stream
-            .play()
-            .map_err(|e| format!("output stream play: {e}"))?;
+        #[cfg(not(feature = "voice-processing"))]
+        let output_stream = {
+            let s = build_output_stream(
+                &output_device,
+                Arc::clone(&playback_ring),
+                Arc::clone(&last_play_ms),
+                Arc::clone(&playback_rms),
+                Arc::clone(&output_rate),
+            )?;
+            s.play()
+                .map_err(|e| format!("output stream play: {e}"))?;
+            s
+        };
 
         // --- Input path: feature-gated ---
         #[cfg(not(feature = "voice-processing"))]
@@ -195,6 +207,10 @@ impl AudioEngine {
                 tx.clone(),
                 Arc::clone(&rms),
                 dev_id,
+                Arc::clone(&playback_ring),
+                Arc::clone(&last_play_ms),
+                Arc::clone(&playback_rms),
+                Arc::clone(&output_rate),
             )?
         };
 
@@ -210,6 +226,7 @@ impl AudioEngine {
             output_rate,
             #[cfg(not(feature = "voice-processing"))]
             _input_stream,
+            #[cfg(not(feature = "voice-processing"))]
             _output_stream: output_stream,
             #[cfg(all(feature = "voice-processing", target_os = "macos"))]
             _vp_input,

@@ -17,6 +17,7 @@
 //! first callback so production diagnostics can distinguish "permission
 //! granted but no render callbacks" from downstream STT issues.
 
+use std::collections::VecDeque;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -26,12 +27,25 @@ use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObjectProtocol};
 use objc2::{sel, AnyThread};
 use objc2_avf_audio::{
-    AVAudioEngine, AVAudioInputNode, AVAudioNode, AVAudioNodeBus, AVAudioPCMBuffer, AVAudioTime,
+    AVAudioEngine, AVAudioFormat, AVAudioFrameCount, AVAudioInputNode, AVAudioMixerNode, AVAudioNode,
+    AVAudioNodeBus, AVAudioPCMBuffer, AVAudioSourceNode, AVAudioTime,
     AVAudioVoiceProcessingOtherAudioDuckingConfiguration,
     AVAudioVoiceProcessingOtherAudioDuckingLevel,
 };
+use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
 
 use super::engine::{AudioMsg, MIC_FRAME_SAMPLES, MIC_SAMPLE_RATE};
+
+/// Shared TTS ring (i16 at TTS_SAMPLE_RATE, mono), drained by the output source node.
+type PlaybackRing = Arc<Mutex<VecDeque<i16>>>;
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 const AUDIBLE_RMS_THRESHOLD: f32 = 0.001;
 
@@ -44,6 +58,19 @@ pub struct VoiceProcessingInput {
     /// when the tap is installed; we keep one too just for safety
     /// (matches AVFoundation Obj-C samples).
     _tap_block: RcBlock<dyn Fn(NonNull<AVAudioPCMBuffer>, NonNull<AVAudioTime>)>,
+    /// Unified-VPIO output: the source node that renders TTS through this
+    /// engine, so Apple's voice-processing AEC has the playback reference and
+    /// can cancel the orb's own voice from the mic (speaker barge-in). Held so
+    /// the node + its render block live for the engine's lifetime.
+    _source_node: Retained<AVAudioSourceNode>,
+    #[allow(clippy::type_complexity)]
+    _render_block: RcBlock<
+        dyn Fn(NonNull<Bool>, NonNull<AudioTimeStamp>, AVAudioFrameCount, NonNull<AudioBufferList>) -> i32,
+    >,
+    /// (AudioDeviceID, original nominal sample rate) pairs — we conformed the
+    /// input + output devices to the VPIO's 44.1 kHz clock. Restored on Drop so
+    /// other apps get their sample rate back. Empty if nothing was changed.
+    restore_rates: Vec<(u32, f64)>,
 }
 
 // AVAudioEngine + RcBlock are not Send/Sync by default. We only ever
@@ -62,7 +89,67 @@ impl VoiceProcessingInput {
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
         rms: Arc<AtomicU32>,
         input_device_id: Option<u32>,
+        playback_ring: PlaybackRing,
+        last_play_ms: Arc<AtomicU64>,
+        playback_rms: Arc<AtomicU32>,
+        output_rate: Arc<AtomicU32>,
     ) -> Result<Self, String> {
+        // --- Conform the audio devices to the VPIO clock BEFORE the engine ---
+        // With voice processing on, inputNode + outputNode are ONE
+        // VoiceProcessingIO unit that requires a single shared sample rate, and
+        // on macOS that unit's output scope runs at 44.1 kHz regardless of the
+        // hardware (observed: mic + USB interface both 48 kHz, yet outputNode
+        // stays 44100). A 48 kHz mic against the 44.1 kHz VPIO output makes
+        // AVAudioEngine.start() fail with -10875 (kAudioUnitErr_FormatNotSupported),
+        // and forcing the devices UP to 48 kHz can't move the unit off 44.1.
+        // So conform BOTH the input and output devices DOWN to 44.1 kHz — input
+        // scope, output scope, and both device hops then agree. The set is
+        // system-global + asynchronous (the helper polls until the HAL switches),
+        // so we save each previous rate and restore it on Drop.
+        const VPIO_RATE: f64 = 44_100.0;
+        let restore_rates: Vec<(u32, f64)> = {
+            let din = super::coreaudio_devices::default_input_device_id();
+            let dout = super::coreaudio_devices::default_output_device_id();
+            log::info!(
+                "[vp-rate] pinned_in={:?}  default_in={:?} '{}' {:?}Hz  default_out={:?} '{}' {:?}Hz",
+                input_device_id,
+                din,
+                din.and_then(super::coreaudio_devices::device_name_for_id)
+                    .unwrap_or_default(),
+                din.and_then(super::coreaudio_devices::device_nominal_sample_rate),
+                dout,
+                dout.and_then(super::coreaudio_devices::device_name_for_id)
+                    .unwrap_or_default(),
+                dout.and_then(super::coreaudio_devices::device_nominal_sample_rate),
+            );
+            let in_id = input_device_id.or(din);
+            let mut restored = Vec::new();
+            for (label, dev) in [("input", in_id), ("output", dout)] {
+                let Some(id) = dev else { continue };
+                if !super::coreaudio_devices::device_supports_sample_rate(id, VPIO_RATE) {
+                    log::warn!(
+                        "[voice-processing] {label} device {id} can't run at {VPIO_RATE} Hz — VPIO clock may stay split (-10875 risk)"
+                    );
+                    continue;
+                }
+                match super::coreaudio_devices::set_device_nominal_sample_rate(id, VPIO_RATE) {
+                    Ok(prev) if (prev - VPIO_RATE).abs() >= 1.0 => {
+                        log::info!(
+                            "[voice-processing] {label} device {id} nominal rate {prev}→{VPIO_RATE} Hz (VPIO clock); will restore on exit"
+                        );
+                        restored.push((id, prev));
+                    }
+                    Ok(_) => log::info!(
+                        "[voice-processing] {label} device {id} already at {VPIO_RATE} Hz"
+                    ),
+                    Err(e) => log::warn!(
+                        "[voice-processing] couldn't set {label} device {id} to {VPIO_RATE} Hz: {e} — engine start may hit -10875"
+                    ),
+                }
+            }
+            restored
+        };
+
         // SAFETY: AVAudioEngine, the input node, and tap installation
         // are all standard AVFAudio API surface. The tap block runs on
         // a render thread Apple manages — we send samples through an
@@ -173,14 +260,148 @@ impl VoiceProcessingInput {
                 },
             );
 
-            // Install the tap on bus 0 with the native format. Buffer
-            // size 1024 frames is Apple's recommended starting point
-            // for low-latency voice work; the engine may deliver
-            // smaller buffers.
+            // NOTE: the tap is installed LAST, after the output graph is wired
+            // (see below). Accessing mainMixerNode()/attaching the source node
+            // reconfigures the engine, which silently drops a tap installed
+            // earlier — that left the mic dead (no callbacks) once we added the
+            // output path. Build the graph first, tap last.
+
+            // --- Unified VPIO output ------------------------------------------
+            // Render TTS through THIS engine (the one doing voice-processing
+            // input) so Apple's AEC gets the playback as its reference and
+            // cancels the orb's own voice from the mic — the prerequisite for
+            // barge-in over SPEAKERS.
+            //
+            // The source node MUST run at the engine's output-graph rate. A
+            // 24 kHz source in the 48 kHz voice-processing graph fails engine
+            // start with -10875 (kAudioUnitErr_FormatNotSupported). So match the
+            // graph rate here and publish it via `output_rate` — `push_playback`
+            // then resamples each TTS chunk 24 kHz → graph rate once (exactly
+            // like the CPAL output path did). Mono in; the mixer upmixes to the
+            // device's channel count.
+            let mixer = engine.mainMixerNode();
+            let graph_rate =
+                mixer.outputFormatForBus(0 as AVAudioNodeBus).sampleRate() as u32;
+            output_rate.store(graph_rate, Ordering::Relaxed);
+            log::info!(
+                "[voice-processing] output graph rate = {graph_rate} Hz (TTS resampled to match)"
+            );
+
+            // One-off topology dump to pin the -10875 cause: the VPIO unit shares
+            // one format across input+output, so a mic/speaker device-rate split
+            // shows up as a mismatch among these. If outputNode.inputFormat ==
+            // input rate → connect direct (non-invasive); if it's the hardware
+            // 44.1k → the device nominal rate must be forced to match the mic.
+            let onode = engine.outputNode();
+            let in_fmt = input_node.outputFormatForBus(0 as AVAudioNodeBus);
+            let on_in = onode.inputFormatForBus(0 as AVAudioNodeBus);
+            let on_out = onode.outputFormatForBus(0 as AVAudioNodeBus);
+            let mx_in = mixer.inputFormatForBus(0 as AVAudioNodeBus);
+            log::info!(
+                "[vp-diag] input.out={}ch@{}  outNode.in={}ch@{}  outNode.out={}ch@{}  mixer.in={}ch@{}  graph(mixer.out)={}Hz",
+                in_fmt.channelCount(), in_fmt.sampleRate() as u32,
+                on_in.channelCount(), on_in.sampleRate() as u32,
+                on_out.channelCount(), on_out.sampleRate() as u32,
+                mx_in.channelCount(), mx_in.sampleRate() as u32,
+                graph_rate,
+            );
+
+            let out_format = AVAudioFormat::initStandardFormatWithSampleRate_channels(
+                AVAudioFormat::alloc(),
+                graph_rate as f64,
+                1,
+            )
+            .ok_or_else(|| "AVAudioFormat::initStandardFormat(mono) returned nil".to_string())?;
+
+            let ring = Arc::clone(&playback_ring);
+            let last_play = Arc::clone(&last_play_ms);
+            let pb_rms = Arc::clone(&playback_rms);
+            let render_block: RcBlock<
+                dyn Fn(NonNull<Bool>, NonNull<AudioTimeStamp>, AVAudioFrameCount, NonNull<AudioBufferList>) -> i32,
+            > = RcBlock::new(
+                move |is_silence: NonNull<Bool>,
+                      _ts: NonNull<AudioTimeStamp>,
+                      frame_count: AVAudioFrameCount,
+                      buffer_list: NonNull<AudioBufferList>|
+                      -> i32 {
+                    let frames = frame_count as usize;
+                    // SAFETY: the engine hands us a valid AudioBufferList sized
+                    // for `frames`; standard format → one deinterleaved mono
+                    // f32 buffer.
+                    unsafe {
+                        let abl = buffer_list.as_ptr();
+                        let out = (*abl).mBuffers[0].mData as *mut f32;
+                        if out.is_null() {
+                            *is_silence.as_ptr() = Bool::new(true);
+                            return 0;
+                        }
+                        let mut written = 0usize;
+                        let mut sum_sq = 0f64;
+                        if let Ok(mut r) = ring.lock() {
+                            let take = frames.min(r.len());
+                            if take > 0 {
+                                last_play.store(now_ms(), Ordering::Relaxed);
+                            }
+                            for i in 0..take {
+                                let f = r.pop_front().unwrap_or(0) as f32 / 32768.0;
+                                *out.add(i) = f;
+                                sum_sq += (f as f64) * (f as f64);
+                            }
+                            written = take;
+                        }
+                        for i in written..frames {
+                            *out.add(i) = 0.0;
+                        }
+                        if written == 0 {
+                            *is_silence.as_ptr() = Bool::new(true);
+                        } else {
+                            let rms = (sum_sq / written as f64).sqrt() as f32;
+                            pb_rms.store(rms.to_bits(), Ordering::Relaxed);
+                        }
+                    }
+                    0 // noErr
+                },
+            );
+
+            let source_node = AVAudioSourceNode::initWithRenderBlock(
+                AVAudioSourceNode::alloc(),
+                &*render_block as *const _ as *mut _,
+            );
+            engine.attachNode(&source_node);
+            engine.connect_to_format(&source_node, &mixer, Some(&*out_format));
+            log::info!("[voice-processing] unified VPIO output wired — TTS renders through the AEC engine");
+
+            // --- Pull the mic into the running graph --------------------------
+            // Once an output graph exists, AVAudioEngine only renders the input
+            // node if it's CONNECTED downstream — a tapped-but-unconnected input
+            // is never pulled, so the tap never fires and the mic goes dead.
+            // Route the input through a MUTED mixer (outputVolume 0) into the main
+            // mixer: that makes the engine render the input (tap fires) while none
+            // of the mic reaches the speaker (no sidetone/feedback). The VPIO unit
+            // still does AEC on the real mic→speaker acoustic path.
+            let mic_in_format = input_node.outputFormatForBus(0 as AVAudioNodeBus);
+            let mic_sink = AVAudioMixerNode::new();
+            engine.attachNode(&mic_sink);
+            mic_sink.setOutputVolume(0.0);
+            engine.connect_to_format(&input_node, &mic_sink, Some(&mic_in_format));
+            engine.connect_to_format(&mic_sink, &mixer, None);
+            log::info!(
+                "[voice-processing] mic routed through muted sink — engine renders input so the tap fires"
+            );
+
+            // Install the mic tap NOW — after the output graph exists — so the
+            // reconfiguration from accessing mainMixerNode() doesn't drop it.
+            // Re-read the input format in case the graph rebuild changed it.
+            let tap_format = input_node.outputFormatForBus(0 as AVAudioNodeBus);
+            log::info!(
+                "[voice-processing] installing mic tap: {} ch @ {} Hz",
+                tap_format.channelCount(),
+                tap_format.sampleRate() as u32
+            );
             input_node.installTapOnBus_bufferSize_format_block(
                 0,
                 1024,
-                Some(&format),
+                Some(&tap_format),
                 &*tap_block as *const _ as *mut _,
             );
 
@@ -188,11 +409,19 @@ impl VoiceProcessingInput {
                 .startAndReturnError()
                 .map_err(|e| format!("AVAudioEngine::startAndReturnError: {e:?}"))?;
 
-            log::info!("[voice-processing] engine started — AEC + AGC + NS active");
+            log::info!(
+                "[voice-processing] engine.isRunning() = {}",
+                engine.isRunning()
+            );
+
+            log::info!("[voice-processing] engine started — AEC + AGC + NS active, full-duplex output");
 
             Ok(Self {
                 engine,
                 _tap_block: tap_block,
+                _source_node: source_node,
+                _render_block: render_block,
+                restore_rates,
             })
         }
     }
@@ -205,6 +434,13 @@ impl Drop for VoiceProcessingInput {
             input_node.removeTapOnBus(0);
             self.engine.stop();
             log::info!("[voice-processing] engine stopped");
+        }
+        // Give other apps their device sample rates back.
+        for (id, rate) in self.restore_rates.drain(..) {
+            match super::coreaudio_devices::set_device_nominal_sample_rate(id, rate) {
+                Ok(_) => log::info!("[voice-processing] restored device {id} to {rate} Hz"),
+                Err(e) => log::warn!("[voice-processing] couldn't restore device {id} rate: {e}"),
+            }
         }
     }
 }
@@ -231,6 +467,19 @@ unsafe fn handle_tap(
 ) {
     let buf_ref = unsafe { buf.as_ref() };
     let frame_length = buf_ref.frameLength() as usize;
+    {
+        // Probe: does the tap callback fire AT ALL? (logs before any early
+        // return, unlike "first input tap" which is gated behind frame_length
+        // and channel-data checks). Tells pull-issue (never fires) apart from
+        // bad-buffer (fires but bails).
+        static TAP_ENTERED: AtomicBool = AtomicBool::new(false);
+        if !TAP_ENTERED.swap(true, Ordering::Relaxed) {
+            let cd_null = unsafe { buf_ref.floatChannelData() }.is_null();
+            log::info!(
+                "[voice-processing] tap callback ENTERED (first): frame_length={frame_length}, floatChannelData_null={cd_null}"
+            );
+        }
+    }
     if frame_length == 0 {
         return;
     }
