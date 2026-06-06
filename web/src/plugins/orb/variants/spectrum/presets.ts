@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Spectrum variant palettes. Each preset carries the OrbBasePreset
  * shape (used by useStateCrossfade) plus the spectrum-specific
@@ -5,7 +7,7 @@
  * cosine rainbow palette).
  */
 
-export interface SpectrumPreset {
+export interface SpectrumPreset extends OrbBasePreset {
   // OrbBasePreset shape — used by useStateCrossfade.
   primaryEnergy: string;
   secondaryEnergy: string;

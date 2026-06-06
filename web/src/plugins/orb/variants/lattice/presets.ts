@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Lattice variant palettes. Each preset carries the OrbBasePreset
  * fields (so useStateCrossfade can derive per-state snapshots) plus
@@ -5,7 +7,7 @@
  * glow, RGB offsets feeding the cosine-palette shimmer).
  */
 
-export interface LatticePreset {
+export interface LatticePreset extends OrbBasePreset {
   // OrbBasePreset shape — used by useStateCrossfade.
   primaryEnergy: string;
   secondaryEnergy: string;

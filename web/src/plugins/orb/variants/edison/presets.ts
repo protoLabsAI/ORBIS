@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Edison variant palettes.
  *
@@ -10,7 +12,7 @@
  * Values seeded from the original lil-gui prototype, scaled to orb framing.
  */
 
-export interface EdisonPreset {
+export interface EdisonPreset extends OrbBasePreset {
   // --- shared base (read by stateSnapshot) ---
   primaryEnergy: string; // core filament
   secondaryEnergy: string; // glow / glass tint

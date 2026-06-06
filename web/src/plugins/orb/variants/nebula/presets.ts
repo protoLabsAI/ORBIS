@@ -1,4 +1,6 @@
-export interface NebulaPreset {
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
+export interface NebulaPreset extends OrbBasePreset {
   primaryEnergy: string;
   secondaryEnergy: string;
   speed: number;

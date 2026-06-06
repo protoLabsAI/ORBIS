@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Reactor variant palettes — a kaleidoscopic KIFS fractal caged in the orb's
  * glass shell. `primaryEnergy` is the fractal's emissive tint (boosted by
@@ -5,7 +7,7 @@
  * lil-gui prototype.
  */
 
-export interface ReactorPreset {
+export interface ReactorPreset extends OrbBasePreset {
   // --- shared base (read by stateSnapshot) ---
   primaryEnergy: string;
   secondaryEnergy: string;
