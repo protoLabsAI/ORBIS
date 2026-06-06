@@ -527,8 +527,7 @@ fn build_input_stream(
                                 frame
                                     .iter()
                                     .map(|s| {
-                                        ((*s as f32) * gain)
-                                            .clamp(i16::MIN as f32, i16::MAX as f32)
+                                        ((*s as f32) * gain).clamp(i16::MIN as f32, i16::MAX as f32)
                                             as i16
                                     })
                                     .collect()
