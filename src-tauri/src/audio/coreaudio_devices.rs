@@ -34,6 +34,7 @@ const fn fourcc(s: &[u8; 4]) -> u32 {
 const K_AUDIO_HARDWARE_PROPERTY_DEVICES: u32 = fourcc(b"dev#");
 const K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL: u32 = fourcc(b"glob");
 const K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT: u32 = fourcc(b"inpt");
+const K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT: u32 = fourcc(b"outp");
 const K_AUDIO_OBJECT_PROPERTY_NAME: u32 = fourcc(b"lnam");
 const K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION: u32 = fourcc(b"slay");
 #[cfg(feature = "voice-processing")]
@@ -113,8 +114,9 @@ fn addr(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
     }
 }
 
-/// All Core Audio input devices as (AudioDeviceID, name).
-fn input_devices() -> Vec<(AudioDeviceID, String)> {
+/// All Core Audio devices with at least one stream on `scope`
+/// (INPUT or OUTPUT), as (AudioDeviceID, name).
+fn devices_with_scope(scope: u32) -> Vec<(AudioDeviceID, String)> {
     let mut out = Vec::new();
     unsafe {
         let devices_addr = addr(
@@ -148,8 +150,8 @@ fn input_devices() -> Vec<(AudioDeviceID, String)> {
             return out;
         }
         for id in ids {
-            if device_input_channel_count(id) == 0 {
-                continue; // output-only device — skip
+            if device_channel_count(id, scope) == 0 {
+                continue; // no streams on this scope — skip
             }
             if let Some(name) = device_name(id) {
                 out.push((id, name));
@@ -159,6 +161,16 @@ fn input_devices() -> Vec<(AudioDeviceID, String)> {
     out
 }
 
+/// All Core Audio input devices as (AudioDeviceID, name).
+fn input_devices() -> Vec<(AudioDeviceID, String)> {
+    devices_with_scope(K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT)
+}
+
+/// All Core Audio output devices as (AudioDeviceID, name).
+fn output_devices() -> Vec<(AudioDeviceID, String)> {
+    devices_with_scope(K_AUDIO_OBJECT_PROPERTY_SCOPE_OUTPUT)
+}
+
 /// Input device names only — for the mic picker. Pure HAL property reads; no
 /// audio stream is opened, so the macOS mic indicator stays dark (unlike CPAL's
 /// `input_devices()` probing, which opens each device).
@@ -166,12 +178,16 @@ pub fn list_input_device_names() -> Vec<String> {
     input_devices().into_iter().map(|(_, name)| name).collect()
 }
 
-/// Input channel count for a device (0 = not an input device).
-unsafe fn device_input_channel_count(id: AudioDeviceID) -> u32 {
-    let cfg_addr = addr(
-        K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION,
-        K_AUDIO_OBJECT_PROPERTY_SCOPE_INPUT,
-    );
+/// Output device names only — for the output picker. Same pure-HAL property
+/// reads as the input list; no audio stream is opened.
+pub fn list_output_device_names() -> Vec<String> {
+    output_devices().into_iter().map(|(_, name)| name).collect()
+}
+
+/// Channel count for a device on `scope` (0 = no streams on that scope — i.e.
+/// not an input device for INPUT scope, not an output device for OUTPUT scope).
+unsafe fn device_channel_count(id: AudioDeviceID, scope: u32) -> u32 {
+    let cfg_addr = addr(K_AUDIO_DEVICE_PROPERTY_STREAM_CONFIGURATION, scope);
     let mut size: u32 = 0;
     if AudioObjectGetPropertyDataSize(id, &cfg_addr, 0, std::ptr::null(), &mut size) != 0
         || size == 0

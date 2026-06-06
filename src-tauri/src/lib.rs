@@ -315,7 +315,15 @@ fn try_start_native_engine(app: &AppHandle) {
         if let Some(name) = preferred.as_deref() {
             log::info!("[audio] preferred input device from store: '{name}'");
         }
-        match audio::engine::AudioEngine::new(preferred.as_deref(), mic_tx) {
+        let preferred_output = persisted_output_device(&app_handle);
+        if let Some(name) = preferred_output.as_deref() {
+            log::info!("[audio] preferred output device from store: '{name}'");
+        }
+        match audio::engine::AudioEngine::new(
+            preferred.as_deref(),
+            preferred_output.as_deref(),
+            mic_tx,
+        ) {
             Ok(engine) => {
                 let engine = Arc::new(engine);
                 if let Some(state) = app_handle.try_state::<AudioEngineState>() {
@@ -356,6 +364,50 @@ fn start_audio_engine(app: tauri::AppHandle) -> bool {
     app.try_state::<AudioEngineState>()
         .and_then(|s| s.engine.lock().ok().map(|g| g.is_some()))
         .unwrap_or(false)
+}
+
+/// Return the names of all output devices on the host (HAL on macOS, CPAL
+/// elsewhere). Only compiled when the `native-audio` feature is active.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn list_audio_outputs() -> Vec<String> {
+    audio::engine::AudioEngine::list_output_devices()
+}
+
+/// File where the user's preferred output-device name is persisted, picked up at
+/// engine construction (built at boot, before the frontend loads) — the parallel
+/// of `input_device_pref_path`.
+#[cfg(feature = "native-audio")]
+fn output_device_pref_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("output_device"))
+}
+
+#[cfg(feature = "native-audio")]
+fn persisted_output_device(app: &tauri::AppHandle) -> Option<String> {
+    let p = output_device_pref_path(app)?;
+    std::fs::read_to_string(p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Persist the user's chosen output device. Applied when the audio engine is next
+/// (re)built — i.e. on the next launch.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_output_device(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let p = output_device_pref_path(&app).ok_or("no app data dir")?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let name = name.trim();
+    std::fs::write(&p, name).map_err(|e| format!("persist output device: {e}"))?;
+    log::info!("[audio] preferred output device = '{name}' (applies on next launch)");
+    Ok(())
 }
 
 /// Return the active native input path so the frontend can avoid
@@ -1251,6 +1303,8 @@ pub fn run() {
                     list_audio_inputs,
                     set_input_device,
                     start_audio_engine,
+                    list_audio_outputs,
+                    set_output_device,
                     get_audio_level,
                     get_audio_levels,
                     get_audio_input_mode,
