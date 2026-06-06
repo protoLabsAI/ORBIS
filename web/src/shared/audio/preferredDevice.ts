@@ -53,3 +53,43 @@ export function subscribePreferredAudioDeviceId(l: Listener): () => void {
     listeners.delete(l);
   };
 }
+
+// --- Output device (where ORBIS plays TTS) ---------------------------------
+// Same single-slot localStorage pattern as the input device above. Empty /
+// missing = "no preference, follow the system default output."
+
+const OUTPUT_STORAGE_KEY = 'orbis.audio.outputDeviceId';
+const outputListeners = new Set<Listener>();
+
+function readOutput(): string {
+  try {
+    return localStorage.getItem(OUTPUT_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeOutput(id: string): void {
+  try {
+    if (id) localStorage.setItem(OUTPUT_STORAGE_KEY, id);
+    else localStorage.removeItem(OUTPUT_STORAGE_KEY);
+  } catch {
+    // localStorage may be unavailable — see write() above.
+  }
+}
+
+export function getPreferredAudioOutputDeviceId(): string {
+  return readOutput();
+}
+
+export function setPreferredAudioOutputDeviceId(id: string): void {
+  writeOutput(id);
+  for (const l of outputListeners) l(id);
+}
+
+export function subscribePreferredAudioOutputDeviceId(l: Listener): () => void {
+  outputListeners.add(l);
+  return () => {
+    outputListeners.delete(l);
+  };
+}
