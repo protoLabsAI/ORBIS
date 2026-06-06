@@ -1,9 +1,11 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Crystal variant palettes. Shared base fields (required by
  * stateSnapshot()) + crystal-specific optical parameters.
  */
 
-export interface CrystalPreset {
+export interface CrystalPreset extends OrbBasePreset {
   // Shared (consumed by stateSnapshot + Atmosphere)
   primaryEnergy: string;
   secondaryEnergy: string;

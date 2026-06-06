@@ -1,10 +1,12 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Galaxy variant palettes. OrbBasePreset shape + galaxy-specific
  * tunables (3-stop plasma palette, shell colour, plasma noise params,
  * voice-tint mix strength, particle count).
  */
 
-export interface GalaxyPreset {
+export interface GalaxyPreset extends OrbBasePreset {
   // OrbBasePreset shape — used by useStateCrossfade.
   primaryEnergy: string;
   secondaryEnergy: string;

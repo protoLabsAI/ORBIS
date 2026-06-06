@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Tetra variant palettes. Each preset carries the OrbBasePreset
  * fields useStateCrossfade reads (density, atmosphereGlow, speed,
@@ -6,7 +8,7 @@
  * glow accumulator.
  */
 
-export interface TetraPreset {
+export interface TetraPreset extends OrbBasePreset {
   // OrbBasePreset shape — drives state-crossfade snapshots.
   primaryEnergy: string;
   secondaryEnergy: string;

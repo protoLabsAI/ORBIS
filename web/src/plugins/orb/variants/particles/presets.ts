@@ -1,4 +1,6 @@
-export interface ParticlesPreset {
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
+export interface ParticlesPreset extends OrbBasePreset {
   primaryEnergy: string;
   secondaryEnergy: string;
   speed: number;

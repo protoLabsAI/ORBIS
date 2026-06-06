@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Flux variant palettes — a fluid, pulsing volumetric SDF fractal glowing
  * inside the orb's shell. The emission colour slowly cycles between the three
@@ -5,7 +7,7 @@
  * rather than spinning hue continuously. Seeded from the "quantum orb" prototype.
  */
 
-export interface FluxPreset {
+export interface FluxPreset extends OrbBasePreset {
   // --- shared base (read by stateSnapshot) ---
   primaryEnergy: string;
   secondaryEnergy: string;

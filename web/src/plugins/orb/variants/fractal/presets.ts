@@ -1,3 +1,5 @@
+import type { OrbBasePreset } from '../../shared/stateSnapshot';
+
 /**
  * Fractal variant palettes. Each pair places primary and secondary at
  * or near 180° on the color wheel so the secondary→primary gradient
@@ -8,7 +10,7 @@
  * tuned by feel; changing them is a UX call.
  */
 
-export interface FractalPreset {
+export interface FractalPreset extends OrbBasePreset {
   primaryEnergy: string;
   secondaryEnergy: string;
   speed: number;
