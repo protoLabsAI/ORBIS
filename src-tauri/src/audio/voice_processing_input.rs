@@ -62,6 +62,11 @@ impl VoiceProcessingInput {
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
         rms: Arc<AtomicU32>,
         input_device_id: Option<u32>,
+        // Incremented on every tap callback. The caller polls this as a
+        // watchdog: VPIO silently delivers NO input when the default output
+        // can't form an aggregate (e.g. a USB interface), so zero ticks after
+        // start ⇒ dead mic ⇒ caller falls back to the CPAL path.
+        tap_count: Arc<AtomicU64>,
     ) -> Result<Self, String> {
         // SAFETY: AVAudioEngine, the input node, and tap installation
         // are all standard AVFAudio API surface. The tap block runs on
@@ -161,7 +166,7 @@ impl VoiceProcessingInput {
                 native_rate,
                 native_channels,
                 rms,
-                tap_count: Arc::new(AtomicU64::new(0)),
+                tap_count,
                 audible_logged: Arc::new(AtomicBool::new(false)),
             }));
 
