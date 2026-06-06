@@ -171,7 +171,10 @@ impl AudioEngine {
         // the tap, and fall back to CPAL + software AEC if nothing arrives.
         let vpio_active = Arc::new(AtomicBool::new(false));
 
-        #[cfg(not(feature = "voice-processing"))]
+        // CPAL input directly in non-VP builds, AND as the only option on a
+        // voice-processing build that isn't macOS (Linux CI enables the feature
+        // but the VPIO code below is macOS-gated) — so `_input` is always defined.
+        #[cfg(not(all(feature = "voice-processing", target_os = "macos")))]
         let _input = InputSource::Cpal(build_cpal_input(
             &host,
             input_device_name,
