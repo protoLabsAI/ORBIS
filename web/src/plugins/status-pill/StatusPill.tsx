@@ -15,9 +15,9 @@ export function StatusPill() {
   const connected = useVoiceStateSelector((s) => s.connected);
   const activation = useVoiceStateSelector((s) => s.activation);
   const wakePhrase = useVoiceStateSelector((s) => s.wakePhrase);
+  const voiceState = useVoiceStateSelector((s) => s.state);
   const micListening = useVoiceStateSelector((s) => s.micListening);
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
-  const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
   const externalTransient = useSyncExternalStore(
@@ -25,7 +25,7 @@ export function StatusPill() {
     statusPillStore.getSnapshot,
   );
   const delegationText = activeToolCall
-    ? formatActiveToolCall(activeToolCall, delegationProgress)
+    ? formatActiveToolCall(activeToolCall)
     : null;
 
   // Auto-expire the externally-pushed transient once its TTL hits.
@@ -47,17 +47,25 @@ export function StatusPill() {
     lastOutcomeRef.current = delegationOutcome;
   }, [delegationOutcome]);
 
+  // Bot pipeline state (driven by the sidecar's `bot-state` SSE) takes
+  // precedence over the idle mic hint — while ORBIS is talking or thinking,
+  // say so instead of "listening…". An active delegation/tool call is more
+  // specific still, so it wins above this.
   const text = externalTransient?.text
     ?? delegationText
     ?? (!connected
       ? 'starting up…'
-      : activation === 'armed'
-        ? wakePhrase
-          ? `“${wakePhrase}”`
-          : 'listening for wake word'
-        : activation === 'listening' || micListening
-          ? 'listening…'
-          : 'double-click to talk');
+      : voiceState === 'speaking'
+        ? 'speaking…'
+        : voiceState === 'thinking'
+          ? 'thinking…'
+          : activation === 'armed'
+            ? wakePhrase
+              ? `“${wakePhrase}”`
+              : 'listening for wake word'
+            : activation === 'listening' || micListening
+              ? 'listening…'
+              : 'double-click to talk');
 
   return (
     <div
@@ -74,12 +82,12 @@ export function StatusPill() {
 
 function formatActiveToolCall(
   call: { name: string; args: unknown },
-  progress: string | null,
 ): string {
   if (call.name === 'delegate_to') {
     const target = readDelegateTarget(call.args);
-    const base = target ? `asking ${target}…` : 'delegating…';
-    return progress ? `${base} ${progress}` : base;
+    // Just the target — the per-tool stream (which can be 6 tools deep in
+    // parallel) goes to the logs panel, not smeared across the status line.
+    return target ? `asking ${target}…` : 'delegating…';
   }
   if (call.name === 'adjust_personality') {
     return 'adjusting personality…';
