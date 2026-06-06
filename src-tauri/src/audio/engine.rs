@@ -43,6 +43,21 @@ pub enum AudioMsg {
 /// drained by the CPAL output callback.
 type PlaybackRing = Arc<Mutex<VecDeque<i16>>>;
 
+/// Runtime-selected mic input source. The voice-processing build tries VPIO
+/// (Apple AEC) first and falls back to CPAL + software AEC when VPIO delivers no
+/// audio — e.g. the default output is a USB interface, which can't form a
+/// voice-processing aggregate, leaving the mic silently dead. The non-VP build
+/// only ever has the CPAL variant.
+///
+/// The held value (a CPAL `Stream` or the VPIO engine) is kept solely so its
+/// `Drop` stops the hardware — never read — hence `allow(dead_code)`.
+#[allow(dead_code)]
+enum InputSource {
+    Cpal(Stream),
+    #[cfg(all(feature = "voice-processing", target_os = "macos"))]
+    VoiceProcessing(super::voice_processing_input::VoiceProcessingInput),
+}
+
 /// The live CPAL audio engine.
 ///
 /// Holds the open CPAL streams (dropping them stops the hardware).
@@ -88,16 +103,15 @@ pub struct AudioEngine {
     /// (full context) so the output callback can drain native-rate samples
     /// without per-block resampling artifacts (crackle).
     output_rate: Arc<AtomicU32>,
-    // Keep streams alive — they stop when dropped.
-    // CPAL input is gated off when the voice-processing feature is on;
-    // AVAudioEngine takes its place as the input source.
-    #[cfg(not(feature = "voice-processing"))]
-    _input_stream: Stream,
+    // Keep the input + output alive — they stop when dropped.
+    /// Active mic input (VPIO or CPAL, chosen at runtime). Dropping stops capture.
+    _input: InputSource,
     _output_stream: Stream,
-    /// AVAudioEngine voice-processing input (Phase 2). Only present
-    /// when the `voice-processing` Cargo feature is enabled.
-    #[cfg(all(feature = "voice-processing", target_os = "macos"))]
-    _vp_input: super::voice_processing_input::VoiceProcessingInput,
+    /// True when the active input is VPIO (Apple AEC — mic stays open during
+    /// playback for barge-in). False for CPAL (software AEC — half-duplex mute).
+    /// Set once at construction; drives `half_duplex()` so the voice-processing
+    /// build behaves correctly when it falls back to CPAL.
+    vpio_active: Arc<AtomicBool>,
 }
 
 // cpal 0.17.0 made Stream Send on all hosts (RustAudio/cpal#818, #1021).
@@ -149,40 +163,26 @@ impl AudioEngine {
             .play()
             .map_err(|e| format!("output stream play: {e}"))?;
 
-        // --- Input path: feature-gated ---
+        // --- Input path: VPIO when it works, CPAL + software-AEC fallback ----
+        // The mic is the one thing that must never silently die. VPIO gives
+        // Apple AEC but only forms its capture aggregate with built-in /
+        // aggregatable output; with a USB interface as the default output it
+        // delivers ZERO input (the tap never fires). So we try VPIO, watchdog
+        // the tap, and fall back to CPAL + software AEC if nothing arrives.
+        let vpio_active = Arc::new(AtomicBool::new(false));
+
         #[cfg(not(feature = "voice-processing"))]
-        let _input_stream = {
-            let input_device = match input_device_name {
-                Some(name) => host
-                    .input_devices()
-                    .map_err(|e| format!("enumerate input devices: {e}"))?
-                    .find(|d| d.name().map(|n| n == name).unwrap_or(false))
-                    .ok_or_else(|| format!("input device '{name}' not found"))?,
-                None => host
-                    .default_input_device()
-                    .ok_or_else(|| "no default input device".to_string())?,
-            };
-            log::info!(
-                "[audio] input device: {} (CPAL)",
-                input_device.name().unwrap_or_default()
-            );
-            let stream = build_input_stream(
-                &input_device,
-                tx.clone(),
-                Arc::clone(&aec),
-                Arc::clone(&rms),
-            )?;
-            stream
-                .play()
-                .map_err(|e| format!("input stream play: {e}"))?;
-            stream
-        };
+        let _input = InputSource::Cpal(build_cpal_input(
+            &host,
+            input_device_name,
+            tx.clone(),
+            Arc::clone(&aec),
+            Arc::clone(&rms),
+            1.0, // sidecar (cpal mode) applies its own 16× gain
+        )?);
 
         #[cfg(all(feature = "voice-processing", target_os = "macos"))]
-        let _vp_input = {
-            log::info!("[audio] input path: AVAudioEngine voice-processing");
-            // Resolve the chosen device name → Core Audio AudioDeviceID (None =
-            // system default). orbis-zj5.
+        let _input = {
             let dev_id =
                 input_device_name.and_then(super::coreaudio_devices::input_device_id_for_name);
             if input_device_name.is_some() && dev_id.is_none() {
@@ -191,11 +191,61 @@ impl AudioEngine {
                     input_device_name.unwrap_or("")
                 );
             }
-            super::voice_processing_input::VoiceProcessingInput::new(
+            log::info!("[audio] input path: AVAudioEngine voice-processing (CPAL fallback armed)");
+            let tap_count = Arc::new(AtomicU64::new(0));
+            match super::voice_processing_input::VoiceProcessingInput::new(
                 tx.clone(),
                 Arc::clone(&rms),
                 dev_id,
-            )?
+                Arc::clone(&tap_count),
+            ) {
+                Ok(vp) => {
+                    // Watchdog: the first tap normally fires within ~1–2 s. Zero
+                    // ticks after ~4 s ⇒ VPIO can't capture (non-aggregatable
+                    // output, e.g. a USB interface) ⇒ fall back.
+                    let mut fired = false;
+                    for _ in 0..80 {
+                        if tap_count.load(Ordering::Relaxed) > 0 {
+                            fired = true;
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    if fired {
+                        log::info!("[audio] VPIO input live — Apple AEC active (full-duplex)");
+                        vpio_active.store(true, Ordering::Relaxed);
+                        InputSource::VoiceProcessing(vp)
+                    } else {
+                        log::warn!(
+                            "[audio] VPIO delivered no mic audio in 4 s — the default output \
+                             can't form a voice-processing aggregate (USB interface?). Falling \
+                             back to CPAL + software AEC so the mic works (half-duplex)."
+                        );
+                        drop(vp); // tear down the dead VPIO engine, release the mic
+                        InputSource::Cpal(build_cpal_input(
+                            &host,
+                            input_device_name,
+                            tx.clone(),
+                            Arc::clone(&aec),
+                            Arc::clone(&rms),
+                            16.0, // sidecar is voice_processing (gain 1×); boost here
+                        )?)
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[audio] VPIO init failed: {e} — falling back to CPAL + software AEC"
+                    );
+                    InputSource::Cpal(build_cpal_input(
+                        &host,
+                        input_device_name,
+                        tx.clone(),
+                        Arc::clone(&aec),
+                        Arc::clone(&rms),
+                        16.0,
+                    )?)
+                }
+            }
         };
 
         Ok(Self {
@@ -208,11 +258,9 @@ impl AudioEngine {
             last_play_ms,
             playback_rms,
             output_rate,
-            #[cfg(not(feature = "voice-processing"))]
-            _input_stream,
+            _input,
             _output_stream: output_stream,
-            #[cfg(all(feature = "voice-processing", target_os = "macos"))]
-            _vp_input,
+            vpio_active,
         })
     }
 
@@ -260,11 +308,13 @@ impl AudioEngine {
     /// VPIO unit cancels the speaker echo in hardware, so the mic can stay
     /// open during playback for real barge-in — Python's `BargeInGate`
     /// (grace window + transcription confirmation) filters any residual.
-    /// `cfg!` is a compile-time constant, so the first term folds at compile
-    /// time; the `full_duplex` override then lets headphone users open the mic
-    /// during playback on the CPAL build (no AEC, but no acoustic echo either).
+    /// `vpio_active` is set once at construction (true only when VPIO actually
+    /// captured audio), so a voice-processing build that fell back to CPAL
+    /// correctly reverts to half-duplex; the `full_duplex` override then lets
+    /// headphone users open the mic during playback on a CPAL path (no AEC, but
+    /// no acoustic echo either).
     pub fn half_duplex(&self) -> bool {
-        !cfg!(feature = "voice-processing") && !self.full_duplex.load(Ordering::Relaxed)
+        !self.vpio_active.load(Ordering::Relaxed) && !self.full_duplex.load(Ordering::Relaxed)
     }
 
     /// Toggle the full-duplex override live (Settings → Activation). When on,
@@ -359,19 +409,51 @@ impl AudioEngine {
 // Stream builders
 // ---------------------------------------------------------------------------
 
-/// Build the CPAL input stream. Target 16 kHz mono i16; if the device
-/// doesn't support that natively, we request the closest supported
-/// config and resample in the callback.
-///
-/// Phase 2: this function is unused when the `voice-processing` feature
-/// is enabled — AVAudioEngine takes over the input path. Gated to avoid
-/// dead-code warnings.
-#[cfg(not(feature = "voice-processing"))]
+/// Open the chosen (or default) CPAL input device and start it. Used directly
+/// in the non-voice-processing build and as the VPIO→CPAL fallback (when the
+/// default output can't form a voice-processing aggregate — e.g. a USB
+/// interface — and VPIO delivers no input). `gain` is a Rust-side per-frame
+/// multiplier (see `build_input_stream`). Compiled in both builds now that the
+/// voice-processing build can fall back to it.
+fn build_cpal_input(
+    host: &cpal::Host,
+    input_device_name: Option<&str>,
+    tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
+    aec: Arc<Mutex<AecProcessor>>,
+    rms: Arc<AtomicU32>,
+    gain: f32,
+) -> Result<Stream, String> {
+    let input_device = match input_device_name {
+        Some(name) => host
+            .input_devices()
+            .map_err(|e| format!("enumerate input devices: {e}"))?
+            .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+            .ok_or_else(|| format!("input device '{name}' not found"))?,
+        None => host
+            .default_input_device()
+            .ok_or_else(|| "no default input device".to_string())?,
+    };
+    log::info!(
+        "[audio] input device: {} (CPAL, {gain}× gain)",
+        input_device.name().unwrap_or_default()
+    );
+    let stream = build_input_stream(&input_device, tx, aec, rms, gain)?;
+    stream
+        .play()
+        .map_err(|e| format!("input stream play: {e}"))?;
+    Ok(stream)
+}
+
 fn build_input_stream(
     device: &Device,
     tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     aec: Arc<Mutex<AecProcessor>>,
     rms: Arc<AtomicU32>,
+    // Per-frame multiplier applied AFTER AEC, before send. 1.0 in the pure CPAL
+    // build (the sidecar applies its own 16×); 16.0 in the VPIO→CPAL fallback,
+    // where the sidecar is in voice_processing mode (gain 1×) but the raw
+    // AGC-less mic is quiet.
+    gain: f32,
 ) -> Result<Stream, String> {
     // Try to get a 16 kHz mono config; fall back to default supported.
     let config = preferred_input_config(device)?;
@@ -436,6 +518,20 @@ fn build_input_stream(
                             // echo is handled by the half-duplex mic gate).
                             let frame = if let Ok(mut a) = aec.lock() {
                                 a.process_mic(&frame)
+                            } else {
+                                frame
+                            };
+
+                            // Rust-side gain (VPIO fallback path only; 1.0 = no-op).
+                            let frame = if gain != 1.0 {
+                                frame
+                                    .iter()
+                                    .map(|s| {
+                                        ((*s as f32) * gain)
+                                            .clamp(i16::MIN as f32, i16::MAX as f32)
+                                            as i16
+                                    })
+                                    .collect()
                             } else {
                                 frame
                             };
@@ -560,7 +656,6 @@ fn build_output_stream(
 // Device config helpers
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "voice-processing"))]
 fn preferred_input_config(device: &Device) -> Result<cpal::SupportedStreamConfig, String> {
     // Prefer 16 kHz mono f32 → i16 conversion happens in callback.
     // Fall back to default if unsupported.
