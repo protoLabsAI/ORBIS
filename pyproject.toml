@@ -27,10 +27,10 @@ dependencies = [
     "cryptography>=42",
     # A2A 1.0 (ORBIS#340 / protoWorkstacean ADR-0006). Official SDK owns the
     # protocol mechanics; protolabs-a2a is the thin fleet conventions layer
-    # (the 4 extensions, agent-card defaults, auth schemes). Private git dep —
-    # the build env must have read access to protoLabsAI/protolabs-a2a.
+    # (the 4 extensions, agent-card defaults, auth schemes).
     "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
-    # Public fleet conventions layer, pinned to the published tag (not on PyPI).
+    # Public git dep (github.com/protoLabsAI/protolabs-a2a) — the repo is public,
+    # so it installs without auth; pinned to the published tag, not yet on PyPI.
     "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0",
     "sse-starlette",
     # Observability
