@@ -1,8 +1,9 @@
 ---
 const links = [
-  { href: '/download', label: 'Download' },
-  { href: '/docs', label: 'Docs' },
-  { href: '/changelog', label: 'Changelog' },
+  { href: '/download', label: 'Download', external: false },
+  { href: '/docs', label: 'Docs', external: true },
+  { href: '/changelog', label: 'Changelog', external: false },
+  { href: 'https://github.com/protoLabsAI/ORBIS', label: 'GitHub', external: true },
 ];
 const currentPath = Astro.url.pathname;
 ---
@@ -12,9 +13,11 @@ const currentPath = Astro.url.pathname;
     <a href="/" class="text-white font-semibold tracking-tight text-lg">ORBIS</a>
 
     <div class="flex items-center gap-5 sm:gap-6">
-      {links.map(({ href, label }) => (
+      {links.map(({ href, label, external }) => (
         <a
           href={href}
+          target={external ? '_blank' : undefined}
+          rel={external ? 'noopener noreferrer' : undefined}
           class={[
             'text-sm transition-colors',
             currentPath.startsWith(href) && href !== '/'
