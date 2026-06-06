@@ -1,11 +1,21 @@
 [
   {
+    "version": "v0.2.122",
+    "date": "2026-06-06",
+    "changes": [
+      "Microphone keeps working when your audio output is a USB interface (no more silent mic on a Scarlett or USB DAC).",
+      "Status pill shows real speaking and thinking states, with cleaner delegation labels.",
+      "ORBIS is now open source: build it from source or browse the code on GitHub."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.122/ORBIS-0.2.122-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.121",
     "date": "2026-06-05",
     "changes": [
-      "Voice settings open cleanly — no more microphone-indicator flicker",
+      "Voice settings open cleanly \u2014 no more microphone-indicator flicker",
       "Polished the on/off toggle switches",
-      "Packaging fix — developer-only tools are no longer included in the released app"
+      "Packaging fix \u2014 developer-only tools are no longer included in the released app"
     ],
     "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.121/ORBIS-0.2.121-aarch64-apple-darwin.dmg"
   },
@@ -13,9 +23,9 @@
     "version": "v0.2.118",
     "date": "2026-06-04",
     "changes": [
-      "Redesigned settings — a Quick tab with at-a-glance status and your most-used controls",
+      "Redesigned settings \u2014 a Quick tab with at-a-glance status and your most-used controls",
       "Switch between orb presets right from the Quick tab",
-      "Tidier voice settings — wake-word setup folds out of the way"
+      "Tidier voice settings \u2014 wake-word setup folds out of the way"
     ],
     "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.118/ORBIS-0.2.118-aarch64-apple-darwin.dmg"
   },
@@ -23,10 +33,10 @@
     "version": "v0.2.117",
     "date": "2026-06-04",
     "changes": [
-      "Barge-in — interrupt ORBIS mid-sentence (headphones)",
+      "Barge-in \u2014 interrupt ORBIS mid-sentence (headphones)",
       "\"Hey Orbis\" wake-word activation, fully on-device",
       "Choose on-device or cloud speech models during setup",
-      "Signed + notarized — the app opens cleanly on download"
+      "Signed + notarized \u2014 the app opens cleanly on download"
     ],
     "dmgUrl": "https://github.com/protoLabsAI/orbis-releases/releases/download/v0.2.117/ORBIS-0.2.117-aarch64-apple-darwin.dmg"
   }
