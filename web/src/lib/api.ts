@@ -120,6 +120,10 @@ export type OrbisConfig = {
     tts_url?: string;
     tts_model?: string;
     tts_api_key?: string;
+    // First-run wizard's voice-models choice: download on-device STT+TTS
+    // ('on_device') or bring-your-own backend ('byo'). Gates the eager
+    // prewarm in app.py.
+    local_models?: 'on_device' | 'byo';
   };
   llm?: {
     url?: string;
@@ -163,6 +167,11 @@ export type OrbisConfig = {
     model?: string;
     /** Detection threshold 0..1 — higher = fewer false triggers. */
     threshold?: number;
+  };
+  /** First-run wizard completion — the durable source of truth (the
+   *  localStorage flag is just a fast-path cache that rebuilds wipe). */
+  setup?: {
+    complete?: boolean;
   };
 };
 
