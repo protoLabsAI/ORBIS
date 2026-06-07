@@ -4,15 +4,17 @@
 //!
 //! ## Security posture
 //!
-//! The CSP in `tauri.conf.json#app.security.csp` applies to the
-//! splash page only (frontendDist = `../splash`). Once the sidecar
-//! is ready we `window.navigate()` to `http://127.0.0.1:<ephemeral>`,
-//! which is a different origin and governed by whatever headers the
-//! Python backend serves (currently none specific). Both splash and
-//! SPA ship from fully-local content on this machine, so the policy
-//! is permissive within the app's origin but blocks unexpected
-//! network reach. `shell:allow-execute` in the default capability
-//! pins the sidecar args so there's no arbitrary-exec surface.
+//! The bundled React SPA (`frontendDist = ../web/dist`) loads from
+//! `tauri://localhost` and stays there for the whole app lifetime — we
+//! do NOT navigate to the sidecar origin (that dropped the WKWebView's
+//! keyboard first-responder on macOS, tao#208 / wry#637, and froze the
+//! setup wizard's inputs). Instead, once the sidecar prints `ORBIS_READY`
+//! we inject its loopback URL into the page (`window.__ORBIS_BACKEND__`)
+//! and the frontend resolves `/api/*` fetches + the SSE stream against it
+//! (proxied Rust-side via the `api_request` command and `bridge_sse`).
+//! Everything ships from fully-local content on this machine.
+//! `shell:allow-execute` in the default capability pins the sidecar args
+//! so there's no arbitrary-exec surface.
 //!
 //! One deliberate exception: fleet agents (protoLabsAI/ORBIS#325) drop
 //! a manifest in the user-writable
@@ -30,11 +32,12 @@
 //!      produced by the PyApp workflow at .github/workflows/
 //!      desktop-build.yml).
 //!   2. Stream its stdout. The Python entry in `app.py:main()` prints
-//!      `ORBIS_READY http://127.0.0.1:<port>` once uvicorn is serving.
-//!   3. Navigate the main webview at that URL. The Python backend
-//!      serves its React SPA from /web/dist/ and the /api/* JSON
-//!      endpoints on the same port, so a single webview origin covers
-//!      the whole app.
+//!      `ORBIS_READY http://127.0.0.1:<port>` once uvicorn is serving,
+//!      plus `ORBIS_BOOT {stage,detail}` markers as models load (forwarded
+//!      to the UI loading gate as `orbis-boot` events).
+//!   3. Inject that URL into the already-loaded bundled SPA so its
+//!      `/api/*` fetches + SSE stream resolve against the sidecar — the
+//!      webview itself never leaves `tauri://localhost`.
 //!
 //! Failure modes worth thinking about explicitly:
 //!
@@ -117,6 +120,25 @@ impl AudioEngineState {
         }
     }
 }
+
+/// Bundle captured at boot so the native audio engine can be started either
+/// immediately (returning user — mic already authorized) or later, when the
+/// setup wizard grants microphone permission on first run. Held in
+/// [`PendingAudio`] until [`try_start_native_engine`] consumes it. The bound
+/// socket stays listening while pending, so the sidecar's `connect()` blocks on
+/// the listen backlog until the accept loop comes online after the grant.
+#[cfg(feature = "native-audio")]
+struct PendingAudioStart {
+    sock_server: audio::socket::SocketServer,
+    mic_tx: tokio::sync::mpsc::UnboundedSender<audio::engine::AudioMsg>,
+    mic_rx: tokio::sync::mpsc::UnboundedReceiver<audio::engine::AudioMsg>,
+}
+
+/// Managed state holding the deferred audio-engine start until mic permission
+/// exists. `None` once the engine has started (or before boot binds the socket).
+#[cfg(feature = "native-audio")]
+#[derive(Default)]
+struct PendingAudio(Mutex<Option<PendingAudioStart>>);
 
 // ---------------------------------------------------------------------------
 // Tauri IPC commands — native audio
@@ -242,6 +264,98 @@ fn set_input_device(app: tauri::AppHandle, name: String) -> Result<(), String> {
     std::fs::write(&p, name).map_err(|e| format!("persist input device: {e}"))?;
     log::info!("[audio] preferred input device = '{name}' (applies on next launch)");
     Ok(())
+}
+
+/// Bring the native audio engine online if (a) mic permission is granted and
+/// (b) it isn't already running. Idempotent — safe to call repeatedly, from boot
+/// and from the wizard's grant handler.
+///
+/// Permission is only *checked* here, never requested: on first run the setup
+/// wizard owns the TCC prompt, so the macOS dialog appears with context (the Mic
+/// step) instead of over the splash. Boot calls this once; if permission isn't
+/// there yet the start bundle stays pending and the wizard re-triggers it after
+/// the grant via the `start_audio_engine` IPC. Without this, a first-run user
+/// who granted mic access *in the wizard* never got an engine — it only ever
+/// started in the boot thread, which had already bailed — so the wizard reported
+/// "ready" while voice stayed silently dead until an app relaunch.
+#[cfg(feature = "native-audio")]
+fn try_start_native_engine(app: &AppHandle) {
+    // Already running? Nothing to do.
+    if app
+        .try_state::<AudioEngineState>()
+        .and_then(|s| s.engine.lock().ok().map(|g| g.is_some()))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    // Check (do NOT request) microphone permission. On macOS the engine can't
+    // open the input without it; off-macOS the status is Unsupported and we
+    // proceed (CPAL takes whatever the host allows).
+    #[cfg(target_os = "macos")]
+    if microphone_permission_status() != MicrophonePermissionStatus::Authorized {
+        log::info!("[audio] mic permission not granted yet — engine start deferred");
+        return;
+    }
+    // Take the start bundle stashed at boot. Absent => already started, or boot
+    // hasn't bound the socket yet.
+    let Some(PendingAudioStart {
+        sock_server,
+        mic_tx,
+        mic_rx,
+    }) = app
+        .try_state::<PendingAudio>()
+        .and_then(|s| s.0.lock().ok().and_then(|mut g| g.take()))
+    else {
+        return;
+    };
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let preferred = persisted_input_device(&app_handle);
+        if let Some(name) = preferred.as_deref() {
+            log::info!("[audio] preferred input device from store: '{name}'");
+        }
+        match audio::engine::AudioEngine::new(preferred.as_deref(), mic_tx) {
+            Ok(engine) => {
+                let engine = Arc::new(engine);
+                if let Some(state) = app_handle.try_state::<AudioEngineState>() {
+                    state.store(Arc::clone(&engine));
+                }
+                log::info!("[audio] native engine online");
+                // open-mic activation: mic hot from launch, no auto-close.
+                let act = read_activation_config(&app_handle);
+                if act.style == "open_mic" {
+                    engine.set_listening(true);
+                    log::info!("[wake] activation=open_mic → mic hot at launch");
+                }
+                // Restore the persisted full-duplex (barge-in) preference.
+                engine.set_full_duplex(act.full_duplex);
+                let wake = wake_config(&app_handle);
+                // Accept loop runs in a background task.
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = sock_server.accept_and_run(engine, mic_rx, wake).await {
+                        log::error!("[audio/socket] accept_and_run failed: {e}");
+                    }
+                });
+            }
+            Err(e) => log::error!("[audio] native engine failed to start: {e}"),
+        }
+    });
+}
+
+/// Start the native audio engine now that mic permission may have just been
+/// granted. The setup wizard calls this right after the user allows microphone
+/// access (or fixes it in System Settings and rechecks). Idempotent + safe when
+/// already running. Returns whether the engine reports running *at call time* —
+/// the device open finishes on a background thread, so a freshly-triggered start
+/// reports false until it lands; the wizard confirms via the live level meter.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn start_audio_engine(app: tauri::AppHandle) -> bool {
+    try_start_native_engine(&app);
+    app.try_state::<AudioEngineState>()
+        .and_then(|s| s.engine.lock().ok().map(|g| g.is_some()))
+        .unwrap_or(false)
 }
 
 /// Return the active native input path so the frontend can avoid
@@ -1136,6 +1250,7 @@ pub fn run() {
                 tauri::generate_handler![
                     list_audio_inputs,
                     set_input_device,
+                    start_audio_engine,
                     get_audio_level,
                     get_audio_levels,
                     get_audio_input_mode,
@@ -1205,7 +1320,12 @@ pub fn run() {
             // Register native audio engine state. Must be done in setup()
             // so it's available before supervise_sidecar runs.
             #[cfg(feature = "native-audio")]
-            app.manage(AudioEngineState::new());
+            {
+                app.manage(AudioEngineState::new());
+                // Holds the deferred engine start until mic permission exists
+                // (first run grants it via the wizard). Bound by supervise_sidecar.
+                app.manage(PendingAudio::default());
+            }
 
             // Menu-bar-only agent mode: build the tray first, and only drop
             // the dock icon (Accessory) if it succeeds — so a tray failure
@@ -1551,80 +1671,45 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // socket path is passed to the sidecar as ORBIS_AUDIO_SOCK so Python
     // can connect to it. Production macOS builds use AVAudioEngine
     // voice-processing input plus CPAL output.
+    //
+    // Bind the mic/speaker socket synchronously (no permission needed) so the
+    // sidecar can be spawned and connect right away, then DEFER the engine
+    // start. On a returning user (mic already authorized) it starts now; on
+    // first run it stays pending until the wizard grants permission and calls
+    // the `start_audio_engine` IPC. We deliberately do NOT request permission
+    // here: requesting off the wizard pops the macOS TCC dialog over the splash
+    // before any context, and an in-setup-hook request couldn't present at all
+    // (no run loop yet). The mic is push-to-talk-muted by default, so nothing
+    // needs it until the user opts into a conversation; the socket's listen
+    // backlog holds the sidecar's connection until the accept loop comes online.
     #[cfg(feature = "native-audio")]
     let native_audio_sock: Option<std::path::PathBuf> = {
-        if true {
-            // Bind the socket synchronously (no mic permission needed) so the
-            // sidecar can be spawned and connect right away. DEFER the mic
-            // permission request + AVAudioEngine start to a background thread.
-            //
-            // Requesting permission here in the setup hook blocked the main
-            // thread before the app run loop was up, so the macOS TCC dialog
-            // could not present — first launch failed with a "system input"
-            // error and only a restart (now already-Authorized) worked. Off
-            // the main thread the dialog presents normally once the app is
-            // active. The mic is push-to-talk-muted by default, so nothing
-            // needs it until the user opts into a conversation; the unix
-            // socket's listen backlog holds the sidecar's connection until the
-            // accept loop comes online after the grant.
-            let (mic_tx, mic_rx) =
-                tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
-            let sock_server = match audio::socket::SocketServer::bind() {
-                Ok(s) => s,
-                Err(e) => return Err(format!("native audio socket bind failed: {e}")),
-            };
-            let sock_path = sock_server.path().clone();
-            log::info!("orbis_audio_sock={}", sock_path.display());
-
-            let app_handle = app.app_handle().clone();
-            std::thread::spawn(move || {
-                #[cfg(target_os = "macos")]
-                {
-                    let status = ensure_microphone_permission();
-                    if status != MicrophonePermissionStatus::Authorized {
-                        log::warn!(
-                            "[audio] microphone permission {status:?} — native audio stays offline until granted (System Settings → Privacy & Security → Microphone)"
-                        );
-                        return;
-                    }
+        let (mic_tx, mic_rx) = tokio::sync::mpsc::unbounded_channel::<audio::engine::AudioMsg>();
+        let sock_server = match audio::socket::SocketServer::bind() {
+            Ok(s) => s,
+            Err(e) => return Err(format!("native audio socket bind failed: {e}")),
+        };
+        let sock_path = sock_server.path().clone();
+        log::info!("orbis_audio_sock={}", sock_path.display());
+        match app.try_state::<PendingAudio>() {
+            Some(state) => {
+                if let Ok(mut g) = state.0.lock() {
+                    *g = Some(PendingAudioStart {
+                        sock_server,
+                        mic_tx,
+                        mic_rx,
+                    });
                 }
-                let preferred = persisted_input_device(&app_handle);
-                if let Some(name) = preferred.as_deref() {
-                    log::info!("[audio] preferred input device from store: '{name}'");
-                }
-                match audio::engine::AudioEngine::new(preferred.as_deref(), mic_tx) {
-                    Ok(engine) => {
-                        let engine = Arc::new(engine);
-                        if let Some(state) = app_handle.try_state::<AudioEngineState>() {
-                            state.store(Arc::clone(&engine));
-                        }
-                        log::info!("[audio] native engine online");
-                        // open-mic activation style: mic hot from launch, no
-                        // auto-close (the user-driven "always listening" mode).
-                        let act = read_activation_config(&app_handle);
-                        if act.style == "open_mic" {
-                            engine.set_listening(true);
-                            log::info!("[wake] activation=open_mic → mic hot at launch");
-                        }
-                        // Restore the persisted full-duplex (barge-in) preference.
-                        engine.set_full_duplex(act.full_duplex);
-                        let wake = wake_config(&app_handle);
-                        // Accept loop runs in a background task.
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(e) = sock_server.accept_and_run(engine, mic_rx, wake).await {
-                                log::error!("[audio/socket] accept_and_run failed: {e}");
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        log::error!("[audio] native engine failed to start: {e}");
-                    }
-                }
-            });
-            Some(sock_path)
-        } else {
-            None
+            }
+            // PendingAudio is managed in setup() before this runs; if it's
+            // somehow absent the socket would close on drop and the sidecar
+            // could never connect — fail loud rather than boot mute.
+            None => return Err("PendingAudio state not registered".to_string()),
         }
+        // Start now if already authorized (returning user); otherwise the wizard
+        // re-triggers via `start_audio_engine` after the first-run grant.
+        try_start_native_engine(&app);
+        Some(sock_path)
     };
 
     // `sidecar("orbis")` resolves to `binaries/orbis-<target>` on the
