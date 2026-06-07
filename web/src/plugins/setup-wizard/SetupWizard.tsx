@@ -789,23 +789,25 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
  * can still pick a cloud provider from the grid below.
  */
 function OllamaInstallHelper() {
-  const [copied, setCopied] = useState<string | null>(null);
-  const platform = detectOS();
+  const [copied, setCopied] = useState(false);
 
-  const commands: Record<OSKind, { label: string; cmd: string }> = {
-    macos:   { label: 'macOS',   cmd: 'curl -fsSL https://ollama.com/install.sh | sh' },
-    linux:   { label: 'Linux',   cmd: 'curl -fsSL https://ollama.com/install.sh | sh' },
-    windows: { label: 'Windows', cmd: 'winget install Ollama.Ollama' },
+  // Show only the install line for this machine — ORBIS ships Mac-first, so a
+  // three-OS table was clutter. detectOS() still returns the right one if/when
+  // Linux/Windows desktop builds ship.
+  const commands: Record<OSKind, string> = {
+    macos: 'curl -fsSL https://ollama.com/install.sh | sh',
+    linux: 'curl -fsSL https://ollama.com/install.sh | sh',
+    windows: 'winget install Ollama.Ollama',
   };
+  const cmd = commands[detectOS()];
 
-  const onCopy = async (key: string, cmd: string) => {
+  const onCopy = async () => {
     try {
       await navigator.clipboard.writeText(cmd);
-      setCopied(key);
-      window.setTimeout(() => setCopied(null), 1500);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Browser might block clipboard in some contexts — UX falls back
-      // to the visible text the user can select manually.
+      // Clipboard may be blocked — the visible text stays selectable.
     }
   };
 
@@ -819,37 +821,15 @@ function OllamaInstallHelper() {
         get one running; it's free, open-source, and auto-detected once
         installed.
       </p>
-      <div className="space-y-2">
-        {(['macos', 'linux', 'windows'] as const).map((k) => {
-          const { label, cmd } = commands[k];
-          const highlight = k === platform;
-          const key = `cmd-${k}`;
-          return (
-            <div
-              key={k}
-              className={
-                'flex items-center gap-2 rounded px-2.5 py-1.5 ' +
-                (highlight
-                  ? 'bg-brand/10 border border-brand/40'
-                  : 'bg-raised/40 border border-edge')
-              }
-            >
-              <span className="text-helper uppercase tracking-wider text-fg-subtle w-14 shrink-0">
-                {label}
-              </span>
-              <code className="flex-1 font-mono text-xs text-fg-body truncate">
-                {cmd}
-              </code>
-              <button
-                type="button"
-                onClick={() => onCopy(key, cmd)}
-                className="text-helper uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors shrink-0"
-              >
-                {copied === key ? 'Copied' : 'Copy'}
-              </button>
-            </div>
-          );
-        })}
+      <div className="flex items-center gap-2 rounded border border-brand/40 bg-brand/10 px-2.5 py-1.5">
+        <code className="flex-1 font-mono text-xs text-fg-body truncate">{cmd}</code>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="text-helper uppercase tracking-wider text-fg-subtle hover:text-fg-body transition-colors shrink-0"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
       </div>
       <div className="text-xs text-fg-subtle mt-2">
         After install, reopen this step — we'll detect Ollama and offer
