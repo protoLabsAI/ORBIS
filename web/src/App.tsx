@@ -1,6 +1,7 @@
 import { Drawer } from '@/components/Drawer';
 import { BootStatus } from '@/components/BootStatus';
 import { IntroSplash } from '@/components/IntroSplash';
+import { UpdateNotice } from '@/components/UpdateNotice';
 import { TitleBar } from '@/components/TitleBar';
 import { VoiceStateBridge } from './voice/VoiceStateBridge';
 import { Slot } from './plugins/PluginHost';
@@ -44,6 +45,7 @@ function App() {
         <Drawer />
         <TitleBar />
       </div>
+      <UpdateNotice />
       <BootStatus />
       <IntroSplash />
     </>

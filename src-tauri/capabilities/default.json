@@ -16,6 +16,8 @@
     "dialog:allow-message",
     "log:default",
     "http:default",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "http:default",
       "allow": [

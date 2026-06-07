@@ -42,6 +42,11 @@ reqwest = "0.12"
 url = "2"
 log = "0.4"
 tauri-plugin-log = "2"
+# In-app auto-update: checks latest.json on the GitHub release, downloads +
+# installs the signed updater artifact. `process` provides relaunch() after an
+# update is applied.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal   = { version = "0.17", optional = true }
