@@ -12,6 +12,9 @@
  * `event: error` if the pull failed).
  */
 
+import { backendBase } from '@/lib/api';
+import { authHeaders } from '@/auth/apiKey';
+
 export interface PullProgress {
   status: string;
   completed?: number;
@@ -40,14 +43,32 @@ export async function* pullMlxModel(
   yield* streamPullSse('/api/llm/mlx/pull', { model: modelId }, init);
 }
 
+/**
+ * Download + warm the on-device speech models (Parakeet STT + Kokoro TTS) via
+ * `/api/voice/download_models`. The wizard's "Install on-device models" choice
+ * streams this so the ~900 MB pull happens with a progress bar instead of
+ * silently stalling the first voice turn. Backend derives the repos from the
+ * configured backends; the body is empty.
+ */
+export async function* pullVoiceModels(
+  init?: { signal?: AbortSignal },
+): AsyncGenerator<PullProgress> {
+  yield* streamPullSse('/api/voice/download_models', {}, init);
+}
+
 async function* streamPullSse(
   endpoint: string,
   body: Record<string, unknown>,
   init?: { signal?: AbortSignal },
 ): AsyncGenerator<PullProgress> {
-  const resp = await fetch(endpoint, {
+  // Resolve the sidecar's loopback origin: the bundled UI loads from
+  // tauri://localhost (no /api there), so a relative fetch only worked behind
+  // the vite dev proxy — in the packaged app it 404s. Hit the absolute backend
+  // URL and attach the owner key (harmless on these unauth pull routes).
+  const base = await backendBase();
+  const resp = await fetch(`${base}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
     signal: init?.signal,
   });
