@@ -2133,13 +2133,17 @@ def prewarm_all() -> None:
     # loading, so the UI loading screen reflects actual work, not a timer.
     # Each step is guarded so a failure never strands the loading gate
     # (which releases on the final "ready" marker).
+    # Keep the word "model" in the local-load strings — the UI loading gate
+    # sniffs /loading…model/ to show the "first launch loads local models" note.
     stt_detail = {
-        "parakeet": "Loading Parakeet speech model…",
-        "sensevoice": "Loading SenseVoice speech model…",
+        "parakeet": "Loading on-device speech model (Parakeet)…",
+        "sensevoice": "Loading on-device speech model (SenseVoice)…",
         "openai": "Connecting speech recognition…",
-    }.get(STT_BACKEND, "Loading Whisper speech model…")
+    }.get(STT_BACKEND, "Loading on-device speech model (Whisper)…")
     tts_detail = (
-        "Loading Kokoro voice…" if TTS_BACKEND == "kokoro" else "Loading speech synthesis…"
+        "Loading on-device voice model (Kokoro)…"
+        if TTS_BACKEND == "kokoro"
+        else "Loading speech synthesis…"
     )
     # Defer the on-device STT/TTS download until the user opts in via the setup
     # wizard's "voice models" step (voice.local_models == "on_device"). Keeps a

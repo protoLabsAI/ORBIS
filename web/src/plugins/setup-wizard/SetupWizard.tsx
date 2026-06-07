@@ -47,34 +47,82 @@ const STORAGE_COMPLETE = 'orbis.setupComplete';
 type Step = 'welcome' | 'mic' | 'models' | 'names' | 'llm' | 'pick' | 'done' | 'hatching';
 
 /**
- * First-run setup wizard. Detects "no setup done yet" via a
- * localStorage flag, overlays a full-screen panel above the app,
- * walks the user through: welcome → API key (optional) → pick
- * starter orb → done.
+ * First-run setup wizard. Whether setup is needed is resolved from the durable
+ * config flag (`setup.complete`), with the localStorage flag as a fast-path
+ * cache so a configured instance never flashes the wizard.
  *
- * Re-enter from settings at any time by clearing
- * ``localStorage['orbis.setupComplete']``.
+ * A rebuild / "clear browsing data" wipes localStorage but NOT the config — so
+ * falling back to the config keeps the wizard from re-asking (and the sidecar
+ * from re-loading models on) an instance that's already set up. That mismatch
+ * was the "models load at boot, then the wizard asks if you even want them" bug.
+ *
+ * Re-run from Settings → Setup (which clears both the cache and the flag).
  */
 export function SetupWizard() {
-  const [needsSetup, setNeedsSetup] = useState<boolean>(() => {
+  // null = undecided (awaiting the config check); true/false once known.
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(() => {
     try {
-      return localStorage.getItem(STORAGE_COMPLETE) !== 'true';
+      // Fast path: localStorage says done → never flash the wizard.
+      if (localStorage.getItem(STORAGE_COMPLETE) === 'true') return false;
     } catch {
-      return true;
+      // localStorage unavailable — fall through to the config check.
     }
+    return null;
   });
 
-  if (!needsSetup) return null;
-
-  return (
-    <div className="fixed inset-0 z-30 bg-surface/95 backdrop-blur-sm overflow-y-auto">
-        <WizardFlow
-          onFinish={() => {
+  // Undecided → ask the backend (the durable source of truth). The boot gate
+  // means the sidecar is already up by the time this mounts, so it's quick.
+  useEffect(() => {
+    if (needsSetup !== null) return;
+    let cancelled = false;
+    api
+      .config()
+      .then(({ config }) => {
+        if (cancelled) return;
+        // The explicit flag wins — including a Re-run that set it false, which
+        // must override the legacy signal below (local_models stays set). Only
+        // when the flag was never written do we fall back to back-compat:
+        // voice.local_models is set, and the wizard's models step is its only
+        // writer, so its presence means setup was done on this box.
+        const setup = config?.setup;
+        const done =
+          setup?.complete === true
+            ? true
+            : setup?.complete === false
+              ? false
+              : config?.voice?.local_models != null;
+        if (done) {
           try {
             localStorage.setItem(STORAGE_COMPLETE, 'true');
           } catch {
-            // Ignore storage failures; setup completion is best-effort UI state.
+            // best-effort cache
           }
+        }
+        setNeedsSetup(!done);
+      })
+      .catch(() => {
+        // Can't read config — default to showing setup (safe for a fresh box).
+        if (!cancelled) setNeedsSetup(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsSetup]);
+
+  if (needsSetup !== true) return null; // undecided or already done → nothing
+
+  return (
+    <div className="fixed inset-0 z-30 bg-surface/95 backdrop-blur-sm overflow-y-auto">
+      <WizardFlow
+        onFinish={() => {
+          try {
+            localStorage.setItem(STORAGE_COMPLETE, 'true');
+          } catch {
+            // Ignore storage failures; the config flag below is the real record.
+          }
+          // Durable completion — survives a rebuild / clear-browsing-data so the
+          // wizard doesn't re-ask on an already-configured instance.
+          api.putConfig({ setup: { complete: true } }).catch(() => {});
           setNeedsSetup(false);
         }}
       />

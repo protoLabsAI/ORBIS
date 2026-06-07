@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
+import { api } from '@/lib/api';
 import { DEVTOOLS_ENABLED, devModeStore, useDevMode } from '@/shared/devMode';
 import { ApiKeyField } from './ApiKeyField';
 import { Diagnostics } from './Diagnostics';
@@ -32,11 +33,18 @@ export function SystemPanel() {
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => {
+              onClick={async () => {
                 try {
                   localStorage.removeItem('orbis.setupComplete');
                 } catch {
-                  // best-effort — fall through to the reload regardless
+                  // best-effort — fall through regardless
+                }
+                // Clear the durable flag too, else the config-gated wizard
+                // stays hidden and "Re-run" would no-op.
+                try {
+                  await api.putConfig({ setup: { complete: false } });
+                } catch {
+                  // best-effort — reload anyway
                 }
                 window.location.reload();
               }}
