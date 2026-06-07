@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.2.125",
+    "date": "2026-06-07",
+    "changes": [
+      "Implements an in-app update mechanism that notifies users of available versions via a non-intrusive notification pill.",
+      "Provides a one-click \"Update & Restart\" workflow to download, install, and relaunch the application.",
+      "Automates the generation and signing of update manifests to ensure secure delivery of desktop builds.",
+      "Adds support for selecting specific audio output devices within the application settings.",
+      "Enables persistent selection of output hardware, allowing the app to bypass system-wide default changes.",
+      "Resolves issues where voice processing or acoustic echo cancellation (AEC) fails when the system default is set to a USB interface."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.125/ORBIS-0.2.125-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.124",
     "date": "2026-06-07",
     "changes": [
