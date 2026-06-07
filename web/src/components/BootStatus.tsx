@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { Button } from '@/components/ui/button';
+import { ProtoLabsIcon } from './ProtoLabsIcon';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -135,7 +136,15 @@ export function BootStatus() {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-surface text-fg-body">
-      <div className="h-10 w-10 animate-spin rounded-full border-2 border-edge border-t-brand" />
+      {/* Same brand mark as IntroSplash so the splash fades seamlessly into the
+          loading screen (one continuous branded boot, not splash → plain
+          spinner). Gentle breathing pulse stands in for the spinner. */}
+      <div
+        className="orbis-boot-mark"
+        style={{ filter: 'drop-shadow(0 0 14px rgba(167, 139, 250, 0.35))' }}
+      >
+        <ProtoLabsIcon variant="outline" size={72} />
+      </div>
       <div className="text-base">{detail}</div>
       <div className="h-1 w-56 overflow-hidden rounded-full bg-edge">
         {noMarkerYet ? (
@@ -156,6 +165,13 @@ export function BootStatus() {
         }
         .orbis-boot-indeterminate {
           animation: orbis-boot-indeterminate 1.3s ease-in-out infinite;
+        }
+        @keyframes orbis-boot-mark {
+          0%, 100% { opacity: 0.85; transform: scale(1); }
+          50% { opacity: 1; transform: scale(1.04); }
+        }
+        .orbis-boot-mark {
+          animation: orbis-boot-mark 2.4s ease-in-out infinite;
         }
       `}</style>
       {loadingModels && (
