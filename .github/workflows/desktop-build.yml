@@ -341,7 +341,11 @@ jobs:
             unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
           fi
           echo "Signing mode: ${SIGNED}"
-          cargo tauri build --features native-audio,voice-processing
+          # createUpdaterArtifacts (CI-only, via --config so local `cargo tauri
+          # build` without TAURI_SIGNING_PRIVATE_KEY isn't forced to sign) emits
+          # the signed `*.app.tar.gz` (+ .sig) the in-app updater downloads.
+          cargo tauri build --features native-audio,voice-processing \
+            --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - name: Restore .app from DMG for verification
         shell: bash
@@ -634,3 +638,45 @@ jobs:
                  --notes "Signed + notarized macOS app (Apple Silicon)."
           gh release upload "${TAG}" "${ARTIFACTS[@]}" --repo "${REPO}" --clobber
           echo "Uploaded $(basename "${{ env.installer }}") to ${REPO} ${TAG}."
+
+      - name: Publish updater manifest (latest.json) + artifact
+        if: github.event_name == 'push'
+        # Best-effort: the in-app updater needs latest.json + the signed
+        # `*.app.tar.gz`. If the signed updater artifact wasn't produced (no
+        # TAURI_SIGNING_PRIVATE_KEY) this no-ops — the release + DMG still ship,
+        # updates just aren't offered until it's fixed. tauri.conf pins the
+        # endpoint to releases/latest/download/latest.json.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          shopt -s nullglob
+          TARS=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
+          if [ "${#TARS[@]}" -eq 0 ] || [ ! -f "${TARS[0]}.sig" ]; then
+            echo "::warning::no signed *.app.tar.gz updater artifact — skipping updater manifest (in-app updates disabled this release)."
+            exit 0
+          fi
+          # Clean dist dir (so build-updater-manifest doesn't walk the restored .app).
+          UPD="$(mktemp -d)"
+          cp "${TARS[0]}" "${TARS[0]}.sig" "${UPD}/"
+          # Polished notes from the GitHub release if release.yml has finished
+          # (parallel job); otherwise a generic line. Shown in the in-app panel.
+          NOTES="$(gh release view "${TAG}" --repo "${REPO}" --json body -q .body 2>/dev/null || true)"
+          [ -n "${NOTES}" ] || NOTES="See the GitHub release for details."
+          npx --yes -p '@protolabsai/release-tools@latest' build-updater-manifest \
+            --version "${VERSION}" \
+            --dist "${UPD}" \
+            --base-url "https://github.com/${REPO}/releases/download/${TAG}" \
+            --notes "${NOTES}" \
+            --out latest.json
+          gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1 \
+            || gh release create "${TAG}" --repo "${REPO}" --title "ORBIS ${TAG}" \
+                 --notes "Signed + notarized macOS app (Apple Silicon)."
+          gh release upload "${TAG}" "${UPD}/"*.app.tar.gz "${UPD}/"*.app.tar.gz.sig latest.json \
+            --repo "${REPO}" --clobber
+          echo "Published latest.json + updater artifact for ${TAG}."

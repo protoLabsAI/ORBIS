@@ -50,5 +50,12 @@
       "minimumSystemVersion": "13.0"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZBQTg4QTBCRERFN0E4MDkKUldRSnFPZmRDNHFvK3FMMGdubXlkWGp6bkVmYXFRS29GR1RBVnlpenlUNHh2TUxYWENQdkREUjIK",
+      "endpoints": [
+        "https://github.com/protoLabsAI/ORBIS/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }
