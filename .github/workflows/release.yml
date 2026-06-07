@@ -135,46 +135,15 @@ jobs:
       # buildkit provenance (`provenance: true` on docker/build-push
       # above) still attaches SLSA metadata to the image manifest.
 
-      - name: Generate release notes
-        id: notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          NOTES=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG" --jq '.body' 2>/dev/null || echo "")
-          # Strip chore/docs noise lines from the auto-generated body
-          FILTERED=$(echo "$NOTES" | grep -Eiv '^\* (chore|docs):' || echo "$NOTES")
-          {
-            echo "notes<<NOTES_EOF"
-            echo "$FILTERED"
-            echo "NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          # Idempotent: re-running the release (e.g. to re-fire the Discord
-          # post after fixing the webhook) must not die on an already-existing
-          # release. Edit it in place instead of erroring.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes "${{ steps.notes.outputs.notes }}"
-          else
-            gh release create "$TAG" --title "$TAG" --notes "${{ steps.notes.outputs.notes }}"
-          fi
-
-      # ── Polished release notes via the shared release-tools action ──────────
+      # ── Release notes: one generation → GitHub release body + marketing changelog ──
 
       - name: Compute previous tag
         id: prev_tag
         run: |
           VERSION="${{ steps.version.outputs.tag }}"
-          # Pick the tag immediately preceding VERSION in version-sort
-          # order, not merely the newest other tag. Manual reruns for an
-          # older release would otherwise compare against a newer tag and
-          # ship inverted release notes.
+          # The tag immediately preceding VERSION in version-sort order (not just
+          # the newest other tag) — a manual rerun for an older release would
+          # otherwise diff against a newer tag and invert the notes.
           PREV_TAG=$(
             git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
               awk -v current="${VERSION}" '
@@ -184,26 +153,94 @@ jobs:
           )
           echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
           if [ -z "${PREV_TAG}" ]; then
-            echo "No predecessor tag found — first release or oldest tag; will skip polished notes."
+            echo "No predecessor tag — first release; will use GitHub auto notes."
           fi
 
-      - name: Polish release notes + post to Discord
-        id: discord
-        # Best-effort: if GATEWAY_API_KEY or DISCORD_RELEASE_WEBHOOK isn't
-        # set, or the LLM call fails, the release itself still shipped above
-        # — we just skip the polished announcement. The next step makes a
-        # failure LOUD so it can't pass silently (see its comment).
+      - name: Raw release notes (fallback)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # GitHub's auto-generated notes (PR titles), written to raw-notes.md.
+          # Used only if the polished step below is skipped (first release) or
+          # fails (gateway/LLM down), so a release never ships a blank body.
+          TAG="${{ steps.version.outputs.tag }}"
+          gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq '.body' 2>/dev/null \
+            | grep -Eiv '^\* (chore|docs):' > raw-notes.md || true
+
+      - name: Polished release notes + Discord (release-tools)
+        id: notes
+        # One LLM generation drives the GitHub release body AND the marketing
+        # changelog (steps below), so they can't drift. Writes the notes to
+        # release-notes.md so those steps read a file, not a fragile multiline
+        # output. Best-effort: if GATEWAY_API_KEY / DISCORD_RELEASE_WEBHOOK is
+        # unset or the LLM fails, the release still ships on the raw fallback.
         if: steps.prev_tag.outputs.tag != ''
         continue-on-error: true
-        # SHA-pinned because this action has access to release-channel
-        # credentials and the parent job has contents:write.
-        uses: protoLabsAI/release-tools@b7c3531dd67accb57ca09242f47d8c0eb1ace8eb # v1.1.0
+        # SHA-pinned (this action has release-channel creds + the job has
+        # contents:write). 7bea42a = v2.3.0 (adds out-file + notes/highlights).
+        uses: protoLabsAI/release-tools@7bea42a1b95a7107905ca72bc99680045f2f63ef # v2.3.0
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.prev_tag.outputs.tag }}
+          out-file: release-notes.md
         env:
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          # Prefer the polished notes; fall back to GitHub's auto notes when the
+          # polish step was skipped (first release) or failed. Both are files, so
+          # there's no fragile multiline-output interpolation.
+          if [ -s release-notes.md ]; then
+            SRC=release-notes.md
+            echo "Using polished release notes."
+          else
+            SRC=raw-notes.md
+            echo "Polished notes unavailable — using GitHub auto notes."
+          fi
+          # Idempotent: edit in place if the release already exists.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$SRC"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$SRC"
+          fi
+
+      - name: Sync the marketing changelog
+        # Build a user-facing entry from the SAME polished notes and commit it to
+        # main, so sites/marketing/data/changelog.json can't drift from the
+        # GitHub release body. The push triggers marketing-deploy (and is ignored
+        # by docker-publish + prepare-release). Best-effort — a changelog hiccup
+        # must never fail a shipped release.
+        if: steps.notes.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -s release-notes.md ] || { echo "No polished notes — skipping changelog."; exit 0; }
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${TAG#v}"
+          # release-notes.md is untracked, so it survives the branch switch.
+          git fetch origin main
+          git checkout -B main origin/main
+          TAG="$TAG" DATE="$(date -u +%F)" \
+            DMG_URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/ORBIS-${VERSION}-aarch64-apple-darwin.dmg" \
+            node scripts/changelog-entry.mjs
+          if git diff --quiet -- sites/marketing/data/changelog.json; then
+            echo "Changelog unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sites/marketing/data/changelog.json
+          git commit -m "chore(changelog): ${TAG}"
+          git push origin HEAD:main \
+            || echo "::warning::changelog push to main failed — release shipped fine; update changelog.json manually."
 
       - name: Alert if the Discord notes post failed
         # The post is best-effort (continue-on-error above), so without this a
@@ -211,7 +248,7 @@ jobs:
         # v0.2.113 (a stale repo-level DISCORD_RELEASE_WEBHOOK shadowed the org
         # one → 404 Unknown Webhook, and the release looked fine). Surface it on
         # the dev channel + as a CI warning, without failing the shipped release.
-        if: steps.discord.outcome == 'failure'
+        if: steps.notes.outcome == 'failure'
         env:
           DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
         run: |

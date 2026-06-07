@@ -15,6 +15,10 @@ on:
       - 'docs/**'
       - '*.md'
       - '.github/workflows/docs.yml'
+      # Separate deployables, never in the app image — and release.yml's
+      # changelog sync commits sites/marketing/data/changelog.json on every
+      # release, which shouldn't trigger a Docker rebuild.
+      - 'sites/**'
   workflow_dispatch:
 
 concurrency:
