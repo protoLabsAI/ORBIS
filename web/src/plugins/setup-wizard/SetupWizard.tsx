@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
-import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
+import { pullMlxModel, pullOllamaModel, pullVoiceModels } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import {
   getPreferredAudioDeviceId,
@@ -174,20 +174,66 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
 }
 
 function VoiceModelsStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [saving, setSaving] = useState<'on_device' | 'byo' | null>(null);
+  const [phase, setPhase] = useState<'choose' | 'downloading' | 'done'>('choose');
+  const [busy, setBusy] = useState(false); // BYO save in flight
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const choose = async (choice: 'on_device' | 'byo') => {
-    setSaving(choice);
+  // Stop watching the stream if the user leaves the step. The server-side
+  // download keeps running — the choice is already saved — so this is safe.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const chooseByo = async () => {
+    setBusy(true);
     setError(null);
     try {
-      await api.putConfig({ voice: { local_models: choice } } as never);
+      await api.putConfig({ voice: { local_models: 'byo' } } as never);
       onNext();
     } catch (e) {
-      setSaving(null);
+      setBusy(false);
       setError(String((e as Error).message ?? e));
     }
   };
+
+  const chooseOnDevice = async () => {
+    setError(null);
+    // Persist the choice first (so a future boot's prewarm covers it too), then
+    // actually pull the models *now* with progress — rather than the old
+    // "downloads in the background" claim that did nothing until the next launch
+    // and stalled the first voice turn.
+    try {
+      await api.putConfig({ voice: { local_models: 'on_device' } } as never);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+      return;
+    }
+    setPhase('downloading');
+    setStatus('starting');
+    setCompleted(0);
+    setTotal(0);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      for await (const evt of pullVoiceModels({ signal: ac.signal })) {
+        if (evt.error) {
+          setError(evt.error);
+          continue;
+        }
+        if (evt.status) setStatus(evt.status);
+        if (typeof evt.completed === 'number') setCompleted(evt.completed);
+        if (typeof evt.total === 'number') setTotal(evt.total);
+      }
+      if (!ac.signal.aborted) setPhase('done');
+    } catch (e) {
+      if (!ac.signal.aborted) setError(String((e as Error).message ?? e));
+    }
+  };
+
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
 
   return (
     <div className="space-y-6">
@@ -201,47 +247,86 @@ function VoiceModelsStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
         </p>
       </div>
 
-      <div className="space-y-3">
-        <button
-          type="button"
-          onClick={() => choose('on_device')}
-          disabled={saving !== null}
-          className="w-full rounded-lg border border-brand/50 bg-brand/5 p-4 text-left transition-colors hover:bg-brand/10 disabled:opacity-50"
-        >
-          <div className="text-sm text-fg">
-            Install on-device models{' '}
-            <span className="text-helper text-brand">· recommended</span>
+      {phase === 'choose' && (
+        <>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={chooseOnDevice}
+              disabled={busy}
+              className="w-full rounded-lg border border-brand/50 bg-brand/5 p-4 text-left transition-colors hover:bg-brand/10 disabled:opacity-50"
+            >
+              <div className="text-sm text-fg">
+                Install on-device models{' '}
+                <span className="text-helper text-brand">· recommended</span>
+              </div>
+              <p className="mt-1 text-helper text-fg-muted">
+                Private + offline. ~900&nbsp;MB, downloaded now.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={chooseByo}
+              disabled={busy}
+              className="w-full rounded-lg border border-edge bg-raised/40 p-4 text-left transition-colors hover:bg-raised/70 disabled:opacity-50"
+            >
+              <div className="text-sm text-fg-body">Skip — I&apos;ll set up my own</div>
+              <p className="mt-1 text-helper text-fg-muted">
+                No download.{' '}
+                <span className="text-danger/90">
+                  You&apos;ll need to configure a speech-to-text and voice backend in
+                  Settings → Voice before ORBIS can talk.
+                </span>
+              </p>
+            </button>
           </div>
-          <p className="mt-1 text-helper text-fg-muted">
-            Private + offline.{' '}
-            {saving === 'on_device' ? 'Saving…' : 'Downloads in the background.'}
+
+          {error && <p className="text-center text-xs text-danger">{error}</p>}
+
+          <div className="flex justify-start">
+            <Button variant="ghost" onClick={onBack} disabled={busy}>
+              Back
+            </Button>
+          </div>
+        </>
+      )}
+
+      {phase === 'downloading' && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-fg-muted truncate pr-2">{status}</span>
+              <span className="text-fg-subtle tabular-nums shrink-0">
+                {total > 0 ? `${gb(completed)} / ${gb(total)} GB · ${pct}%` : '…'}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-edge overflow-hidden">
+              <div
+                className="h-full bg-brand/80 transition-[width] duration-200"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+          <p className="text-center text-xs text-fg-faint">
+            You can continue now — the download finishes in the background.
           </p>
-        </button>
+          {error && <p className="text-center text-xs text-danger">{error}</p>}
+          <div className="flex justify-end">
+            <Button onClick={onNext}>Continue</Button>
+          </div>
+        </div>
+      )}
 
-        <button
-          type="button"
-          onClick={() => choose('byo')}
-          disabled={saving !== null}
-          className="w-full rounded-lg border border-edge bg-raised/40 p-4 text-left transition-colors hover:bg-raised/70 disabled:opacity-50"
-        >
-          <div className="text-sm text-fg-body">Skip — I&apos;ll set up my own</div>
-          <p className="mt-1 text-helper text-fg-muted">
-            No download.{' '}
-            <span className="text-danger/90">
-              You&apos;ll need to configure a speech-to-text and voice backend in
-              Settings → Voice before ORBIS can talk.
-            </span>
-          </p>
-        </button>
-      </div>
-
-      {error && <p className="text-center text-xs text-danger">{error}</p>}
-
-      <div className="flex justify-start">
-        <Button variant="ghost" onClick={onBack} disabled={saving !== null}>
-          Back
-        </Button>
-      </div>
+      {phase === 'done' && (
+        <div className="space-y-4 text-center">
+          <p className="text-sm text-success">✓ On-device voice ready.</p>
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <div className="flex justify-end">
+            <Button onClick={onNext}>Continue</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
