@@ -1,5 +1,13 @@
 [
   {
+    "version": "v0.2.126",
+    "date": "2026-06-07",
+    "changes": [
+      "Ensures the application bundle is correctly built during release cycles to allow the updater to serve valid artifacts and manifest files."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.126/ORBIS-0.2.126-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.125",
     "date": "2026-06-07",
     "changes": [
