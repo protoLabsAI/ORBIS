@@ -122,19 +122,37 @@ impl AudioEngine {
     ///
     /// `input_device_name` — if `Some`, selects the named CPAL input
     ///   device; if `None`, uses the host default.
+    /// `output_device_name` — if `Some`, plays TTS through the named output
+    ///   device; if `None` (or the named device is gone), uses the host default.
     pub fn new(
         input_device_name: Option<&str>,
+        output_device_name: Option<&str>,
         tx: tokio::sync::mpsc::UnboundedSender<AudioMsg>,
     ) -> Result<Self, String> {
         let host = cpal::default_host();
 
-        // --- Output device (always CPAL — Phase 2 only swaps input) ---
-        let output_device = host
-            .default_output_device()
-            .ok_or_else(|| "no default output device".to_string())?;
+        // --- Output device: the user's chosen device, else the host default.
+        // Lets ORBIS play through a specific device without changing the system
+        // default; falls back to the default if the chosen device is gone.
+        let output_device = match output_device_name {
+            Some(name) => host
+                .output_devices()
+                .map_err(|e| format!("enumerate output devices: {e}"))?
+                .find(|d| d.name().map(|n| n == name).unwrap_or(false))
+                .or_else(|| host.default_output_device())
+                .ok_or_else(|| format!("output device '{name}' not found and no default"))?,
+            None => host
+                .default_output_device()
+                .ok_or_else(|| "no default output device".to_string())?,
+        };
         log::info!(
-            "[audio] output device: {}",
-            output_device.name().unwrap_or_default()
+            "[audio] output device: {} ({})",
+            output_device.name().unwrap_or_default(),
+            if output_device_name.is_some() {
+                "selected"
+            } else {
+                "system default"
+            }
         );
 
         let aec = Arc::new(Mutex::new(AecProcessor::from_env()));
@@ -400,6 +418,31 @@ impl AudioEngine {
         // usable default input exists — surface the default so the list is
         // never blank.
         if let Some(default_name) = host.default_input_device().and_then(|d| d.name().ok()) {
+            if !names.iter().any(|n| n == &default_name) {
+                names.insert(0, default_name);
+            }
+        }
+        names
+    }
+
+    /// Names of all output devices on the host, for the output picker. Mirrors
+    /// `list_input_devices`: pure Core Audio HAL reads on macOS (no stream
+    /// opened), CPAL elsewhere.
+    pub fn list_output_devices() -> Vec<String> {
+        #[cfg(target_os = "macos")]
+        {
+            let names = super::coreaudio_devices::list_output_device_names();
+            if !names.is_empty() {
+                return names;
+            }
+        }
+
+        let host = cpal::default_host();
+        let mut names: Vec<String> = host
+            .output_devices()
+            .map(|devs| devs.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default();
+        if let Some(default_name) = host.default_output_device().and_then(|d| d.name().ok()) {
             if !names.iter().any(|n| n == &default_name) {
                 names.insert(0, default_name);
             }

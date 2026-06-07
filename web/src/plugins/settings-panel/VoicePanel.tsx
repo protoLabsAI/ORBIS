@@ -1,5 +1,6 @@
 import { CollapsiblePanelProvider } from '@/components/ui/panel';
 import { MicSettings } from './MicSettings';
+import { OutputSettings } from './OutputSettings';
 import { STTSettings } from './STTSettings';
 import { TTSSettings } from './TTSSettings';
 import { WakeWordSettings } from './WakeWordSettings';
@@ -14,6 +15,7 @@ export function VoicePanel() {
     <CollapsiblePanelProvider storageKey="orbis.voicePanel">
       <div className="space-y-5">
         <MicSettings />
+        <OutputSettings />
         <WakeWordSettings />
         <STTSettings />
         <TTSSettings />

@@ -32,3 +32,14 @@ export async function startAudioEngine(): Promise<boolean> {
     return false;
   }
 }
+
+/** List the host's output devices (Core Audio HAL on macOS, no stream opened). */
+export async function listAudioOutputs() {
+  return invoke<string[]>('list_audio_outputs');
+}
+
+/** Persist the chosen output device on the Rust side (applied at engine
+ *  construction — i.e. the next launch). Empty string = follow system default. */
+export async function setOutputDevice(name: string) {
+  return invoke('set_output_device', { name });
+}
