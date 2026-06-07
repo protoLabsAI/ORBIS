@@ -74,7 +74,7 @@ your own:
 | Product name + copyright | `src-tauri/tauri.conf.json` |
 | App-name string "ORBIS" | ~34× in `web/src/`, ~10× in `src-tauri/src/` |
 | Site + in-app URLs `orbis.protolabs.studio` | `sites/marketing/`, in-app help links in `web/src/plugins/...` |
-| Public releases repo `protoLabsAI/orbis-releases` | `.github/workflows/desktop-build.yml`, `sites/marketing/data/changelog.json` |
+| Public DMG downloads — this repo's GitHub Releases (legacy `protoLabsAI/orbis-releases` for pre-v0.2.123 DMGs) | `.github/workflows/desktop-build.yml`, `sites/marketing/data/changelog.json` |
 | CI repo guards `github.repository == 'protoLabsAI/ORBIS'` | `.github/workflows/{desktop-build,release,docker-publish,prepare-release}.yml` — these **no-op on a fork** until changed |
 | Paywall (license pubkey + Stripe issuer) | `config/license_pubkey.pem`, repo var `ORBIS_LICENSE_PUBKEY`, `sites/license-issuer/`. To ship **free**: leave `ORBIS_GATE=open` and remove the Unlock UI. To run your own paid tier: `docs/internal/paywall-go-live-runbook.md`. |
 | Legacy key prefix `pv_ak_` | `auth/users.py`, `auth/infisical.py`, `web/src/plugins/settings-panel/ApiKeyField.tsx` |

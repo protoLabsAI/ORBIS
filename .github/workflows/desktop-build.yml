@@ -605,30 +605,32 @@ jobs:
 
       # ── Release asset attachment (both binary + installer) ─────────────────
 
-      - name: Attach DMG to the public orbis-releases repo
+      - name: Attach DMG to the GitHub release
         if: github.event_name == 'push'
         env:
-          # Cross-repo write: GITHUB_TOKEN is scoped to this (private) repo, so
-          # use the org GH_PAT to write to protoLabsAI/orbis-releases.
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # Same-repo write — GITHUB_TOKEN already has contents:write (see the
+          # job permissions above). No cross-repo PAT needed now that source is
+          # public.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        # The main repo is PRIVATE, so its release assets 404 for the public.
-        # Host the downloadable dmg in the PUBLIC protoLabsAI/orbis-releases repo
-        # (source + paywall stay private). Create that release if it doesn't
-        # exist yet, then upload the dmg (+ updater .sig if present). The
-        # marketing site's /download links here. Also uploads the updater
-        # signature when present (cargo tauri build emits it only when
+        # Source is public now, so attach the signed + notarized dmg straight to
+        # THIS repo's release. (It used to go to a separate public
+        # protoLabsAI/orbis-releases repo, from when source was going to stay
+        # private and the private main repo's assets would 404 publicly.)
+        # release.yml creates the release on the same tag; we upload to it, with
+        # create-if-missing guarding the parallel-job race. Also uploads the
+        # updater .sig when present (cargo tauri build emits it only when
         # TAURI_SIGNING_PRIVATE_KEY is set).
         run: |
           set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
-          REPO="protoLabsAI/orbis-releases"
+          REPO="${{ github.repository }}"
           ARTIFACTS=("${{ env.installer }}")
           if [ -n "${{ env.installer_sig }}" ] && [ -f "${{ env.installer_sig }}" ]; then
             ARTIFACTS+=("${{ env.installer_sig }}")
           fi
           gh release view "${TAG}" --repo "${REPO}" >/dev/null 2>&1 \
             || gh release create "${TAG}" --repo "${REPO}" --title "ORBIS ${TAG}" \
-                 --notes "Beta — signed + notarized macOS app (Apple Silicon). Source: private protoLabsAI/ORBIS."
+                 --notes "Signed + notarized macOS app (Apple Silicon)."
           gh release upload "${TAG}" "${ARTIFACTS[@]}" --repo "${REPO}" --clobber
           echo "Uploaded $(basename "${{ env.installer }}") to ${REPO} ${TAG}."
