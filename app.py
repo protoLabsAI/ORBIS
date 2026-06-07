@@ -63,6 +63,28 @@ except ImportError:
 from agent.paths import configure_hf_home  # noqa: E402
 _cache_dir = configure_hf_home()
 
+
+def _emit_boot(stage: str, detail: str) -> None:
+    """Print a boot-progress marker for the Rust shell to parse and forward to
+    the UI loading gate. Stdout because the shell reads the sidecar pipe even
+    while Python is GIL-stalled by a heavy import or model load — so progress
+    keeps flowing during the slow steps. Defined up here (before the heavy
+    imports) so the import phase can report progress too: a cold start spends
+    ~80s importing torch / MLX / pipecat before anything else runs, and without
+    these markers the loading screen sits on one line the whole time."""
+    import json as _json
+
+    try:
+        print(f"ORBIS_BOOT {_json.dumps({'stage': stage, 'detail': detail})}", flush=True)
+    except Exception:
+        pass
+
+
+# Import-phase progress. The UI shows an indeterminate bar for the "import"
+# stage (it's deliberately not in the gate's STAGE_PROGRESS table) while the
+# detail line tracks which subsystem is loading. pipecat (next) is the long pole.
+_emit_boot("import", "Loading the voice pipeline…")
+
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -91,6 +113,8 @@ from pipecat.utils.context.llm_context_summarization import (
     LLMContextSummaryConfig,
 )
 from pipecat.services.openai.llm import OpenAILLMService
+
+_emit_boot("import", "Loading the agent…")
 
 from voice.ask_gate import AskGate
 from voice.cancel_gate import CancelGate
@@ -154,6 +178,9 @@ from auth import load_users, require_user, user_registry
 from auth.users import User
 from auth.context import current_session_id, current_user_id
 from agent.user_state import active_user_states, all_user_states, user_state_for
+
+_emit_boot("import", "Loading speech + voice engines…")
+
 from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
 from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
 
@@ -2112,19 +2139,6 @@ def prewarm_llm() -> None:
         # need (or want) a boot-time warmup ping, or a local vLLM that isn't
         # up. Not warning-worthy — the LLM still works at request time.
         logger.info(f"LLM prewarm skipped ({type(e).__name__})")
-
-
-def _emit_boot(stage: str, detail: str) -> None:
-    """Print a boot-progress marker for the Rust shell to parse and
-    forward to the UI loading gate. Written to stdout because the shell
-    reads the sidecar pipe even while Python's event loop is GIL-stalled
-    by model loads (so progress keeps flowing during the slow steps)."""
-    import json as _json
-
-    try:
-        print(f"ORBIS_BOOT {_json.dumps({'stage': stage, 'detail': detail})}", flush=True)
-    except Exception:
-        pass
 
 
 def prewarm_all() -> None:
