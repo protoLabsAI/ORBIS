@@ -16,6 +16,7 @@ import {
 import {
   getAudioInputMode,
   setInputDevice,
+  startAudioEngine,
   usesSelectableInputDevice,
   type AudioInputMode,
 } from '@/shared/audio/nativeAudio';
@@ -79,6 +80,15 @@ export function MicSettings() {
     // Initial Tauri permission probe runs once when the settings panel mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The native audio engine is deferred at boot until mic permission exists. If
+  // the user grants access here (e.g. they skipped/denied it during setup),
+  // bring the engine online so it doesn't take a relaunch. Idempotent Rust-side.
+  useEffect(() => {
+    if (isMicrophoneAuthorized(permission)) {
+      startAudioEngine().catch(() => {});
+    }
+  }, [permission]);
 
   const onRequest = async () => {
     setBusy(true);

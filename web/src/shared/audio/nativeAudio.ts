@@ -18,3 +18,17 @@ export function usesSelectableInputDevice(mode: AudioInputMode) {
 export async function setInputDevice(name: string) {
   return invoke('set_input_device', { name });
 }
+
+/** Bring the native audio engine online after the user grants mic permission.
+ *  The engine start is deferred at boot until permission exists (so first run
+ *  shows no TCC dialog over the splash), so the wizard / settings panel call
+ *  this once the grant lands. Idempotent on the Rust side; best-effort here —
+ *  resolves false (never throws) on non-native builds or if the command is
+ *  absent, since the live level meter is the real confirmation. */
+export async function startAudioEngine(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('start_audio_engine');
+  } catch {
+    return false;
+  }
+}
