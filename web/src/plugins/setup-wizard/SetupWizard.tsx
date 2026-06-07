@@ -11,7 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
-import { pullMlxModel, pullOllamaModel } from '@/shared/llm/ollamaPull';
+import { pullMlxModel, pullOllamaModel, pullVoiceModels } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import {
   getPreferredAudioDeviceId,
@@ -19,6 +19,7 @@ import {
 } from '@/shared/audio/preferredDevice';
 import {
   getAudioInputMode,
+  startAudioEngine,
   usesSelectableInputDevice,
   type AudioInputMode,
 } from '@/shared/audio/nativeAudio';
@@ -46,34 +47,82 @@ const STORAGE_COMPLETE = 'orbis.setupComplete';
 type Step = 'welcome' | 'mic' | 'models' | 'names' | 'llm' | 'pick' | 'done' | 'hatching';
 
 /**
- * First-run setup wizard. Detects "no setup done yet" via a
- * localStorage flag, overlays a full-screen panel above the app,
- * walks the user through: welcome → API key (optional) → pick
- * starter orb → done.
+ * First-run setup wizard. Whether setup is needed is resolved from the durable
+ * config flag (`setup.complete`), with the localStorage flag as a fast-path
+ * cache so a configured instance never flashes the wizard.
  *
- * Re-enter from settings at any time by clearing
- * ``localStorage['orbis.setupComplete']``.
+ * A rebuild / "clear browsing data" wipes localStorage but NOT the config — so
+ * falling back to the config keeps the wizard from re-asking (and the sidecar
+ * from re-loading models on) an instance that's already set up. That mismatch
+ * was the "models load at boot, then the wizard asks if you even want them" bug.
+ *
+ * Re-run from Settings → Setup (which clears both the cache and the flag).
  */
 export function SetupWizard() {
-  const [needsSetup, setNeedsSetup] = useState<boolean>(() => {
+  // null = undecided (awaiting the config check); true/false once known.
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(() => {
     try {
-      return localStorage.getItem(STORAGE_COMPLETE) !== 'true';
+      // Fast path: localStorage says done → never flash the wizard.
+      if (localStorage.getItem(STORAGE_COMPLETE) === 'true') return false;
     } catch {
-      return true;
+      // localStorage unavailable — fall through to the config check.
     }
+    return null;
   });
 
-  if (!needsSetup) return null;
-
-  return (
-    <div className="fixed inset-0 z-30 bg-surface/95 backdrop-blur-sm overflow-y-auto">
-        <WizardFlow
-          onFinish={() => {
+  // Undecided → ask the backend (the durable source of truth). The boot gate
+  // means the sidecar is already up by the time this mounts, so it's quick.
+  useEffect(() => {
+    if (needsSetup !== null) return;
+    let cancelled = false;
+    api
+      .config()
+      .then(({ config }) => {
+        if (cancelled) return;
+        // The explicit flag wins — including a Re-run that set it false, which
+        // must override the legacy signal below (local_models stays set). Only
+        // when the flag was never written do we fall back to back-compat:
+        // voice.local_models is set, and the wizard's models step is its only
+        // writer, so its presence means setup was done on this box.
+        const setup = config?.setup;
+        const done =
+          setup?.complete === true
+            ? true
+            : setup?.complete === false
+              ? false
+              : config?.voice?.local_models != null;
+        if (done) {
           try {
             localStorage.setItem(STORAGE_COMPLETE, 'true');
           } catch {
-            // Ignore storage failures; setup completion is best-effort UI state.
+            // best-effort cache
           }
+        }
+        setNeedsSetup(!done);
+      })
+      .catch(() => {
+        // Can't read config — default to showing setup (safe for a fresh box).
+        if (!cancelled) setNeedsSetup(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsSetup]);
+
+  if (needsSetup !== true) return null; // undecided or already done → nothing
+
+  return (
+    <div className="fixed inset-0 z-30 bg-surface/95 backdrop-blur-sm overflow-y-auto">
+      <WizardFlow
+        onFinish={() => {
+          try {
+            localStorage.setItem(STORAGE_COMPLETE, 'true');
+          } catch {
+            // Ignore storage failures; the config flag below is the real record.
+          }
+          // Durable completion — survives a rebuild / clear-browsing-data so the
+          // wizard doesn't re-ask on an already-configured instance.
+          api.putConfig({ setup: { complete: true } }).catch(() => {});
           setNeedsSetup(false);
         }}
       />
@@ -173,20 +222,66 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
 }
 
 function VoiceModelsStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [saving, setSaving] = useState<'on_device' | 'byo' | null>(null);
+  const [phase, setPhase] = useState<'choose' | 'downloading' | 'done'>('choose');
+  const [busy, setBusy] = useState(false); // BYO save in flight
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
+  const abortRef = useRef<AbortController | null>(null);
 
-  const choose = async (choice: 'on_device' | 'byo') => {
-    setSaving(choice);
+  // Stop watching the stream if the user leaves the step. The server-side
+  // download keeps running — the choice is already saved — so this is safe.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const chooseByo = async () => {
+    setBusy(true);
     setError(null);
     try {
-      await api.putConfig({ voice: { local_models: choice } } as never);
+      await api.putConfig({ voice: { local_models: 'byo' } } as never);
       onNext();
     } catch (e) {
-      setSaving(null);
+      setBusy(false);
       setError(String((e as Error).message ?? e));
     }
   };
+
+  const chooseOnDevice = async () => {
+    setError(null);
+    // Persist the choice first (so a future boot's prewarm covers it too), then
+    // actually pull the models *now* with progress — rather than the old
+    // "downloads in the background" claim that did nothing until the next launch
+    // and stalled the first voice turn.
+    try {
+      await api.putConfig({ voice: { local_models: 'on_device' } } as never);
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+      return;
+    }
+    setPhase('downloading');
+    setStatus('starting');
+    setCompleted(0);
+    setTotal(0);
+    const ac = new AbortController();
+    abortRef.current = ac;
+    try {
+      for await (const evt of pullVoiceModels({ signal: ac.signal })) {
+        if (evt.error) {
+          setError(evt.error);
+          continue;
+        }
+        if (evt.status) setStatus(evt.status);
+        if (typeof evt.completed === 'number') setCompleted(evt.completed);
+        if (typeof evt.total === 'number') setTotal(evt.total);
+      }
+      if (!ac.signal.aborted) setPhase('done');
+    } catch (e) {
+      if (!ac.signal.aborted) setError(String((e as Error).message ?? e));
+    }
+  };
+
+  const pct = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(2);
 
   return (
     <div className="space-y-6">
@@ -200,47 +295,86 @@ function VoiceModelsStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
         </p>
       </div>
 
-      <div className="space-y-3">
-        <button
-          type="button"
-          onClick={() => choose('on_device')}
-          disabled={saving !== null}
-          className="w-full rounded-lg border border-brand/50 bg-brand/5 p-4 text-left transition-colors hover:bg-brand/10 disabled:opacity-50"
-        >
-          <div className="text-sm text-fg">
-            Install on-device models{' '}
-            <span className="text-helper text-brand">· recommended</span>
+      {phase === 'choose' && (
+        <>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={chooseOnDevice}
+              disabled={busy}
+              className="w-full rounded-lg border border-brand/50 bg-brand/5 p-4 text-left transition-colors hover:bg-brand/10 disabled:opacity-50"
+            >
+              <div className="text-sm text-fg">
+                Install on-device models{' '}
+                <span className="text-helper text-brand">· recommended</span>
+              </div>
+              <p className="mt-1 text-helper text-fg-muted">
+                Private + offline. ~900&nbsp;MB, downloaded now.
+              </p>
+            </button>
+
+            <button
+              type="button"
+              onClick={chooseByo}
+              disabled={busy}
+              className="w-full rounded-lg border border-edge bg-raised/40 p-4 text-left transition-colors hover:bg-raised/70 disabled:opacity-50"
+            >
+              <div className="text-sm text-fg-body">Skip — I&apos;ll set up my own</div>
+              <p className="mt-1 text-helper text-fg-muted">
+                No download.{' '}
+                <span className="text-danger/90">
+                  You&apos;ll need to configure a speech-to-text and voice backend in
+                  Settings → Voice before ORBIS can talk.
+                </span>
+              </p>
+            </button>
           </div>
-          <p className="mt-1 text-helper text-fg-muted">
-            Private + offline.{' '}
-            {saving === 'on_device' ? 'Saving…' : 'Downloads in the background.'}
+
+          {error && <p className="text-center text-xs text-danger">{error}</p>}
+
+          <div className="flex justify-start">
+            <Button variant="ghost" onClick={onBack} disabled={busy}>
+              Back
+            </Button>
+          </div>
+        </>
+      )}
+
+      {phase === 'downloading' && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-fg-muted truncate pr-2">{status}</span>
+              <span className="text-fg-subtle tabular-nums shrink-0">
+                {total > 0 ? `${gb(completed)} / ${gb(total)} GB · ${pct}%` : '…'}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-edge overflow-hidden">
+              <div
+                className="h-full bg-brand/80 transition-[width] duration-200"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+          <p className="text-center text-xs text-fg-faint">
+            You can continue now — the download finishes in the background.
           </p>
-        </button>
+          {error && <p className="text-center text-xs text-danger">{error}</p>}
+          <div className="flex justify-end">
+            <Button onClick={onNext}>Continue</Button>
+          </div>
+        </div>
+      )}
 
-        <button
-          type="button"
-          onClick={() => choose('byo')}
-          disabled={saving !== null}
-          className="w-full rounded-lg border border-edge bg-raised/40 p-4 text-left transition-colors hover:bg-raised/70 disabled:opacity-50"
-        >
-          <div className="text-sm text-fg-body">Skip — I&apos;ll set up my own</div>
-          <p className="mt-1 text-helper text-fg-muted">
-            No download.{' '}
-            <span className="text-danger/90">
-              You&apos;ll need to configure a speech-to-text and voice backend in
-              Settings → Voice before ORBIS can talk.
-            </span>
-          </p>
-        </button>
-      </div>
-
-      {error && <p className="text-center text-xs text-danger">{error}</p>}
-
-      <div className="flex justify-start">
-        <Button variant="ghost" onClick={onBack} disabled={saving !== null}>
-          Back
-        </Button>
-      </div>
+      {phase === 'done' && (
+        <div className="space-y-4 text-center">
+          <p className="text-sm text-success">✓ On-device voice ready.</p>
+          {error && <p className="text-xs text-danger">{error}</p>}
+          <div className="flex justify-end">
+            <Button onClick={onNext}>Continue</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1064,6 +1198,18 @@ function MicStep({
     // Initial Tauri permission probe runs once when this wizard step mounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // The native audio engine is deferred at boot until mic permission exists, so
+  // a first-run user who grants access *here* would otherwise finish setup with
+  // no engine — the wizard saying "ready" while voice stays silently dead until
+  // a relaunch. Whenever the status becomes authorized (in-app grant, Settings
+  // recheck, or an already-granted mount), bring the engine online so the meter
+  // below goes live and the first conversation has audio. Idempotent Rust-side.
+  useEffect(() => {
+    if (isMicrophoneAuthorized(permission)) {
+      startAudioEngine().catch(() => {});
+    }
+  }, [permission]);
 
   const onRequestPermission = async () => {
     setBusy(true);

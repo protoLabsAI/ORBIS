@@ -477,3 +477,42 @@ def test_merge_patch_wakeword_preserves_other_blocks(tmp_path: Path):
     merge_patch({"wakeword": {"enabled": False}}, p)
     final2 = yaml.safe_load(p.read_text())
     assert final2["wakeword"] == {"enabled": False, "model": "hey_orbis"}
+
+
+# --- setup (durable first-run completion flag) ------------------------------
+
+
+def test_validate_accepts_setup_complete():
+    out = validate_and_normalize({"setup": {"complete": True}})
+    assert out["setup"] == {"complete": True}
+
+
+def test_validate_setup_coerces_to_bool():
+    out = validate_and_normalize({"setup": {"complete": 1}})
+    assert out["setup"] == {"complete": True}
+
+
+def test_validate_drops_unknown_setup_key(caplog: pytest.LogCaptureFixture):
+    out = validate_and_normalize({"setup": {"complete": True, "bogus": 1}})
+    assert out["setup"] == {"complete": True}
+    assert "bogus" in caplog.text
+
+
+def test_merge_patch_setup_preserves_other_blocks(tmp_path: Path):
+    p = _write(tmp_path / "orbis.yaml", """
+        persona:
+          name: X
+        voice:
+          local_models: on_device
+    """)
+    merge_patch({"setup": {"complete": True}}, p)
+    final = yaml.safe_load(p.read_text())
+    assert final["setup"] == {"complete": True}
+    # The wizard-written blocks survive — the whole point of the durable flag.
+    assert final["persona"]["name"] == "X"
+    assert final["voice"]["local_models"] == "on_device"
+    # Re-run flips it back without disturbing the rest.
+    merge_patch({"setup": {"complete": False}}, p)
+    final2 = yaml.safe_load(p.read_text())
+    assert final2["setup"] == {"complete": False}
+    assert final2["voice"]["local_models"] == "on_device"

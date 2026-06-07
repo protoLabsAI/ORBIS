@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { appLogDir } from '@tauri-apps/api/path';
+import { Button } from '@/components/ui/button';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -41,6 +43,20 @@ const STAGE_PROGRESS: Record<string, number> = {
   ready: 1,
 };
 
+// The cold start is legitimately slow AND opaque: the Python sidecar pays ~80s
+// of heavy ML imports (torch / MLX / pipecat) on every launch before the first
+// progress marker — and right after an update, pyapp re-extracts its env on top
+// of that — so the gate sits on "Starting ORBIS…" for a minute+ with nothing
+// moving. That's normal here, not a hang. (Measured ~80s spawn→ORBIS_READY.)
+//
+// So: a gentle reassurance line after a short wait, and the actual escape hatch
+// (View logs / Continue anyway) only after a wait *well past* a normal cold
+// start + model warmup — so a genuinely wedged boot isn't an infinite spinner,
+// without crying wolf on every launch.
+const REASSURE_AFTER_S = 15;
+const SLOW_AFTER_S = 180;
+const HARD_AFTER_S = 300;
+
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
   const [progress, setProgress] = useState(0.05);
@@ -51,6 +67,9 @@ export function BootStatus() {
   // claiming otherwise contradicts the wizard's own "download these models?"
   // step. We infer it from the backend's stage detail ("Loading X model…").
   const [loadingModels, setLoadingModels] = useState(false);
+  // Seconds since mount, ticked until ready — drives the slow/stalled escape
+  // hatch below so a wedged boot isn't an infinite spinner.
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -88,22 +107,83 @@ export function BootStatus() {
     };
   }, []);
 
+  // Tick a seconds counter until ready.
+  useEffect(() => {
+    if (ready) return;
+    const id = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [ready]);
+
   if (ready) return null;
+
+  // True while still in the opaque pre-marker phase (no boot stage reported yet).
+  const noMarkerYet = progress <= 0.05;
+  // Gentle "this is normal" line during a slow cold start, before any marker and
+  // when there's no model-download caveat already reassuring the user.
+  const reassure = noMarkerYet && !loadingModels && elapsed >= REASSURE_AFTER_S;
+  // Escape hatch only after a long wait — later still when a model is actively
+  // downloading (expected-slow; the caveat already explains that).
+  const stalled =
+    elapsed >= HARD_AFTER_S || (elapsed >= SLOW_AFTER_S && !loadingModels);
+
+  const onViewLogs = () => {
+    // Reveal the unified log dir in Finder (open_url → shell.open). Best-effort.
+    appLogDir()
+      .then((dir) => invoke('open_url', { url: dir }))
+      .catch(() => {});
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-surface text-fg-body">
       <div className="h-10 w-10 animate-spin rounded-full border-2 border-edge border-t-brand" />
       <div className="text-base">{detail}</div>
       <div className="h-1 w-56 overflow-hidden rounded-full bg-edge">
-        <div
-          className="h-full rounded-full bg-brand transition-[width] duration-700 ease-out"
-          style={{ width: `${Math.round(progress * 100)}%` }}
-        />
+        {noMarkerYet ? (
+          // No real progress yet (the ~80s import phase). Show an indeterminate
+          // sweep so it reads as "working", not a frozen 5% bar.
+          <div className="orbis-boot-indeterminate h-full w-1/3 rounded-full bg-brand" />
+        ) : (
+          <div
+            className="h-full rounded-full bg-brand transition-[width] duration-700 ease-out"
+            style={{ width: `${Math.round(progress * 100)}%` }}
+          />
+        )}
       </div>
+      <style>{`
+        @keyframes orbis-boot-indeterminate {
+          0% { transform: translateX(-120%); }
+          100% { transform: translateX(320%); }
+        }
+        .orbis-boot-indeterminate {
+          animation: orbis-boot-indeterminate 1.3s ease-in-out infinite;
+        }
+      `}</style>
       {loadingModels && (
         <div className="max-w-xs text-center text-sm text-fg-muted">
           First launch loads local speech models — this can take a minute or
           two. Later launches are quick.
+        </div>
+      )}
+      {reassure && !stalled && (
+        <div className="max-w-xs text-center text-sm text-fg-muted">
+          First launch takes a moment — warming up the runtime. Hang tight.
+        </div>
+      )}
+      {stalled && (
+        <div className="mt-2 flex flex-col items-center gap-3">
+          <p className="max-w-xs text-center text-sm text-fg-muted">
+            {loadingModels
+              ? 'Still downloading — a first-run model pull can run several minutes on a slow connection.'
+              : 'Still starting — this is taking longer than usual.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={onViewLogs}>
+              View logs
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setReady(true)}>
+              Continue anyway
+            </Button>
+          </div>
         </div>
       )}
     </div>

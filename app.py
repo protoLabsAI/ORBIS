@@ -2133,13 +2133,17 @@ def prewarm_all() -> None:
     # loading, so the UI loading screen reflects actual work, not a timer.
     # Each step is guarded so a failure never strands the loading gate
     # (which releases on the final "ready" marker).
+    # Keep the word "model" in the local-load strings — the UI loading gate
+    # sniffs /loading…model/ to show the "first launch loads local models" note.
     stt_detail = {
-        "parakeet": "Loading Parakeet speech model…",
-        "sensevoice": "Loading SenseVoice speech model…",
+        "parakeet": "Loading on-device speech model (Parakeet)…",
+        "sensevoice": "Loading on-device speech model (SenseVoice)…",
         "openai": "Connecting speech recognition…",
-    }.get(STT_BACKEND, "Loading Whisper speech model…")
+    }.get(STT_BACKEND, "Loading on-device speech model (Whisper)…")
     tts_detail = (
-        "Loading Kokoro voice…" if TTS_BACKEND == "kokoro" else "Loading speech synthesis…"
+        "Loading on-device voice model (Kokoro)…"
+        if TTS_BACKEND == "kokoro"
+        else "Loading speech synthesis…"
     )
     # Defer the on-device STT/TTS download until the user opts in via the setup
     # wizard's "voice models" step (voice.local_models == "on_device"). Keeps a
@@ -3220,6 +3224,115 @@ async def llm_mlx_pull(body: dict):
         yield (
             f'data: {{"status": "done", '
             f'"completed": {completed}, "total": {total_bytes or completed}}}\n\n'
+        )
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/voice/download_models")
+async def voice_download_models():
+    """Download + warm the on-device speech models (Parakeet STT + Kokoro TTS),
+    streaming byte progress as SSE.
+
+    The setup wizard's "Install on-device models" choice calls this so the
+    ~900 MB pull happens *then*, with a progress bar — instead of being silently
+    deferred to the next launch (prewarm_all only downloads on-device models when
+    ``voice.local_models == "on_device"`` is already set at boot) and stalling
+    the first voice turn with no feedback. Idempotent: re-running with weights
+    cached + loaded returns fast (the prewarm fns short-circuit on a warm model).
+
+    Emits ``data: {status, completed, total}`` byte-progress events, then a final
+    ``event: done`` (or ``event: error``). Unauth — same rationale as
+    ``/api/llm/mlx/pull``: it only pulls public model weights from HuggingFace.
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    # Only local backends pull weights. Map the configured STT/TTS backend to its
+    # HuggingFace repo (the progress denominator) + its prewarm fn (downloads,
+    # then warms on the right thread). Cloud backends carry no big local download.
+    targets: list = []  # (label, repo_id, prewarm_fn)
+    if STT_BACKEND == "parakeet":
+        from voice.stt_parakeet import _MODEL_ID as _stt_repo
+        targets.append(("speech recognition", _stt_repo, prewarm_stt))
+    elif STT_BACKEND == "local":
+        from voice.stt import WHISPER_MODEL as _stt_repo
+        targets.append(("speech recognition", _stt_repo, prewarm_stt))
+    if TTS_BACKEND == "kokoro":
+        targets.append(("voice", "hexgrad/Kokoro-82M", prewarm_tts))
+
+    async def _stream():
+        try:
+            from huggingface_hub import HfApi
+        except ImportError as e:
+            yield f"event: error\ndata: huggingface_hub not available: {e}\n\n"
+            return
+
+        if not targets:
+            # BYO / cloud backends — nothing to download.
+            yield 'data: {"status": "no on-device models needed", "completed": 0, "total": 0}\n\n'
+            yield "event: done\ndata: {}\n\n"
+            return
+
+        loop = _asyncio.get_running_loop()
+        hf_home = os.environ.get("HF_HOME", str(_Path.home() / ".cache/huggingface"))
+        hub = _Path(hf_home) / "hub"
+
+        def _cache_dir(repo_id: str) -> _Path:
+            return hub / f"models--{repo_id.replace('/', '--')}"
+
+        def _dir_size(p: _Path) -> int:
+            if not p.exists():
+                return 0
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+        # One combined progress bar across every target repo.
+        yield 'data: {"status": "fetching model details", "completed": 0, "total": 0}\n\n'
+        total_bytes = 0
+        for _label, repo_id, _fn in targets:
+            try:
+                info = await loop.run_in_executor(
+                    None, lambda rid=repo_id: HfApi().repo_info(rid, files_metadata=True)
+                )
+                total_bytes += sum(f.size or 0 for f in (info.siblings or []))
+            except Exception:  # noqa: BLE001
+                pass  # percent may be missing; byte counts still stream
+
+        done_bytes = 0  # bytes credited from already-finished targets
+        for label, repo_id, fn in targets:
+            cache_dir = _cache_dir(repo_id)
+            base = done_bytes
+            yield (
+                f'data: {{"status": "downloading {label}", '
+                f'"completed": {base + _dir_size(cache_dir)}, "total": {total_bytes}}}\n\n'
+            )
+            fut = loop.run_in_executor(None, fn)
+            last = -1
+            while not fut.done():
+                completed = base + _dir_size(cache_dir)
+                if completed != last:
+                    yield (
+                        f'data: {{"status": "downloading {label}", '
+                        f'"completed": {completed}, "total": {total_bytes}}}\n\n'
+                    )
+                    last = completed
+                await _asyncio.sleep(0.4)
+            try:
+                await fut
+            except Exception as e:  # noqa: BLE001
+                yield f"event: error\ndata: {label}: {str(e)[:200]}\n\n"
+                return
+            done_bytes = base + _dir_size(cache_dir)
+
+        yield (
+            f'data: {{"status": "done", "completed": {done_bytes}, '
+            f'"total": {total_bytes or done_bytes}}}\n\n'
         )
         yield "event: done\ndata: {}\n\n"
 
