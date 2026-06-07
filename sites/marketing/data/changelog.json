@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.2.123",
+    "date": "2026-06-06",
+    "changes": [
+      "Smoother first launch — the loading screen shows real progress and no longer looks stuck while ORBIS warms up.",
+      "Setup remembers you're set up — it won't re-ask about on-device voice on a Mac you've already configured.",
+      "Choosing on-device voice now downloads the speech models right then, with a progress bar — instead of stalling your first conversation.",
+      "Allowing the microphone during setup starts voice right away — no restart needed."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.123/ORBIS-0.2.123-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.122",
     "date": "2026-06-06",
     "changes": [
