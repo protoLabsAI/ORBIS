@@ -1271,6 +1271,10 @@ pub fn run() {
         )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // In-app auto-update (check latest.json → download + install the signed
+        // updater artifact) + process (relaunch after applying). Desktop-only.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // tauri-plugin-http: routes JS fetch() through Rust + reqwest,
         // bypassing WKWebView's silent POST drop on macOS arm64
         // (tauri-apps/tauri#11854, #13166, #13878). Frontend imports
