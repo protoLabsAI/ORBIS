@@ -408,9 +408,9 @@ def check_workflow() -> None:
     )
     require_contains(
         workflow,
-        "protoLabsAI/orbis-releases",
-        "desktop release must upload the DMG to the public orbis-releases repo "
-        "(the private main repo's assets 404 publicly)",
+        'REPO="${{ github.repository }}"',
+        "desktop release must attach the DMG to this repo's GitHub release "
+        "(source is public now; the separate orbis-releases repo is retired)",
     )
     require_contains(
         workflow,

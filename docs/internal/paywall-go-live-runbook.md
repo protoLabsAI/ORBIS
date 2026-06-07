@@ -122,5 +122,6 @@ activated licenses simply stop being required.
   in `agent/license.py`).
 - **Private key is the crown jewel.** Worker secret + Infisical only; never in
   the repo. Rotating it invalidates all issued licenses.
-- The main repo stays **private**; only the DMGs are public on `orbis-releases`.
-  The paywall is what keeps customization paid while the app is a free download.
+- The main repo is **public**; the signed DMGs attach directly to its GitHub
+  Releases (the separate `orbis-releases` repo is retired). The paywall is what
+  keeps customization paid while the app itself is a free download.
