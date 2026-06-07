@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { appLogDir } from '@tauri-apps/api/path';
+import { Button } from '@/components/ui/button';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -41,6 +43,15 @@ const STAGE_PROGRESS: Record<string, number> = {
   ready: 1,
 };
 
+// A normal boot — cloud/BYO, or a returning user with models cached — readies in
+// a few seconds; a first-run on-device model download legitimately takes a
+// minute or two. So the "still starting?" escape hatch only appears after a long
+// wait (and waits even longer when a model is actively downloading, which is
+// expected-slow), so a hung sidecar no longer means an infinite spinner with no
+// way out.
+const SLOW_AFTER_S = 25;
+const HARD_AFTER_S = 90;
+
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
   const [progress, setProgress] = useState(0.05);
@@ -51,6 +62,9 @@ export function BootStatus() {
   // claiming otherwise contradicts the wizard's own "download these models?"
   // step. We infer it from the backend's stage detail ("Loading X model…").
   const [loadingModels, setLoadingModels] = useState(false);
+  // Seconds since mount, ticked until ready — drives the slow/stalled escape
+  // hatch below so a wedged boot isn't an infinite spinner.
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -88,7 +102,27 @@ export function BootStatus() {
     };
   }, []);
 
+  // Tick a seconds counter until ready.
+  useEffect(() => {
+    if (ready) return;
+    const id = window.setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [ready]);
+
   if (ready) return null;
+
+  // Surface the escape hatch after a long wait — sooner for a quick boot
+  // (cloud/BYO, deferred models) that's overdue, later when an on-device model
+  // is genuinely downloading.
+  const stalled =
+    elapsed >= HARD_AFTER_S || (elapsed >= SLOW_AFTER_S && !loadingModels);
+
+  const onViewLogs = () => {
+    // Reveal the unified log dir in Finder (open_url → shell.open). Best-effort.
+    appLogDir()
+      .then((dir) => invoke('open_url', { url: dir }))
+      .catch(() => {});
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-surface text-fg-body">
@@ -104,6 +138,23 @@ export function BootStatus() {
         <div className="max-w-xs text-center text-sm text-fg-muted">
           First launch loads local speech models — this can take a minute or
           two. Later launches are quick.
+        </div>
+      )}
+      {stalled && (
+        <div className="mt-2 flex flex-col items-center gap-3">
+          <p className="max-w-xs text-center text-sm text-fg-muted">
+            {loadingModels
+              ? 'Still downloading — a first-run model pull can run several minutes on a slow connection.'
+              : 'This is taking longer than usual. The backend may be stuck.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={onViewLogs}>
+              View logs
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setReady(true)}>
+              Continue anyway
+            </Button>
+          </div>
         </div>
       )}
     </div>
