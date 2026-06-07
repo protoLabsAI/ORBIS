@@ -343,9 +343,13 @@ jobs:
           echo "Signing mode: ${SIGNED}"
           # createUpdaterArtifacts (CI-only, via --config so local `cargo tauri
           # build` without TAURI_SIGNING_PRIVATE_KEY isn't forced to sign) emits
-          # the signed `*.app.tar.gz` (+ .sig) the in-app updater downloads.
+          # the signed `*.app.tar.gz` (+ .sig) the in-app updater downloads. It
+          # needs an updater-enabled target — the `*.app.tar.gz` is made from the
+          # `app` bundle, NOT the dmg — so build `app` alongside `dmg` here. The
+          # checked-in tauri.conf stays `targets: ["dmg"]` (guardrail), this just
+          # overrides for the release build.
           cargo tauri build --features native-audio,voice-processing \
-            --config '{"bundle":{"createUpdaterArtifacts":true}}'
+            --config '{"bundle":{"createUpdaterArtifacts":true,"targets":["app","dmg"]}}'
 
       - name: Restore .app from DMG for verification
         shell: bash
