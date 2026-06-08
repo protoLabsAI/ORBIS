@@ -1,5 +1,21 @@
 [
   {
+    "version": "v0.2.127",
+    "date": "2026-06-08",
+    "changes": [
+      "Implements auto-discovery for plugins, widgets, and orb variants via filesystem globs, removing the need to manually update central import lists.",
+      "Introduces a stable `@/sdk` web surface to provide explicit registration functions and types for extensions.",
+      "Establishes `config/widgets.yaml` as the single source of truth for widget definitions, synchronizing the agent and web registries.",
+      "Adds comprehensive contribution guides and in-folder documentation for plugins, widgets, orb variants, and agents.",
+      "Moves transient status management from a specific plugin into core shared services to prevent cross-plugin dependency fragility.",
+      "Resolves an issue where saving persona configurations would silently strip `behavior` settings due to validation filtering.",
+      "Prevents silent failures by adding CI guards that validate starter orb IDs against the registered variant registry.",
+      "Ensures widget parameters are passed through a generic `props` object to allow new widgets to function without modifying tool schemas.",
+      "Transitions the project to the Apache-2.0 license to support inbound contributions and provide explicit patent grants."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.127/ORBIS-0.2.127-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.126",
     "date": "2026-06-07",
     "changes": [
