@@ -7,6 +7,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
@@ -354,6 +356,27 @@ def test_sdk_is_the_extension_surface():
                 f"{f.relative_to(WEB)} reaches into status-pill internals — "
                 "import pushStatusTransient from '@/sdk' instead"
             )
+
+
+def test_starter_orbs_reference_registered_variants():
+    """Every starter in config/starter_orbs.yaml must name a registered orb
+    variant — a folder under variants/ with an index.tsx. Guards a silent
+    footgun: a typo'd `variant:` renders a blank orb at first run."""
+    starters = yaml.safe_load(
+        (ROOT / "config/starter_orbs.yaml").read_text(encoding="utf-8")
+    ) or {}
+    variants_dir = WEB / "src/plugins/orb/variants"
+    registered = {
+        d.name
+        for d in variants_dir.iterdir()
+        if d.is_dir() and (d / "index.tsx").exists()
+    }
+    for entry in starters.get("starters") or []:
+        variant = (entry.get("variant") or "").strip()
+        assert variant in registered, (
+            f"starter {entry.get('slug')!r} references unknown orb variant "
+            f"{variant!r} — add web/src/plugins/orb/variants/{variant}/ or fix the id"
+        )
 
 
 def test_upstream_orb_spectrum_shader_hardening_stays_ported():
