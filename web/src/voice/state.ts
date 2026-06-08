@@ -20,8 +20,12 @@ export interface VoiceSnapshot {
   activation: ActivationState;
   /** Display phrase for the active wake word (e.g. "Hey Orbis"), or null. */
   wakePhrase: string | null;
-  /** Push-to-talk: true when the mic is forwarding audio (double-click the orb to toggle). */
+  /** Push-to-talk: true when the mic is in a listening turn (double-click the orb, or a wake word, starts one). */
   micListening: boolean;
+  /** Hard mute (the mic button) — the top-level override. When true the engine
+   * drops ALL mic input: no STT, no wake word, no barge-in (truly silent).
+   * Independent of micListening/activation; session-only, boots false (live). */
+  micMuted: boolean;
   /** True once the SSE bridge has received its first event from the sidecar. */
   connected: boolean;
   lastUserTranscript: string | null;
@@ -40,6 +44,7 @@ const INITIAL: VoiceSnapshot = {
   activation: null,
   wakePhrase: null,
   micListening: false,
+  micMuted: false,
   connected: false,
   lastUserTranscript: null,
   lastBotText: null,

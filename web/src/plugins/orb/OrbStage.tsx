@@ -30,13 +30,18 @@ export function OrbStage() {
   const botStream = useMemo<MediaStream | null>(() => null, []);
   const localStream = useMemo<MediaStream | null>(() => null, []);
 
-  // Double-click / double-tap toggles push-to-talk. The mic is muted by
-  // default (privacy + no Whisper hallucinations on silence); the user
-  // opts into a conversation by double-clicking the orb, and again to mute.
+  // Double-click / double-tap starts (or ends) a push-to-talk listening turn.
+  // Hard mute is king: if the mic button has muted the mic, double-click is a
+  // no-op (tap the mic button to unmute first) — the Rust engine gates the wake
+  // word the same way, so muted is truly silent.
   const onDoubleClick = () => {
+    if (voiceStore.getSnapshot().micMuted) {
+      pushStatusTransient('muted — tap the mic to unmute', 2400);
+      return;
+    }
     const next = !voiceStore.getSnapshot().micListening;
     voiceStore.update({ micListening: next });
-    pushStatusTransient(next ? 'listening…' : 'muted', 1800);
+    pushStatusTransient(next ? 'listening…' : 'stopped', 1800);
     invoke('set_mic_listening', { on: next }).catch(() => {
       // Command unavailable (e.g. non-native dev build) — keep local UI state.
     });

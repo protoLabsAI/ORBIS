@@ -82,6 +82,12 @@ pub struct AudioEngine {
     /// always-listening behavior and Whisper hallucinations on silence.
     /// Toggled by double-clicking the orb via `set_mic_listening`.
     pub listening: Arc<AtomicBool>,
+    /// Hard mute (the mic button). Top-level override ABOVE the push-to-talk
+    /// `listening` gate: when true the socket writer drops every mic frame — to
+    /// STT *and* the wake-word detector — so there's no wake word, no barge-in,
+    /// no activation (truly silent). Session-only; resets to false on launch.
+    /// Toggled via `set_mic_muted`.
+    pub muted: Arc<AtomicBool>,
     /// Full-duplex override. When true, the socket writer keeps the mic open
     /// while she speaks (instead of the half-duplex echo mute) so the user can
     /// barge in. Safe only with echo cancellation (VPIO) OR headphones (no
@@ -158,7 +164,8 @@ impl AudioEngine {
         let aec = Arc::new(Mutex::new(AecProcessor::from_env()));
         let playback_ring: PlaybackRing = Arc::new(Mutex::new(VecDeque::with_capacity(48_000)));
         let rms = Arc::new(AtomicU32::new(0));
-        let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: muted by default
+        let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: idle until activated
+        let muted = Arc::new(AtomicBool::new(false)); // hard mute off at launch (boot live)
                                                           // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
                                                           // it on for testing; the persisted Settings toggle sets it at startup.
         let full_duplex = Arc::new(AtomicBool::new(
@@ -275,6 +282,7 @@ impl AudioEngine {
             aec,
             rms,
             listening,
+            muted,
             full_duplex,
             last_play_ms,
             playback_rms,
@@ -302,12 +310,32 @@ impl AudioEngine {
         self.listening.load(Ordering::Relaxed)
     }
 
+    /// Hard mute (the mic button) — the top-level override above push-to-talk
+    /// and the wake word. When muted, the socket writer drops every mic frame
+    /// (STT *and* the wake detector), so nothing can hear or activate. Muting
+    /// also closes any open listening window so a mid-turn mute stops at once.
+    pub fn set_muted(&self, on: bool) {
+        self.muted.store(on, Ordering::Relaxed);
+        if on {
+            self.listening.store(false, Ordering::Relaxed);
+        }
+        log::info!("[audio] mic muted = {on}");
+    }
+
+    /// Whether the mic is hard-muted (no audio in at all).
+    pub fn is_muted(&self) -> bool {
+        self.muted.load(Ordering::Relaxed)
+    }
+
     /// Open a listening window from a wake-word fire (the ARMED → LISTENING
     /// transition). Idempotent while already listening, so a burst of fires is
     /// one open. For now this just unmutes the mic — the same gate a manual
     /// double-click opens; the auto-close timer + orb ARMED cue land in the
     /// engagement-modes UX pass (docs/internal/wake-word.md, build step 3).
     pub fn arm_listening_window(&self) {
+        if self.is_muted() {
+            return; // hard mute is king — the wake word can't open the mic
+        }
         if !self.is_listening() {
             self.set_listening(true);
             log::info!("[wake] fired → listening window opened");
