@@ -34,6 +34,12 @@ to change. There is no central list to edit.
 If you find yourself editing a hand-maintained list to register something, that
 is a bug in the extension point — open an issue, it should auto-discover.
 
+Import what you register (and the runtime services you need —
+voice state, `pushStatusTransient`) from **`@/sdk`**, the stable extension
+surface, rather than reaching into internal module paths. The backend client
+(`@/lib/api`) and design-system primitives (`@/components/ui/*`) are their own
+documented stable modules.
+
 ## Dev setup
 
 Requirements: **Python 3.11+**, **Bun** (or npm), **Rust** (for the native

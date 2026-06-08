@@ -2,7 +2,7 @@ import { useSyncExternalStore, useCallback } from 'react';
 import { Mic, MicOff } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
-import { pushStatusTransient } from '@/plugins/status-pill/store';
+import { pushStatusTransient } from '@/sdk';
 
 /**
  * Quick mute/unmute toggle in the right-edge chrome rail (below the

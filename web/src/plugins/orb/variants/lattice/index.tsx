@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { LatticeVariant } from './LatticeVariant';
 import { LATTICE_PRESETS } from './presets';
 import { LATTICE_FIELDS } from './schema';

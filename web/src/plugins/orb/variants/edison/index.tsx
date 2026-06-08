@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { EdisonVariant } from './EdisonVariant';
 import { EdisonPost } from './EdisonPost';
 import { EDISON_FIELDS } from './schema';

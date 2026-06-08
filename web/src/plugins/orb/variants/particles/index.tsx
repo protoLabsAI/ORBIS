@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { ParticlesVariant } from './ParticlesVariant';
 import { PARTICLES_PRESETS } from './presets';
 import { PARTICLES_FIELDS } from './schema';

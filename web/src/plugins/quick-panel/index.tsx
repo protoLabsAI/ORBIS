@@ -1,4 +1,4 @@
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { QuickPanel } from './QuickPanel';
 
 registerPlugin({

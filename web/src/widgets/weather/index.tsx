@@ -1,5 +1,5 @@
 import { CloudSun } from 'lucide-react';
-import { registerWidget } from '../registry';
+import { registerWidget } from '@/sdk';
 import { Weather } from './Weather';
 
 // Self-registering widget — picked up by the eager glob in ../index.ts.

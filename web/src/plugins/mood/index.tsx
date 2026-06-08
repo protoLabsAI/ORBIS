@@ -10,7 +10,7 @@
  * amendment.
  */
 
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { startMoodDriver } from './moodDriver';
 
 startMoodDriver();

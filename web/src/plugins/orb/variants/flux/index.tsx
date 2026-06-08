@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { FluxVariant } from './FluxVariant';
 import { FluxPost } from './FluxPost';
 import { FLUX_FIELDS } from './schema';

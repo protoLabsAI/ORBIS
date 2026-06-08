@@ -27,7 +27,7 @@ variants/<id>/
 `variants/<id>/index.tsx`:
 
 ```tsx
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { MyVariant } from './MyVariant';
 import { MY_PRESETS } from './presets';
 import { MY_FIELDS } from './schema';

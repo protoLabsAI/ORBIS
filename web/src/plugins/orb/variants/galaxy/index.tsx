@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { GalaxyVariant } from './GalaxyVariant';
 import { GALAXY_PRESETS } from './presets';
 import { GALAXY_FIELDS } from './schema';
