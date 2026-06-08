@@ -1997,6 +1997,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         state.active_delivery = delivery
         state.active_tracer = turn_tracer
         state.active_tts = tts  # for runtime voice switching via /api/tts/voice
+        state.active_llm = llm  # for runtime model swap via POST /api/config
         sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
         state.active_session_id = sid
         current_session_id.set(sid)
@@ -2100,6 +2101,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             state.active_delivery = None
         if state.active_tts is tts:
             state.active_tts = None
+        if state.active_llm is llm:
+            state.active_llm = None
         if state.active_tracer is turn_tracer:
             state.active_tracer = None
             _tracing.set_active_tracer(None, user_id=user_id)
@@ -3641,6 +3644,54 @@ async def deactivate_entitlement(user: User = Depends(require_user)):
     return deactivate(get_memory())
 
 
+def _reconfigure_live_llm(llm_cfg: dict, *, user_id: str | None = None) -> dict:
+    """Reconfigure the LIVE LLM service in place so a model/endpoint change
+    applies to the next turn — no pipeline rebuild, no audio reconnect. Mirrors
+    the runtime TTS-voice swap (_switch_live_voice) and the delegate-roster
+    refresh: the codebase hot-swaps session config rather than restarting.
+
+    Works for OpenAI-compatible services (cloud gateways, Ollama). In-process
+    MLX can't be retargeted to a remote endpoint in place, so those changes
+    still need a restart (``needs_restart``). Never raises — the caller surfaces
+    the status as ``llm_applied_live``.
+    """
+    state = user_state_for(user_id or _A2A_USER_ID)
+    svc = state.active_llm
+    if svc is None:
+        return {"ok": False, "error": "no live LLM session"}
+    name = type(svc).__name__
+    if "MLX" in name:
+        return {
+            "ok": False,
+            "needs_restart": True,
+            "error": "MLX runs in-process; restart to switch models",
+        }
+    model = str(llm_cfg.get("model") or "").strip()
+    url = llm_cfg.get("url")
+    api_key = llm_cfg.get("api_key") or ""
+    try:
+        # url / key — recreate the AsyncOpenAI client (OpenAILLMService.create_client).
+        if url and hasattr(svc, "create_client"):
+            svc._client = svc.create_client(
+                api_key=api_key or "not-needed", base_url=str(url)
+            )
+        # model — base_llm reads self._settings.model per request.
+        settings = getattr(svc, "_settings", None)
+        if model and settings is not None and hasattr(settings, "model"):
+            settings.model = model
+        # two-model routing tiers (router decides / content narrates); collapse
+        # to the chosen model unless an explicit split is in the config.
+        if hasattr(svc, "_router_model"):
+            svc._router_model = str(llm_cfg.get("router_model") or model)
+        if hasattr(svc, "_content_model"):
+            svc._content_model = str(llm_cfg.get("content_model") or model)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[llm] live reconfigure failed: {e}")
+        return {"ok": False, "error": str(e)}
+    logger.info(f"[llm] live reconfigure → {name} url={url} model={model}")
+    return {"ok": True, "model": model, "url": url}
+
+
 @app.post("/api/config")
 async def put_config(patch: dict, user: User = Depends(require_user)):
     """Apply a shallow-merge patch to config/orbis.yaml. Returns the
@@ -3684,7 +3735,20 @@ async def put_config(patch: dict, user: User = Depends(require_user)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     persona = reload_persona()
-    return {"ok": True, "config": normalized, "persona": persona.slug}
+    # Hot-swap the live LLM (no restart) when the llm block changed — mirrors
+    # the runtime TTS-voice swap. MLX (in-process) can't retarget live, so
+    # `llm_applied_live` stays False there and the UI keeps the restart hint.
+    applied_live = False
+    if isinstance(patch, dict) and "llm" in patch:
+        new_llm = normalized.get("llm") if isinstance(normalized, dict) else None
+        res = _reconfigure_live_llm(new_llm or {}, user_id="default")
+        applied_live = bool(res.get("ok"))
+    return {
+        "ok": True,
+        "config": normalized,
+        "persona": persona.slug,
+        "llm_applied_live": applied_live,
+    }
 
 
 def _serve_react() -> bool:

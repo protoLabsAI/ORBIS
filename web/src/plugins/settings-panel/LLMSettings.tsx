@@ -19,13 +19,15 @@ type TestState =
 type SaveState =
   | { kind: 'idle' }
   | { kind: 'saving' }
-  | { kind: 'saved' }
+  | { kind: 'saved'; live: boolean }
   | { kind: 'error'; message: string };
 
 /**
  * LLM settings — edit the router-brain provider without re-running the
- * setup wizard. Persists via POST /api/config which reloads the persona
- * server-side, so the next voice turn picks up the new endpoint.
+ * setup wizard. Persists via POST /api/config, which hot-swaps the live LLM
+ * service in place (model + client) so the change applies to the next turn
+ * with no restart. In-process MLX can't retarget live (the response's
+ * `llm_applied_live` is false), so those changes still need a restart.
  *
  * Shows the same minimal "featured" preset surface as the wizard's LLM
  * step, with an expander for the long-tail of OpenAI-compatible
@@ -164,8 +166,8 @@ export function LLMSettings() {
       // already set.
       const llm: LLMPayload = { url: url.trim(), model: model.trim() };
       if (apiKey.trim()) llm.api_key = apiKey.trim();
-      await api.putConfig({ llm });
-      setSave({ kind: 'saved' });
+      const res = await api.putConfig({ llm });
+      setSave({ kind: 'saved', live: res.llm_applied_live === true });
       if (apiKey.trim()) {
         setKeyIsSet(true);
         setApiKey('');
@@ -192,7 +194,8 @@ export function LLMSettings() {
     <Panel title="LLM">
       <div className="space-y-4">
         <p className="text-sm text-fg-muted -mt-1">
-          Router brain. Pick a preset or type your own URL.
+          Router brain. Pick a preset or type your own URL. Changes apply to your
+          next turn — no restart (in-process MLX models are the exception).
         </p>
 
         <div className="grid grid-cols-2 gap-2">
@@ -327,7 +330,9 @@ export function LLMSettings() {
             </span>
           )}
           {save.kind === 'saved' && (
-            <span className="text-xs text-success">✓ Saved</span>
+            <span className="text-xs text-success">
+              {save.live ? '✓ Saved — applied live' : '✓ Saved · restart to apply'}
+            </span>
           )}
           {save.kind === 'error' && (
             <span className="text-xs text-danger truncate max-w-[55%]">
