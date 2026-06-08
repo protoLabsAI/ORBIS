@@ -54,6 +54,7 @@ class UserState:
     active_tracer: Any | None = None
     active_session_id: str | None = None
     active_tts: Any | None = None  # live TTS service (for runtime voice switch)
+    active_llm: Any | None = None  # live LLM service (for runtime model swap)
 
     # HITL: a background orchestration run waiting on the user's spoken answer.
     pending_ask: PendingAsk | None = None

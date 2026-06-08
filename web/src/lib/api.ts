@@ -417,7 +417,7 @@ export const api = {
   starterOrbs: () => get<StarterOrbsResponse>('/api/starter_orbs'),
   config: () => get<{ config: OrbisConfig }>('/api/config'),
   putConfig: (patch: OrbisConfig) =>
-    postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string }>('/api/config', patch),
+    postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string; llm_applied_live?: boolean }>('/api/config', patch),
   entitlement: () => get<EntitlementState>('/api/entitlement'),
   activateLicense: (license_key: string) =>
     postJSON<EntitlementState>('/api/entitlement/activate', { license_key }),
