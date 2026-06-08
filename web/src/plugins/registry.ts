@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { createRegistry } from '@/lib/createRegistry';
 
 /**
  * UI slot names — add here first, then plugins can target them.
@@ -27,46 +28,28 @@ export interface Plugin {
   slots?: Partial<Record<UISlotName, ComponentType>>;
 }
 
-type Listener = () => void;
+// Built on the shared registry primitive; componentsForSlot is the
+// plugin-specific query layered on top.
+const base = createRegistry<Plugin>();
 
-class PluginRegistry {
-  private byId = new Map<string, Plugin>();
-  private listeners = new Set<Listener>();
+export const pluginRegistry = {
+  register: base.register,
+  get: base.get,
+  all: base.all,
+  subscribe: base.subscribe,
 
-  register(plugin: Plugin): () => void {
-    this.byId.set(plugin.id, plugin);
-    this.emit();
-    return () => {
-      this.byId.delete(plugin.id);
-      this.emit();
-    };
-  }
-
-  all(): ReadonlyArray<Plugin> {
-    return Array.from(this.byId.values());
-  }
-
+  /**
+   * Render contributions for a slot, ordered by `order` (ties keep
+   * registration order — Array.sort is stable). Called inside <Slot>'s
+   * render after a subscribe tick, so a fresh array per call is fine.
+   */
   componentsForSlot(slot: UISlotName): Array<{ id: string; Component: ComponentType }> {
     const out: Array<{ id: string; Component: ComponentType; order: number }> = [];
-    for (const p of this.byId.values()) {
+    for (const p of base.all()) {
       const C = p.slots?.[slot];
       if (C) out.push({ id: p.id, Component: C, order: p.order ?? 100 });
     }
-    // Explicit `order` wins; Array.sort is stable, so ties keep registration order.
     out.sort((a, b) => a.order - b.order);
     return out.map(({ id, Component }) => ({ id, Component }));
-  }
-
-  subscribe(l: Listener): () => void {
-    this.listeners.add(l);
-    return () => {
-      this.listeners.delete(l);
-    };
-  }
-
-  private emit() {
-    this.listeners.forEach((l) => l());
-  }
-}
-
-export const pluginRegistry = new PluginRegistry();
+  },
+};
