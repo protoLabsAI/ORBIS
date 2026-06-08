@@ -54,6 +54,13 @@ _STALL_LINES: tuple[str, ...] = (
     "hmm, this one's being slow, bear with me",
 )
 
+# A dismiss ("cancel" / "stop listening") within this many seconds before a
+# watchdog fire means the fire belongs to the dismissed interaction — stay
+# quiet. The window is forward-looking from the cancel, so a phantom re-arm
+# shortly after the dismiss (bot-audio bleed on the open full-duplex mic, a
+# sub-threshold utterance) can't slip a recovery line into dead air.
+_CANCEL_QUIET_GRACE = 8.0
+
 
 class StallWatchdog(FrameProcessor):
     """Speaks a recovery line if the agent goes silent after the user's turn."""
@@ -72,7 +79,6 @@ class StallWatchdog(FrameProcessor):
         self._timer: asyncio.Task | None = None
         self._responding = False  # any sign of work since the user stopped
         self._last_line: str | None = None
-        self._armed_at = 0.0  # monotonic time of the last arm (cancel check)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -103,7 +109,6 @@ class StallWatchdog(FrameProcessor):
 
     def _arm(self) -> None:
         self._cancel()
-        self._armed_at = time.monotonic()
         if self._enabled and self._stall_secs > 0:
             self._timer = asyncio.create_task(self._fire_after_delay())
 
@@ -126,11 +131,15 @@ class StallWatchdog(FrameProcessor):
             await asyncio.sleep(self._stall_secs)
             if self._responding:
                 return
-            if self._armed_at and turn_cancelled_since(self._armed_at):
-                # The user dismissed this turn ("cancel" / "stop listening") —
-                # it's intentionally empty, not a stall. Stay quiet. Guard on
-                # _armed_at: an unarmed watchdog (0.0 sentinel) has no arm to
-                # cancel against, so the signal must not suppress its fire.
+            # A recent dismiss ("cancel" / "stop listening") means this fire
+            # belongs to the dismissed interaction — stay quiet. Check a forward
+            # window from the cancel, NOT the arm time: a phantom re-arm AFTER
+            # the cancel (bot-audio bleed on the open full-duplex mic, a
+            # sub-threshold utterance) slips past an arm-time check and speaks a
+            # recovery line into dead air — the bug this guards.
+            if turn_cancelled_since(
+                time.monotonic() - self._stall_secs - _CANCEL_QUIET_GRACE
+            ):
                 return
             line = self._pick()
             logger.warning(

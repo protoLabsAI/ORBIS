@@ -5,7 +5,19 @@ from __future__ import annotations
 import pytest
 from pipecat.frames.frames import TTSSpeakFrame
 
+from agent import user_state
 from agent.stall_watchdog import _STALL_LINES, StallWatchdog
+
+
+@pytest.fixture(autouse=True)
+def _no_recent_cancel():
+    """Isolate the module-level cancel signal: default each test to 'never
+    cancelled' so a cancel from one test can't suppress another (the watchdog
+    now consults a forward time window, not just its own arm)."""
+    saved = user_state._last_turn_cancel
+    user_state._last_turn_cancel = float("-inf")
+    yield
+    user_state._last_turn_cancel = saved
 
 
 class _Cap(StallWatchdog):
@@ -32,6 +44,20 @@ async def test_no_fire_if_responding() -> None:
     w = _Cap(stall_secs=0.01, enabled=True)
     w._responding = True
     await w._fire_after_delay()
+    assert w.pushed == []
+
+
+@pytest.mark.asyncio
+async def test_no_fire_after_recent_cancel() -> None:
+    # Regression: a dismiss ("cancel" / "stop listening") keeps the watchdog
+    # quiet even when it re-armed on a phantom UserStopped AFTER the cancel
+    # (bot-audio bleed on the open full-duplex mic, or a sub-threshold
+    # utterance). The old arm-time check missed this and spoke "this is taking a
+    # moment" into dead air.
+    w = _Cap(stall_secs=0.01, enabled=True)
+    w._responding = False
+    user_state.note_turn_cancel()  # user dismissed just now
+    await w._fire_after_delay()     # the fire window opens after the cancel
     assert w.pushed == []
 
 
