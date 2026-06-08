@@ -305,17 +305,23 @@ def test_chrome_uses_design_tokens_not_raw_tailwind_palette():
 
 
 def test_upstream_orb_variants_stay_ported_to_native_frontend():
-    """Native ORBIS keeps upstream visual product work that fits Tauri."""
+    """Native ORBIS keeps upstream visual product work that fits Tauri.
+
+    Variants auto-register via the eager glob in variants/index.ts, so a
+    variant is wired in iff its folder (with an index.tsx) exists — there is
+    no hand-maintained import list to check anymore.
+    """
     variants = WEB / "src/plugins/orb/variants"
-    imports = (variants / "index.ts").read_text(encoding="utf-8")
+    index = (variants / "index.ts").read_text(encoding="utf-8")
+    assert "import.meta.glob" in index, "variants must be auto-discovered via glob"
 
     for variant in ("tetra", "lattice", "spectrum", "galaxy"):
-        assert f"import './{variant}';" in imports
         assert (variants / variant / "index.tsx").exists()
         assert (variants / variant / "schema.ts").exists()
         assert (variants / variant / "presets.ts").exists()
 
-    assert "import './liquid';" not in imports
+    # 'liquid' was dropped upstream — its folder must not exist, so the glob
+    # cannot pick it up.
     assert not (variants / "liquid").exists()
 
 
