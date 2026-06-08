@@ -164,20 +164,27 @@ impl SocketServer {
             while let Some(msg) = mic_rx.recv().await {
                 match msg {
                     AudioMsg::MicFrame(samples) => {
-                        // Feed the detector regardless of the gate — wake mode
-                        // listens for "Hey Orbis" while muted. Cheap (~640 B).
+                        // Hard mute (the mic button) is the top-level gate: when
+                        // muted, drop the frame entirely — no STT and no wake
+                        // detector, so it's truly silent (no "Hey Orbis", no
+                        // barge-in). Beats both the push-to-talk gate and wake.
+                        if eng.is_muted() {
+                            continue;
+                        }
+                        // Not muted: feed the detector regardless of the
+                        // push-to-talk gate so wake mode hears "Hey Orbis" while
+                        // idle. Cheap (~640 B).
                         if let Some(ref dtx) = det_tx {
                             let _ = dtx.send(samples.clone());
                         }
-                        // Push-to-talk gate always applies. The half-duplex
-                        // echo mute applies only in CPAL mode; in
-                        // voice-processing mode the VPIO unit cancels the echo
-                        // in hardware, so the mic stays open during playback to
-                        // allow real barge-in (interrupting her mid-utterance).
+                        // Push-to-talk gate applies. The half-duplex echo mute
+                        // applies only in CPAL mode; in voice-processing mode the
+                        // VPIO unit cancels echo in hardware, so the mic stays
+                        // open during playback for real barge-in.
                         if !eng.is_listening()
                             || (eng.half_duplex() && eng.echo_guard_active(ECHO_GUARD_MS))
                         {
-                            continue; // muted, or (half-duplex) she's speaking
+                            continue; // idle, or (half-duplex) she's speaking
                         }
                         let frame = encode_frame(DIR_MIC_TO_PYTHON, MIC_SAMPLE_RATE, &samples);
                         if writer.write_all(&frame).await.is_err() {

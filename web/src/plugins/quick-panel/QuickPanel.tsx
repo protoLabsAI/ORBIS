@@ -33,17 +33,20 @@ const STYLE_LABELS: Record<ActivationStyle, string> = {
  * the Rust detector only reads at launch (shown with a relaunch hint).
  */
 export function QuickPanel() {
-  const micListening = useSyncExternalStore(
+  const micMuted = useSyncExternalStore(
     voiceStore.subscribe,
-    () => voiceStore.getSnapshot().micListening,
+    () => voiceStore.getSnapshot().micMuted,
   );
 
-  const toggleMic = useCallback(() => {
-    const next = !voiceStore.getSnapshot().micListening;
-    voiceStore.update({ micListening: next });
-    pushStatusTransient(next ? 'listening…' : 'muted', 1800);
-    invoke('set_mic_listening', { on: next }).catch(() => {
-      voiceStore.update({ micListening: !next });
+  // The "Microphone" switch is the hard mute (on = mic live, off = muted) —
+  // same top-level override as the chrome-rail mic button. Activation
+  // (double-click / wake word) is separate and blocked while muted.
+  const toggleMute = useCallback(() => {
+    const next = !voiceStore.getSnapshot().micMuted;
+    voiceStore.update(next ? { micMuted: true, micListening: false } : { micMuted: false });
+    pushStatusTransient(next ? 'muted' : 'unmuted', 1800);
+    invoke('set_mic_muted', { muted: next }).catch(() => {
+      voiceStore.update({ micMuted: !next });
       pushStatusTransient('mic toggle failed', 2400);
     });
   }, []);
@@ -78,7 +81,7 @@ export function QuickPanel() {
     <div className="space-y-5">
       {/* At-a-glance state */}
       <div className="rounded-xl border border-edge bg-raised/40 p-4 space-y-2.5">
-        <StatusRow label="Microphone" value={micListening ? 'Listening' : 'Muted'} tone={micListening ? 'live' : 'idle'} />
+        <StatusRow label="Microphone" value={micMuted ? 'Muted' : 'Live'} tone={micMuted ? 'idle' : 'live'} />
         <StatusRow
           label="Connection"
           value={connected === null ? '…' : connected ? 'Connected' : 'Offline'}
@@ -97,7 +100,7 @@ export function QuickPanel() {
       <div className="space-y-3.5">
         <SectionLabel>Quick controls</SectionLabel>
 
-        <SwitchRow label="Microphone" on={micListening} onToggle={toggleMic} />
+        <SwitchRow label="Microphone" on={!micMuted} onToggle={toggleMute} />
         <SwitchRow label="Allow interruptions" on={act.full_duplex} onToggle={() => act.setFullDuplex(!act.full_duplex)} />
 
         <OrbSwitcher />

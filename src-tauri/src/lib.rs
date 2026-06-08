@@ -501,6 +501,30 @@ fn mic_listening(state: tauri::State<AudioEngineState>) -> bool {
         .unwrap_or(false)
 }
 
+/// Hard mute (the mic button) — the top-level override above push-to-talk and
+/// the wake word. When muted the engine drops all mic frames (STT *and* the
+/// wake detector), so there's no listening, no "Hey Orbis", no barge-in.
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn set_mic_muted(muted: bool, state: tauri::State<AudioEngineState>) {
+    if let Ok(g) = state.engine.lock() {
+        if let Some(e) = g.as_ref() {
+            e.set_muted(muted);
+        }
+    }
+}
+
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn mic_muted(state: tauri::State<AudioEngineState>) -> bool {
+    state
+        .engine
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|e| e.is_muted()))
+        .unwrap_or(false)
+}
+
 /// Clear the WKWebView's storage (cookies, IndexedDB, localStorage,
 /// service-worker registrations, fetch cache). Use when stale frontend
 /// state is suspected — typically a rebuilt sidecar is being served by
@@ -1319,6 +1343,8 @@ pub fn run() {
                     backend_url,
                     set_mic_listening,
                     mic_listening,
+                    set_mic_muted,
+                    mic_muted,
                     get_activation_config,
                     set_activation_config,
                     set_full_duplex,

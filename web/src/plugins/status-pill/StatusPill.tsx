@@ -17,6 +17,7 @@ export function StatusPill() {
   const wakePhrase = useVoiceStateSelector((s) => s.wakePhrase);
   const voiceState = useVoiceStateSelector((s) => s.state);
   const micListening = useVoiceStateSelector((s) => s.micListening);
+  const micMuted = useVoiceStateSelector((s) => s.micMuted);
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
@@ -53,7 +54,9 @@ export function StatusPill() {
   // specific still, so it wins above this.
   const text = externalTransient?.text
     ?? delegationText
-    ?? (!connected
+    ?? (micMuted
+      ? 'muted'
+      : !connected
       ? 'starting up…'
       : voiceState === 'speaking'
         ? 'speaking…'
