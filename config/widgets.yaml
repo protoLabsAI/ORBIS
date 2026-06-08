@@ -1,0 +1,18 @@
+# Widget catalog — the single source the voice sidecar reads to know which
+# on-screen widgets exist and what props the model may pass to each.
+#
+# The matching *render* (React component + icon) lives in
+# web/src/widgets/<id>/index.tsx; the `id` here is the link between the two,
+# and tests/test_widgets.py asserts the two stay in lockstep (a widget declared
+# on only one side is a bug).
+#
+# Add a widget (no Python code edit needed):
+#   1. web/src/widgets/<id>/index.tsx  -> registerWidget({ id, render, ... })
+#   2. an entry here with the SAME id  -> so the voice agent can open it
+widgets:
+  - id: weather
+    title: Weather
+    description: current conditions for a city
+    props:
+      - name: location
+        description: a city name
