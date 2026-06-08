@@ -5,5 +5,6 @@ import { SetupWizard } from './SetupWizard';
 // drawer panel — it needs to own the whole viewport on first run.
 registerPlugin({
   id: 'setup-wizard',
+  order: 30,
   slots: { 'overlay-top': SetupWizard },
 });

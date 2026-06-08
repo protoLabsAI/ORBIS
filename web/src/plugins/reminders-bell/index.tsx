@@ -6,6 +6,7 @@ import { RemindersBell } from './RemindersBell';
 // settings tab so reminders are reachable without opening settings.
 registerPlugin({
   id: 'reminders-bell',
+  order: 10,
   slots: {
     'overlay-top': RemindersBell,
   },
