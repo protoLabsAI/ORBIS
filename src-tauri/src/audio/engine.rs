@@ -166,8 +166,8 @@ impl AudioEngine {
         let rms = Arc::new(AtomicU32::new(0));
         let listening = Arc::new(AtomicBool::new(false)); // push-to-talk: idle until activated
         let muted = Arc::new(AtomicBool::new(false)); // hard mute off at launch (boot live)
-                                                          // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
-                                                          // it on for testing; the persisted Settings toggle sets it at startup.
+                                                      // Full-duplex starts off (half-duplex, safe). ORBIS_FULL_DUPLEX=1 seeds
+                                                      // it on for testing; the persisted Settings toggle sets it at startup.
         let full_duplex = Arc::new(AtomicBool::new(
             std::env::var("ORBIS_FULL_DUPLEX")
                 .map(|v| v == "1")
