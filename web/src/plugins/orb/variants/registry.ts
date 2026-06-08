@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import type { FieldSpec } from '../shared/field-types';
 import type { VoiceState } from '../../../voice/state';
 import type { MoodOverrides } from '../compose';
+import { createRegistry } from '@/lib/createRegistry';
 
 /** Shared props every variant receives from the OrbStage / OrbPreview. */
 export interface VariantProps {
@@ -49,37 +50,8 @@ export interface VariantSpec {
   PostEffects?: ComponentType;
 }
 
-type Listener = () => void;
+export const variantRegistry = createRegistry<VariantSpec>();
 
-class VariantRegistry {
-  private byId = new Map<string, VariantSpec>();
-  private cachedAll: ReadonlyArray<VariantSpec> = [];
-  private listeners = new Set<Listener>();
-
-  register(spec: VariantSpec): void {
-    this.byId.set(spec.id, spec);
-    this.cachedAll = Array.from(this.byId.values());
-    this.listeners.forEach((l) => l());
-  }
-
-  get(id: string): VariantSpec | undefined {
-    return this.byId.get(id);
-  }
-
-  /**
-   * Cached — returns the same reference across calls until register() is
-   * next invoked. useSyncExternalStore compares by Object.is; returning a
-   * fresh `Array.from(...)` every call was triggering a render loop.
-   */
-  all = (): ReadonlyArray<VariantSpec> => this.cachedAll;
-
-  subscribe = (l: Listener): (() => void) => {
-    this.listeners.add(l);
-    return () => {
-      this.listeners.delete(l);
-    };
-  };
-}
-
-export const variantRegistry = new VariantRegistry();
-export const registerVariant = (spec: VariantSpec) => variantRegistry.register(spec);
+export const registerVariant = (spec: VariantSpec): void => {
+  variantRegistry.register(spec);
+};

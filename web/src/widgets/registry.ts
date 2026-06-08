@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import { createRegistry } from '@/lib/createRegistry';
 
 /**
  * Widget runtime — content panels the user opens, docks in the main window, or
@@ -30,36 +31,7 @@ export interface WidgetDef {
   render: ComponentType<WidgetProps>;
 }
 
-type Listener = () => void;
-
-class WidgetRegistry {
-  private byId = new Map<string, WidgetDef>();
-  // Cached array so useSyncExternalStore gets a stable reference between
-  // registrations (rebuilt only when the set changes).
-  private snap: ReadonlyArray<WidgetDef> = [];
-  private listeners = new Set<Listener>();
-
-  register(def: WidgetDef): void {
-    this.byId.set(def.id, def);
-    this.snap = Array.from(this.byId.values());
-    this.listeners.forEach((l) => l());
-  }
-
-  get(id: string): WidgetDef | undefined {
-    return this.byId.get(id);
-  }
-
-  all = (): ReadonlyArray<WidgetDef> => this.snap;
-
-  subscribe = (l: Listener): (() => void) => {
-    this.listeners.add(l);
-    return () => {
-      this.listeners.delete(l);
-    };
-  };
-}
-
-export const widgetRegistry = new WidgetRegistry();
+export const widgetRegistry = createRegistry<WidgetDef>();
 
 export function registerWidget(def: WidgetDef): void {
   widgetRegistry.register(def);
