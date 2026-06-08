@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useVoiceStateSelector } from '@/voice/hooks';
-import { statusPillStore } from './store';
+import { statusBus } from '@/shared/statusBus';
 
 /**
  * Bottom-of-screen status hint.
@@ -21,8 +21,8 @@ export function StatusPill() {
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
   const externalTransient = useSyncExternalStore(
-    statusPillStore.subscribe,
-    statusPillStore.getSnapshot,
+    statusBus.subscribe,
+    statusBus.getSnapshot,
   );
   const delegationText = activeToolCall
     ? formatActiveToolCall(activeToolCall)
@@ -33,16 +33,16 @@ export function StatusPill() {
     if (!externalTransient || externalTransient.expiresAt === 0) return;
     const remaining = externalTransient.expiresAt - Date.now();
     if (remaining <= 0) {
-      statusPillStore.clear();
+      statusBus.clear();
       return;
     }
-    const id = window.setTimeout(() => statusPillStore.clear(), remaining);
+    const id = window.setTimeout(() => statusBus.clear(), remaining);
     return () => window.clearTimeout(id);
   }, [externalTransient]);
 
   useEffect(() => {
     if (delegationOutcome === 'error' && lastOutcomeRef.current !== 'error') {
-      statusPillStore.push('delegation failed', 4000);
+      statusBus.push('delegation failed', 4000);
     }
     lastOutcomeRef.current = delegationOutcome;
   }, [delegationOutcome]);

@@ -13,7 +13,7 @@ Plugins are **auto-discovered**. Every `plugins/<name>/index.tsx` that calls
 Create `web/src/plugins/<name>/index.tsx`:
 
 ```tsx
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { MyThing } from './MyThing';
 
 registerPlugin({
@@ -57,14 +57,14 @@ registerPlugin({ id: 'my-thing', order: 25, slots: { 'overlay-top': MyThing } })
 
 ## What you can import
 
-Plugins are app code, so you can use the shared surfaces:
+The blessed surface is **`@/sdk`** — the registration functions, their types,
+the voice-state hooks (`useVoiceState`/`useVoiceStateSelector`), and
+`pushStatusTransient`. Beyond that, these shared modules are fair game:
 
-- voice state — `@/voice/...` (e.g. `useVoiceStateSelector`)
 - the backend client — `@/lib/api`
 - UI primitives + tokens — `@/components/ui/*`, the design tokens in `@/index.css`
 
-**Don't** reach into another plugin's folder for its internal store — if you need
-something shared, lift it to `@/shared` or `@/lib`. (A formal `@/sdk` barrel for
-the blessed extension surface is planned; until then, prefer the imports above.)
+**Don't** reach into another plugin's folder for its internals — if you need
+something shared, lift it to `@/shared` (or re-export it from `@/sdk`).
 
 See [CONTRIBUTING.md](../../../CONTRIBUTING.md) for the big picture.

@@ -1,4 +1,4 @@
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { AgentPanel } from './AgentPanel';
 import { SystemPanel } from './SystemPanel';
 import { VoicePanel } from './VoicePanel';

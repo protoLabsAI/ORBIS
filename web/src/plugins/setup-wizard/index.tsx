@@ -1,4 +1,4 @@
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { SetupWizard } from './SetupWizard';
 
 // The wizard lives in its own top-level overlay slot rather than a

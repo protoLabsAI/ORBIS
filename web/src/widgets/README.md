@@ -19,7 +19,7 @@ A widget is defined in **two places that share an `id`** — and a test
 
 ```tsx
 import { Clock } from 'lucide-react';
-import { registerWidget } from '../registry';
+import { registerWidget } from '@/sdk';
 import { Timer } from './Timer';
 
 registerWidget({

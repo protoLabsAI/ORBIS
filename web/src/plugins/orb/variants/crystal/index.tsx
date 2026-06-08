@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { CrystalVariant } from './CrystalVariant';
 import { CRYSTAL_PRESETS } from './presets';
 import { CRYSTAL_FIELDS } from './schema';

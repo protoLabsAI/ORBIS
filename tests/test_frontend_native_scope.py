@@ -325,6 +325,37 @@ def test_upstream_orb_variants_stay_ported_to_native_frontend():
     assert not (variants / "liquid").exists()
 
 
+def test_sdk_is_the_extension_surface():
+    """`@/sdk` is the stable surface extensions register through; it must export
+    the registration functions, and the transient-status service must live in
+    core (`@/shared`), not be reached out of the status-pill plugin."""
+    sdk = (WEB / "src/sdk/index.ts").read_text(encoding="utf-8")
+    for sym in (
+        "registerPlugin",
+        "registerWidget",
+        "registerVariant",
+        "registerActions",
+        "pushStatusTransient",
+    ):
+        assert sym in sdk, f"@/sdk must export {sym}"
+
+    # The transient-status service is core now, not trapped in a plugin.
+    assert (WEB / "src/shared/statusBus.ts").exists()
+    assert not (WEB / "src/plugins/status-pill/store.ts").exists()
+
+    # No plugin reaches into the status-pill plugin's internals — the transient
+    # status comes via @/sdk.
+    plugins = WEB / "src/plugins"
+    for sub in plugins.iterdir():
+        if not sub.is_dir() or sub.name == "status-pill":
+            continue
+        for f in [*sub.rglob("*.ts"), *sub.rglob("*.tsx")]:
+            assert "status-pill/store" not in f.read_text(encoding="utf-8"), (
+                f"{f.relative_to(WEB)} reaches into status-pill internals — "
+                "import pushStatusTransient from '@/sdk' instead"
+            )
+
+
 def test_upstream_orb_spectrum_shader_hardening_stays_ported():
     """The Rainbow spectrum palette must not regress to a blank render."""
     spectrum = WEB / "src/plugins/orb/variants/spectrum"

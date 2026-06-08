@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
-import { pushStatusTransient } from '@/plugins/status-pill/store';
+import { pushStatusTransient } from '@/sdk';
 import { api, type OrbisConfig, type StarterOrb } from '@/lib/api';
 import { VerbositySelector } from '@/plugins/settings-panel/VerbositySelector';
 import { SectionLabel } from '@/components/ui/section-label';

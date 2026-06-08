@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { NebulaVariant } from './NebulaVariant';
 import { NEBULA_PRESETS } from './presets';
 import { NEBULA_FIELDS } from './schema';

@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { SpectrumVariant } from './SpectrumVariant';
 import { SPECTRUM_PRESETS } from './presets';
 import { SPECTRUM_FIELDS } from './schema';

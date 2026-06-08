@@ -1,4 +1,4 @@
-import { registerPlugin } from '../PluginHost';
+import { registerPlugin } from '@/sdk';
 import { RemindersBell } from './RemindersBell';
 
 // Top-level reminders affordance — a bell in the top-right chrome with an

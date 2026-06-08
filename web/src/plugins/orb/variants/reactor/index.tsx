@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { ReactorVariant } from './ReactorVariant';
 import { ReactorPost } from './ReactorPost';
 import { REACTOR_FIELDS } from './schema';

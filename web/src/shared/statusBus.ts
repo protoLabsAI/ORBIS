@@ -1,10 +1,12 @@
 /**
- * Tiny transient store for the StatusPill so callers outside the
- * derived voice-state stream can surface a short-lived message in the
- * same UI.
+ * Transient status bus — a tiny pub-sub for surfacing short-lived messages in
+ * the StatusPill from anywhere (a plugin action, a one-off error) without
+ * polluting the derived voice-state stream.
  *
- * Mirrors the useSyncExternalStore pattern from voice/state.ts —
- * intentionally tiny, no external dep.
+ * This is a core service, NOT owned by the status-pill plugin (which only
+ * renders it): write with pushStatusTransient() from '@/sdk'; the StatusPill
+ * subscribes to render it. Mirrors the useSyncExternalStore pattern in
+ * voice/state.ts — intentionally tiny, no external dep.
  */
 
 export interface PillTransient {
@@ -14,7 +16,7 @@ export interface PillTransient {
 
 type Listener = () => void;
 
-class StatusPillStore {
+class StatusBus {
   private current: PillTransient | null = null;
   private listeners = new Set<Listener>();
 
@@ -39,14 +41,13 @@ class StatusPillStore {
   }
 }
 
-export const statusPillStore = new StatusPillStore();
+export const statusBus = new StatusBus();
 
 /**
- * Push a transient into the StatusPill. Defaults to 4s. Use this for
- * one-off errors or actions that do not belong in the persistent
- * voice-state snapshot; happy-path state should derive from
- * voice/state.ts.
+ * Push a transient into the StatusPill. Defaults to 4s. Use for one-off errors
+ * or actions that don't belong in the persistent voice-state snapshot;
+ * happy-path state should derive from voice/state.ts.
  */
 export function pushStatusTransient(text: string, ms = 4000): void {
-  statusPillStore.push(text, ms);
+  statusBus.push(text, ms);
 }

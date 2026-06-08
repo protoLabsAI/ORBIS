@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { TetraVariant } from './TetraVariant';
 import { TETRA_PRESETS } from './presets';
 import { TETRA_FIELDS } from './schema';

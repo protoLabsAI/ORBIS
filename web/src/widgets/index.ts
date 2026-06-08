@@ -1,4 +1,4 @@
-import { registerPlugin } from '../plugins/PluginHost';
+import { registerPlugin } from '@/sdk';
 import { WidgetLauncher } from './WidgetLauncher';
 
 /**

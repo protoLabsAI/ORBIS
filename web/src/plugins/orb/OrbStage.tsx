@@ -5,7 +5,7 @@ import { useActiveVariant } from './useOrbState';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { LumaChromaticAberrationEffect } from './shared/chromaticAberration';
 import { useOrbState } from './useOrbState';
-import { pushStatusTransient } from '../status-pill/store';
+import { pushStatusTransient } from '@/sdk';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
 import type { FractalPreset } from './variants/fractal/presets';

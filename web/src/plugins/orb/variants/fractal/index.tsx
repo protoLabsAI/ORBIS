@@ -1,4 +1,4 @@
-import { registerVariant } from '../registry';
+import { registerVariant } from '@/sdk';
 import { FractalVariant } from './FractalVariant';
 import { FRACTAL_PRESETS } from './presets';
 import { FRACTAL_FIELDS } from './schema';
