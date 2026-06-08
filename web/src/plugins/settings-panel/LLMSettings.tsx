@@ -24,8 +24,9 @@ type SaveState =
 
 /**
  * LLM settings — edit the router-brain provider without re-running the
- * setup wizard. Persists via POST /api/config which reloads the persona
- * server-side, so the next voice turn picks up the new endpoint.
+ * setup wizard. Persists via POST /api/config. The running voice pipeline
+ * binds its LLM service at session start, so a changed url/model/key takes
+ * effect after a restart — not on the next turn (hence the in-panel notice).
  *
  * Shows the same minimal "featured" preset surface as the wizard's LLM
  * step, with an expander for the long-tail of OpenAI-compatible
@@ -195,6 +196,11 @@ export function LLMSettings() {
           Router brain. Pick a preset or type your own URL.
         </p>
 
+        <p className="text-helper text-fg-muted rounded-md border border-edge bg-raised/40 px-2.5 py-2">
+          Changing the LLM takes effect after a restart — quit and reopen ORBIS
+          to use the new model.
+        </p>
+
         <div className="grid grid-cols-2 gap-2">
           {visiblePresets.map((p) => (
             <button
@@ -327,7 +333,7 @@ export function LLMSettings() {
             </span>
           )}
           {save.kind === 'saved' && (
-            <span className="text-xs text-success">✓ Saved</span>
+            <span className="text-xs text-success">✓ Saved · restart to apply</span>
           )}
           {save.kind === 'error' && (
             <span className="text-xs text-danger truncate max-w-[55%]">
