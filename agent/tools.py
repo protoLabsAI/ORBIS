@@ -47,6 +47,7 @@ from .delegates import (
 )
 from .delivery import DeliveryController
 from .filler import Latency
+from .widgets import known_widget_ids, load_widgets, render_catalog_text
 
 logger = logging.getLogger(__name__)
 
@@ -555,10 +556,13 @@ async def cancel_reminder_handler(params: FunctionCallParams) -> None:
 # opens it (and seeds its state) off the SSE 'widget' event.
 # ---------------------------------------------------------------------------
 
-# What the model may render. Keep in step with the web/src/widgets registrations;
-# the description teaches the model each widget's settable props.
-_RENDERABLE_WIDGETS = "weather (props: location — a city name)"
-_KNOWN_WIDGETS = frozenset({"weather"})
+# Loaded once at import from the widget catalog (config/widgets.yaml) — the
+# single source shared with the web render layer (web/src/widgets/<id>). Add a
+# widget there + its render folder; no edit needed here. _RENDERABLE_WIDGETS
+# teaches the model each widget's settable props; _KNOWN_WIDGETS gates the tool.
+_WIDGET_CATALOG = load_widgets()
+_KNOWN_WIDGETS = known_widget_ids(_WIDGET_CATALOG)
+_RENDERABLE_WIDGETS = render_catalog_text(_WIDGET_CATALOG)
 
 
 @tool(
@@ -577,9 +581,13 @@ _KNOWN_WIDGETS = frozenset({"weather"})
             "enum": ["open", "close"],
             "description": "open (default) to show it, close to hide it.",
         },
-        "location": {
-            "type": "string",
-            "description": "For the weather widget: the city to show (optional).",
+        "props": {
+            "type": "object",
+            "description": (
+                'Widget-specific settings, e.g. {"location": "Tokyo"} for '
+                "weather. See each widget's props in the list above."
+            ),
+            "additionalProperties": {"type": "string"},
         },
     },
     required=["widget"],
@@ -596,14 +604,21 @@ async def render_widget_handler(params: FunctionCallParams) -> None:
     if action not in ("open", "close"):
         action = "open"
     props: dict[str, str] = {}
+    raw_props = params.arguments.get("props")
+    if isinstance(raw_props, dict):
+        for k, v in raw_props.items():
+            if v is None:
+                continue
+            props[str(k)] = str(v)
+    # Back-compat: tolerate a top-level `location` (older schema / model habit).
     location = (params.arguments.get("location") or "").strip()
-    if location:
+    if location and "location" not in props:
         props["location"] = location
     await sse_bus.publish("widget", {"action": action, "id": widget, "props": props})
     if action == "close":
         await params.result_callback(f"Hidden the {widget}.")
-    elif location:
-        await params.result_callback(f"Here's the {widget} for {location}.")
+    elif props.get("location"):
+        await params.result_callback(f"Here's the {widget} for {props['location']}.")
     else:
         await params.result_callback(f"Here's the {widget}.")
 
