@@ -18,7 +18,7 @@ export interface VariantProps {
  * Adding a variant:
  *   1. create plugins/orb/variants/<id>/index.tsx
  *   2. call registerVariant({...}) at module top-level
- *   3. add a side-effect import to plugins/orb/variants/index.ts
+ * That's it — variants/index.ts auto-discovers the folder (Vite eager glob).
  */
 
 export interface VariantSpec {

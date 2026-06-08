@@ -17,6 +17,12 @@ export type UISlotName =
 
 export interface Plugin {
   id: string;
+  /**
+   * Render priority within a slot when several plugins share it
+   * (lower = earlier). Only matters for multi-contributor slots like
+   * `overlay-top`; defaults to 100. Registration order breaks ties.
+   */
+  order?: number;
   /** Optional UI contributions, keyed by slot. */
   slots?: Partial<Record<UISlotName, ComponentType>>;
 }
@@ -41,12 +47,14 @@ class PluginRegistry {
   }
 
   componentsForSlot(slot: UISlotName): Array<{ id: string; Component: ComponentType }> {
-    const out: Array<{ id: string; Component: ComponentType }> = [];
+    const out: Array<{ id: string; Component: ComponentType; order: number }> = [];
     for (const p of this.byId.values()) {
       const C = p.slots?.[slot];
-      if (C) out.push({ id: p.id, Component: C });
+      if (C) out.push({ id: p.id, Component: C, order: p.order ?? 100 });
     }
-    return out;
+    // Explicit `order` wins; Array.sort is stable, so ties keep registration order.
+    out.sort((a, b) => a.order - b.order);
+    return out.map(({ id, Component }) => ({ id, Component }));
   }
 
   subscribe(l: Listener): () => void {

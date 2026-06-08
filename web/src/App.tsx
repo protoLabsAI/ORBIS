@@ -9,18 +9,10 @@ import { LogsCollector } from './plugins/logs-panel';
 import { OrbAccentBridge } from './plugins/orb/OrbAccentBridge';
 import { WidgetDock } from './widgets/WidgetDock';
 import { AmbientBridge } from './widgets/AmbientBridge';
-// Side-effect imports — each plugin registers at module load.
-import './plugins/orb';
-import './plugins/status-pill';
-import './plugins/orb-settings';
-import './plugins/quick-panel';
-import './plugins/settings-panel';
-import './plugins/reminders-bell';
-import './plugins/mic-toggle';
-import './plugins/setup-wizard';
-import './plugins/mood';
-import './plugins/dev-panel';
-// Widget runtime — registers the built-in widgets + the launcher.
+// Auto-discovery (Vite eager glob): every plugins/<name>/index.tsx and
+// widgets/<name>/index.tsx self-registers on import. Drop a folder in — no
+// edit here, no central import list to maintain.
+import './plugins';
 import './widgets';
 
 /**
