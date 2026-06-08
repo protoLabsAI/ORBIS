@@ -243,4 +243,7 @@ out of the seed.
 
 ## License
 
-TBD.
+[Apache License 2.0](./LICENSE) — © 2026 protoLabs. See [NOTICE](./NOTICE).
+Contributions are accepted under the same license (Apache-2.0 §5), so there's no
+separate CLA. The optional paid orb-customization unlock is a separate commercial
+entitlement enforced at runtime; the source itself is Apache-2.0.
