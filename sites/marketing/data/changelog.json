@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.2.128",
+    "date": "2026-06-08",
+    "changes": [
+      "Implements a top-level microphone mute that overrides wake-word detection and push-to-talk to ensure no audio is processed when muted.",
+      "Fixes an issue where the stall watchdog would trigger recovery audio after a user had already cancelled a turn.",
+      "Adds new commands to manage the hardware mute state via the AudioEngine.",
+      "Enables hot-swapping of LLM providers and models in the live session without requiring a restart or audio reconnection.",
+      "Unifies frontend plugin, widget, and variant registries into a single primitive to improve state management stability.",
+      "Optimizes registry lookups to prevent unnecessary render loops in the web client."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.128/ORBIS-0.2.128-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.127",
     "date": "2026-06-08",
     "changes": [
