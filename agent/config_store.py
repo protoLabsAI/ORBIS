@@ -35,6 +35,11 @@ DEFAULT_PATH = os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
 _ALLOWED_PERSONA_KEYS = {
     "slug", "name", "user_name", "system_prompt", "system_prompt_file",
     "temperature", "max_tokens", "filler_verbosity",
+    # Advanced per-session behavior overrides (speaker_gate / backchannel /
+    # micro_ack / bargein / audio_tags). Interpreted in app.py
+    # (_resolve_behavior_block); config_store only round-trips the nested block
+    # so a drawer save can't silently strip a hand-edited one.
+    "behavior",
 }
 _ALLOWED_VOICE_KEYS = {
     "tts_backend", "voice", "tts_url", "tts_model", "tts_api_key",
@@ -108,6 +113,13 @@ def _validate_persona(block: Any) -> dict:
                     f"filler_verbosity must be one of {sorted(_ALLOWED_VERBOSITIES)}"
                 )
             out[k] = val
+        elif k == "behavior":
+            # Round-trip only — the nested behavior block (speaker_gate /
+            # backchannel / micro_ack / bargein / audio_tags) is interpreted by
+            # app.py, not here. Preserve it as-is so a UI save doesn't drop a
+            # hand-edited block; a non-dict value is malformed, so skip it.
+            if isinstance(v, dict):
+                out[k] = v
     return out
 
 

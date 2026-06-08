@@ -145,6 +145,25 @@ def test_validate_rejects_bad_verbosity():
         validate_and_normalize({"persona": {"filler_verbosity": "raucous"}})
 
 
+def test_validate_round_trips_persona_behavior():
+    """persona.behavior (speaker_gate / backchannel / micro_ack / bargein /
+    audio_tags) is interpreted by app.py, so config_store must round-trip it,
+    not drop it. Regression guard: a drawer save once silently wiped a
+    hand-edited behavior block."""
+    behavior = {
+        "speaker_gate": {"enabled": True, "verification_threshold": 0.62},
+        "backchannel": {"enabled": False},
+        "audio_tags": {"enabled": True},
+    }
+    out = validate_and_normalize({"persona": {"name": "X", "behavior": behavior}})
+    assert out["persona"]["behavior"] == behavior
+
+
+def test_validate_drops_non_dict_behavior():
+    out = validate_and_normalize({"persona": {"name": "X", "behavior": "nope"}})
+    assert "behavior" not in out["persona"]
+
+
 def test_validate_accepts_full_config():
     data = {
         "persona": {
@@ -419,6 +438,30 @@ def test_merge_patch_creates_block_if_missing(tmp_path: Path):
     merge_patch({"orb": {"variant": "crystal", "palette": "Prism"}}, p)
     final = yaml.safe_load(p.read_text())
     assert final["orb"]["variant"] == "crystal"
+
+
+def test_merge_patch_preserves_persona_behavior(tmp_path: Path):
+    """The real bug: a hand-edited persona.behavior block must survive a drawer
+    save that patches an unrelated block (the whole config is re-validated on
+    every write)."""
+    p = _write(tmp_path / "orbis.yaml", """
+        persona:
+          slug: x
+          name: X
+          behavior:
+            speaker_gate:
+              enabled: true
+              verification_threshold: 0.62
+        voice:
+          tts_backend: kokoro
+    """)
+    # Patch only the voice — persona.behavior must survive.
+    merge_patch({"voice": {"voice": "af_heart"}}, p)
+    final = yaml.safe_load(p.read_text())
+    gate = final["persona"]["behavior"]["speaker_gate"]
+    assert gate["enabled"] is True
+    assert gate["verification_threshold"] == 0.62
+    assert final["voice"]["voice"] == "af_heart"
 
 
 # --- wakeword ---------------------------------------------------------------
