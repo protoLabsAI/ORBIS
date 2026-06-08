@@ -114,4 +114,9 @@ and the relevant log (`~/Library/Logs/studio.protolabs.orbis/sidecar.log` for th
 Python side, `/tmp/orbis-tauri.stderr` for the Rust side). Features: say what you
 want to *do*, not just what to build — it helps us route it to the right seam.
 
+## License
+
+ORBIS is [Apache-2.0](./LICENSE). By submitting a contribution you agree it's
+licensed under the same terms (Apache-2.0 §5) — there's no separate CLA to sign.
+
 Welcome aboard. 🛸
