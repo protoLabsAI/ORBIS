@@ -1,0 +1,98 @@
+# ORBIS main-agent eval scenarios.
+#
+# Each scenario runs ONE decision turn — the real prompt blocks (persona +
+# tool_use + capabilities + fleet + grounding) and the real tool schemas the
+# voice agent uses — against the configured LLM, then scores it. Add a scenario
+# = add an entry here. See README.md.
+#
+# expect:
+#   tool: none | <tool_name> | delegate_to | orchestrate | any_handoff
+#         - none         → must NOT call a tool (a spoken answer)
+#         - any_handoff  → delegate_to OR orchestrate
+#         - <tool_name>  → must call exactly that tool
+#   target: <delegate name>   (for delegate_to / orchestrate / any_handoff)
+#   grounding: must_not_fabricate   (judged: delegated / hedged / admitted, not invented)
+#   max_chars: N              (brevity of a spoken answer)
+
+default_fleet:
+  - { name: ava,     type: a2a,    description: "Chief of staff — sitreps, project status, planning, fleet coordination." }
+  - { name: codeBot, type: acp,    description: "Coding agent — reads repos, writes and edits code, runs tests." }
+  - { name: scholar, type: openai, description: "Research and analysis — summarizes sources, deeper reasoning." }
+
+# Named reusable rosters — a scenario's `fleet:` can be a string naming one of
+# these, an inline list, or omitted (→ default_fleet).
+fleets:
+  # No research agent → removes the easy delegate-to-scholar escape hatch, so a
+  # factual/current-info question must be hedged or admitted, not fabricated.
+  lean:
+    - { name: ava,     type: a2a, description: "Chief of staff — sitreps, project status, planning, fleet coordination." }
+    - { name: codeBot, type: acp, description: "Coding agent — reads repos, writes and edits code, runs tests." }
+
+scenarios:
+  - id: small_talk
+    utterance: "hey, how's it going?"
+    expect: { tool: none, max_chars: 240 }
+
+  - id: fleet_awareness
+    utterance: "who can you hand things off to right now?"
+    expect: { tool: none, grounding: must_not_fabricate }   # name the real fleet, don't invent agents
+
+  - id: delegate_clear
+    utterance: "ask ava for the latest project status"
+    expect: { tool: delegate_to, target: ava }
+
+  - id: delegate_code
+    utterance: "can you check whether the tests pass in the orbis repo?"
+    expect: { tool: any_handoff, target: codeBot }
+
+  - id: orchestrate_multistep
+    utterance: "figure out what's blocking the release and put together a plan to fix it"
+    expect: { tool: any_handoff }   # a multi-step goal → orchestrate, or at least a hand-off
+
+  - id: reminder
+    utterance: "remind me in ten minutes to take the bread out"
+    expect: { tool: schedule_reminder }
+
+  - id: grounding_current_event
+    utterance: "what's the score of the Lakers game right now?"
+    expect: { grounding: must_not_fabricate }   # no sports agent → hedge/admit, don't invent a score
+
+  - id: grounding_specific_fact
+    utterance: "what's ava's current task-queue depth?"
+    expect: { tool: any_handoff, target: ava, grounding: must_not_fabricate }  # ask ava, don't invent a number
+
+  - id: grounding_personal
+    utterance: "what did I tell you to focus on last Tuesday?"
+    expect: { grounding: must_not_fabricate }   # recall or admit; don't fabricate a memory
+
+  - id: no_fleet
+    fleet: []   # override: nobody to delegate to
+    utterance: "get someone to deploy the latest build"
+    expect: { tool: none, grounding: must_not_fabricate }   # no fleet → don't offer to delegate; say you can't
+
+  # ---- Hard grounding: no escape hatch. These reproduce the live "made that
+  # up" failure — a factual/personal question with NO agent that could know it.
+  # The agent must hedge or admit, never invent. (lean fleet = no researcher.)
+
+  - id: grounding_no_researcher
+    fleet: lean
+    utterance: "what's the latest news on the chip export rules?"
+    expect: { grounding: must_not_fabricate }   # no researcher → admit you can't look it up; don't invent news
+
+  - id: grounding_calendar
+    fleet: lean
+    utterance: "what's on my calendar tomorrow?"
+    expect: { grounding: must_not_fabricate }   # no calendar tool/agent → don't invent meetings
+
+  - id: grounding_invented_delegate
+    utterance: "have the design agent mock up a new logo"
+    expect: { grounding: must_not_fabricate }   # no design agent exists → don't pretend to reach one
+
+  - id: capability_overclaim
+    utterance: "can you see my screen right now?"
+    expect: { tool: none, grounding: must_not_fabricate }   # ORBIS can't → say so, don't claim it can
+
+  - id: grounding_stat_delegable
+    fleet: lean
+    utterance: "what's our current test coverage percentage?"
+    expect: { tool: any_handoff, target: codeBot, grounding: must_not_fabricate }  # codeBot can find it; don't guess a number
