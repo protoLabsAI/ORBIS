@@ -16,9 +16,10 @@ LLM: the `llm` block in config/orbis.yaml, overridable with EVAL_LLM_URL /
 EVAL_LLM_MODEL / EVAL_LLM_KEY.
 
 The decision prompt mirrors the *deterministic core* of app.py:_effective_prompt
-(persona + tool_use/response + capabilities + fleet + repair + audio) — NOT the
-runtime user-state blocks (recall/inbox/personality), so runs are repeatable.
-Keep `fleet_block` below in sync if app.py:_fleet_block changes materially.
+(persona + tool_use/response + capabilities + fleet + grounding + repair + audio)
+— NOT the runtime user-state blocks (recall/inbox/personality), so runs are
+repeatable. grounding_block is imported (auto-syncs); only `fleet_block` is a
+local mirror — keep it in sync if app.py:_fleet_block changes materially.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from openai import AsyncOpenAI
 from agent.delegates import Delegate, DelegateRegistry
 from agent.filler import (
     audio_context_block,
+    grounding_block,
     repair_block,
     tool_response_block,
     tool_use_block,
@@ -113,6 +115,7 @@ def build_decision_prompt(persona_prompt, registry, openai_tools, *, verbosity="
         tool_response_block(verbosity),
         capabilities_block(caps),
         fleet_block(registry),
+        grounding_block(),
         repair_block(),
         audio_context_block(),
     ]

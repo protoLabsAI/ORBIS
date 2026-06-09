@@ -74,8 +74,14 @@ live-pipeline harness. Tracked as future work.
 
 ## Baseline
 
-First baseline on `protolabs/fast` (2026-06-08): **14/15**. The one failure,
-`grounding_invented_delegate`, is a real and stable bug — a request for a
-nonexistent "design agent" gets misrouted to the (unrelated) research agent
-instead of an honest "I don't have a design agent." That's the next refinement
-target.
+On `protolabs/fast` (2026-06-08): **15/15**.
+
+The first harness baseline was 14/15 — `grounding_invented_delegate` was a real,
+stable bug: a request for a nonexistent "design agent" got misrouted to the
+(unrelated) research agent instead of an honest "I don't have a design agent."
+The `grounding_block` honesty guardrail (`agent/filler.py`, wired into
+`_effective_prompt` right after the fleet block) closed it — the agent now says
+"I can't do that, I don't have a design agent in my fleet" — with no regression
+on the other 14. That's the harness working as intended: it caught the
+fabrication, the fix is measured against it, and it stays a regression guard for
+future prompt changes.
