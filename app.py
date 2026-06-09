@@ -153,6 +153,7 @@ from agent.filler import (
     Latency,
     Verbosity,
     audio_context_block,
+    grounding_block,
     plan_block,
     repair_block,
     tool_response_block,
@@ -769,6 +770,11 @@ def _effective_prompt(
         + (("\n\n" + _caps) if (_caps := capabilities_block(tools_schema)) else "")
         + "\n\n"
         + _fleet_block(delegates)
+        # Honesty guardrail — pairs with the fleet block: delegate-or-admit,
+        # never fabricate a fact or force-fit an unrelated agent. Measured by
+        # evals/ (grounding_invented_delegate et al.).
+        + "\n\n"
+        + grounding_block()
         + (("\n\n" + plan) if plan else "")
         + "\n\n"
         + repair_block()
