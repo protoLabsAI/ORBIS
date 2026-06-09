@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.2.129",
+    "date": "2026-06-09",
+    "changes": [
+      "Implements a grounding guardrail that prevents agents from fabricating capabilities or routing requests to mismatched agents in the fleet.",
+      "Forces agents to admit when no suitable specialist exists rather than attempting to force-fit an unrelated tool or agent.",
+      "Permits agents to answer directly using existing knowledge without over-hedging on general reasoning or conversational tasks.",
+      "Expands the evaluation harness to simulate the full voice tool surface, including orchestration and routing schemas.",
+      "Introduces a deterministic decision harness to measure routing accuracy, grounding integrity, and response brevity.",
+      "Enables scenario-based testing against specific fleet configurations to catch regressions in agent delegation logic."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.129/ORBIS-0.2.129-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.128",
     "date": "2026-06-08",
     "changes": [
