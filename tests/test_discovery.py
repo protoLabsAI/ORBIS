@@ -189,6 +189,63 @@ def test_discover_enriches_mdns_description_from_card(patched_channels):
 
 
 # ---------------------------------------------------------------------------
+# Being discovered — the card must be probe-able and the bind must stay in
+# the fleet port range (discoverable mode binds 0.0.0.0:7866 + fallback).
+# ---------------------------------------------------------------------------
+
+
+def test_agent_card_is_unauthenticated():
+    """Peers discover ORBIS by fetching the agent card with NO credentials —
+    the /a2a auth gate must not cover /.well-known/agent-card.json."""
+    r = TestClient(app).get("/.well-known/agent-card.json")
+    assert r.status_code == 200
+    assert r.json().get("name")
+
+
+def test_bind_falls_back_within_fleet_range():
+    """Requested fleet-range port taken → walk the rest of the range (stay
+    discoverable by port-scan) instead of failing or going ephemeral."""
+    lo, hi = discovery.PORT_RANGE
+    import socket as socket_mod
+    taken = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+    taken.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_REUSEADDR, 1)
+    # Find a free fleet-range port to occupy; skip live agents on the dev box.
+    for p in range(lo, hi + 1):
+        try:
+            taken.bind(("127.0.0.1", p))
+            break
+        except OSError:
+            continue
+    else:
+        pytest.skip("entire fleet range occupied on this machine")
+    occupied = taken.getsockname()[1]
+    taken.listen(1)
+    try:
+        sock = app_module._bind_listen_socket("127.0.0.1", occupied)
+        port = sock.getsockname()[1]
+        sock.close()
+        assert port != occupied
+        assert lo <= port <= hi  # fell back INSIDE the range
+    finally:
+        taken.close()
+
+
+def test_bind_out_of_range_port_taken_goes_ephemeral():
+    import socket as socket_mod
+    taken = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+    taken.bind(("127.0.0.1", 0))
+    taken.listen(1)
+    occupied = taken.getsockname()[1]
+    try:
+        sock = app_module._bind_listen_socket("127.0.0.1", occupied)
+        port = sock.getsockname()[1]
+        sock.close()
+        assert port != occupied  # booted anyway, on an OS-assigned port
+    finally:
+        taken.close()
+
+
+# ---------------------------------------------------------------------------
 # GET /api/delegates/discover — known-set assembly
 # ---------------------------------------------------------------------------
 

@@ -266,6 +266,46 @@ fn set_input_device(app: tauri::AppHandle, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// File where the "discoverable on your network" opt-in is persisted ("1"/"0").
+/// Read at sidecar spawn: enabled → bind 0.0.0.0 on a fleet-range port (7866,
+/// sidecar falls back within 7860–7910) + mDNS advertise fires in the sidecar's
+/// lifespan; disabled (default) → loopback + ephemeral port, invisible to the
+/// network. Applies on next launch — a bind address can't change live.
+fn discoverable_pref_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("discoverable"))
+}
+
+fn discoverable_enabled(app: &tauri::AppHandle) -> bool {
+    discoverable_pref_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn get_discoverable(app: tauri::AppHandle) -> bool {
+    discoverable_enabled(&app)
+}
+
+/// Persist the discoverability opt-in (applies on next launch). Default off:
+/// binding 0.0.0.0 exposes the whole HTTP API to the LAN, not just /a2a, so
+/// it has to be a deliberate choice.
+#[tauri::command]
+fn set_discoverable(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let p = discoverable_pref_path(&app).ok_or("no app data dir")?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&p, if enabled { "1" } else { "0" })
+        .map_err(|e| format!("persist discoverable: {e}"))?;
+    log::info!("[discovery] discoverable = {enabled} (applies on next launch)");
+    Ok(())
+}
+
 /// Bring the native audio engine online if (a) mic permission is granted and
 /// (b) it isn't already running. Idempotent — safe to call repeatedly, from boot
 /// and from the wizard's grant handler.
@@ -1348,6 +1388,8 @@ pub fn run() {
                     get_activation_config,
                     set_activation_config,
                     set_full_duplex,
+                    get_discoverable,
+                    set_discoverable,
                     open_url,
                     api_request,
                     boot_status,
@@ -1367,6 +1409,8 @@ pub fn run() {
                     get_audio_input_mode,
                     clear_browsing_data,
                     backend_url,
+                    get_discoverable,
+                    set_discoverable,
                     open_url,
                     api_request,
                     boot_status,
@@ -1800,10 +1844,20 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // bundle or `./binaries/orbis-<target>` during `tauri dev`.
     // Target-suffix resolution is Tauri's job — we just give the base
     // name that matches the externalBin entry in tauri.conf.json.
+    // Default: loopback + ephemeral port — invisible to the network. With the
+    // "discoverable" opt-in: all interfaces + a fleet-range port so protoAgent
+    // discovery (mDNS + port-scan over 7860–7910) finds this ORBIS; the
+    // sidecar walks the range itself if 7866 is taken.
+    let (bind_host, bind_port) = if discoverable_enabled(&app) {
+        log::info!("[discovery] discoverable mode — binding 0.0.0.0:7866 (fleet range)");
+        ("0.0.0.0", "7866")
+    } else {
+        ("127.0.0.1", "0")
+    };
     let mut command = shell
         .sidecar("orbis")
         .map_err(|e| format!("couldn't find sidecar binary: {e}"))?
-        .args(["--host", "127.0.0.1", "--port", "0"])
+        .args(["--host", bind_host, "--port", bind_port])
         .env("ORBIS_CONFIG", &config_path)
         // Default STT to Parakeet (MLX) on the native build — far fewer
         // silence-hallucinations than Whisper. Only the default: a
