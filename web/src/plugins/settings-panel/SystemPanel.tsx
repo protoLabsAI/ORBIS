@@ -59,8 +59,8 @@ export function SystemPanel() {
         <AboutPanel />
 
         {/* Developer mode is a build-time capability (VITE_ORBIS_DEVTOOLS), not
-            a user setting — never offered in a shipped build, so the Dev/Orb
-            tabs + premium-orb picker can't be reached for free. */}
+            a user setting — never offered in a shipped build, so the Dev tab
+            can't be reached there. */}
         {DEVTOOLS_ENABLED && (
           <div className="flex items-center justify-between gap-3 border-t border-edge pt-3">
             <span className="text-helper text-fg-subtle">Developer mode</span>

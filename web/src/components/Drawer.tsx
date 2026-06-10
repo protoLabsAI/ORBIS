@@ -16,8 +16,12 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-type TabName = 'quick' | 'voice' | 'brain' | 'settings' | 'orb' | 'dev';
-const ALL_TABS: readonly TabName[] = ['quick', 'voice', 'brain', 'settings', 'orb', 'dev'];
+// 'orb' (the paid customization editor) is intentionally absent: premium-orb
+// selection surfaces are off until the post-beta paywall go-live. The
+// orb-settings plugin stays in-tree (slot 'drawer-orb', nothing renders it);
+// a persisted 'orb' pick from an older build fails isTabName → Quick.
+type TabName = 'quick' | 'voice' | 'brain' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['quick', 'voice', 'brain', 'settings', 'dev'];
 const isTabName = (value: string): value is TabName =>
   (ALL_TABS as readonly string[]).includes(value);
 
@@ -34,10 +38,9 @@ export function Drawer() {
     }
     return 'quick';
   });
-  // Orb (customization editor) and Dev are both dev-gated; fall back to Quick
-  // when developer mode is off so a persisted pick can't strand the drawer.
-  const effectiveTab: TabName =
-    !devMode && (tab === 'dev' || tab === 'orb') ? 'quick' : tab;
+  // Dev is dev-gated; fall back to Quick when developer mode is off so a
+  // persisted pick can't strand the drawer.
+  const effectiveTab: TabName = !devMode && tab === 'dev' ? 'quick' : tab;
 
   useEffect(() => {
     try {
@@ -104,12 +107,11 @@ export function Drawer() {
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-6' : 'grid-cols-4')}>
+          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-5' : 'grid-cols-4')}>
             <TabsTrigger value="quick">Quick</TabsTrigger>
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="brain">Brain</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
-            {devMode && <TabsTrigger value="orb">Orb</TabsTrigger>}
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
           <TabsContent value="quick" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
@@ -124,11 +126,6 @@ export function Drawer() {
           <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-settings" />
           </TabsContent>
-          {devMode && (
-            <TabsContent value="orb" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
-              <Slot name="drawer-orb" />
-            </TabsContent>
-          )}
           {devMode && (
             <TabsContent value="dev" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
               <Slot name="drawer-dev" />
