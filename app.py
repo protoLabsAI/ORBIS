@@ -3678,6 +3678,62 @@ async def get_starter_orbs():
     return {"starters": [s.to_dict() for s in starters]}
 
 
+@app.get("/api/orbs")
+async def list_orbs(user: User = Depends(require_user)):
+    """User-imported ``.orbis`` orb definitions (app-data orbs dir).
+    The frontend fetches this at boot and registers each definition
+    with the raymarch-v1 engine. See agent/orb_definitions.py +
+    docs/internal/orb-format-and-editor.md.
+
+    Response shape::
+        {"orbs": [<OrbDefinition>, ...]}
+    """
+    from agent.orb_definitions import list_definitions
+    return {"orbs": list_definitions()}
+
+
+@app.post("/api/orbs")
+async def import_orb(body: dict, user: User = Depends(require_user)):
+    """Import (or update — same id replaces) a ``.orbis`` definition.
+
+    Custom orbs are part of the paid customization unlock, same gate as
+    the ``orb`` config block below. Validation mirrors the frontend
+    package's validator; a definition accepted here is one the engine
+    will load."""
+    from agent.entitlement import has_customization
+    from agent.orb_definitions import OrbDefinitionError, save_definition
+
+    if not has_customization(get_memory()):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Importing custom orbs is part of the paid unlock. "
+                "Use /api/orb/select_starter to pick from the free "
+                "starter pool, or purchase the unlock."
+            ),
+        )
+    try:
+        _, replaced = save_definition(body)
+    except OrbDefinitionError as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e), "errors": e.errors},
+        )
+    return {"ok": True, "id": body["id"], "replaced": replaced}
+
+
+@app.delete("/api/orbs/{orb_id}")
+async def delete_orb(orb_id: str, user: User = Depends(require_user)):
+    """Remove an imported orb definition. The frontend deregisters the
+    variant and falls back to a starter when the deleted orb was active."""
+    from agent.orb_definitions import delete_definition
+    if not delete_definition(orb_id):
+        return JSONResponse(
+            status_code=404, content={"error": f"orb {orb_id!r} not found"},
+        )
+    return {"ok": True}
+
+
 @app.get("/api/config")
 async def get_config(user: User = Depends(require_user)):
     """Return the current config/orbis.yaml as a dict. Drawer UI

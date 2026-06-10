@@ -437,6 +437,17 @@ export const api = {
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
+  orbs: {
+    // Imported `.orbis` definitions — typed loosely here; the orb-runtime
+    // validator is the real contract (validateOrbDefinition on load).
+    list: () => get<{ orbs: unknown[] }>('/api/orbs'),
+    import: (definition: unknown) =>
+      postJSON<{ ok?: boolean; id?: string; replaced?: boolean; error?: string; errors?: string[] }>(
+        '/api/orbs', definition,
+      ),
+    remove: (id: string) =>
+      deleteJSON<{ ok?: boolean; error?: string }>(`/api/orbs/${encodeURIComponent(id)}`),
+  },
 
   // LLM-provider probing for the setup wizard. These routes are
   // unauth — the wizard runs before the owner key is set and what's
