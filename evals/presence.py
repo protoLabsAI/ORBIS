@@ -30,26 +30,31 @@ from agent.filler import Latency, Settings
 from agent.presence import PRESENCE_FLOOR_SECS, PresenceEvent, max_dead_air, plan_presence
 from agent.tools import ASYNC_TOOL_NAMES, latency_for
 
-# completion_at / progress_at are seconds after the tool call starts.
+# completion_at / visual_at are seconds after the tool call starts. `visual_at`
+# is when the delegate streamed note_progress — VISUAL-only (StatusPill), so it
+# does NOT count against the audio dead-air SLA; it grounds the spoken line.
 PROFILES: list[dict] = [
     {"id": "reminder_fast", "tool": "schedule_reminder", "completion_at": 0.4,
-     "progress_at": (), "note": "fast tool — its own result is the ack"},
+     "visual_at": (), "note": "fast tool — its own result is the ack, no loop"},
     {"id": "delegate_stream_healthy", "tool": "delegate_to", "completion_at": 20.0,
-     "progress_at": (5.0, 10.0, 15.0), "note": "delegate streams note_progress ~every 5s"},
+     "visual_at": (5.0, 10.0, 15.0), "note": "delegate streams note_progress (visual) ~every 5s"},
     {"id": "delegate_no_stream", "tool": "delegate_to", "completion_at": 25.0,
-     "progress_at": (), "note": "WHERE'D YOU GO — slow delegate, never streams progress"},
+     "visual_at": (), "note": "the WHERE'D YOU GO case — slow delegate, never streams"},
     {"id": "delegate_one_early", "tool": "delegate_to", "completion_at": 30.0,
-     "progress_at": (3.0,), "note": "one early check-in, then silence to the answer"},
+     "visual_at": (3.0,), "note": "one early visual update, otherwise quiet"},
     {"id": "delegate_sparse", "tool": "delegate_to", "completion_at": 40.0,
-     "progress_at": (8.0,), "note": "long delegate, a single sparse update"},
+     "visual_at": (8.0,), "note": "long delegate, a single sparse visual update"},
     {"id": "orchestrate_steps", "tool": "orchestrate", "completion_at": 35.0,
-     "progress_at": (6.0, 14.0, 22.0, 30.0), "note": "multi-step, per-step reassurance"},
+     "visual_at": (6.0, 14.0, 22.0, 30.0), "note": "multi-step (now classified SLOW)"},
     {"id": "sync_slow_long", "tool": "(hypothetical slow sync)", "tier": Latency.SLOW,
-     "is_async": False, "completion_at": 30.0, "progress_at": (),
-     "note": "slow SYNC tool — two-line loop (6s,12s) THEN silence"},
+     "is_async": False, "completion_at": 30.0, "visual_at": (),
+     "note": "slow SYNC tool — loop now continues past 12s"},
     {"id": "medium_runs_long", "tool": "(hypothetical medium)", "tier": Latency.MEDIUM,
-     "is_async": False, "completion_at": 15.0, "progress_at": (),
-     "note": "medium tool that runs long — opening ack only, no loop"},
+     "is_async": False, "completion_at": 15.0, "visual_at": (),
+     "note": "MEDIUM tool that overruns — loop kicks in (robust to mis-classification)"},
+    {"id": "medium_quick", "tool": "(hypothetical medium)", "tier": Latency.MEDIUM,
+     "is_async": False, "completion_at": 2.0, "visual_at": (),
+     "note": "genuine fast-ish MEDIUM — finishes before the first line, no spam"},
 ]
 
 
@@ -61,7 +66,8 @@ def _derive(p: dict) -> tuple[Latency, bool]:
 
 
 def _timeline(events: list[PresenceEvent]) -> str:
-    glyph = {"ack": "▸", "progress": "·", "delegate_progress": "·", "result": "✓"}
+    # ◇ = visual-only (StatusPill, silent); the rest are audible.
+    glyph = {"ack": "▸", "progress": "·", "visual": "◇", "result": "✓"}
     return "  ".join(f"{glyph.get(e.kind, '?')}{e.at:g}s {e.kind}" for e in events)
 
 
@@ -78,8 +84,8 @@ def main() -> None:
 
     settings = Settings()
     print(f"presence floor = {args.floor:g}s   "
-          f"(progress loop fires at {settings.progress_first_secs:g}s, "
-          f"{settings.progress_second_secs:g}s)\n")
+          f"(spoken loop: first @ {settings.progress_first_secs:g}s, "
+          f"then every {settings.progress_interval_secs:g}s | ◇ = visual-only)\n")
     print(f"{'profile':<24} {'tier':<6} {'async':<6} {'done':>6} {'max-gap':>8}  verdict")
     print("-" * 72)
 
@@ -89,7 +95,7 @@ def main() -> None:
         events = plan_presence(
             tool_name=p["tool"], tier=tier, is_async=is_async,
             completion_at=p["completion_at"],
-            delegate_progress_at=tuple(p.get("progress_at", ())),
+            delegate_progress_at=tuple(p.get("visual_at", ())),
             settings=settings,
         )
         gap, a, b = max_dead_air(events)

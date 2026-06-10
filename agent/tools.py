@@ -142,12 +142,14 @@ def tool(
     return decorator
 
 
-# Hand-wired SLOW tier (the registry can't see it): delegate_to is an external
-# agent round-trip that can take tens of seconds (Ava ~60s observed). SLOW arms
-# the opening filler ("okay, on it") — the single ack. delegate_to is also a
-# native async tool, so the legacy progress-narration loop SKIPS it; its real
-# progress streams via is_final results instead.
-_HANDWIRED_SLOW_NAMES = frozenset({"delegate_to"})
+# Hand-wired SLOW tier (the registry can't see it): both are external/multi-step
+# round-trips that take tens of seconds (Ava ~60s observed; orchestrate runs a
+# bounded ReAct loop over several delegates). SLOW arms the opening ack and the
+# presence loop (agent/presence.py: any non-fast tool gets time-based spoken
+# check-ins so a slow async call doesn't dead-air — note_progress is VISUAL-only).
+# orchestrate was previously unclassified → defaulted to MEDIUM, understating the
+# slowest tool there is.
+_HANDWIRED_SLOW_NAMES = frozenset({"delegate_to", "orchestrate"})
 
 # Wall-clock bound on a single delegation. Native async = non-blocking, so a
 # generous cap is fine: the answer narrates whenever it lands (up to this), and

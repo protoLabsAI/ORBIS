@@ -103,43 +103,50 @@ future prompt changes.
 
 `presence.py` measures the **"where'd you go?"** failure: a slow tool runs, the
 LLM is blocked on the result and can't narrate, and the user is left in silence.
-It's **deterministic — no LLM, no pipeline** — so it can run anywhere and back a
-pytest regression guard.
+It's **deterministic — no LLM, no pipeline** — so it runs anywhere; `tests/
+test_presence.py` is its CI regression guard.
 
 For each profile (a tool, how long it takes, and when the delegate streamed
 `note_progress`) it derives the user-audible timeline from the **real policy**
 (`agent/presence.py`, driven by the real `latency_for` / `ASYNC_TOOL_NAMES` /
-filler `Settings`) and reports the largest **dead-air gap** against a presence
-SLA (default 8 s, anchored to the stall-watchdog's threshold).
+filler `Settings`) and reports the largest **audible dead-air gap** against a
+presence SLA. Crucially, `note_progress` is **visual-only** (the StatusPill rail —
+`DeliveryController.note_progress` does not speak), so those updates show in the
+timeline as `◇` but do NOT count toward audio dead-air.
+
+The SLA floor defaults to **12 s** — larger than the stall-watchdog's 8 s
+cold-stall threshold, because the user already heard the opening ack and tolerates
+a longer beat in-flight (and over-narrating reads as spam).
 
 ```bash
-python evals/presence.py             # all profiles, 8s floor
-python evals/presence.py --floor 6   # stricter
+python evals/presence.py             # all profiles, 12s floor
+python evals/presence.py --floor 8   # stricter
 python evals/presence.py -s delegate # filter by id substring
 ```
 
-`agent/presence.py` is the single source of the presence schedule; `app.py`'s
-`on_function_calls_started` should call it so the two never drift (the fix that
-closes the gap below is a change to that one function).
+`agent/presence.py` is the single source of the presence schedule, and
+`app.py:on_function_calls_started` drives the live loop off it
+(`should_run_presence_loop` + the filler cadence) so the two don't drift.
 
-### Baseline (presence) — **3/8 within the 8 s floor**
+### Baseline (presence) — **9/9 within the 12 s floor**
 
-The harness reproduces and *quantifies* the live "where'd you go":
+The first harness baseline (before the fix) was **3/8**, with the live "where'd
+you go" quantified:
 
-| profile | gap | why |
-|---|---:|---|
-| `delegate_no_stream` | **24.4 s** | slow async delegate, never streams progress → opening ack, then silence to the answer |
-| `delegate_one_early` | 27.0 s | one early check-in, then a long void |
-| `delegate_sparse` | 32.0 s | long delegate, a single sparse update |
-| `sync_slow_long` | 18.0 s | even a SLOW **sync** tool goes silent after the two-line loop (6 s, 12 s) |
-| `medium_runs_long` | 14.4 s | a `medium`-classified tool that runs long gets the ack, then nothing |
+| profile | before | after | what changed |
+|---|---:|---:|---|
+| `delegate_no_stream` | **24.4 s** | 10 s | slow async delegate with no streaming now gets the spoken loop |
+| `delegate_sparse` | 32.0 s | 10 s | long delegate — loop keeps talking instead of stopping |
+| `delegate_one_early` | 27.0 s | 10 s | — |
+| `sync_slow_long` | 18.0 s | 10 s | loop no longer caps at two lines |
+| `medium_runs_long` | 14.4 s | 9 s | overrunning `medium` tool now covered (loop gated on non-fast) |
 
-Root cause: the opening ack covers t≈0, the `_progress_loop` covers SLOW **sync**
-tools at 6 s/12 s (then stops), and **async** tools (`delegate_to`, `orchestrate`)
-get *no time-based loop at all* — they depend entirely on the delegate streaming
-`note_progress`. The stall-watchdog can't help: it stands down the instant the
-tool starts. The fix (next): give async delegates a time-based presence fallback
-that defers to real streamed progress when it's flowing — re-measured here.
-
-(Bonus finding: `orchestrate` derives as `medium`, not `slow` — a latency
-mis-classification worth fixing alongside.)
+**The fix** (one place — the presence policy): the `_progress_loop` now runs for
+**any non-fast tool** (sync *or* async), first at `progress_first_secs` then every
+`progress_interval_secs` until the tool finishes — so a slow async delegate, whose
+`note_progress` is visual-only, gets a sparse *spoken* "still working" line
+grounded in that visual status instead of silence. Two supporting fixes:
+`orchestrate` is now classified `SLOW` (was defaulting to `MEDIUM`), and a genuine
+quick tool still says nothing past the ack (the loop's first line never fires —
+see `medium_quick`). The stall-watchdog still can't help here (it stands down at
+tool-start), which is why this is its own policy.

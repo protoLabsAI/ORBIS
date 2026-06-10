@@ -159,6 +159,7 @@ from agent.filler import (
     tool_response_block,
     tool_use_block,
 )
+from agent import presence
 from agent import tracing as _tracing
 from agent.session_store import (
     drain_stashed_deliveries,
@@ -1846,20 +1847,30 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         return None
 
     async def _progress_loop(tool_name: str):
-        """Two-tier cadence: ~2 s first ack, ~6 s later second ack, then
-        silence. Over-narrating past ~8 s starts feeling performative.
-        Cancelled on tool completion or barge-in via `_cancel_progress`."""
+        """Sparse 'still working' cadence for any non-fast tool in flight: first
+        line at ~progress_first_secs, then one every ~progress_interval_secs until
+        the tool finishes — so a slow async delegate never dead-airs past one
+        interval. (A delegate's note_progress is VISUAL-only — the StatusPill —
+        so without a spoken loop it's silent from the opening ack to the answer:
+        the "where'd you go?" gap. See agent/presence.py.) Each line grounds in
+        the delegate's latest streamed status when present. Cancelled on tool
+        completion or barge-in via `_cancel_progress`."""
         try:
             _fs = user_state.filler_settings
             _fg = _filler_gen_for(user_id)
-            for idx, sleep_secs in enumerate((
-                _fs.progress_first_secs,
-                _fs.progress_second_secs,
-            )):
-                await asyncio.sleep(sleep_secs)
+            await asyncio.sleep(_fs.progress_first_secs)
+            tick = 0
+            while True:
+                # During a HITL ask_user pause (orchestrate parked on the user's
+                # answer) the tool is still "in flight" but the agent is waiting on
+                # the USER, not working — so a "still working" line would be wrong.
+                # Stay quiet this tick and re-check next interval.
+                if user_state.has_pending_ask_on_active():
+                    await asyncio.sleep(_fs.progress_interval_secs)
+                    continue
                 with _tracing.span(
                     "filler.progress",
-                    input={"tool": tool_name, "tier": "first" if idx == 0 else "second"},
+                    input={"tool": tool_name, "tick": tick},
                 ) as sp:
                     try:
                         phrase = await _fg.progress(
@@ -1881,6 +1892,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                         await task.queue_frame(
                             TTSSpeakFrame(phrase, append_to_context=False)
                         )
+                tick += 1
+                await asyncio.sleep(_fs.progress_interval_secs)
         except asyncio.CancelledError:
             pass
 
@@ -1962,10 +1975,14 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 logger.info(f"[filler:opening] {_ack!r}")
                 await task.queue_frame(TTSSpeakFrame(_ack, append_to_context=False))
 
-            # SLOW sync tools additionally get the progress narration loop
-            # (~2 s / ~6 s "still working" lines). Async tools narrate
-            # themselves via DeliveryController, so they skip the loop.
-            if tier is Latency.SLOW and not any_async:
+            # Any NON-FAST tool gets the spoken presence loop — crucially
+            # INCLUDING async delegates. A delegate's note_progress is VISUAL-only
+            # (the StatusPill rail; DeliveryController.note_progress does not
+            # speak), so the old `tier is SLOW and not any_async` gate left a slow
+            # delegate silent from the opening ack to the answer — the "where'd
+            # you go?" dead air. The loop grounds each line in that visual status
+            # when present. See agent/presence.py + evals/presence.py.
+            if presence.should_run_presence_loop(tier):
                 # Tell the filler WHO it's waiting on (the delegate target) so
                 # the check-in is "still waiting on Ava", not a generic/
                 # self-action line.
