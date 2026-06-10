@@ -224,10 +224,11 @@ class LocalWhisperSTT(SegmentedSTTService):
                     )
                     text = ""
                 elif text:
-                    # Log the full transcript at INFO when something
-                    # passes the gates — useful for tuning the filters
-                    # without flipping the whole logger to DEBUG.
-                    logger.info(f"[stt.local] transcript: {text!r}")
+                    # Full transcript at DEBUG only — this is the user's
+                    # private spoken content landing in an unencrypted,
+                    # append-only sidecar.log that often gets shared in bug
+                    # reports. INFO below carries duration + length only.
+                    logger.debug(f"[stt.local] transcript: {text!r}")
                 # INFO log carries duration + length only — every voice
                 # utterance flows through here, so the full transcript
                 # at INFO would write the user's spoken content to
@@ -288,9 +289,24 @@ def make_stt(
         # Lazy import keeps parakeet-mlx in the [parakeet] optional extra.
         # NVIDIA Parakeet-TDT on MLX — faster + far fewer silence
         # hallucinations than Whisper.
-        from voice.stt_parakeet import ParakeetMLXSTT
-        logger.info("STT backend: parakeet (NVIDIA Parakeet-TDT via MLX)")
-        return ParakeetMLXSTT()
+        try:
+            from voice.stt_parakeet import ParakeetMLXSTT
+        except ImportError as exc:
+            # The shell forces STT_BACKEND=parakeet unconditionally, so a
+            # release sidecar built WITHOUT the [parakeet] extra would 500
+            # every session here. Degrade to Whisper loudly instead of dying
+            # so voice still works (CRITICAL: see audit C1). The real fix is
+            # building the sidecar with PYAPP_PROJECT_FEATURES=parakeet.
+            logger.error(
+                "STT backend 'parakeet' requested but parakeet-mlx is not "
+                "installed (%s); falling back to local Whisper. The sidecar "
+                "was built without the [parakeet] extra — voice quality/latency "
+                "will be degraded.",
+                exc,
+            )
+        else:
+            logger.info("STT backend: parakeet (NVIDIA Parakeet-TDT via MLX)")
+            return ParakeetMLXSTT()
     if chosen_backend != "local":
         logger.warning(f"Unknown STT backend={chosen_backend!r}; falling back to local")
     if whisper_model and whisper_model != WHISPER_MODEL:
@@ -314,9 +330,19 @@ def prewarm() -> None:
         prewarm_sensevoice()
         return
     if STT_BACKEND == "parakeet":
-        from voice.stt_parakeet import prewarm as prewarm_parakeet
-        prewarm_parakeet()
-        return
+        try:
+            from voice.stt_parakeet import prewarm as prewarm_parakeet
+        except ImportError as exc:
+            # Sidecar built without the [parakeet] extra — make_stt() will
+            # degrade to Whisper, so warm that path instead of failing.
+            logger.error(
+                "STT prewarm: parakeet-mlx not installed (%s); warming local "
+                "Whisper fallback instead.",
+                exc,
+            )
+        else:
+            prewarm_parakeet()
+            return
     _get_local_pipe()
 
 

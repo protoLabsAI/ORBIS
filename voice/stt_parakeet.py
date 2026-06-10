@@ -137,9 +137,11 @@ class ParakeetMLXSTT(SegmentedSTTService):
             # Inference on the dedicated MLX thread (consistent stream +
             # off the event loop).
             text = await loop.run_in_executor(_executor, _transcribe_sync, data, sr)
-            logger.info(
-                f"[stt.parakeet] {time.time() - t0:.2f}s → {len(text)} chars: {text!r}"
-            )
+            # Latency + length at INFO; the transcript itself (the user's
+            # private spoken content) only at DEBUG so it doesn't persist in
+            # the shareable sidecar.log. See audit L1.
+            logger.info(f"[stt.parakeet] {time.time() - t0:.2f}s → {len(text)} chars")
+            logger.debug(f"[stt.parakeet] transcript: {text!r}")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[stt.parakeet] inference failed: {e}")
             yield ErrorFrame(error=f"STT inference failed: {e}")

@@ -438,6 +438,25 @@ def check_workflow() -> None:
         "PYAPP_EXEC_SPEC: 'app:main'",
         "desktop workflow must build a PyApp sidecar that launches app:main",
     )
+    # CRITICAL (audit C1): the shell forces STT_BACKEND=parakeet
+    # unconditionally (src-tauri/src/lib.rs), so the SHIPPED sidecar must
+    # bundle the [parakeet] extra — otherwise the released DMG ImportErrors
+    # on first session while a local nuke-and-rebuild.sh build (which sets
+    # the same features) voice-works. Keep these three in lock-step.
+    require_contains(
+        workflow,
+        "PYAPP_PROJECT_FEATURES: 'parakeet,smart-turn'",
+        "desktop workflow must bundle the parakeet STT extra (the shell forces "
+        "STT_BACKEND=parakeet — without it the shipped DMG has no STT)",
+    )
+    lib_rs = ROOT / "src-tauri" / "src" / "lib.rs"
+    if 'env("STT_BACKEND", "parakeet")' in read(lib_rs):
+        require_contains(
+            ROOT / "scripts" / "nuke-and-rebuild.sh",
+            'PYAPP_PROJECT_FEATURES="parakeet,smart-turn"',
+            "nuke-and-rebuild.sh must bundle parakeet to match the shell's "
+            "STT_BACKEND=parakeet (and the release workflow)",
+        )
     require_contains(
         workflow,
         "PYAPP_FULL_ISOLATION: '1'",
