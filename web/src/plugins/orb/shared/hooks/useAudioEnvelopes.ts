@@ -40,18 +40,29 @@ export function useAudioEnvelopes({
     let active = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
+      timer = null;
+      // Don't burn an IPC round-trip ~30×/s when the window is hidden
+      // (mini-orb / minimized) — the orb isn't being rendered then, so
+      // the levels aren't read. Resume on visibilitychange below.
+      if (!active || document.hidden) return;
       try {
         const lv = await invoke<{ mic: number; playback: number }>('get_audio_levels');
         if (lv) nativeRef.current = lv;
       } catch {
         // Command unavailable (plain browser dev) — leave at 0.
       }
-      if (active) timer = setTimeout(poll, 33); // ~30 Hz
+      if (active && !document.hidden) timer = setTimeout(poll, 33); // ~30 Hz
     };
+    const onVisibility = () => {
+      // Becoming visible with no poll scheduled — kick it back off.
+      if (!document.hidden && active && timer === null) poll();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     poll();
     return () => {
       active = false;
       if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, []);
 

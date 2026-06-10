@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { EffectComposer } from '@react-three/postprocessing';
 import { useActiveVariant } from './useOrbState';
@@ -29,6 +29,20 @@ export function OrbStage() {
 
   const botStream = useMemo<MediaStream | null>(() => null, []);
   const localStream = useMemo<MediaStream | null>(() => null, []);
+
+  // Pause the raymarch render loop while the window is hidden (mini-orb /
+  // minimized / occluded). The orb is a full-screen GLSL raymarch; left on
+  // `frameloop="always"` it keeps shading at full rate off-screen and drains
+  // battery. WKWebView throttles rAF inconsistently for off-screen windows,
+  // so gate it explicitly. See audit L3.
+  const [frameloop, setFrameloop] = useState<'always' | 'never'>(
+    typeof document !== 'undefined' && document.hidden ? 'never' : 'always',
+  );
+  useEffect(() => {
+    const onVisibility = () => setFrameloop(document.hidden ? 'never' : 'always');
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   // Double-click / double-tap starts (or ends) a push-to-talk listening turn.
   // Hard mute is king: if the mic button has muted the mic, double-click is a
@@ -65,6 +79,7 @@ export function OrbStage() {
       style={{ touchAction: 'none' }}
     >
       <Canvas
+        frameloop={frameloop}
         camera={{ fov: 45, near: 0.1, far: 100, position: [0, 0, 13] }}
         dpr={0.7}
         gl={{ antialias: true, alpha: false }}
