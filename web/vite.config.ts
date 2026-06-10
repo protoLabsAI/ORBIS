@@ -26,10 +26,24 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Shared orb runtime, consumed as source (no install). Exact alias
+      // to the package index — web never subpath-imports it.
+      '@orbis/orb-runtime': path.resolve(
+        __dirname,
+        '../packages/orb-runtime/src/index.ts',
+      ),
     },
+    // The orb-runtime sources sit outside web/, so node resolution from
+    // those files would miss web/node_modules — pin their peer deps to
+    // this app's single copy.
+    dedupe: ['react', 'react-dom', 'three', '@react-three/fiber'],
   },
   server: {
     port: 5173,
+    fs: {
+      // The orb-runtime package lives one level above the vite root.
+      allow: ['..'],
+    },
     // Allow the dev server to be reached via Tailscale serve on :8443.
     allowedHosts: ['protolabs.taild25506.ts.net', 'localhost', '.ts.net'],
     proxy: {

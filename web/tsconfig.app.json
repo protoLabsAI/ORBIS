@@ -9,7 +9,15 @@
     "allowJs": true,
     "checkJs": false,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@orbis/orb-runtime": ["../packages/orb-runtime/src/index.ts"],
+      // orb-runtime sources live outside web/, so module resolution from
+      // those files can't find web/node_modules on its own — map their
+      // peer deps back to this app's copies.
+      "three": ["./node_modules/@types/three"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "@react-three/fiber": ["./node_modules/@react-three/fiber"]
     },
 
     /* Bundler mode */
@@ -26,5 +34,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "../packages/orb-runtime/src"]
 }
