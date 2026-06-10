@@ -2914,7 +2914,8 @@ async def llm_test(body: dict):
     """
     from agent.llm_probe import ping_endpoint
     url = str(body.get("url") or "")
-    if url and not _llm_probe_url_is_safe(url):
+    # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
+    if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
         return {"ok": False, "error": "URL not allowed (blocked target)"}
     api_key = str(body.get("api_key") or "")
     # "Leave blank to keep the saved key" must apply to the test too —
@@ -2944,7 +2945,8 @@ async def llm_models(body: dict):
     """
     from agent.llm_probe import list_models
     url = str(body.get("url") or "")
-    if url and not _llm_probe_url_is_safe(url):
+    # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
+    if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
         return {"ok": False, "models": [], "error": "URL not allowed (blocked target)"}
     api_key = str(body.get("api_key") or "")
     # Same "leave blank to keep" fallback as /api/llm/test (see there).
