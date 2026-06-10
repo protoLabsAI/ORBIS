@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.2.131",
+    "date": "2026-06-10",
+    "changes": [
+      "Prevents silence during long-running asynchronous tool execution by ensuring the presence loop continues until task completion.",
+      "Suspends spoken status updates when the agent is paused waiting for human-in-the-loop user input.",
+      "Adjusts tool classification to ensure multi-step orchestration tasks trigger appropriate audio reassurance.",
+      "Removes premium customization and developer-only UI surfaces from standard production builds.",
+      "Transitions developer tools to an opt-in configuration via build flags to ensure clean distribution bundles."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.131/ORBIS-0.2.131-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.130",
     "date": "2026-06-10",
     "changes": [
