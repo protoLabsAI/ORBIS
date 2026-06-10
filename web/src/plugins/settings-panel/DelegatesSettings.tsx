@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Pencil, Plus, Radar, Trash2 } from 'lucide-react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
+import { Switch } from '@/components/ui/switch';
 import {
   api,
   type Delegate,
@@ -174,8 +176,67 @@ export function DelegatesSettings() {
             }
           />
         )}
+
+        {!editing && <DiscoverableToggle />}
       </div>
     </Panel>
+  );
+}
+
+/**
+ * "Discoverable on your network" — opt-in that makes the Tauri shell launch
+ * the sidecar bound to all interfaces on a fleet-range port, so protoAgent
+ * fleets see ORBIS's mDNS broadcast and can probe its agent card. Default
+ * off (a network bind exposes the whole HTTP API, not just /a2a). Shell-side
+ * setting (the bind happens before the sidecar boots), applied on next
+ * launch. Hidden outside the Tauri shell — there's no shell to ask.
+ */
+function DiscoverableToggle() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<boolean>('get_discoverable')
+      .then(setEnabled)
+      .catch(() => setEnabled(null)); // not in the Tauri shell → stay hidden
+  }, []);
+
+  const onToggle = useCallback(async (on: boolean) => {
+    setEnabled(on);
+    try {
+      await invoke('set_discoverable', { enabled: on });
+      setDirty(true);
+      setError(null);
+    } catch (e) {
+      setEnabled(!on);
+      setError(String(e));
+    }
+  }, []);
+
+  if (enabled === null) return null;
+
+  return (
+    <div className="pt-2 border-t border-edge space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-fg-subtle">
+            Discoverable on your network
+          </div>
+          <div className="text-xs text-fg-muted mt-0.5">
+            Let other protoLabs agents on your network find this ORBIS and
+            delegate to it. Exposes the local server beyond this machine.
+          </div>
+        </div>
+        <Switch checked={enabled} onCheckedChange={onToggle} />
+      </div>
+      {dirty && (
+        <div className="text-xs text-brand">
+          Applies on next launch — restart ORBIS to take effect.
+        </div>
+      )}
+      {error && <div className="text-xs text-danger break-words">{error}</div>}
+    </div>
   );
 }
 

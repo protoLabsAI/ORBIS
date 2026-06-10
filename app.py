@@ -3892,6 +3892,57 @@ if _serve_react():
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+def _bind_listen_socket(host: str, port: int):
+    """Pre-bound listen socket for uvicorn (fd handoff — see main()).
+
+    When the requested port is taken (another fleet agent grabbed it), walk
+    the rest of the discovery port range so ORBIS stays inside the window
+    protoAgent port-scans (agent/discovery.py PORT_RANGE) — being discoverable
+    is why a fixed port was requested in the first place. Last resort is an
+    ephemeral port: the app must boot even if the whole range is occupied
+    (mDNS discovery still works there; only the port-scan channels go blind).
+    Requests outside the fleet range fall straight to ephemeral.
+    """
+    import socket
+
+    from agent.discovery import PORT_RANGE
+
+    def _try(p: int):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, p))
+        except OSError:
+            s.close()
+            return None
+        s.listen(128)
+        return s
+
+    sock = _try(port)
+    if sock is None and PORT_RANGE[0] <= port <= PORT_RANGE[1]:
+        for p in range(PORT_RANGE[0], PORT_RANGE[1] + 1):
+            if p == port:
+                continue
+            sock = _try(p)
+            if sock is not None:
+                logger.warning(
+                    f"[boot] port {port} taken — fell back to {p} "
+                    f"(still inside the discovery range)"
+                )
+                break
+    if sock is None:
+        sock = _try(0)
+        if port:
+            logger.warning(
+                f"[boot] port {port} (and the discovery range) taken — "
+                f"using an ephemeral port; port-scan discovery of this "
+                f"instance won't work, mDNS still will"
+            )
+    if sock is None:  # ephemeral bind failed too — host is unusable
+        raise OSError(f"could not bind any port on {host}")
+    return sock
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=PORT,
@@ -3926,13 +3977,9 @@ def main():
     # port BEFORE uvicorn starts (the Tauri shell reads stdout for the
     # readiness line). uvicorn's Config accepts a pre-bound fd, which
     # closes the race window between knowing the port and listening on it.
-    import socket
     import uvicorn
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((args.host, args.port))
-    sock.listen(128)
+    sock = _bind_listen_socket(args.host, args.port)
     bound_host, bound_port = sock.getsockname()[:2]
 
     # Hand the real bind address to lifespan (mDNS advertise) + the
@@ -3943,8 +3990,11 @@ def main():
 
     # Canonical readiness line — Tauri + other supervisors grep for this
     # prefix to learn where to connect. Keep it first on stdout; any
-    # logger output is on stderr.
-    print(f"ORBIS_READY http://{bound_host}:{bound_port}", flush=True)
+    # logger output is on stderr. The reader is always on THIS machine, so
+    # an all-interfaces bind (0.0.0.0, the discoverable mode) is reported
+    # as loopback — WKWebView can't reliably navigate to 0.0.0.0.
+    ready_host = "127.0.0.1" if bound_host == "0.0.0.0" else bound_host
+    print(f"ORBIS_READY http://{ready_host}:{bound_port}", flush=True)
 
     config = uvicorn.Config(app, fd=sock.fileno())
     server = uvicorn.Server(config)
