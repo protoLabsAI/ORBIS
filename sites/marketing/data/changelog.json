@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.2.132",
+    "date": "2026-06-10",
+    "changes": [
+      "Redacts provider API keys from the `/api/config` endpoint to prevent cleartext exposure.",
+      "Implements SSRF protection for LLM probes by rejecting cloud-metadata and link-local targets.",
+      "Offloads DNS resolution to a separate thread to prevent blocking the main event loop during LLM testing.",
+      "Uses constant-time comparison for inbox ingest tokens to mitigate timing attacks.",
+      "Adds immediate exception logging for failed native pipeline tasks to prevent silent crashes.",
+      "Moves full speech transcripts from INFO to DEBUG logs to ensure user privacy in shared log files.",
+      "Reduces CPU usage by replacing a busy-looping SSE bus with an asynchronous wait mechanism.",
+      "Pauses the Orb render loop and audio polling when the application window is hidden to save GPU and battery.",
+      "Ensures Parakeet STT features are correctly bundled in macOS DMG releases.",
+      "Enables automatic fallback to Whisper if the primary STT backend fails to load."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.132/ORBIS-0.2.132-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.131",
     "date": "2026-06-10",
     "changes": [
