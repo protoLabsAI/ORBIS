@@ -362,15 +362,17 @@ _BACKCHANNEL_STYLE = (
 @dataclass
 class Settings:
     verbosity: Verbosity = DEFAULT_VERBOSITY
-    # Progress cadence, AFTER the opening ack (which now reliably fires at
-    # ~1 s with a contextual line). The opening covers "I heard you", so the
-    # progress loop must NOT pile on right behind it — first line waits ~6 s
-    # (a comfortable gap, ~5 s after the opening), so a typical 8-15 s delegate
-    # gets just opening + one "still working" line. A second only fires for
-    # genuinely long waits (~6 s sleep ON TOP, i.e. ~12 s in). Over-narrating
-    # back-to-back reads as spam (arXiv 2507.22352); under it is dead air.
+    # Progress cadence, AFTER the opening ack (which fires at ~1 s with a
+    # contextual line). The opening covers "I heard you", so the progress loop
+    # must NOT pile on behind it — the first line waits ~6 s (a comfortable gap).
+    # Then it repeats every ~interval until the tool finishes, so a long delegate
+    # never dead-airs past one interval (the old fixed two-line loop went silent
+    # after ~12 s — see agent/presence.py and evals/presence.py). The interval is
+    # sparse on purpose: over-narrating back-to-back reads as spam (arXiv
+    # 2507.22352), but a multi-second silent gap is the "where'd you go" dead air.
+    # Each line grounds in the delegate's latest streamed status when present.
     progress_first_secs: float = 6.0
-    progress_second_secs: float = 12.0
+    progress_interval_secs: float = 10.0
     recency_window: int = 6
     max_gen_tokens: int = 30
     temperature: float = 0.9
