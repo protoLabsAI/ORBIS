@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Radar, Trash2 } from 'lucide-react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -10,6 +10,7 @@ import {
   type DelegateTestResult,
   type DelegateTypeSpec,
   type DelegateWithStatus,
+  type DiscoveredAgent,
 } from '@/lib/api';
 
 /**
@@ -157,8 +158,115 @@ export function DelegatesSettings() {
             Add delegate
           </Button>
         )}
+
+        {!editing && (
+          <DiscoverSection
+            onAdd={(agent) =>
+              setEditing({
+                kind: 'create',
+                prefill: {
+                  type: 'a2a',
+                  name: slugify(agent.name),
+                  description: agent.description,
+                  url: `${agent.url}/a2a`,
+                },
+              })
+            }
+          />
+        )}
       </div>
     </Panel>
+  );
+}
+
+/** Delegate names feed delegate_to(target=...) — lowercase, no spaces. */
+function slugify(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Network discovery — surface A2A agents broadcasting nearby (protoAgent's
+ * mDNS `_protoagent._tcp` adverts + local/tailnet card probes) and add one
+ * as an a2a delegate with the editor prefilled from its agent card.
+ */
+function DiscoverSection({ onAdd }: { onAdd: (agent: DiscoveredAgent) => void }) {
+  const [scanning, setScanning] = useState(false);
+  const [found, setFound] = useState<DiscoveredAgent[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const onScan = useCallback(async () => {
+    setScanning(true);
+    setError(null);
+    try {
+      const r = await api.delegates.discover();
+      setFound(r.discovered);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  return (
+    <div className="pt-2 border-t border-edge space-y-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-fg-subtle">
+            Discover on your network
+          </div>
+          <div className="text-xs text-fg-muted mt-0.5">
+            Finds protoLabs agents broadcasting on this machine, the LAN, and
+            your tailnet.
+          </div>
+        </div>
+        <Button variant="secondary" size="sm" onClick={onScan} disabled={scanning}>
+          <Radar className="h-3.5 w-3.5 mr-1" />
+          {scanning ? 'Scanning…' : 'Scan'}
+        </Button>
+      </div>
+
+      {error && <div className="text-xs text-danger break-words">{error}</div>}
+
+      {found && found.length === 0 && !scanning && (
+        <div className="text-xs text-fg-subtle italic">
+          No new agents broadcasting right now.
+        </div>
+      )}
+
+      {found && found.length > 0 && (
+        <ul className="space-y-2">
+          {found.map((agent) => (
+            <li
+              key={`${agent.host}:${agent.port}`}
+              className="flex items-start gap-3 rounded-md border border-edge bg-raised/40 p-2.5"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-fg font-mono truncate">{agent.name}</span>
+                  <span className="text-helper text-fg-subtle font-mono">
+                    {agent.host}:{agent.port}
+                  </span>
+                </div>
+                {agent.description && (
+                  <div className="text-sm text-fg-muted mt-0.5 line-clamp-2">
+                    {agent.description}
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="shrink-0"
+                onClick={() => onAdd(agent)}
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Add
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -206,7 +314,7 @@ function blankDraftFor(spec: DelegateTypeSpec, common: { name: string; descripti
 // ---------------------------------------------------------------------------
 
 type EditingState =
-  | { kind: 'create' }
+  | { kind: 'create'; prefill?: Draft }
   | { kind: 'edit'; original: DelegateWithStatus };
 
 interface EditorProps {
@@ -218,11 +326,20 @@ interface EditorProps {
 
 function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
   const isEdit = state.kind === 'edit';
-  const [draft, setDraft] = useState<Draft>(() =>
-    isEdit
-      ? ({ ...state.original } as Draft)
-      : blankDraftFor(specs[0], { name: '', description: '' }),
-  );
+  const [draft, setDraft] = useState<Draft>(() => {
+    if (isEdit) return { ...state.original } as Draft;
+    // Discovery's Add prefills type/name/description/url; field defaults
+    // from the type's schema fill the rest.
+    const prefill = state.prefill ?? {};
+    const spec = specs.find((s) => s.type === prefill.type) ?? specs[0];
+    return {
+      ...blankDraftFor(spec, {
+        name: String(prefill.name ?? ''),
+        description: String(prefill.description ?? ''),
+      }),
+      ...prefill,
+    };
+  });
   const [test, setTest] = useState<DelegateTestResult | 'checking' | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -33,6 +33,9 @@ dependencies = [
     # so it installs without auth; pinned to the published tag, not yet on PyPI.
     "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0",
     "sse-starlette",
+    # mDNS advertise/browse for A2A agent discovery (agent/discovery.py — sees
+    # protoAgent _protoagent._tcp broadcasts; ported from protoAgent ADR 0042 §I).
+    "zeroconf",
     # Observability
     "langfuse>=4,<5",
     # MLX-LM for native Apple Silicon LLM inference (Mac arm64 only).

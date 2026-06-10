@@ -2257,6 +2257,27 @@ async def lifespan(app: FastAPI):
         _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",
     )
 
+    # mDNS advertise (protoAgent ADR 0042 §I interop) — announce ORBIS as a
+    # `_protoagent._tcp` service so fleet agents discover it the way ORBIS
+    # discovers them. Skipped when bound to loopback: the advert carries the
+    # LAN IP, and a loopback-bound server is unreachable there — advertising
+    # it would surface a dead entry in every sibling's scan. Off the loop
+    # (to_thread): sync zeroconf on a running loop blocks it ~10s at boot.
+    from agent import discovery as _discovery
+    _bound_host = os.environ.get("ORBIS_BOUND_HOST", "")
+    _bound_port = int(os.environ.get("ORBIS_BOUND_PORT", "0") or 0)
+    if _bound_port and _bound_host not in ("127.0.0.1", "localhost", ""):
+        from a2a_server import AGENT_NAME as _agent_name
+        try:
+            await asyncio.to_thread(_discovery.advertise, _agent_name, _bound_port)
+        except Exception:
+            logger.exception("[discovery] mDNS advertise failed")
+    else:
+        logger.info(
+            "[discovery] mDNS advertise skipped (loopback or unknown bind) — "
+            "discovery of other agents still works"
+        )
+
     # Start the persistent native voice pipeline. The Rust shell sets
     # ORBIS_AUDIO_SOCK to the unix socket the native audio engine is listening
     # on — direct `python app.py` runs without that env var (e.g. the
@@ -2293,6 +2314,12 @@ async def lifespan(app: FastAPI):
                 await t
             except (asyncio.CancelledError, Exception):
                 pass
+        # Withdraw the mDNS advertisement. Off the loop — same deadlock as
+        # advertise (zc.close() posts to and waits on the loop it's called from).
+        try:
+            await asyncio.to_thread(_discovery.stop_advertise)
+        except Exception:
+            pass
 
 
 app = FastAPI(title="ORBIS", lifespan=lifespan)
@@ -2724,6 +2751,37 @@ async def delegate_types_endpoint(user: User = Depends(require_user)):
 @app.post("/api/delegates/test")
 async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
     return await _probe_delegate(body or {})
+
+
+@app.get("/api/delegates/discover")
+async def discover_delegates_endpoint(user: User = Depends(require_user)):
+    """A2A agents broadcasting nearby (local port-scan + mDNS `_protoagent._tcp`
+    browse + tailnet probe — protoAgent ADR 0042 §I interop) — candidates to
+    add as a2a delegates. Excludes agents already configured (+ ORBIS itself)."""
+    from urllib.parse import urlparse
+
+    from agent import discovery
+
+    known: set[tuple[str, int]] = set()
+    # ORBIS itself — both its loopback and LAN addresses.
+    bound_port = int(os.environ.get("ORBIS_BOUND_PORT", "0") or 0)
+    if bound_port:
+        known.add(("127.0.0.1", bound_port))
+        try:
+            known.add((discovery._local_ip(), bound_port))
+        except Exception:  # noqa: BLE001
+            pass
+    # Already-configured a2a delegates, by their endpoint's (host, port).
+    for d in _DELEGATES.all():
+        if d.type != "a2a" or not d.url:
+            continue
+        try:
+            parsed = urlparse(d.url)
+            if parsed.hostname and parsed.port:
+                known.add((parsed.hostname, parsed.port))
+        except ValueError:
+            continue
+    return {"discovered": await discovery.discover(known=known)}
 
 
 async def _probe_delegate(entry: dict) -> dict:
@@ -3876,6 +3934,12 @@ def main():
     sock.bind((args.host, args.port))
     sock.listen(128)
     bound_host, bound_port = sock.getsockname()[:2]
+
+    # Hand the real bind address to lifespan (mDNS advertise) + the
+    # delegates discovery endpoint (self-exclusion) — they run after
+    # uvicorn starts and can't see the pre-bound socket.
+    os.environ["ORBIS_BOUND_HOST"] = str(bound_host)
+    os.environ["ORBIS_BOUND_PORT"] = str(bound_port)
 
     # Canonical readiness line — Tauri + other supervisors grep for this
     # prefix to learn where to connect. Keep it first on stdout; any

@@ -316,6 +316,17 @@ export interface DelegateTypeSpec {
   fields: DelegateFieldSpec[];
 }
 
+/** An A2A agent found broadcasting on the network (mDNS `_protoagent._tcp`,
+ *  local port-scan, or tailnet probe) — a candidate to add as an a2a delegate. */
+export interface DiscoveredAgent {
+  name: string;
+  description: string;
+  /** Base URL of the agent (its A2A endpoint is `url + '/a2a'`). */
+  url: string;
+  host: string;
+  port: number;
+}
+
 /** Thrown when a response carries HTTP 401 — signals the key is wrong/missing. */
 export class UnauthorizedError extends Error {
   constructor(path: string) { super(`${path} → 401 unauthorized`); }
@@ -472,6 +483,10 @@ export const api = {
     /** Registered delegate types + their capabilities/field schema. Drives the
      *  generic New/Edit form, so a new backend adapter needs no UI change. */
     types: () => get<{ types: DelegateTypeSpec[] }>('/api/delegate-types'),
+    /** Scan for A2A agents broadcasting nearby (box + LAN + tailnet); already-
+     *  configured delegates and ORBIS itself are excluded. Takes a few seconds
+     *  (the mDNS browse waits out its timeout). */
+    discover: () => get<{ discovered: DiscoveredAgent[] }>('/api/delegates/discover'),
   },
   wakeword: {
     /** Catalog with live download status. */
