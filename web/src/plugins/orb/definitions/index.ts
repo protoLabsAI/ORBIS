@@ -11,6 +11,7 @@
  */
 import { validateOrbDefinition } from '@orbis/orb-runtime';
 import { registerDefinition } from './host';
+import { loadRuntimeOrbs } from './runtime';
 
 const bundled = import.meta.glob('./*.orbis.json', { eager: true, import: 'default' });
 
@@ -24,3 +25,8 @@ for (const [path, raw] of Object.entries(bundled)) {
     console.error(`[orb] bundled definition ${path} rejected:`, res.errors);
   }
 }
+
+// User-imported orbs from the sidecar catalog (app-data orbs dir).
+// Fire-and-forget: the registry pushes updates to subscribers when the
+// catalog lands, so late arrival just pops them into the picker.
+loadRuntimeOrbs();

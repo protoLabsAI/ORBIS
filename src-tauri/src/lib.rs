@@ -1886,6 +1886,18 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     if let Ok(models) = app.path().app_data_dir() {
         command = command.env("ORBIS_MODELS_DIR", models.join("models"));
     }
+    // User-imported `.orbis` orb definitions live in app-data so they
+    // survive app updates (same posture as delegates.yaml). Without this
+    // the sidecar falls back to a cwd-relative "config/orbs" the
+    // installed app can't find. See agent/orb_definitions.py.
+    if let Ok(data) = app.path().app_data_dir() {
+        let orbs = data.join("orbs");
+        if let Err(e) = std::fs::create_dir_all(&orbs) {
+            log::warn!("orbs dir create failed: {e}");
+        }
+        log::info!("sidecar env: ORBIS_ORBS_DIR={}", orbs.display());
+        command = command.env("ORBIS_ORBS_DIR", orbs);
+    }
     // Pass AUDIO_TRANSPORT=native + socket path to Python. Python reads
     // both to activate the native socket pipeline and to report the
     // correct transport in /healthz.
