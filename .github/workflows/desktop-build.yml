@@ -147,6 +147,14 @@ jobs:
           PYAPP_PROJECT_NAME: orbis
           PYAPP_PROJECT_VERSION: ${{ steps.version.outputs.version }}
           PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist-sdist/orbis-${{ steps.version.outputs.version }}.tar.gz
+          # Bundle the Parakeet STT backend (parakeet-mlx) + smart-turn so the
+          # shell's unconditional STT_BACKEND=parakeet (src-tauri/src/lib.rs)
+          # resolves in the SHIPPED build. Without this the release sidecar is
+          # Whisper-only and `parakeet` ImportErrors on first session — the
+          # local nuke-and-rebuild.sh sets the same features, so a dev build
+          # voice-works while the released DMG does not. Keep in sync with
+          # scripts/nuke-and-rebuild.sh and the check-macos-release-config guard.
+          PYAPP_PROJECT_FEATURES: 'parakeet,smart-turn'
           PYAPP_PYTHON_VERSION: '3.11'
           PYAPP_EXEC_SPEC: 'app:main'
           # Full isolation — don't touch the user's Python or site-packages.
