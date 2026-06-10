@@ -1861,6 +1861,13 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             await asyncio.sleep(_fs.progress_first_secs)
             tick = 0
             while True:
+                # During a HITL ask_user pause (orchestrate parked on the user's
+                # answer) the tool is still "in flight" but the agent is waiting on
+                # the USER, not working — so a "still working" line would be wrong.
+                # Stay quiet this tick and re-check next interval.
+                if user_state.has_pending_ask_on_active():
+                    await asyncio.sleep(_fs.progress_interval_secs)
+                    continue
                 with _tracing.span(
                     "filler.progress",
                     input={"tool": tool_name, "tick": tick},

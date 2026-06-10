@@ -114,6 +114,15 @@ def set_pending_ask_on_active(ask: PendingAsk) -> bool:
     return False
 
 
+def has_pending_ask_on_active() -> bool:
+    """True if the active session is parked on a HITL ``ask_user`` question.
+    Presence narration checks this so the "still working" loop stays quiet while
+    the agent is actually waiting on the USER to answer — not working."""
+    for st in _REGISTRY.active_sessions():
+        return st.pending_ask is not None
+    return False
+
+
 def take_pending_ask() -> PendingAsk | None:
     """Return + CLEAR the active session's pending ask (None if none). The voice
     AskGate calls this on a user transcript to route the answer to the run."""
