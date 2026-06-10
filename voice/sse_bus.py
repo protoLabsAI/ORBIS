@@ -27,13 +27,16 @@ Heartbeat (keep-alive) every HEARTBEAT_S seconds:
 
 Implementation note on cleanup
 -------------------------------
-Python's async generator ``aclose()`` only injects GeneratorExit when the
-generator is suspended at a ``yield`` expression, not at an ``await``.
-To guarantee cleanup, the generator never awaits inside the yield loop —
-it uses ``asyncio.Event`` + a background waker task that wakes the loop
-every POLL_INTERVAL seconds, writes a sentinel to the queue, then the
-generator drains via synchronous ``get_nowait()`` and always lands back
-at a ``yield`` before the next iteration.
+The generator blocks on ``await asyncio.wait_for(q.get(), HEARTBEAT_S)``:
+it parks on a real event, and on timeout emits a heartbeat comment. This
+both bounds idle wakeups to once per HEARTBEAT_S (no busy loop) and gives
+a clean teardown point — Starlette/FastAPI cancels the streaming task on
+client disconnect, raising ``CancelledError`` at the ``await``, which runs
+the ``finally`` block (subscriber removal). An earlier revision avoided
+awaiting and used a 0.5s waker + ``get_nowait()`` drain so the generator
+always parked at a ``yield`` for ``aclose()``; that spun a CPU core because
+a bare ``yield`` to an eager consumer never actually yields control. The
+await-based design relies on cancellation, not ``aclose()``, for cleanup.
 """
 
 from __future__ import annotations
@@ -41,16 +44,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from typing import Any, AsyncGenerator
 
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_S: float = 25.0   # seconds between keep-alive comments
-_POLL_INTERVAL: float = 0.5  # waker tick interval (seconds)
 _QUEUE_MAXSIZE = 64          # per-subscriber backpressure cap
 
-_TICK = object()             # waker sentinel — triggers queue drain
 _SENTINEL = object()         # put into queue to signal teardown
 
 
@@ -89,39 +89,31 @@ class SseBus:
     async def subscribe(self) -> AsyncGenerator[str, None]:
         """Yield SSE-formatted strings until the client disconnects.
 
-        The generator is always suspended at a ``yield`` so that
-        ``aclose()`` (triggered by FastAPI on client disconnect) reliably
-        reaches the ``finally`` block for cleanup.
-
-        A background asyncio.Task ticks every ``_POLL_INTERVAL`` seconds,
-        putting a ``_TICK`` sentinel into the queue so the main loop wakes
-        up to drain real events or emit a heartbeat.
+        Blocks on ``asyncio.wait_for(q.get(), HEARTBEAT_S)``: parks on a
+        real event, and on timeout emits a heartbeat comment. Idle wakeups
+        are bounded to once per ``HEARTBEAT_S`` (no busy loop). Cleanup runs
+        in ``finally`` when Starlette cancels the streaming task on client
+        disconnect (``CancelledError`` raised at the await).
         """
         q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._subscribers.add(q)
         logger.debug("[sse_bus] subscriber connected (total=%d)", len(self._subscribers))
 
-        # Background waker: wakes the generator loop without suspending it
-        # at an await inside the generator body.
-        async def _waker():
-            while True:
-                await asyncio.sleep(_POLL_INTERVAL)
-                try:
-                    q.put_nowait(_TICK)
-                except asyncio.QueueFull:
-                    pass
-
-        waker_task = asyncio.create_task(_waker(), name="sse-waker")
-
-        last_heartbeat = time.monotonic()
         try:
-            # Initial connection acknowledgement — inside try so GeneratorExit
-            # thrown here by aclose() is caught and falls into finally.
             yield ": connected\n\n"
 
             while True:
-                # Drain everything currently in the queue (non-blocking).
-                emitted = False
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=HEARTBEAT_S)
+                except asyncio.TimeoutError:
+                    # Idle for HEARTBEAT_S — keep the connection alive.
+                    yield ": heartbeat\n\n"
+                    continue
+                if item is _SENTINEL:
+                    return
+                yield item
+                # Opportunistically drain any events queued behind this one
+                # so a burst flushes in a single wakeup.
                 while True:
                     try:
                         item = q.get_nowait()
@@ -129,34 +121,11 @@ class SseBus:
                         break
                     if item is _SENTINEL:
                         return
-                    if item is _TICK:
-                        # Waker fired — always yield a comment so the generator
-                        # returns to a yield point.  Emit a full heartbeat when
-                        # HEARTBEAT_S has elapsed, otherwise a minimal comment.
-                        now = time.monotonic()
-                        if (now - last_heartbeat) >= HEARTBEAT_S:
-                            yield ": heartbeat\n\n"
-                            last_heartbeat = now
-                        else:
-                            yield ": \n\n"
-                        emitted = True
-                        continue
-                    # Real SSE message.
                     yield item
-                    emitted = True
 
-                if not emitted:
-                    # Queue drained with no real events or tick — yield a
-                    # minimal keep-alive comment so:
-                    # (a) the generator is at a yield point for aclose(), and
-                    # (b) the outer while loop doesn't spin as a busy loop.
-                    # EventSource clients ignore comment lines.
-                    yield ": \n\n"
-
-        except GeneratorExit:
+        except (GeneratorExit, asyncio.CancelledError):
             pass
         finally:
-            waker_task.cancel()
             self._subscribers.discard(q)
             logger.debug("[sse_bus] subscriber disconnected (total=%d)", len(self._subscribers))
 

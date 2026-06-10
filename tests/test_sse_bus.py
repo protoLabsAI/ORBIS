@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from voice.sse_bus import SseBus, _POLL_INTERVAL
+from voice.sse_bus import SseBus
 
 
 # ---------------------------------------------------------------------------
@@ -86,8 +86,8 @@ async def test_subscriber_count():
     assert bus.subscriber_count() == 1
 
     await gen.aclose()
-    # aclose() triggers GeneratorExit between poll ticks; finally runs immediately.
-    await asyncio.sleep(_POLL_INTERVAL * 2)
+    # aclose() throws GeneratorExit at the await point; the finally runs
+    # before aclose() returns, so the subscriber is gone synchronously.
     assert bus.subscriber_count() == 0
 
 

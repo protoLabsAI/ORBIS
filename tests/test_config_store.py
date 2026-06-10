@@ -10,8 +10,10 @@ import pytest
 import yaml
 
 from agent.config_store import (
+    REDACTED_SECRET,
     merge_patch,
     read_config,
+    redact_secrets,
     validate_and_normalize,
     write_config,
 )
@@ -215,6 +217,42 @@ def test_validate_llm_accepts_env_ref_or_direct_key():
     assert o1["llm"]["api_key_env"] == "FOO"
     o2 = validate_and_normalize({"llm": {"url": "http://x", "api_key": "sk-..."}})
     assert o2["llm"]["api_key"] == "sk-..."
+
+
+def test_redact_secrets_masks_stored_keys():
+    cfg = {
+        "llm": {"url": "http://x", "api_key": "sk-secret"},
+        "stt": {"backend": "openai", "api_key": "sk-stt"},
+        "voice": {"tts_backend": "openai", "tts_api_key": "sk-tts"},
+    }
+    out = redact_secrets(cfg)
+    assert out["llm"]["api_key"] == REDACTED_SECRET
+    assert out["stt"]["api_key"] == REDACTED_SECRET
+    assert out["voice"]["tts_api_key"] == REDACTED_SECRET
+    # Non-secret fields untouched; original dict not mutated.
+    assert out["llm"]["url"] == "http://x"
+    assert cfg["llm"]["api_key"] == "sk-secret"
+
+
+def test_redact_secrets_leaves_unset_keys_absent():
+    out = redact_secrets({"llm": {"url": "http://x"}})
+    assert "api_key" not in out["llm"]
+
+
+def test_merge_patch_redacted_secret_keeps_existing_key(tmp_path: Path):
+    p = tmp_path / "orbis.yaml"
+    write_config({"llm": {"url": "http://x", "api_key": "sk-real"}}, p)
+    # A client echoes back the redacted block — must NOT wipe the real key.
+    merged = merge_patch({"llm": {"model": "gpt-4", "api_key": REDACTED_SECRET}}, p)
+    assert merged["llm"]["api_key"] == "sk-real"
+    assert merged["llm"]["model"] == "gpt-4"
+
+
+def test_merge_patch_real_key_still_overrides(tmp_path: Path):
+    p = tmp_path / "orbis.yaml"
+    write_config({"llm": {"url": "http://x", "api_key": "sk-old"}}, p)
+    merged = merge_patch({"llm": {"api_key": "sk-new"}}, p)
+    assert merged["llm"]["api_key"] == "sk-new"
 
 
 def test_validate_drops_complex_param_types(
