@@ -1,10 +1,53 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-02 (delegation → Pipecat-native async). On `main`,
-all PRs merged.*
+*Last updated 2026-06-10 (v0.2.132 — eval-driven agent quality, A2A discovery,
+OSS round, distribution audit). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-10 (v0.2.132 — agent quality measured, product hardened, sell-it audit)
+
+Hot cadence: v0.2.126 → v0.2.132 shipped 2026-06-07 → 06-10. Focus per
+2026-06-04 remains **ship + sell ORBIS as a paid native Mac app**.
+
+- **Eval harnesses now drive agent work** (`evals/`): the decision harness
+  (routing + grounding, #469) produced the grounding guardrail —
+  delegate-or-admit, never fabricate (#471, 14/15→15/15); the presence /
+  dead-air harness (#476) produced the spoken "still working" loop for slow
+  async delegates (#479, 3/8→9/9). Policy lives in `agent/presence.py`.
+- **A2A network discovery** (#472/#474/#475): delegates panel "Discover on
+  your network" (mDNS `_protoagent._tcp`, protoAgent ADR 0042 §I interop,
+  co-located dedupe) + default-off "Discoverable" toggle.
+- **OSS / extensibility round**: Apache-2.0 (#461/#462), CONTRIBUTING +
+  extension guides (#457), `@/sdk` stable extension surface (#458), glob
+  auto-discovery of plugins/widgets/orb variants (#454), `createRegistry`
+  unification (#463), widget catalog single-sourced from
+  `config/widgets.yaml` (#456), live LLM hot-swap on config change (#465).
+- **In-app updater** (#451/#452): update notification + one-click Update &
+  Restart on signed releases.
+- **Hardening (06-10)**: config-secret redaction, SSRF-guarded LLM probes,
+  pipeline supervision, SSE busy-loop fix (#493); Parakeet STT bundled in
+  shipped DMGs + transcripts kept out of logs (#492); render loop + audio
+  poll paused while hidden (#494); premium-orb dev surfaces removed,
+  devtools now opt-in (#477).
+- **Distribution-readiness audit (06-10) filed #481–491** — the active
+  backlog: perf (#481 TTS/speaker-gate off the event loop, #482 FTS rebuild
+  per write, #483 torch import at boot, #484 RT-unsafe CPAL callbacks),
+  robustness (#485 SIGKILL orphans sidecar grandchildren, #486 binds-once
+  audio socket → silent dead audio on restart), distribution (#487
+  protolabs-a2a git dep needs git/CLT on customer machines, #488 no crash
+  reporting, #489 1.7GB sidecar re-downloaded per update), process (#490 no
+  branch protection / release test gate, #491 frontend + Tauri wiring
+  untested).
+- **Paywall still NOT enforced**: `ORBIS_LICENSE_PUBKEY` unset → gate open.
+  Go-live = generate keypair + set the repo var; runbook at
+  `docs/internal/paywall-go-live-runbook.md`.
+- Queued engineering epics: engagement-mode orchestration layer, S2 widget
+  runtime, command bar, layer-2 verbal-cancel of delegations, speaker-mode
+  AEC / output selector (VPIO dies on USB output; smart fallback #433).
 
 ---
 
@@ -91,7 +134,11 @@ live at **orbis.protolabs.studio/docs** (Cloudflare, #338); GitHub Pages retired
 
 The dual-transport `AUDIO_TRANSPORT=native|webrtc` toggle goes away — there is one transport. See [`DECISIONS.md` § "Mac-first desktop, Linux/Windows later" amendment (2026-05-29)](./DECISIONS.md) and [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md) for the comprehensive guide.
 
-## Native fork status — 2026-05-29
+## Native fork status — 2026-05-29 (HISTORICAL — overwrite completed)
+
+*Resolved: `protoLabsAI/ORBIS` `main` now IS the native content; the old PWA
+history is archived at `archive/pwa-main-v0.2.22`. The section below is kept
+for provenance only.*
 
 Canonical native work is staged in
 [`protoLabsAI/orbis-native`](https://github.com/protoLabsAI/orbis-native)
