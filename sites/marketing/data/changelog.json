@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.2.130",
+    "date": "2026-06-10",
+    "changes": [
+      "Enables agents to discover nearby A2A delegates via mDNS/Bonjour, local port scanning, and Tailscale peer probes.",
+      "Adds a \"Discoverable on your network\" toggle in Delegate settings to allow external access via 0.0.0.0 binding.",
+      "Implements automatic deduplication to prevent co-located agents from appearing multiple times in the discovery panel.",
+      "Provides a streamlined workflow to add discovered agents as delegates using prefilled connection details.",
+      "Introduces a deterministic presence harness to measure \"dead air\" gaps during long-running tool executions.",
+      "Establishes a centralized presence policy to ensure consistent user feedback when async delegates or slow sync tools are active.",
+      "Adds automated reporting for latency deviations against defined presence SLAs."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.130/ORBIS-0.2.130-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.129",
     "date": "2026-06-09",
     "changes": [
