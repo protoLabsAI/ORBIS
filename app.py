@@ -25,6 +25,7 @@ Duplex behavior:
 
 import argparse
 import asyncio
+import hmac
 import logging
 import os
 import random
@@ -2307,6 +2308,31 @@ async def lifespan(app: FastAPI):
             run_bot(transport=native_transport, user_id="default"),
             name="orbis-native-pipeline",
         )
+
+        def _on_pipeline_done(task: asyncio.Task) -> None:
+            # Without this the pipeline can die (build error, unhandled
+            # frame-processing exception escaping the runner) and voice goes
+            # silently dead for the rest of the process life — the exception
+            # only surfaces as "Task exception was never retrieved" at GC /
+            # shutdown. Log it loudly the moment it happens. /healthz already
+            # reports pipeline_running=false for an external watcher. See
+            # audit M2.
+            if task.cancelled():
+                return
+            exc = task.exception()
+            if exc is not None:
+                logger.error(
+                    "[native audio] persistent pipeline EXITED with an "
+                    "exception — voice is now dead until relaunch",
+                    exc_info=exc,
+                )
+            else:
+                logger.warning(
+                    "[native audio] persistent pipeline returned unexpectedly "
+                    "(no exception) — voice is now idle until relaunch"
+                )
+
+        _native_pipeline_task.add_done_callback(_on_pipeline_done)
         logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
     else:
         logger.info(
@@ -2827,6 +2853,56 @@ async def reload_persona_endpoint(user: User = Depends(require_user)):
     return {"ok": True, "slug": persona.slug, "name": persona.name}
 
 
+def _llm_probe_url_is_safe(url: str) -> bool:
+    """SSRF guard for the unauth ``/api/llm/test`` + ``/api/llm/models``
+    routes.
+
+    Unlike ``_ollama_url_is_safe`` (which constrains to local/private —
+    correct for the ``ollama pull`` route), these routes must reach
+    *public* providers (OpenAI, OpenRouter, …) as well as a local Ollama,
+    so we can't allow-list to private space. Instead we block only the
+    genuinely dangerous targets: the cloud-metadata link-local range
+    (169.254.0.0/16 / fe80::/10), the unspecified address, and multicast.
+    Hostnames are resolved so ``http://meta.attacker.com`` that points at
+    169.254.169.254 is also rejected. Everything else (public + private +
+    loopback) is allowed because those are all legitimate LLM endpoints.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+
+    def _ip_is_dangerous(ip: ipaddress._BaseAddress) -> bool:
+        return ip.is_link_local or ip.is_unspecified or ip.is_multicast
+
+    try:
+        return not _ip_is_dangerous(ipaddress.ip_address(host))
+    except ValueError:
+        pass  # hostname — resolve and check every answer
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
+    except OSError:
+        # DNS failure — let the probe itself surface the connection error.
+        return True
+    for info in infos:
+        addr = info[4][0]
+        try:
+            if _ip_is_dangerous(ipaddress.ip_address(addr)):
+                return False
+        except ValueError:
+            continue
+    return True
+
+
 @app.post("/api/llm/test")
 async def llm_test(body: dict):
     """Real round-trip ping against a configured LLM endpoint.
@@ -2838,6 +2914,8 @@ async def llm_test(body: dict):
     """
     from agent.llm_probe import ping_endpoint
     url = str(body.get("url") or "")
+    if url and not _llm_probe_url_is_safe(url):
+        return {"ok": False, "error": "URL not allowed (blocked target)"}
     api_key = str(body.get("api_key") or "")
     # "Leave blank to keep the saved key" must apply to the test too —
     # otherwise a blank field reports a false 'auth rejected' even when a
@@ -2866,6 +2944,8 @@ async def llm_models(body: dict):
     """
     from agent.llm_probe import list_models
     url = str(body.get("url") or "")
+    if url and not _llm_probe_url_is_safe(url):
+        return {"ok": False, "models": [], "error": "URL not allowed (blocked target)"}
     api_key = str(body.get("api_key") or "")
     # Same "leave blank to keep" fallback as /api/llm/test (see there).
     if not api_key:
@@ -2895,7 +2975,7 @@ def _inbox_writer_ok(request: Request) -> bool:
         return True
     if x_api_key and user_registry.resolve(x_api_key):
         return True
-    if INBOX_INGEST_TOKEN and x_api_key == INBOX_INGEST_TOKEN:
+    if INBOX_INGEST_TOKEN and hmac.compare_digest(x_api_key, INBOX_INGEST_TOKEN):
         return True
     return False
 
@@ -3600,7 +3680,7 @@ async def get_starter_orbs():
 async def get_config(user: User = Depends(require_user)):
     """Return the current config/orbis.yaml as a dict. Drawer UI
     consumes this to populate the settings form."""
-    from agent.config_store import read_config
+    from agent.config_store import read_config, redact_secrets
     cfg = read_config()
     # Surface the *effective* STT backend so Settings reflects what's
     # actually running. The native build defaults the backend via the
@@ -3613,7 +3693,11 @@ async def get_config(user: User = Depends(require_user)):
     if not stt.get("backend"):
         stt["backend"] = STT_BACKEND
         cfg["stt"] = stt
-    return {"config": cfg}
+    # Never return stored provider secrets — the UI only needs to know a
+    # key is set (it shows a "saved" indicator). Redaction also closes the
+    # cleartext-key exposure if this route is ever reached unauthenticated
+    # (single-user fallback + a non-loopback bind). See audit H3/M11.
+    return {"config": redact_secrets(cfg)}
 
 
 @app.get("/api/personality")

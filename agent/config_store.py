@@ -29,6 +29,22 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATH = os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
 
 
+# Sentinel substituted for stored secret values in the GET /api/config
+# response so the actual provider keys never leave the box (the UI only
+# needs to know a key *is* set — it shows a "key saved" indicator and
+# only sends a value when the user types a new one). merge_patch treats
+# this exact value as "keep the existing secret" so a client that echoes
+# the redacted block back can't wipe the saved key.
+REDACTED_SECRET = "__redacted__"  # noqa: S105 — not a credential
+
+# Top-level block + field pairs holding provider secrets, used for both
+# redaction (app.py GET) and the keep-existing guard in merge_patch.
+_SECRET_FIELDS = {
+    "llm": ("api_key",),
+    "stt": ("api_key",),
+    "voice": ("tts_api_key",),
+}
+
 # Keys we allow at each level of the YAML. Anything else is dropped
 # from the write (with a log message) so the UI can't inject garbage
 # that later boots would have to tolerate.
@@ -430,5 +446,29 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
         existing = merged.get(block_key) or {}
         if not isinstance(existing, dict):
             existing = {}
+        block_patch = dict(block_patch)
+        # Keep-existing on redacted secrets: a client may echo back the
+        # GET-redacted block (api_key == REDACTED_SECRET); never let that
+        # overwrite the real stored key.
+        for field in _SECRET_FIELDS.get(block_key, ()):
+            if block_patch.get(field) == REDACTED_SECRET:
+                block_patch.pop(field, None)
         merged[block_key] = {**existing, **block_patch}
     return write_config(merged, path)
+
+
+def redact_secrets(cfg: dict) -> dict:
+    """Return a shallow copy of ``cfg`` with stored provider secrets
+    replaced by ``REDACTED_SECRET`` (only when a non-empty value is set).
+    Used by GET /api/config so keys never leave the box."""
+    out = dict(cfg)
+    for block_key, fields in _SECRET_FIELDS.items():
+        block = out.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        block = dict(block)
+        for field in fields:
+            if block.get(field):
+                block[field] = REDACTED_SECRET
+        out[block_key] = block
+    return out
