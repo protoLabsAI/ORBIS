@@ -31,6 +31,7 @@
 #   scripts/nuke-and-rebuild.sh --launch           # build + launch
 #   scripts/nuke-and-rebuild.sh --launch --tail    # + tail sidecar log
 #   scripts/nuke-and-rebuild.sh --dmg              # build local DMG
+#   scripts/nuke-and-rebuild.sh --devtools         # dev build (Dev tab etc.)
 #   scripts/nuke-and-rebuild.sh --legacy-cpal      # fallback input path
 #
 # Stops on first error.
@@ -44,12 +45,14 @@ LAUNCH=0
 TAIL=0
 DMG=0
 DMG_STAGE=""
+DEVTOOLS=0
 VOICE_PROCESSING=1
 for arg in "$@"; do
   case "$arg" in
     --launch) LAUNCH=1 ;;
     --tail)   TAIL=1 ;;
     --dmg)    DMG=1 ;;
+    --devtools) DEVTOOLS=1 ;;
     --voice-processing|--vp)
       # Kept for compatibility with older runbooks; voice-processing
       # is now the default Mac dev/release path.
@@ -183,10 +186,17 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 cd "${ROOT}/web"
 bun install --silent
-# Local dev builds get the developer tools (Dev/Orb tabs, premium-orb picker).
-# CI release builds do NOT set this, so the dev surface — and the paywall
-# bypass it would open — never ships. See web/src/shared/devMode.ts.
-VITE_ORBIS_DEVTOOLS=1 bun run build
+# Dev tools (the Dev tab + dev toggle) are OPT-IN via --devtools. The default
+# build is ship-clean: this script also produces the DMG that gets distributed,
+# so a hardcoded flag here is exactly how dev surfaces leak into shipped builds
+# (see web/src/shared/devMode.ts for the paywall history). When you want the
+# Dev tab locally, pass --devtools or use `bun run dev`.
+if [ "${DEVTOOLS}" = "1" ]; then
+  echo "  (devtools build — Dev tab enabled; do NOT ship this bundle)"
+  VITE_ORBIS_DEVTOOLS=1 bun run build
+else
+  bun run build
+fi
 [ -f "${ROOT}/web/dist/index.html" ] || { echo "bun build produced no dist/index.html" >&2; exit 3; }
 ok "frontend built ($(stat -f %m "${ROOT}/web/dist/index.html"))"
 cd "${ROOT}"

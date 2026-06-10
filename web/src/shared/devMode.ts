@@ -3,16 +3,16 @@ import { useSyncExternalStore } from 'react';
 const STORAGE_KEY = 'orbis.devMode';
 
 /**
- * Developer tools — the Dev + Orb drawer tabs, the premium-orb picker, the live
- * event log — are a BUILD-TIME capability, never a user-flippable one. Exposing
- * them in a shipped build lets anyone reach the paid orb editor + premium orbs
- * for free, defeating the paywall (they did, pre-2026-06-05).
+ * Developer tools — the Dev drawer tab + the dev-mode toggle in Settings —
+ * are a BUILD-TIME capability, never a user-flippable one. Exposing them in a
+ * shipped build has opened paywall bypasses before (the dev-gated premium-orb
+ * surfaces, pre-2026-06-05; those surfaces are now removed outright).
  *
  * They're enabled only in a real dev server (`vite dev`) or when a build sets
- * `VITE_ORBIS_DEVTOOLS=1` — the local `nuke-and-rebuild.sh` sets it; CI release
- * builds do NOT. In a shipped build the flag is unset, so dev mode is
- * permanently off and `set()` is a no-op — a stale `orbis.devMode=1` in
- * localStorage from an older build is ignored.
+ * `VITE_ORBIS_DEVTOOLS=1` — `nuke-and-rebuild.sh` sets it only with the
+ * --devtools flag; default and CI release builds do NOT. In a shipped build
+ * the flag is unset, so dev mode is permanently off and `set()` is a no-op —
+ * a stale `orbis.devMode=1` in localStorage from an older build is ignored.
  */
 export const DEVTOOLS_ENABLED: boolean =
   import.meta.env.DEV ||
