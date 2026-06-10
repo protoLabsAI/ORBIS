@@ -52,6 +52,7 @@ export interface VariantSpec {
 
 export const variantRegistry = createRegistry<VariantSpec>();
 
-export const registerVariant = (spec: VariantSpec): void => {
+/** Register a variant. Returns a deregister fn (used by runtime-imported
+ * `.orbis` definitions; built-ins just ignore it). */
+export const registerVariant = (spec: VariantSpec): (() => void) =>
   variantRegistry.register(spec);
-};

@@ -14,3 +14,7 @@
  * `premium: true` and is reached only through the paid customization editor.
  */
 import.meta.glob('./*/index.tsx', { eager: true });
+
+// Data-driven `.orbis` definitions register through the same registry —
+// bundled ones load here; user-imported ones arrive via the orbs catalog.
+import '../definitions';

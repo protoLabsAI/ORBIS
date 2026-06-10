@@ -6,7 +6,8 @@
   ],
   "compilerOptions": {
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@orbis/orb-runtime": ["../packages/orb-runtime/src/index.ts"]
     }
   }
 }

@@ -1,0 +1,15 @@
+{
+  "name": "@orbis/orb-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ORBIS orb rendering runtime — the .orbis definition format, validator, and the data-driven raymarch engine shared by the app and the editor.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "@react-three/fiber": ">=9",
+    "react": ">=19",
+    "three": ">=0.180"
+  }
+}
