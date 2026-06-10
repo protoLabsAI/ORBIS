@@ -128,6 +128,9 @@ def patched_channels(monkeypatch):
     monkeypatch.setattr(discovery, "_browse_mdns", _browse_mdns)
     monkeypatch.setattr(discovery, "_scan_tailnet", _scan_tailnet)
     monkeypatch.setattr(discovery, "_probe", _probe)
+    # Neutral own-IP so the co-located normalization (protoAgent #837) never
+    # accidentally fires on the dev machine's real LAN address.
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "10.255.255.1")
     return state
 
 
@@ -144,6 +147,35 @@ def test_discover_filters_known_and_dedupes(patched_channels):
     by_key = {(a["host"], a["port"]): a for a in found}
     assert set(by_key) == {("127.0.0.1", 7870), ("192.168.1.20", 7871)}
     assert by_key[("127.0.0.1", 7870)]["name"] == "roxy"  # local won the clash
+
+
+def test_discover_collapses_colocated_mdns_with_local_scan(
+    patched_channels, monkeypatch,
+):
+    """A co-located agent's mDNS advert carries the machine's LAN IP — without
+    normalization it surfaces twice (loopback via local scan + LAN IP via mDNS,
+    different (host, port) keys). protoAgent #837."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.5.31")
+    patched_channels["local"] = [_agent("127.0.0.1", 7874, "roxy", "ops agent")]
+    patched_channels["mdns"] = [
+        _agent("192.168.5.31", 7874, "roxy"),  # same agent, own-IP advert
+        _agent("192.168.1.20", 7871, "proto", "dev agent"),  # genuinely remote
+    ]
+
+    found = asyncio.run(discovery.discover())
+    by_key = {(a["host"], a["port"]): a for a in found}
+    assert set(by_key) == {("127.0.0.1", 7874), ("192.168.1.20", 7871)}
+    assert by_key[("127.0.0.1", 7874)]["description"] == "ops agent"  # local won
+
+
+def test_discover_own_ip_advert_hits_known_exclusion(patched_channels, monkeypatch):
+    """A loopback-configured delegate's own mDNS advert (LAN IP) must collapse
+    into the known set, not reappear as 'discovered'."""
+    monkeypatch.setattr(discovery, "_local_ip", lambda: "192.168.5.31")
+    patched_channels["mdns"] = [_agent("192.168.5.31", 7874, "roxy")]
+
+    found = asyncio.run(discovery.discover(known={("127.0.0.1", 7874)}))
+    assert found == []
 
 
 def test_discover_enriches_mdns_description_from_card(patched_channels):
