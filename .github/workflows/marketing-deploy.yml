@@ -1,16 +1,19 @@
 name: Deploy Marketing Site
 
-# Builds the Astro marketing site AND the VitePress docs, then deploys the
-# combined bundle to Cloudflare Pages (project: orbis-marketing →
-# https://orbis.protolabs.studio). The docs are served at /docs — built with
-# DOCS_BASE=/docs/ and copied into the Astro output's dist/docs before deploy,
-# so one Cloudflare Pages project serves both the landing page and the docs.
+# Builds the Astro marketing site, the VitePress docs, AND the orb editor
+# SPA, then deploys the combined bundle to Cloudflare Pages (project:
+# orbis-marketing → https://orbis.protolabs.studio). The docs are served at
+# /docs (built with DOCS_BASE=/docs/) and the editor at /editor (Vite
+# base=/editor/) — both copied into the Astro output before deploy, so one
+# Cloudflare Pages project serves all three.
 
 on:
   push:
     branches: [main]
     paths:
       - 'sites/marketing/**'
+      - 'sites/editor/**'
+      - 'packages/orb-runtime/**'
       - 'docs/**'
       - 'package.json'
       - 'package-lock.json'
@@ -61,6 +64,21 @@ jobs:
           rm -rf sites/marketing/dist/docs
           mkdir -p sites/marketing/dist/docs
           cp -R docs/.vitepress/dist/. sites/marketing/dist/docs/
+
+      # --- Orb editor (Vite SPA / bun) served at /editor ---
+      - name: Install editor dependencies
+        run: bun install
+        working-directory: sites/editor
+
+      - name: Build orb editor (base /editor/)
+        run: bun run build
+        working-directory: sites/editor
+
+      - name: Fold editor into the marketing bundle at /editor
+        run: |
+          rm -rf sites/marketing/dist/editor
+          mkdir -p sites/marketing/dist/editor
+          cp -R sites/editor/dist/. sites/marketing/dist/editor/
 
       - name: Deploy to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name=orbis-marketing --branch=main

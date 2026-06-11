@@ -1,0 +1,367 @@
+{
+  "format": "orbis-orb",
+  "version": 1,
+  "id": "prism",
+  "name": "Prism",
+  "author": "ORBIS",
+  "description": "Refraction-tilted volumetric orb \u2014 the first data-driven .orbis definition, rendered by the raymarch-v1 engine.",
+  "engine": "raymarch-v1",
+  "geometry": {
+    "type": "sphere",
+    "radius": 5.5,
+    "widthSegments": 32,
+    "heightSegments": 32
+  },
+  "material": {
+    "blending": "additive",
+    "transparent": true,
+    "depthWrite": false,
+    "doubleSide": true
+  },
+  "motion": {
+    "scaleAudioPump": 0.06,
+    "breath": true,
+    "rotationXRatio": 0.5
+  },
+  "shaders": {
+    "fragment": "// Polynomial smooth minimum \u2014 organic blend between two SDFs.\nfloat smin(float a, float b, float k) {\n  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);\n  return mix(b, a, h) - k * h * (1.0 - h);\n}\n\n// Two-sphere blend with nested sine-wave turbulence on both\n// sample positions. The non-uniform iteration step (2.3 \u2192 6.0\n// step 1.1) is kept verbatim \u2014 that irregularity is what makes\n// the turbulence feel organic instead of grid-like.\nfloat evaluateScene(vec3 p, float t, out vec3 secondaryPosOut) {\n  vec3 primaryPos   = p * uFractalScale;\n  vec3 secondaryPos = p * uFractalScale;\n\n  for (float iteration = 2.3; iteration <= 6.0; iteration += 1.1) {\n    float secondaryScale = iteration * 0.3;\n    secondaryPos += sin(0.6 * t + primaryPos.zxy * secondaryScale) * 0.4;\n    primaryPos   += sin(t + primaryPos.yzx * iteration) * 0.25;\n  }\n\n  secondaryPosOut = secondaryPos;\n\n  float sphereA = length(primaryPos + 1.0) - 2.0;\n  float sphereB = length(secondaryPos - 1.3) - 2.9;\n  float blended = smin(sphereA, sphereB, uSmoothing);\n\n  // Volume contribution: thin shell around the blended surface.\n  // Divide by uFractalScale so the SDF stays correctly normalised\n  // when uFractalScale changes (otherwise denser scales overshoot).\n  return abs(blended) * 0.1 / uFractalScale;\n}\n\n// Hash for jitter \u2014 breaks up volumetric banding.\nfloat hash(vec2 p) {\n  return fract(sin(dot(p, vec2(12.8998, 78.233))) * 43758.5453);\n}\n\n// Cosine-palette emission. Phase shifts in uColorPhases pull the\n// rainbow toward different hues; the per-pixel z-depth is what\n// produces the rainbow gradient through the volume.\nvec3 paletteFor(float depth) {\n  // The original returns vec4 + uColorPhases (RGBA); we only need\n  // RGB for the additive accumulator.\n  return 1.0 + cos(depth + uColorPhases.rgb);\n}\n\nvoid main() {\n  vec3 ro = uLocalCamPos;\n  vec3 rd = normalize(vLocalPosition - uLocalCamPos);\n\n  // Pixel-stable jitter to break banding.\n  float t = -0.015 * hash(gl_FragCoord.xy);\n\n  vec3 accum = vec3(0.0);\n\n  // Per-pixel ray budget. The source ran from a camera at z=-4.5 with\n  // a 10-unit cap; ORBIS's camera sits at z=13 in object space and the\n  // bounding-sphere fast-forward jumps the ray from there to fadeOuter,\n  // which already eats ~10 units before the orb is reached. Raise the\n  // cap to comfortably cover camera distance + sphere diameter + a\n  // little slack.\n  const float T_MAX = 25.0;\n\n  for (int step = 0; step < 90; step++) {\n    if (t > T_MAX) break;\n    vec3 pos = ro + rd * t;\n    float distFromCenter = length(pos);\n\n    // Bounding-sphere fast-forward \u2014 skip expensive turbulence math\n    // when we're outside the visible volume. The 0.01 offset lets\n    // the smoothstep below still feather correctly at the edge.\n    if (distFromCenter > uFadeOuter + 0.01) {\n      t += distFromCenter - uFadeOuter;\n      continue;\n    }\n\n    vec3 secondaryPos;\n    float sceneDist = evaluateScene(pos, uTime, secondaryPos);\n\n    float stepSize = 0.012 + sceneDist;\n    t += stepSize;\n\n    // Soft containment \u2014 full contribution inside fadeInner, fading\n    // to zero at fadeOuter. Defend against degenerate ranges where\n    // the slider step (0.05) snaps fadeOuter to \u2264 fadeInner, or a\n    // user drags inner above outer \u2014 both make smoothstep undefined\n    // per the GLSL spec, and Rainbow's 2.56/2.55 defaults sit\n    // exactly on that quantization cliff. min/max keeps the window\n    // valid; the +1e-4 floor stops a zero-width band from collapsing\n    // the whole orb to alpha=0.\n    float lo = min(uFadeInner, uFadeOuter);\n    float hi = max(uFadeInner, uFadeOuter);\n    float radialFade = 1.0 - smoothstep(lo, max(hi, lo + 1e-4), distFromCenter);\n\n    // Per-step rainbow palette. uColorPhases is the deployer's hue\n    // shift; the depth-mod-by-z gives the rainbow gradient.\n    vec3 baseColor = paletteFor(pos.z);\n\n    // Lightly tint with primary\u2194secondary so voice-state colour\n    // crossfades come through without overpowering the rainbow.\n    // 25% mix keeps the spectrum identity intact in idle / neutral\n    // states; state changes still register visually.\n    vec3 voiceTint = mix(uSecondaryColor, uPrimaryColor, 0.5);\n    baseColor = mix(baseColor, baseColor * voiceTint * 2.0, 0.25);\n\n    // Click reactivity \u2014 same in-march directional boost the other\n    // sphere-mounted variants use. Samples whose direction from\n    // origin aligns with uClickDir glow brighter.\n    float plen = length(pos);\n    vec3 pDir = (plen > 1e-4) ? pos / plen : vec3(0.0);\n    float clickBoost = uClickStrength * smoothstep(0.55, 1.0, dot(pDir, uClickDir));\n\n    float weight = (1.0 / max(stepSize, 1e-4)) * radialFade;\n    accum += baseColor * weight * (1.0 + clickBoost * 1.5);\n  }\n\n  // Tone-map. The original divides by 8000 \u00d7 screen-vignette;\n  // sphere-mounted geometry has no usable screen-uv so we drop\n  // the vignette and use a softer divisor instead.\n  vec3 tone = accum * uGlow / 8000.0;\n\n  // tanh keeps highlights from clipping while preserving bright\n  // cores; clamp the input so exp() can't blow up on mobile GPUs.\n  vec3 clamped = clamp(tone, -20.0, 20.0);\n  vec3 e2x = exp(2.0 * clamped);\n  vec3 finalColor = (e2x - 1.0) / (e2x + 1.0);\n  finalColor = clamp(finalColor, 0.0, 1.0);\n\n  // Alpha mirrors luminance so the orb blends into the canvas\n  // background instead of carrying a black box around its silhouette.\n  float maxLuma = max(finalColor.r, max(finalColor.g, finalColor.b));\n  float alpha = clamp(maxLuma * 1.5, 0.0, 1.0);\n\n  gl_FragColor = vec4(finalColor, alpha);\n}\n",
+    "vertex": null
+  },
+  "uniforms": {
+    "uFractalScale": {
+      "type": "float",
+      "default": 1.0
+    },
+    "uFadeOuter": {
+      "type": "float",
+      "default": 2.6
+    },
+    "uFadeInner": {
+      "type": "float",
+      "default": 2.45
+    },
+    "uSmoothing": {
+      "type": "float",
+      "default": 1.55
+    },
+    "uColorPhases": {
+      "type": "vec4",
+      "default": [
+        2.4,
+        3.4,
+        4.4,
+        0.8
+      ]
+    },
+    "uGlow": {
+      "type": "float",
+      "default": 1.0
+    }
+  },
+  "fields": [
+    {
+      "kind": "color",
+      "key": "primaryEnergy",
+      "label": "Primary",
+      "section": "color"
+    },
+    {
+      "kind": "color",
+      "key": "secondaryEnergy",
+      "label": "Secondary",
+      "section": "color"
+    },
+    {
+      "kind": "slider",
+      "key": "density",
+      "label": "Density",
+      "section": "energy",
+      "min": 0.1,
+      "max": 3.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "atmosphereGlow",
+      "label": "Glow",
+      "section": "energy",
+      "min": 0.0,
+      "max": 5.0,
+      "step": 0.01
+    },
+    {
+      "kind": "slider",
+      "key": "glow",
+      "label": "Core glow",
+      "section": "energy",
+      "min": 0.1,
+      "max": 2.5,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "chromaticAberration",
+      "label": "Aberration",
+      "section": "energy",
+      "min": 0.0,
+      "max": 0.05,
+      "step": 0.001
+    },
+    {
+      "kind": "slider",
+      "key": "speed",
+      "label": "Internal speed",
+      "section": "motion",
+      "min": 0.1,
+      "max": 3.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "orbRotation",
+      "label": "Auto-rotation",
+      "section": "motion",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "kind": "slider",
+      "key": "asymmetry",
+      "label": "Asymmetry",
+      "section": "motion",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "kind": "slider",
+      "key": "fractalScale",
+      "label": "Scale",
+      "section": "fractal",
+      "min": 0.5,
+      "max": 2.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "fadeOuter",
+      "label": "Halo outer",
+      "section": "fractal",
+      "min": 1.0,
+      "max": 5.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "fadeInner",
+      "label": "Halo inner",
+      "section": "fractal",
+      "min": 0.5,
+      "max": 4.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "smoothing",
+      "label": "Smoothing",
+      "section": "fractal",
+      "min": 0.1,
+      "max": 4.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "colorPhaseR",
+      "label": "Phase R",
+      "section": "fractal",
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "colorPhaseG",
+      "label": "Phase G",
+      "section": "fractal",
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "colorPhaseB",
+      "label": "Phase B",
+      "section": "fractal",
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "colorPhaseA",
+      "label": "Phase A",
+      "section": "fractal",
+      "min": 0.0,
+      "max": 10.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "dpr",
+      "label": "Resolution",
+      "section": "perf",
+      "min": 0.1,
+      "max": 2.0,
+      "step": 0.1
+    }
+  ],
+  "palettes": {
+    "Prism": {
+      "primaryEnergy": "#8be9fd",
+      "secondaryEnergy": "#bd93f9",
+      "density": 1.6,
+      "atmosphereGlow": 0.18,
+      "speed": 0.5,
+      "chromaticAberration": 0.018,
+      "asymmetry": 0.45,
+      "orbRotation": 0.5,
+      "fractalScale": 1.0,
+      "fadeOuter": 2.6,
+      "fadeInner": 2.45,
+      "smoothing": 1.55,
+      "glow": 1.0,
+      "colorPhaseR": 2.4,
+      "colorPhaseG": 3.4,
+      "colorPhaseB": 4.4,
+      "colorPhaseA": 0.8,
+      "dpr": 0.7
+    },
+    "Sunburst": {
+      "primaryEnergy": "#fbbf24",
+      "secondaryEnergy": "#dc2626",
+      "density": 1.8,
+      "atmosphereGlow": 0.22,
+      "speed": 0.55,
+      "chromaticAberration": 0.024,
+      "asymmetry": 0.55,
+      "orbRotation": 0.55,
+      "fractalScale": 1.0,
+      "fadeOuter": 2.6,
+      "fadeInner": 2.4,
+      "smoothing": 1.6,
+      "glow": 1.1,
+      "colorPhaseR": 0.3,
+      "colorPhaseG": 1.2,
+      "colorPhaseB": 2.6,
+      "colorPhaseA": 0.5,
+      "dpr": 0.7
+    },
+    "Glacier": {
+      "primaryEnergy": "#67e8f9",
+      "secondaryEnergy": "#1e40af",
+      "density": 1.4,
+      "atmosphereGlow": 0.16,
+      "speed": 0.45,
+      "chromaticAberration": 0.014,
+      "asymmetry": 0.4,
+      "orbRotation": 0.45,
+      "fractalScale": 1.05,
+      "fadeOuter": 2.4,
+      "fadeInner": 2.2,
+      "smoothing": 1.4,
+      "glow": 0.9,
+      "colorPhaseR": 3.2,
+      "colorPhaseG": 4.8,
+      "colorPhaseB": 6.2,
+      "colorPhaseA": 1.4,
+      "dpr": 0.7
+    }
+  },
+  "defaultPalette": "Prism",
+  "bindings": [
+    {
+      "target": "uFractalScale",
+      "signal": "param.fractalScale"
+    },
+    {
+      "target": "uFadeOuter",
+      "signal": "param.fadeOuter"
+    },
+    {
+      "target": "uFadeInner",
+      "signal": "param.fadeInner"
+    },
+    {
+      "target": "uColorPhases.x",
+      "signal": "param.colorPhaseR"
+    },
+    {
+      "target": "uColorPhases.y",
+      "signal": "param.colorPhaseG"
+    },
+    {
+      "target": "uColorPhases.z",
+      "signal": "param.colorPhaseB"
+    },
+    {
+      "target": "uColorPhases.w",
+      "signal": "param.colorPhaseA"
+    },
+    {
+      "target": "uGlow",
+      "signal": "param.glow"
+    },
+    {
+      "target": "uGlow",
+      "signal": "snap.density",
+      "op": "mul",
+      "scale": 0.25,
+      "offset": 0.85
+    },
+    {
+      "target": "uGlow",
+      "signal": "bot.level",
+      "op": "add",
+      "scale": 0.5
+    },
+    {
+      "target": "uSmoothing",
+      "signal": "param.smoothing"
+    },
+    {
+      "target": "uSmoothing",
+      "signal": "user.level",
+      "op": "add",
+      "scale": 0.4
+    }
+  ],
+  "moodDefaults": {
+    "valence": {
+      "glow": 0.1,
+      "fadeOuter": 0.08,
+      "atmosphereGlow": 0.06,
+      "density": 0.15,
+      "asymmetry": -0.05
+    },
+    "arousal": {
+      "glow": 0.15,
+      "smoothing": -0.15,
+      "speed": 0.4,
+      "orbRotation": 0.2,
+      "density": 0.4,
+      "chromaticAberration": 0.008
+    },
+    "guardedness": {
+      "glow": -0.15,
+      "fadeOuter": -0.1,
+      "smoothing": 0.2,
+      "atmosphereGlow": -0.1,
+      "density": -0.4,
+      "asymmetry": 0.15,
+      "orbRotation": -0.15
+    }
+  },
+  "premium": true,
+  "post": null
+}

@@ -1,0 +1,203 @@
+{
+  "format": "orbis-orb",
+  "version": 1,
+  "id": "my-first-orb",
+  "name": "My First Orb",
+  "author": "you",
+  "description": "A soft luminous core \u2014 the smallest useful .orbis definition. Edit me.",
+  "engine": "raymarch-v1",
+  "geometry": {
+    "type": "sphere",
+    "radius": 5.5
+  },
+  "material": {
+    "blending": "additive",
+    "transparent": true,
+    "depthWrite": false,
+    "doubleSide": true
+  },
+  "motion": {
+    "scaleAudioPump": 0.06,
+    "breath": true
+  },
+  "shaders": {
+    "fragment": "// Minimal starter orb \u2014 a soft luminous core with a breathing halo.\n// Ray origin = uLocalCamPos; ray direction toward this fragment on the\n// sphere shell. We never march here \u2014 just closest-approach glow math,\n// the cheapest possible audio-reactive orb.\nvoid main() {\n  vec3 ro = uLocalCamPos;\n  vec3 rd = normalize(vLocalPosition - uLocalCamPos);\n\n  // Closest point on the ray to the orb center (local origin).\n  float t = max(0.0, -dot(ro, rd));\n  vec3 nearest = ro + rd * t;\n  float d = length(nearest);\n\n  // Gentle ripple so the halo feels alive.\n  float ripple = 0.12 * sin(uTime * 1.6 + nearest.y * 2.0 + nearest.x * 1.3);\n  float r = uCoreRadius + ripple;\n\n  float core = exp(-pow(max(0.0, d - r) * uFalloff, 2.0));\n  float halo = exp(-d * d * 0.08) * 0.35;\n\n  // Click bloom \u2014 brighten samples facing the click direction.\n  vec3 nDir = (d > 1e-4) ? nearest / d : vec3(0.0, 0.0, 1.0);\n  float click = uClickStrength * smoothstep(0.55, 1.0, dot(nDir, uClickDir));\n\n  vec3 col = mix(uSecondaryColor, uPrimaryColor, clamp(core + halo, 0.0, 1.0));\n  float lum = (core + halo) * uGlow * (1.0 + click);\n  vec3 finalColor = col * lum;\n  float alpha = clamp(max(finalColor.r, max(finalColor.g, finalColor.b)), 0.0, 1.0);\n  gl_FragColor = vec4(finalColor, alpha);\n}\n",
+    "vertex": null
+  },
+  "uniforms": {
+    "uCoreRadius": {
+      "type": "float",
+      "default": 2.0
+    },
+    "uFalloff": {
+      "type": "float",
+      "default": 1.5
+    },
+    "uGlow": {
+      "type": "float",
+      "default": 1.0
+    }
+  },
+  "fields": [
+    {
+      "kind": "color",
+      "key": "primaryEnergy",
+      "label": "Primary",
+      "section": "color"
+    },
+    {
+      "kind": "color",
+      "key": "secondaryEnergy",
+      "label": "Secondary",
+      "section": "color"
+    },
+    {
+      "kind": "slider",
+      "key": "glow",
+      "label": "Glow",
+      "section": "energy",
+      "min": 0.1,
+      "max": 3.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "coreRadius",
+      "label": "Core radius",
+      "section": "energy",
+      "min": 0.5,
+      "max": 4.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "falloff",
+      "label": "Edge falloff",
+      "section": "energy",
+      "min": 0.3,
+      "max": 4.0,
+      "step": 0.05
+    },
+    {
+      "kind": "slider",
+      "key": "density",
+      "label": "Presence",
+      "section": "energy",
+      "min": 0.2,
+      "max": 3.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "atmosphereGlow",
+      "label": "State glow",
+      "section": "energy",
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01
+    },
+    {
+      "kind": "slider",
+      "key": "speed",
+      "label": "Speed",
+      "section": "motion",
+      "min": 0.1,
+      "max": 3.0,
+      "step": 0.1
+    },
+    {
+      "kind": "slider",
+      "key": "orbRotation",
+      "label": "Auto-rotation",
+      "section": "motion",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01
+    },
+    {
+      "kind": "slider",
+      "key": "dpr",
+      "label": "Resolution",
+      "section": "perf",
+      "min": 0.1,
+      "max": 2.0,
+      "step": 0.1
+    }
+  ],
+  "palettes": {
+    "Lumen": {
+      "primaryEnergy": "#9b87f2",
+      "secondaryEnergy": "#6366f1",
+      "glow": 1.0,
+      "coreRadius": 2.0,
+      "falloff": 1.5,
+      "density": 1.0,
+      "atmosphereGlow": 0.5,
+      "speed": 1.0,
+      "orbRotation": 0.4,
+      "dpr": 0.7
+    },
+    "Ember": {
+      "primaryEnergy": "#fb923c",
+      "secondaryEnergy": "#7c2d12",
+      "glow": 1.2,
+      "coreRadius": 1.8,
+      "falloff": 1.2,
+      "density": 1.2,
+      "atmosphereGlow": 0.6,
+      "speed": 0.8,
+      "orbRotation": 0.3,
+      "dpr": 0.7
+    }
+  },
+  "defaultPalette": "Lumen",
+  "bindings": [
+    {
+      "target": "uCoreRadius",
+      "signal": "param.coreRadius"
+    },
+    {
+      "target": "uCoreRadius",
+      "signal": "user.level",
+      "op": "add",
+      "scale": 0.3
+    },
+    {
+      "target": "uFalloff",
+      "signal": "param.falloff"
+    },
+    {
+      "target": "uGlow",
+      "signal": "param.glow"
+    },
+    {
+      "target": "uGlow",
+      "signal": "snap.glow",
+      "op": "mul",
+      "scale": 0.5,
+      "offset": 0.75
+    },
+    {
+      "target": "uGlow",
+      "signal": "bot.level",
+      "op": "add",
+      "scale": 0.6
+    }
+  ],
+  "moodDefaults": {
+    "valence": {
+      "glow": 0.15,
+      "coreRadius": 0.1
+    },
+    "arousal": {
+      "speed": 0.5,
+      "glow": 0.2
+    },
+    "guardedness": {
+      "glow": -0.2,
+      "coreRadius": -0.3
+    }
+  },
+  "premium": true,
+  "post": null
+}

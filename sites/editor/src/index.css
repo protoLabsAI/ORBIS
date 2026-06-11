@@ -1,0 +1,27 @@
+@import 'tailwindcss';
+
+/* protoLabs brand accents (see reference_protolabs_brand): lavender → indigo. */
+@theme {
+  --color-brand: #9b87f2;
+  --color-brand-deep: #6366f1;
+  --color-bg: #0a0a0f;
+  --color-panel: #14141c;
+  --color-edge: #26263a;
+  --color-fg: #e7e7f0;
+  --color-fg-subtle: #8b8ba3;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-brand) 40%, transparent);
+}
