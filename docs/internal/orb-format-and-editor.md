@@ -1,6 +1,11 @@
 # Data-driven orbs + the `/editor` app — direction & plan
 
-*Drafted 2026-06-10. Status: PROPOSED (research + plan; no implementation yet).*
+*Drafted 2026-06-10. Status: **Phase 0 + Phase 1 SHIPPED 2026-06-10** —
+#496 (`packages/orb-runtime` + format + engine + prism proof), #498
+(runtime import: `/api/orbs`, `ORBIS_ORBS_DIR`, import UI, entitlement
+gate), #499 (`sites/editor` at /editor). Phase 0 workspace decision
+resolved: vite alias + `resolve.dedupe` + tsconfig `paths`, NO bun
+workspace (the release pipeline stays untouched). Phase 2+ open.*
 
 Goal: make orb visuals **data-driven** so a new orb can be imported at runtime
 as a `.orbis` file — and ship a standalone web editor at
@@ -342,7 +347,7 @@ decided in Phase 0, not load-bearing for the design.
 
 ## 7. Phasing
 
-**Phase 0 — runtime foundation (app repo, ~3-4 PRs)**
+**Phase 0 — runtime foundation — DONE 2026-06-10 (#496, #498)**
 `packages/orb-runtime` + workspace; `OrbDefinition` zod schema +
 versioned validation; `raymarch-v1` engine; spectrum ported as the proof;
 `.orbis` import (dialog + drag-drop, `ORBIS_ORBS_DIR`, sidecar CRUD,
@@ -350,7 +355,7 @@ entitlement gate); registry runtime registration verified end-to-end.
 *Exit: a hand-written `.orbis` file imports live and renders identically
 to the built-in it was ported from.*
 
-**Phase 1 — editor MVP (~3-4 PRs)**
+**Phase 1 — editor MVP — DONE 2026-06-10 (#499)**
 `sites/editor/` SPA: preview + signal simulator + shader/controls/palette
 /bindings tabs + export/import + 3 templates; `marketing-deploy.yml`
 merge step; docs page for the format.
