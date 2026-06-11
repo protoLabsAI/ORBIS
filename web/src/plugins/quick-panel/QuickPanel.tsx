@@ -22,6 +22,7 @@ import { variantRegistry } from '@/plugins/orb/variants/registry';
 import {
   importOrbisFile,
   isRuntimeOrb,
+  persistSelection,
   removeRuntimeOrb,
 } from '@/plugins/orb/definitions/runtime';
 import { useActivationConfig, type ActivationStyle } from './useActivationConfig';
@@ -250,6 +251,9 @@ function OrbSwitcher() {
       });
     } else {
       setVariant(e.variantId); // loads the definition's default palette
+      // Server config is the boot source of truth (fresh origin per
+      // launch) — persist like select_starter does for starters.
+      persistSelection(e.variantId);
     }
   };
 

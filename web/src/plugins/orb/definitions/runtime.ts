@@ -93,7 +93,21 @@ export async function importOrbisFile(file: File): Promise<ImportResult> {
 
   registerRuntime(def);
   setVariant(def.id);
+  persistSelection(def.id, def.defaultPalette);
   return { ok: true, id: def.id, errors: [] };
+}
+
+/** Server-side selection persistence. The desktop webview gets a fresh
+ * origin every launch (ephemeral sidecar port), so localStorage doesn't
+ * survive — configDriver re-hydrates the orb from /api/config at boot,
+ * and an un-persisted pick resets on refresh. Same posture as
+ * select_starter, same entitlement gate as the import itself. */
+export function persistSelection(variantId: string, palette?: string): void {
+  api
+    .putConfig({ orb: { variant: variantId, ...(palette ? { palette } : {}) } })
+    .catch(() => {
+      console.warn('[orb] could not persist orb selection to config');
+    });
 }
 
 /** Delete an imported orb: sidecar first, then deregister. Falls back
@@ -105,7 +119,10 @@ export async function removeRuntimeOrb(id: string): Promise<boolean> {
   disposers.delete(id);
   if (orbStore.getSnapshot().variantId === id) {
     const fallback = variantRegistry.all()[0];
-    if (fallback) setVariant(fallback.id);
+    if (fallback) {
+      setVariant(fallback.id);
+      persistSelection(fallback.id, fallback.defaultPalette);
+    }
   }
   return true;
 }
