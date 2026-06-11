@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
-import { ProtoLabsIcon } from './ProtoLabsIcon';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -150,9 +149,11 @@ export function BootStatus() {
         ? 'First launch takes a moment — warming up the runtime. Hang tight.'
         : undefined;
 
+  // No logo here on purpose: the Splash bumper just showed the brand mark
+  // full-screen — repeating it on the gate reads as a stutter. The gate is
+  // spinner + stage text + progress bar only.
   return (
     <BootGate
-      logo={<ProtoLabsIcon variant="outline" size={72} />}
       title={detail}
       detail={caveat}
       action={
