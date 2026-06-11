@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
+import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
 import { ProtoLabsIcon } from './ProtoLabsIcon';
 
@@ -17,6 +18,11 @@ import { ProtoLabsIcon } from './ProtoLabsIcon';
  * prints `ORBIS_BOOT {stage,detail}` markers as each component loads, the
  * Rust shell forwards them as `orbis-boot` events (and caches the latest
  * for `boot_status`, in case a marker landed before we subscribed).
+ *
+ * The shell is the design system's BootGate (mark + spinner + title +
+ * detail + action — the same surface protoAgent boots through); this
+ * component keeps all the ORBIS-specific stage/progress/stall logic and
+ * slots the progress bar + escape hatch in.
  */
 
 interface BootStage {
@@ -134,74 +140,57 @@ export function BootStatus() {
       .catch(() => {});
   };
 
+  const caveat = stalled
+    ? loadingModels
+      ? 'Still downloading — a first-run model pull can run several minutes on a slow connection.'
+      : 'Still starting — this is taking longer than usual.'
+    : loadingModels
+      ? 'First launch loads local speech models — this can take a minute or two. Later launches are quick.'
+      : reassure
+        ? 'First launch takes a moment — warming up the runtime. Hang tight.'
+        : undefined;
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-5 bg-surface text-fg-body">
-      {/* Same brand mark as IntroSplash so the splash fades seamlessly into the
-          loading screen (one continuous branded boot, not splash → plain
-          spinner). Gentle breathing pulse stands in for the spinner. */}
-      <div
-        className="orbis-boot-mark"
-        style={{ filter: 'drop-shadow(0 0 14px rgba(167, 139, 250, 0.35))' }}
-      >
-        <ProtoLabsIcon variant="outline" size={72} />
-      </div>
-      <div className="text-base">{detail}</div>
-      <div className="h-1 w-56 overflow-hidden rounded-full bg-edge">
-        {noMarkerYet ? (
-          // No real progress yet (the ~80s import phase). Show an indeterminate
-          // sweep so it reads as "working", not a frozen 5% bar.
-          <div className="orbis-boot-indeterminate h-full w-1/3 rounded-full bg-brand" />
-        ) : (
-          <div
-            className="h-full rounded-full bg-brand transition-[width] duration-700 ease-out"
-            style={{ width: `${Math.round(progress * 100)}%` }}
-          />
-        )}
-      </div>
-      <style>{`
-        @keyframes orbis-boot-indeterminate {
-          0% { transform: translateX(-120%); }
-          100% { transform: translateX(320%); }
-        }
-        .orbis-boot-indeterminate {
-          animation: orbis-boot-indeterminate 1.3s ease-in-out infinite;
-        }
-        @keyframes orbis-boot-mark {
-          0%, 100% { opacity: 0.85; transform: scale(1); }
-          50% { opacity: 1; transform: scale(1.04); }
-        }
-        .orbis-boot-mark {
-          animation: orbis-boot-mark 2.4s ease-in-out infinite;
-        }
-      `}</style>
-      {loadingModels && (
-        <div className="max-w-xs text-center text-sm text-fg-muted">
-          First launch loads local speech models — this can take a minute or
-          two. Later launches are quick.
-        </div>
-      )}
-      {reassure && !stalled && (
-        <div className="max-w-xs text-center text-sm text-fg-muted">
-          First launch takes a moment — warming up the runtime. Hang tight.
-        </div>
-      )}
-      {stalled && (
-        <div className="mt-2 flex flex-col items-center gap-3">
-          <p className="max-w-xs text-center text-sm text-fg-muted">
-            {loadingModels
-              ? 'Still downloading — a first-run model pull can run several minutes on a slow connection.'
-              : 'Still starting — this is taking longer than usual.'}
-          </p>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={onViewLogs}>
-              View logs
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setReady(true)}>
-              Continue anyway
-            </Button>
+    <BootGate
+      logo={<ProtoLabsIcon variant="outline" size={72} />}
+      title={detail}
+      detail={caveat}
+      action={
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-1 w-56 overflow-hidden rounded-full bg-edge">
+            {noMarkerYet ? (
+              // No real progress yet (the ~80s import phase). Show an
+              // indeterminate sweep so it reads as "working", not a frozen
+              // 5% bar.
+              <div className="orbis-boot-indeterminate h-full w-1/3 rounded-full bg-brand" />
+            ) : (
+              <div
+                className="h-full rounded-full bg-brand transition-[width] duration-700 ease-out"
+                style={{ width: `${Math.round(progress * 100)}%` }}
+              />
+            )}
           </div>
+          <style>{`
+            @keyframes orbis-boot-indeterminate {
+              0% { transform: translateX(-120%); }
+              100% { transform: translateX(320%); }
+            }
+            .orbis-boot-indeterminate {
+              animation: orbis-boot-indeterminate 1.3s ease-in-out infinite;
+            }
+          `}</style>
+          {stalled && (
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={onViewLogs}>
+                View logs
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setReady(true)}>
+                Continue anyway
+              </Button>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      }
+    />
   );
 }
