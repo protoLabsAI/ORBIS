@@ -37,10 +37,16 @@ export function App() {
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-4 border-b border-edge bg-panel px-4 py-2.5">
         <h1 className="text-sm font-semibold tracking-wide">
-          <span className="bg-gradient-to-r from-brand to-brand-deep bg-clip-text text-transparent">
-            ORBIS
-          </span>{' '}
-          <span className="text-fg-subtle">orb editor</span>
+          <a
+            href="https://orbis.protolabs.studio/"
+            title="ORBIS home"
+            className="transition-opacity hover:opacity-80"
+          >
+            <span className="bg-gradient-to-r from-brand to-brand-deep bg-clip-text text-transparent">
+              ORBIS
+            </span>{' '}
+            <span className="text-fg-subtle">orb editor</span>
+          </a>
         </h1>
         <span className="truncate text-xs text-fg-subtle">
           {snap.definition.name} <code className="text-[10px]">({snap.definition.id})</code>
