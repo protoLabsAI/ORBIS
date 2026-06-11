@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.2.134",
+    "date": "2026-06-11",
+    "changes": [
+      "Migrates the application splash and loading screens to the official design system components.",
+      "Synchronizes boot sequence animations and brand elements with the standard design system shell.",
+      "Removes redundant logo displays during the boot gate phase to streamline the startup visual flow.",
+      "Implements CSS token support for consistent dark mode rendering based on system preferences.",
+      "Fixes a Docker build error by ensuring necessary workspace packages are included in the web build stage."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.134/ORBIS-0.2.134-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.132",
     "date": "2026-06-10",
     "changes": [
