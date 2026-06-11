@@ -1,10 +1,94 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-10 (v0.2.132 — eval-driven agent quality, A2A discovery,
-OSS round, distribution audit). On `main`, all PRs merged.*
+*Last updated 2026-06-11 late (v0.2.136 — .orbis orbs + the editor live, DS
+boot surfaces, wake auto-close fixes). On `main`, all PRs merged. Josh tests
+the released build in the morning.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-11 (v0.2.133–136 — orbs become data, the editor ships, wake holds the room)
+
+One marathon session (PRs #495–#513). Plan of record:
+`docs/internal/orb-format-and-editor.md` (Phase 0+1 SHIPPED).
+
+**Data-driven orbs + the editor (the headline).**
+- `packages/orb-runtime` — shared engine package, consumed AS SOURCE via
+  vite alias + `resolve.dedupe` + tsconfig paths (deliberately NO bun
+  workspace — release pipeline untouched). web's old `shared/` files are
+  re-export shims; single source of truth.
+- `.orbis` format v1: JSON = GLSL fragment body + typed uniforms +
+  FieldSpec fields + palettes + declarative signal→uniform bindings (no
+  executable JS — the security model). `raymarch-v1` engine
+  (`DefinitionOrb`) renders any definition with the built-ins' exact
+  per-frame behavior. Bundled proof: **Prism** (spectrum's shader as data).
+- Runtime import: `agent/orb_definitions.py` (validator mirrors the TS one
+  — keep in LOCK-STEP), `/api/orbs` CRUD (POST entitlement-gated),
+  `ORBIS_ORBS_DIR=<app_data>/orbs`. **Quick tab** owns the user surface
+  (switcher cycles starters + imported orbs; Import/Remove row) because
+  the beta IA renders NO `drawer-orb` slot — anything in OrbSettingsPanel
+  is unreachable in ship builds.
+- Selection persistence: import/toggle/remove all `putConfig` the `orb:`
+  block — **server config is the boot source of truth** (fresh webview
+  origin per launch; localStorage does not survive). orbStore holds a
+  *pending* selection for ids that register late (catalog races boot).
+- **The editor** lives at **orbis.protolabs.studio/editor** (`sites/editor`
+  SPA folded into the Cloudflare bundle like /docs): same engine, signal
+  simulator (state scrubber, pulse/manual/mic levels — calm by default,
+  pulse softened below the photosensitive band), Shader/Controls/Bindings/
+  JSON/Meta panes, templates, .orbis import/export. Docs:
+  `/docs/how-to/create-custom-orbs` + `/docs/reference/orbis-file-format`.
+
+**Design-system boot surfaces.** IntroSplash + BootStatus now render
+through `@protolabsai/ui`'s `Splash` + `BootGate` (extracted from ORBIS
+originally — homecoming). `--pl-*` tokens pinned dark via
+`data-theme="dark"`. Boot gate is spinner + stage text + bar only (no
+logo — the bumper already showed the mark).
+
+**Wake-word fixes (found by Josh live-testing the released build).**
+- #511: auto-close is busy-aware — `ConversationBusy` (wake_word.rs)
+  holds the listening window while bot-state is thinking/speaking, ANY
+  tool call is in flight (count + state tracked separately — state drops
+  idle mid-delegation after the ack), or playback within 1.5s. Fed from
+  `bridge_sse`; 10-min max hold. Fixes "delegation → silence → window
+  closes → 'say Hey Orbis' mid-task".
+- #512: the Listen window slider (4–30s) EXISTED but was buried in the
+  tuning disclosure — lifted under the activation style cards.
+
+**Releases.** v0.2.133 (DUD — Docker-rot: Dockerfile web stage didn't COPY
+packages/; fixed #507, tag has no published release), v0.2.134 (orb work +
+DS boot + hardening), v0.2.135 (version-only, used to live-test the
+updater end-to-end ✔), v0.2.136 (wake fixes — Josh's morning build).
+
+**Live incident during testing (resolved + lesson).** Gateway key rotated
+→ every LLM call 401s → orb sits in "thinking" FOREVER, silently. The
+StallWatchdog disarms on `LLMFullResponseStartFrame` (pushed before the
+HTTP call); the ErrorFrame flows UPSTREAM where it never looks; nothing
+re-arms. **OPEN: LLMErrorAnnouncer** — catch upstream ErrorFrame, classify
+(auth vs unreachable), speak one throttled canned line. Designed, not
+built. Secondary effect: dead LLM + silence = wake auto-close, which
+masqueraded as "the app keeps turning off".
+
+### Morning QA (Josh, on the installed build)
+1. Updater: v0.2.134 → v0.2.136 in-app (time it — live evidence for #489,
+   the 1.7GB sidecar re-download).
+2. Wake: "Hey Orbis" → ask for a delegation → window HOLDS through the
+   silent work → answer → follow-up without re-waking.
+3. Listen window slider visible under the activation styles (wake style).
+4. Imported orb survived the update + still selected after relaunch.
+5. Boot: brand bumper → logo-less gate, no stutter.
+
+### Open threads (priority order)
+- **LLMErrorAnnouncer** (silent-thinking bug — worst first-user failure).
+- **ACCESS field rename** (settings) — confused even Josh; "Owner API
+  key" + copy distinguishing it from the A2A token.
+- Distribution audit backlog #481–491 (esp. #487 git-dep-on-customer-
+  machines, #489 updater payload size — now with live timing data).
+- Orb plan Phase 2: Rust FFT bands (`bot.band.N` signals), port remaining
+  raymarch built-ins to definitions, frame-time watchdog for imports.
+- Paywall go-live still pending (`ORBIS_LICENSE_PUBKEY` unset → gate open).
 
 ---
 
