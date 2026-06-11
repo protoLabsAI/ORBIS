@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.2.136",
+    "date": "2026-06-11",
+    "changes": [
+      "Prevents the listening window from auto-closing while the system is processing tool calls or delivering spoken responses.",
+      "Maintains an active listening state through concurrent background tasks to ensure uninterrupted conversation flow.",
+      "Surfaces the wake listen-window duration slider directly under activation style cards for easier access.",
+      "Implements a dual-input busy signal to track both bot speech and in-flight tool execution independently.",
+      "Adds a safety timeout to the busy state to prevent the microphone from remaining open indefinitely if a task completion event is missed.",
+      "Improves echo guard logic to treat recent playback as active conversation, preventing premature window closure."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.136/ORBIS-0.2.136-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.134",
     "date": "2026-06-11",
     "changes": [
