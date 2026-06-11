@@ -87,7 +87,7 @@ export function App() {
             Export .orbis
           </button>
           <a
-            href="https://orbis.protolabs.studio/docs/"
+            href="https://orbis.protolabs.studio/docs/how-to/create-custom-orbs"
             target="_blank"
             rel="noreferrer"
             className="text-fg-subtle hover:text-fg"
