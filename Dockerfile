@@ -15,6 +15,10 @@ FROM oven/bun:1 AS web
 WORKDIR /web
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
+# The orb runtime is consumed as source from OUTSIDE web/ (vite alias +
+# tsconfig paths point at ../packages/orb-runtime) — without this copy
+# the web build can't resolve @orbis/orb-runtime inside the image.
+COPY packages/ /packages/
 COPY web/ ./
 RUN bun run build
 
