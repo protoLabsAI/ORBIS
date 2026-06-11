@@ -11,7 +11,7 @@
  * its own frame loop exactly like the app does.
  */
 
-import { Envelope, ENV_BOT, ENV_USER, clamp01 } from '@orbis/orb-runtime';
+import { Envelope, ENV_BOT, ENV_USER, DISP_ALPHA, clamp01, lerp } from '@orbis/orb-runtime';
 import type { LevelMode } from '../state';
 
 export class LevelSimulator {
@@ -38,8 +38,13 @@ export class LevelSimulator {
   start(): void {
     const tick = () => {
       const t = (performance.now() - this.startMs) / 1000;
-      this.botRef.current = this.level(this.botMode, this.botManual, t, this.envBot, 0);
-      this.userRef.current = this.level(this.userMode, this.userManual, t, this.envUser, 2.13);
+      // Final display-stage smoothing (DISP_ALPHA), same as the app's
+      // useAudioEnvelopes — without it the synthetic pulse strobes far
+      // harder than ORBIS ever renders. Photosensitivity matters here.
+      const bot = this.level(this.botMode, this.botManual, t, this.envBot, 0);
+      const user = this.level(this.userMode, this.userManual, t, this.envUser, 2.13);
+      this.botRef.current = lerp(this.botRef.current, bot, DISP_ALPHA);
+      this.userRef.current = lerp(this.userRef.current, user, DISP_ALPHA);
       this.raf = requestAnimationFrame(tick);
     };
     this.raf = requestAnimationFrame(tick);
@@ -79,15 +84,18 @@ export class LevelSimulator {
       case 'off':
         return env.update(0);
       case 'manual':
-        // Manual is already a target level — bypass the envelope so the
-        // slider feels 1:1.
+        // Manual is a steady target level — bypass the envelope (the
+        // display smoother in start() still eases slider jumps).
         return clamp01(manual);
       case 'pulse': {
-        // Syllables (~4 Hz) gated by phrase-length bursts (~0.25 Hz on,
-        // off) — close enough to speech for tuning reactivity.
-        const syllable = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 3.7 + phase);
-        const gate = Math.sin(t * Math.PI * 2 * 0.13 + phase) > -0.2 ? 1 : 0;
-        return env.update(syllable * gate * 0.28);
+        // Gentle speech-like modulation: slow syllable swell (~1.8 Hz,
+        // shallow) inside soft phrase bursts. Deliberately below the
+        // 3 Hz photosensitive-flash band and smoothstep-gated — no
+        // hard on/off edges.
+        const syllable = 0.65 + 0.35 * Math.sin(t * Math.PI * 2 * 1.8 + phase);
+        const g = clamp01((Math.sin(t * Math.PI * 2 * 0.13 + phase) + 0.35) / 0.6);
+        const gate = g * g * (3 - 2 * g);
+        return env.update(syllable * gate * 0.22);
       }
       case 'mic': {
         if (!this.analyser || !this.micBuf) return env.update(0);
