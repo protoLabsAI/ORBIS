@@ -274,8 +274,7 @@ impl ConversationBusy {
     pub fn is_active(&self, max_hold_ms: u64) -> bool {
         let busy =
             self.state_busy.load(Ordering::Relaxed) || self.tool_calls.load(Ordering::Relaxed) > 0;
-        busy
-            && unix_ms().saturating_sub(self.since_ms.load(Ordering::Relaxed)) < max_hold_ms
+        busy && unix_ms().saturating_sub(self.since_ms.load(Ordering::Relaxed)) < max_hold_ms
     }
 }
 
