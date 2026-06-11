@@ -52,9 +52,12 @@ class EditorStore {
       definition: def,
       params: paletteParams(def, palette),
       palette,
+      // Calm by default — no synthetic speech pulse until the author
+      // opts in. A flashing preview on first load is a photosensitivity
+      // hazard, not a demo.
       sim: {
-        voiceState: 'speaking',
-        botMode: 'pulse',
+        voiceState: 'idle',
+        botMode: 'off',
         userMode: 'off',
         botManual: 0.5,
         userManual: 0.5,
