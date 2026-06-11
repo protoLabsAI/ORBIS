@@ -207,6 +207,33 @@ export function WakeWordSettings() {
           </Hint>
         )}
 
+        {/* Listen window — a behavior knob, not tuning esoterica, so it lives
+            up here with the style choice instead of inside the disclosure
+            (it was buried there and nobody found it). Wake-word style only:
+            push-to-talk closes per turn, open mic never closes. */}
+        {wakeSelected && (
+          <label className="block space-y-1 rounded-md border border-edge bg-raised/40 p-2.5">
+            <span className="flex items-center justify-between text-helper text-fg-muted">
+              <span>Listen window</span>
+              <span className="tabular-nums text-fg-subtle">{cfg.listen_window_s}s</span>
+            </span>
+            <input
+              type="range"
+              min={4}
+              max={30}
+              step={1}
+              value={cfg.listen_window_s}
+              onChange={(e) => save({ listen_window_s: Number(e.target.value) })}
+              className="w-full accent-brand"
+            />
+            <Hint className="text-fg-faint">
+              After the conversation goes quiet for this long, the mic closes back
+              to armed (“{cfg.model === 'hey_orbis' ? 'Hey Orbis' : 'wake word'}” reopens
+              it). She holds the window while thinking, working on a task, or speaking.
+            </Hint>
+          </label>
+        )}
+
         {/* Barge-in (full-duplex) — applies live, all activation styles */}
         <div className="flex items-start justify-between gap-3 rounded-md border border-edge bg-raised/40 p-2.5">
           <span className="min-w-0">
@@ -253,24 +280,6 @@ export function WakeWordSettings() {
                 className="w-full accent-brand"
               />
               <Hint className="text-fg-faint">Lower = fires more easily (more false triggers).</Hint>
-            </label>
-            <label className="block space-y-1">
-              <span className="flex items-center justify-between text-helper text-fg-muted">
-                <span>Listen window</span>
-                <span className="tabular-nums text-fg-subtle">{cfg.listen_window_s}s</span>
-              </span>
-              <input
-                type="range"
-                min={4}
-                max={30}
-                step={1}
-                value={cfg.listen_window_s}
-                onChange={(e) => save({ listen_window_s: Number(e.target.value) })}
-                className="w-full accent-brand"
-              />
-              <Hint className="text-fg-faint">
-                Closes back to armed after this much trailing silence.
-              </Hint>
             </label>
           </div>
         )}
