@@ -22,6 +22,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
@@ -226,6 +227,84 @@ impl WakeWord {
     }
 }
 
+/// Process-wide "the agent is mid-exchange" signal, fed by `lib.rs`'s SSE
+/// bridge (`bot-state` + `tool-call` events it already proxies). The
+/// auto-close timer treats busy as conversation activity, so a long
+/// delegation or a long answer can't close the listening window out from
+/// under an active exchange (the "it stops and asks for Hey Orbis again
+/// mid-task" bug).
+///
+/// Two independent signals, because they interleave: during a delegation
+/// the bot-state drops to `idle` after the ack finishes speaking while the
+/// tool call is still in flight — a single flag would get clobbered.
+/// `since_ms` re-stamps on every busy assertion and `is_active` caps the
+/// hold, so a missed clearing event can't pin the mic open forever.
+pub struct ConversationBusy {
+    /// bot-state is `thinking` | `speaking`.
+    state_busy: AtomicBool,
+    /// In-flight tool calls (delegations run in parallel; count, don't flag).
+    tool_calls: AtomicU64,
+    /// Last busy assertion (unix ms) — the max-hold clock.
+    since_ms: AtomicU64,
+}
+
+impl ConversationBusy {
+    pub fn set_state_busy(&self, busy: bool) {
+        self.state_busy.store(busy, Ordering::Relaxed);
+        if busy {
+            self.since_ms.store(unix_ms(), Ordering::Relaxed);
+        }
+    }
+
+    pub fn tool_started(&self) {
+        self.tool_calls.fetch_add(1, Ordering::Relaxed);
+        self.since_ms.store(unix_ms(), Ordering::Relaxed);
+    }
+
+    pub fn tool_ended(&self) {
+        let _ = self
+            .tool_calls
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_sub(1))
+            });
+    }
+
+    /// Busy now, and the last busy assertion is fresher than `max_hold_ms`
+    /// (a lost idle / tool-end event must not hold the window open forever).
+    pub fn is_active(&self, max_hold_ms: u64) -> bool {
+        let busy =
+            self.state_busy.load(Ordering::Relaxed) || self.tool_calls.load(Ordering::Relaxed) > 0;
+        busy
+            && unix_ms().saturating_sub(self.since_ms.load(Ordering::Relaxed)) < max_hold_ms
+    }
+}
+
+/// The single process-wide instance — a global because it crosses layers
+/// (SSE bridge in lib.rs → detector thread here) that otherwise share no
+/// plumbing, and threading it through PendingAudioStart → socket →
+/// spawn_detector buys nothing for a one-per-process signal.
+pub static CONVERSATION_BUSY: ConversationBusy = ConversationBusy {
+    state_busy: AtomicBool::new(false),
+    tool_calls: AtomicU64::new(0),
+    since_ms: AtomicU64::new(0),
+};
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Cap on how long "busy" can hold the window open without a fresh busy
+/// assertion. Comfortably above DELEGATE_TIMEOUT (300 s) — a delegation that
+/// legitimately runs long keeps re-asserting via progress narration anyway.
+const BUSY_MAX_HOLD_MS: u64 = 600_000;
+
+/// "Her voice played within this window" counts as conversation activity —
+/// a long answer must not auto-close the window mid-sentence.
+const PLAYBACK_ACTIVITY_MS: u64 = 1_500;
+
 /// What the detector thread needs to run: where the `.onnx` files live (the
 /// picker's `<models_dir>/wakeword/` layout), which wake word, the fire
 /// threshold, and the auto-close window. Built in `lib.rs` from the app-data
@@ -331,6 +410,15 @@ pub fn spawn_detector(
                             emit("armed");
                             state = State::Armed;
                             log::info!("[wake] window closed externally → armed");
+                        } else if CONVERSATION_BUSY.is_active(BUSY_MAX_HOLD_MS)
+                            || engine.echo_guard_active(PLAYBACK_ACTIVITY_MS)
+                        {
+                            // The conversation is alive even though the mic is
+                            // quiet: the agent is thinking / mid-tool-call (the
+                            // SSE-fed busy signal) or her own answer is still
+                            // playing. Hold the timer; the user gets a fresh
+                            // window once the work and the speech finish.
+                            last_voice = Instant::now();
                         } else if det.is_recent_silence() {
                             if last_voice.elapsed() >= window {
                                 engine.set_listening(false);
@@ -423,6 +511,67 @@ fn score_window(mel: &Model, emb: &Model, wake: &Model, audio: &[f32]) -> TractR
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Fresh instance per test — the static is process-wide, tests must not
+    /// share it.
+    fn busy() -> ConversationBusy {
+        ConversationBusy {
+            state_busy: AtomicBool::new(false),
+            tool_calls: AtomicU64::new(0),
+            since_ms: AtomicU64::new(0),
+        }
+    }
+
+    #[test]
+    fn busy_tracks_bot_state() {
+        let b = busy();
+        assert!(!b.is_active(60_000));
+        b.set_state_busy(true);
+        assert!(b.is_active(60_000));
+        b.set_state_busy(false);
+        assert!(!b.is_active(60_000));
+    }
+
+    /// The delegation interleave that motivated the split: tool starts,
+    /// then the ack finishes speaking and bot-state drops to idle — the
+    /// in-flight tool must still hold busy.
+    #[test]
+    fn idle_state_does_not_clobber_inflight_tool() {
+        let b = busy();
+        b.set_state_busy(true); // thinking
+        b.tool_started(); // delegate_to dispatched
+        b.set_state_busy(true); // speaking (the ack)
+        b.set_state_busy(false); // idle — ack finished, tool still running
+        assert!(b.is_active(60_000), "in-flight tool call must hold busy");
+        b.tool_ended();
+        assert!(!b.is_active(60_000));
+    }
+
+    #[test]
+    fn parallel_tools_count_not_flag() {
+        let b = busy();
+        b.tool_started();
+        b.tool_started();
+        b.tool_ended();
+        assert!(b.is_active(60_000), "one of two delegations still running");
+        b.tool_ended();
+        assert!(!b.is_active(60_000));
+        // Unbalanced end (missed start) must not underflow.
+        b.tool_ended();
+        assert!(!b.is_active(60_000));
+    }
+
+    /// A lost idle/tool-end event must not pin the listening window open:
+    /// past the max hold, busy stops counting as activity.
+    #[test]
+    fn stale_busy_expires_past_max_hold() {
+        let b = busy();
+        b.tool_started();
+        // Backdate the assertion stamp beyond the cap.
+        b.since_ms.store(unix_ms() - 10_000, Ordering::Relaxed);
+        assert!(b.is_active(60_000), "fresh enough within a 60s cap");
+        assert!(!b.is_active(5_000), "stale past a 5s cap");
+    }
 
     /// The detector test needs the real ONNX models. Point `ORBIS_MODELS_DIR`
     /// at a dir whose `wakeword/` holds melspectrogram/embedding/hey_orbis

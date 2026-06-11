@@ -1262,6 +1262,37 @@ fn parse_sse_block(raw: &str) -> Option<(String, String)> {
     event.map(|e| (e, data.join("\n")))
 }
 
+/// Map the SSE events onto the wake detector's conversation-busy signal
+/// (audio::wake_word::CONVERSATION_BUSY): bot-state thinking/speaking and
+/// in-flight tool calls hold the listening window's auto-close timer, so
+/// "ask → it delegates → silence while it works" doesn't end with the
+/// window closed and the answer arriving to an armed mic.
+#[cfg(feature = "native-audio")]
+fn update_conversation_busy(event: &str, data: &str) {
+    use audio::wake_word::CONVERSATION_BUSY;
+    let parsed: Option<serde_json::Value> = serde_json::from_str(data).ok();
+    let field = |key: &str| -> Option<String> {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(|s| s.as_str())
+            .map(str::to_owned)
+    };
+    match event {
+        "bot-state" => match field("state").as_deref() {
+            Some("thinking") | Some("speaking") => CONVERSATION_BUSY.set_state_busy(true),
+            Some("idle") | Some("listening") => CONVERSATION_BUSY.set_state_busy(false),
+            _ => {}
+        },
+        "tool-call" => match field("event").as_deref() {
+            Some("start") => CONVERSATION_BUSY.tool_started(),
+            Some("end") => CONVERSATION_BUSY.tool_ended(),
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
 /// Bridge the sidecar's /api/events SSE stream to the frontend as Tauri
 /// `orbis-sse` events. WKWebView won't stream a cross-origin EventSource
 /// on Tahoe, so Rust (reqwest) consumes the stream and re-emits each
@@ -1287,6 +1318,12 @@ async fn bridge_sse(app: AppHandle, base: String) {
                             while let Some(idx) = buf.find("\n\n") {
                                 let block: String = buf.drain(..idx + 2).collect();
                                 if let Some((event, data)) = parse_sse_block(&block) {
+                                    // Feed the wake auto-close timer's busy signal
+                                    // from the stream we already proxy — a long
+                                    // delegation or answer must not close the
+                                    // listening window mid-exchange.
+                                    #[cfg(feature = "native-audio")]
+                                    update_conversation_busy(&event, &data);
                                     let _ = app.emit("orbis-sse", SsePayload { event, data });
                                 }
                             }
