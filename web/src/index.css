@@ -2,6 +2,11 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+/* protoLabs design system — --pl-* tokens (pinned dark via data-theme on
+   <html>) + component styles (the Splash brand bumper et al). DS classes
+   are pl-prefixed; no collisions with the ORBIS tokens below. */
+@import "@protolabsai/design/css/tokens";
+@import "@protolabsai/ui/styles.css";
 
 @custom-variant dark (&:is(.dark *));
 
