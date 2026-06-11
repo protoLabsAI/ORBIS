@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
 import { pushStatusTransient } from '@/sdk';
@@ -18,6 +18,12 @@ import { cn } from '@/lib/utils';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { orbStore } from '@/plugins/orb/store';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
+import { variantRegistry } from '@/plugins/orb/variants/registry';
+import {
+  importOrbisFile,
+  isRuntimeOrb,
+  removeRuntimeOrb,
+} from '@/plugins/orb/definitions/runtime';
 import { useActivationConfig, type ActivationStyle } from './useActivationConfig';
 
 const STYLE_LABELS: Record<ActivationStyle, string> = {
@@ -169,13 +175,39 @@ function SwitchRow({
   );
 }
 
+type OrbEntry =
+  | { kind: 'starter'; name: string; starter: StarterOrb }
+  | { kind: 'imported'; name: string; variantId: string };
+
 /**
- * Free starter-orb switcher — cycles the curated pool (8 by default) via
- * select_starter. Always available, independent of the paid customization
- * editor: it applies the focused starter to the live orb and persists it.
+ * Orb switcher — cycles the curated starter pool plus any imported
+ * `.orbis` orbs (the only selection surface for them while the paid
+ * Orb tab is off for beta). Starters persist via select_starter;
+ * imported picks persist through the orb store's local storage.
+ * The row beneath imports a `.orbis` file and removes the active
+ * imported orb.
  */
 function OrbSwitcher() {
   const [starters, setStarters] = useState<StarterOrb[]>([]);
+  const variants = useSyncExternalStore(
+    variantRegistry.subscribe,
+    variantRegistry.all,
+    variantRegistry.all,
+  );
+  const activeVariantId = useSyncExternalStore(
+    orbStore.subscribe,
+    () => orbStore.getSnapshot().variantId,
+  );
+
+  const entries = useMemo<OrbEntry[]>(
+    () => [
+      ...starters.map((s): OrbEntry => ({ kind: 'starter', name: s.name, starter: s })),
+      ...variants
+        .filter((v) => isRuntimeOrb(v.id))
+        .map((v): OrbEntry => ({ kind: 'imported', name: v.name, variantId: v.id })),
+    ],
+    [starters, variants],
+  );
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
@@ -183,50 +215,136 @@ function OrbSwitcher() {
     api
       .starterOrbs()
       .then((r) => {
-        if (cancelled) return;
-        setStarters(r.starters);
-        const snap = orbStore.get().getSnapshot();
-        const i = r.starters.findIndex(
-          (s) => s.variant === snap.variantId && s.palette === snap.palette,
-        );
-        if (i >= 0) setIndex(i);
+        if (!cancelled) setStarters(r.starters);
       })
       .catch(() => {
-        /* no starters configured — the switcher just hides */
+        /* no starters configured — starters just don't appear */
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // Keep the focused entry in sync with whatever is actually live
+  // (boot restore, an import that auto-activated, a removal fallback).
+  useEffect(() => {
+    const snap = orbStore.get().getSnapshot();
+    const i = entries.findIndex((e) =>
+      e.kind === 'starter'
+        ? e.starter.variant === snap.variantId && e.starter.palette === snap.palette
+        : e.variantId === snap.variantId,
+    );
+    if (i >= 0) setIndex(i);
+  }, [entries, activeVariantId]);
+
   const step = (dir: number) => {
-    if (starters.length === 0) return;
-    const next = (index + dir + starters.length) % starters.length;
+    if (entries.length === 0) return;
+    const next = (index + dir + entries.length) % entries.length;
     setIndex(next);
-    const s = starters[next];
-    setVariant(s.variant); // live + broadcast
-    applyPreset(s.palette);
-    api.selectStarter(s.slug).catch(() => {
-      /* persist in background; the live orb already changed */
-    });
+    const e = entries[next];
+    if (e.kind === 'starter') {
+      setVariant(e.starter.variant); // live + broadcast
+      applyPreset(e.starter.palette);
+      api.selectStarter(e.starter.slug).catch(() => {
+        /* persist in background; the live orb already changed */
+      });
+    } else {
+      setVariant(e.variantId); // loads the definition's default palette
+    }
   };
 
-  if (starters.length === 0) return null;
+  if (entries.length === 0) return null;
+  const current = entries[index];
 
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-sm text-fg-body">Orb</span>
-      <div className="flex items-center gap-1">
-        <ArrowButton label="Previous orb" onClick={() => step(-1)}>
-          <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
-        </ArrowButton>
-        <span className="min-w-[6.5rem] truncate text-center text-sm text-fg-muted">
-          {starters[index]?.name ?? '—'}
-        </span>
-        <ArrowButton label="Next orb" onClick={() => step(1)}>
-          <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
-        </ArrowButton>
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm text-fg-body">Orb</span>
+        <div className="flex items-center gap-1">
+          <ArrowButton label="Previous orb" onClick={() => step(-1)}>
+            <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
+          </ArrowButton>
+          <span className="min-w-[6.5rem] truncate text-center text-sm text-fg-muted">
+            {current?.name ?? '—'}
+            {current?.kind === 'imported' && (
+              <span className="ml-1.5 text-micro uppercase tracking-wider text-fg-subtle">
+                imported
+              </span>
+            )}
+          </span>
+          <ArrowButton label="Next orb" onClick={() => step(1)}>
+            <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
+          </ArrowButton>
+        </div>
       </div>
+      <ImportOrbRow activeVariantId={activeVariantId} />
+    </div>
+  );
+}
+
+/** Quiet utility row under the orb switcher: import a `.orbis` file
+ * (authored at orbis.protolabs.studio/editor) and remove the active
+ * imported orb. The sidecar enforces the customization entitlement on
+ * import — a 403 surfaces through the status pill. */
+function ImportOrbRow({ activeVariantId }: { activeVariantId: string }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  const onFile = async (file: File | undefined) => {
+    if (!file || busy) return;
+    setBusy(true);
+    try {
+      const res = await importOrbisFile(file);
+      if (res.ok) {
+        pushStatusTransient(`imported orb "${res.id}"`, 2400);
+      } else {
+        pushStatusTransient(`import failed: ${res.errors[0] ?? 'invalid file'}`, 4000);
+        console.warn('[orb] .orbis import rejected:', res.errors);
+      }
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const onRemove = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const ok = await removeRuntimeOrb(activeVariantId);
+      pushStatusTransient(ok ? 'orb removed' : 'remove failed', 2400);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-end gap-3">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".orbis,application/json"
+        className="hidden"
+        onChange={(e) => onFile(e.target.files?.[0])}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => fileRef.current?.click()}
+        className="text-helper text-fg-subtle transition-colors hover:text-fg-body disabled:opacity-50"
+      >
+        Import .orbis
+      </button>
+      {isRuntimeOrb(activeVariantId) && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onRemove}
+          className="text-helper text-fg-subtle transition-colors hover:text-danger disabled:opacity-50"
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }
