@@ -52,10 +52,15 @@ function saveVariantId(id: string): void {
 class OrbStore {
   private snap: OrbStateSnapshot;
   private listeners = new Set<Listener>();
+  /** A selection whose variant isn't registered (yet). Runtime-imported
+   * orbs land async (sidecar catalog fetch), so both boot hydration and
+   * configDriver's server push can name an id the registry doesn't have
+   * at that instant. Remember the intent; apply on registration. */
+  private pending: { variantId: string; palette?: string } | null = null;
 
   constructor() {
-    const variantId = loadVariantId();
-    const variant = variantRegistry.get(variantId) ?? variantRegistry.all()[0];
+    const requestedId = loadVariantId();
+    const variant = variantRegistry.get(requestedId) ?? variantRegistry.all()[0];
     const saved = loadPalette();
     // Guarantee a non-empty string — Radix Select flips controlled ⇄
     // uncontrolled when value swaps undefined/non-empty. Fall back to the
@@ -65,13 +70,44 @@ class OrbStore {
     const paletteParams = (variant?.palettes?.[palette] ?? {}) as Record<string, unknown>;
     const savedParams = loadParams() ?? {};
     this.snap = {
-      variantId: variant?.id ?? variantId,
+      variantId: variant?.id ?? requestedId,
       palette,
       params: { ...paletteParams, ...savedParams },
       stateOverrides: {},
       moodOverrides: {},
       epoch: 0,
     };
+    // The persisted pick may be an imported orb that registers later —
+    // render the fallback for now, restore when the catalog lands.
+    if (!variantRegistry.get(requestedId)) {
+      this.pending = { variantId: requestedId, palette: saved ?? undefined };
+    }
+    variantRegistry.subscribe(() => this.tryApplyPending());
+  }
+
+  /** Apply a remembered selection once its variant registers. */
+  private tryApplyPending(): void {
+    const pending = this.pending;
+    if (!pending) return;
+    const variant = variantRegistry.get(pending.variantId);
+    if (!variant) return;
+    this.pending = null;
+    const palette =
+      pending.palette && variant.palettes[pending.palette]
+        ? pending.palette
+        : variant.defaultPalette;
+    const paletteParams = (variant.palettes[palette] ?? {}) as Record<string, unknown>;
+    this.snap = {
+      ...this.snap,
+      variantId: variant.id,
+      palette,
+      params: { ...paletteParams },
+      epoch: this.snap.epoch + 1,
+    };
+    this.listeners.forEach((l) => l());
+    saveVariantId(variant.id);
+    savePalette(palette);
+    saveParams(this.snap.params);
   }
 
   /** Replace the authoring override maps — called by the drawer or by
@@ -105,6 +141,14 @@ class OrbStore {
 
   /** Switch palette — overwrites params with the palette's defaults. */
   setPreset(paletteName: string): void {
+    if (this.pending) {
+      // A palette arriving for a not-yet-registered variant (configDriver
+      // pushes variant then palette) belongs to the pending selection —
+      // applying it against the fallback variant would wipe params.
+      this.pending.palette = paletteName;
+      savePalette(paletteName);
+      return;
+    }
     const variant = variantRegistry.get(this.snap.variantId);
     const paletteParams = (variant?.palettes?.[paletteName] ?? {}) as Record<string, unknown>;
     this.snap = {
@@ -126,7 +170,14 @@ class OrbStore {
    * to re-fetch from the server. */
   setVariant(id: string): void {
     const variant = variantRegistry.get(id);
-    if (!variant) return;
+    if (!variant) {
+      // Not registered (yet) — likely a runtime-imported orb racing the
+      // catalog fetch. Persist the intent and apply on registration.
+      this.pending = { variantId: id };
+      saveVariantId(id);
+      return;
+    }
+    this.pending = null;
     const palette = variant.defaultPalette;
     const paletteParams = (variant.palettes[palette] ?? {}) as Record<string, unknown>;
     this.snap = {
