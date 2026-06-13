@@ -219,7 +219,13 @@ jobs:
         if: steps.notes.outcome == 'success'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GH_PAT (not GITHUB_TOKEN) so the changelog commit TRIGGERS
+          # marketing-deploy: GitHub bars a GITHUB_TOKEN push from firing
+          # downstream workflows (recursion guard), so the site never picked up
+          # the new version automatically (bit v0.2.136 + v0.2.137). Scoped to
+          # this best-effort step's push only — the core release path stays on
+          # GITHUB_TOKEN, so a missing/expired PAT can't fail a shipped release.
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           [ -s release-notes.md ] || { echo "No polished notes — skipping changelog."; exit 0; }
@@ -239,8 +245,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add sites/marketing/data/changelog.json
           git commit -m "chore(changelog): ${TAG}"
-          git push origin HEAD:main \
-            || echo "::warning::changelog push to main failed — release shipped fine; update changelog.json manually."
+          if [ -n "${GH_PAT:-}" ]; then
+            git push "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}.git" HEAD:main \
+              || echo "::warning::changelog push to main failed — release shipped fine; update changelog.json manually."
+          else
+            echo "::warning::GH_PAT unset — pushing with the default token, which will NOT trigger marketing-deploy. Dispatch it manually after this run."
+            git push origin HEAD:main \
+              || echo "::warning::changelog push to main failed — release shipped fine; update changelog.json manually."
+          fi
 
       - name: Alert if the Discord notes post failed
         # The post is best-effort (continue-on-error above), so without this a
