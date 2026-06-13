@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.2.137",
+    "date": "2026-06-13",
+    "changes": [
+      "The shader panel is now resizable via a draggable divider to accommodate long GLSL lines.",
+      "Added window-level pointer listeners to ensure smooth dragging when moving over the preview canvas.",
+      "Keyboard navigation allows for resizing the panel, with width persisting across sessions.",
+      "Default panel width is increased to 680px to improve initial visibility.",
+      "Added links to the web-based orb editor in the global navigation and footer.",
+      "Included a call-to-action on the homepage for the in-browser design tool.",
+      "The release process now skips version bumps when a release pull request is already open to prevent CI failures.",
+      "Orphaned remote branches are automatically cleaned up during the release preparation phase."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.137/ORBIS-0.2.137-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.136",
     "date": "2026-06-11",
     "changes": [
