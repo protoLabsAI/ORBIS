@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.2.140",
+    "date": "2026-06-13",
+    "changes": [
+      "Replaces manual workflow dispatching with native GitHub workflow chaining to eliminate token permission errors.",
+      "Implements conditional triggers to ensure marketing site deployments only occur following successful release builds.",
+      "Ensures the marketing site only updates after the release assets are successfully uploaded and the changelog is committed."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.140/ORBIS-0.2.140-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.139",
     "date": "2026-06-13",
     "changes": [
