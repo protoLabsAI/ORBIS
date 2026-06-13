@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.2.139",
+    "date": "2026-06-13",
+    "changes": [
+      "The marketing site deployment now triggers only after the desktop installer and updater manifest are successfully uploaded.",
+      "The release process uses API-based workflow dispatch to prevent authentication conflicts and recursion during the changelog update."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.139/ORBIS-0.2.139-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.138",
     "date": "2026-06-13",
     "changes": [
