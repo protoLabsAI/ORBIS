@@ -19,6 +19,15 @@ on:
       - 'package-lock.json'
       - '.github/workflows/marketing-deploy.yml'
   workflow_dispatch:
+  # Release chain: when Desktop Build finishes a release, redeploy so /download
+  # + /changelog pick up the new version with a LIVE download link. By that
+  # point the DMG is uploaded and release.yml has already landed the changelog
+  # commit on main. workflow_run is a first-class GitHub event — unlike a
+  # GITHUB_TOKEN/PAT-initiated dispatch it isn't blocked by the recursion guard
+  # and needs no Actions:write token (our GH_PAT lacks it → the dispatch 403'd).
+  workflow_run:
+    workflows: ['Desktop Build']
+    types: [completed]
 
 concurrency:
   group: marketing-deploy
@@ -28,6 +37,13 @@ jobs:
   deploy:
     name: Build & deploy to Cloudflare Pages
     runs-on: ubuntu-latest
+    # push / manual dispatch: always run. workflow_run chain: only on a
+    # SUCCESSFUL release build (tag push) — skip failed builds and manual
+    # Desktop Build test runs (workflow_dispatch).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     steps:
       - uses: actions/checkout@v6
 

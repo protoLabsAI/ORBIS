@@ -693,32 +693,12 @@ jobs:
             --repo "${REPO}" --clobber
           echo "Published latest.json + updater artifact for ${TAG}."
 
-      - name: Trigger the marketing deploy (DMG is live now)
-        if: github.event_name == 'push'
-        # Kick Deploy Marketing Site so /download + /changelog pick up the new
-        # version. Done HERE — not from release.yml's changelog push — because
-        # release.yml lands changelog.json long before this job notarizes +
-        # uploads the DMG; deploying on that commit would publish a /download
-        # whose .dmg link 404s until this job finishes. By the time we're here
-        # the DMG is live AND the changelog commit is on main (release.yml's
-        # Docker build finishes well before notarization), so the link is valid
-        # the moment the site updates.
-        #
-        # GH_PAT, not GITHUB_TOKEN: a workflow_dispatch initiated with
-        # GITHUB_TOKEN is suppressed by the recursion guard (the API returns 204
-        # but no run is created). This is an API dispatch (gh), not a git push,
-        # so there's no actions/checkout extraheader to override the auth.
-        # Best-effort — a deploy hiccup must never fail a shipped release.
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::warning::GH_PAT unset — can't auto-trigger Deploy Marketing Site; run it manually: gh workflow run \"Deploy Marketing Site\" --ref main"
-            exit 0
-          fi
-          gh workflow run "Deploy Marketing Site" --ref main --repo "${{ github.repository }}" \
-            && echo "Dispatched Deploy Marketing Site on main." \
-            || echo "::warning::Deploy Marketing Site dispatch failed — run it manually: gh workflow run \"Deploy Marketing Site\" --ref main"
+      # NB: the marketing redeploy (so /download + /changelog pick up the new
+      # version once the DMG is live) is chained off THIS workflow's completion
+      # via marketing-deploy.yml's `workflow_run` trigger — NOT dispatched from
+      # here. A `gh workflow run` dispatch needs an Actions:write token, which
+      # GH_PAT lacks (it 403'd); workflow_run is a first-class event with no such
+      # requirement and isn't blocked by the recursion guard. See
+      # marketing-deploy.yml. By the time this workflow completes the DMG is
+      # uploaded AND release.yml has landed the changelog commit on main, so the
+      # download link is valid the moment the site redeploys.
