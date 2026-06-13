@@ -63,15 +63,38 @@ jobs:
           # fire downstream workflows.
           token: ${{ secrets.GH_PAT }}
 
+      # One pending release at a time. The version on main only advances
+      # when a `chore: release` PR merges; bumping again while one is open
+      # re-targets the SAME prepare-release/vX.Y.Z branch and the push is
+      # rejected (non-fast-forward) — the job goes red on every feature
+      # merge until the open release PR lands. So if a release PR is already
+      # open, no-op: the next merge after it merges will bump cleanly.
+      - name: Skip if a release is already pending
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          OPEN=$(gh pr list -R "${{ github.repository }}" --state open \
+            --search "chore: release in:title" --json number --jq 'length')
+          if [ "$OPEN" -gt 0 ]; then
+            echo "A release PR is already open — skipping bump (one pending release at a time)."
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.pending != 'true'
         with:
           python-version: '3.12'
 
       - name: Bump version
+        if: steps.guard.outputs.pending != 'true'
         run: python scripts/version.py ${{ inputs.bump || 'patch' }}
 
       - name: Read new version
         id: version
+        if: steps.guard.outputs.pending != 'true'
         run: |
           V=$(python -c "
           import re, pathlib
@@ -81,13 +104,13 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Preview (dry run)
-        if: inputs.dry_run == true
+        if: inputs.dry_run == true && steps.guard.outputs.pending != 'true'
         run: |
           echo "New version: v${{ steps.version.outputs.version }}"
           git diff pyproject.toml
 
       - name: Create release branch + PR
-        if: inputs.dry_run != true
+        if: inputs.dry_run != true && steps.guard.outputs.pending != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -100,6 +123,10 @@ jobs:
           git checkout -b "${BRANCH}"
           git add pyproject.toml
           git commit -m "chore: release v${VERSION}"
+          # The guard above guarantees no OPEN release PR exists here, so a
+          # remote branch of this name is an orphan from a closed/abandoned
+          # release — clear it so the push can't be rejected non-fast-forward.
+          git push origin --delete "${BRANCH}" 2>/dev/null || true
           git push origin "${BRANCH}"
 
           PR_URL=$(gh pr create \
