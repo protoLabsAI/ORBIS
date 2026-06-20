@@ -5,9 +5,10 @@ import changelog from '../../data/changelog.json';
 const latest = changelog[0];
 
 // Buttondown newsletter — non-Mac visitors can't run the aarch64 .dmg, so we
-// capture an email and tell them when their platform lands (iPhone/iPad are on
-// the roadmap; web/PWA is intentionally not). Same account protoAgent uses;
-// flip this one line if ORBIS gets its own list.
+// capture an email and tell them when their platform lands. Demand here helps
+// us prioritise what ships next (iPhone/iPad, Windows, Linux); web/PWA stays
+// out. Same account protoAgent uses; flip this one line if ORBIS gets its own
+// list.
 const BUTTONDOWN_USER = 'protoLabsAI';
 const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
 const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
@@ -123,14 +124,15 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
       </div>
     </div>
 
-    <!-- ===== Windows / Linux / iOS / other: not downloadable ===== -->
+    <!-- ===== Windows / Linux / iOS / other: not downloadable yet ===== -->
     <div class="dl-os dl-os-other">
       <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
-        <h2 class="text-lg font-semibold text-white mb-2">ORBIS is Mac-only right now</h2>
+        <h2 class="text-lg font-semibold text-white mb-2">ORBIS is Mac-only for now</h2>
         <p class="text-zinc-400 text-sm">
-          ORBIS is a native Apple-Silicon Mac app — it runs on-device speech and ML, so it needs an M1 or
-          later. <strong class="text-zinc-200">iPhone &amp; iPad are on the roadmap.</strong> Leave your email
-          below and we’ll let you know the moment ORBIS lands on your device — or build it from source today.
+          ORBIS is a native Apple-Silicon Mac app today. We want it everywhere —
+          <strong class="text-zinc-200">iPhone, iPad, Windows, and Linux are all on the table</strong>, and
+          the more people ask for a platform, the sooner it ships. Drop your email below and we’ll tell you
+          the moment ORBIS lands on your device — or build it from source today.
         </p>
       </div>
     </div>
@@ -139,8 +141,8 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
     <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
       <h2 class="text-lg font-semibold text-white mb-1">Get notified about new platforms</h2>
       <p class="text-zinc-400 text-sm mb-5">
-        ORBIS ships on Apple Silicon Mac today, with iPhone &amp; iPad next. Leave your email and we’ll let
-        you know the moment it reaches your device.
+        ORBIS ships on Apple Silicon Mac today — iPhone, iPad, Windows, and Linux are what’s next, and your
+        signup helps us decide what to build first. We’ll email you the moment it reaches your device.
       </p>
       <form
         action={subscribeAction}
