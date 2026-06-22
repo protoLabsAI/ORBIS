@@ -19,9 +19,11 @@ PR1 scope (the thin vertical from the spike):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -31,6 +33,38 @@ ProgressCallback = Callable[[str], Awaitable[None]]
 
 # ACP protocol version ORBIS speaks. Negotiated in `initialize`.
 PROTOCOL_VERSION = 1
+
+# asyncio's StreamReader defaults to a 64 KB line limit; a single newline-
+# delimited ACP JSON-RPC message routinely exceeds that (a tool result with a
+# file's contents, a large diff). Past the limit `readline()` raises
+# LimitOverrunError, which kills the read loop and aborts the turn mid-build.
+# Give the reader generous headroom.
+_STDOUT_LINE_LIMIT = 32 * 1024 * 1024  # 32 MB
+
+# Env markers Claude Code sets so a nested `claude` can detect "am I already
+# running inside another Claude Code session?". If ORBIS's sidecar was itself
+# launched from within a Claude Code session (dogfooding), these are inherited —
+# and a `claude`/claude-agent-acp delegate we spawn then hits the *"cannot be
+# launched inside another Claude Code session"* guard and respawn-loops with no
+# surfaced error. Strip them from the ACP launch env: ``CLAUDECODE`` plus the
+# whole ``CLAUDE_CODE_*`` family. Harmless for non-Claude agents (proto/codex
+# don't read them). ``ANTHROPIC_*`` is left alone — it carries credentials.
+_NESTED_CLAUDE_ENV_EXACT = frozenset({"CLAUDECODE"})
+_NESTED_CLAUDE_ENV_PREFIX = "CLAUDE_CODE_"
+
+
+def _launch_env(extra: dict[str, str] | None) -> dict[str, str]:
+    """Build the subprocess environment for an ACP agent: the sidecar's own
+    ``os.environ`` with the nested-Claude markers stripped (see above), then the
+    delegate's ``env`` overlaid last — so an operator who *deliberately* sets one
+    of these in the delegate env still wins."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in _NESTED_CLAUDE_ENV_EXACT and not k.startswith(_NESTED_CLAUDE_ENV_PREFIX)
+    }
+    env.update(extra or {})
+    return env
 
 
 class AcpError(Exception):
@@ -66,6 +100,7 @@ class AcpClient:
         self._next_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: asyncio.Task | None = None
+        self._stderr_task: asyncio.Task | None = None
         self._start_lock = asyncio.Lock()
 
         # Per-turn state (one turn at a time).
@@ -75,12 +110,26 @@ class AcpClient:
     # -- lifecycle -----------------------------------------------------------
 
     async def _ensure_started(self) -> None:
+        """Start the agent for a real dispatch: spawn + ``initialize`` +
+        ``session/new``. Idempotent — a no-op when already up."""
         async with self._start_lock:
             if self._proc is not None and self._proc.returncode is None:
                 return
             await self._start()
 
-    async def _start(self) -> None:
+    async def handshake(self) -> None:
+        """Start the agent for a *liveness check only*: spawn + run the ACP
+        ``initialize`` round-trip and STOP — no ``session/new``, no session state
+        touched. The genuinely cheap, side-effect-free probe the delegate health
+        check wants (the static `which` + dir check false-greens a `command` that
+        is on PATH but can't actually speak ACP, e.g. `claude` without its ACP
+        adapter). The caller ``close()``s it. Idempotent."""
+        async with self._start_lock:
+            if self._proc is not None and self._proc.returncode is None:
+                return
+            await self._start(open_session=False)
+
+    async def _start(self, *, open_session: bool = True) -> None:
         if not Path(self.cwd).is_dir():
             raise AcpError(f"workdir does not exist: {self.cwd}")
         try:
@@ -91,7 +140,20 @@ class AcpClient:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, **(self.env or {})},
+                # Strip the inherited nested-Claude markers (CLAUDECODE /
+                # CLAUDE_CODE_*) so a spawned Claude backend doesn't refuse to
+                # launch "inside another Claude Code session"; the delegate's env
+                # is overlaid last.
+                env=_launch_env(self.env),
+                # Put the agent in its OWN session/process group so teardown can
+                # kill the WHOLE tree (the adapter *and* the backend it spawns,
+                # e.g. `npx …claude-agent-acp` → node). Without this, terminate()
+                # signals only the direct child; its backend reparents to init and
+                # leaks. POSIX-only (start_new_session ⇒ setsid()).
+                start_new_session=True,
+                # Raise the per-line buffer ceiling — ACP messages exceed the
+                # 64 KB default and would otherwise raise LimitOverrunError.
+                limit=_STDOUT_LINE_LIMIT,
             )
         except FileNotFoundError as exc:
             raise AcpError(
@@ -99,10 +161,21 @@ class AcpClient:
                 "(is it installed and on PATH?)"
             ) from exc
 
-        self._reader_task = asyncio.create_task(self._read_loop())
-        asyncio.create_task(self._drain_stderr())
-        await self._initialize()
-        await self._new_session()
+        # The subprocess now exists. If the handshake raises OR the caller's
+        # wait_for cancels us mid-initialize (a probe timeout), reap the tree we
+        # just spawned instead of leaking it — close() is idempotent.
+        try:
+            self._reader_task = asyncio.create_task(self._read_loop())
+            self._stderr_task = asyncio.create_task(self._drain_stderr())
+            await self._initialize()
+            # The probe path (handshake) stops here — a liveness check must NOT
+            # open a session. A real dispatch opens one.
+            if open_session:
+                await self._new_session()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.close()
+            raise
         logger.info(
             "[acp/%s] up (pid=%s, session=%s, cwd=%s)",
             self.name,
@@ -111,14 +184,62 @@ class AcpClient:
             self.cwd,
         )
 
+    @staticmethod
+    def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
+        """Send ``sig`` to the subprocess's whole process GROUP (the agent plus
+        the backend it spawned), falling back to the bare process if the group is
+        already gone. Synchronous syscall + swallows ProcessLookup, so it's safe
+        from a teardown/cancel path where our coroutines won't run."""
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.send_signal(sig)
+
+    def kill_now(self) -> None:
+        """Synchronously SIGKILL the agent's whole process group — no awaits, so
+        it's safe from a CancelledError handler where awaiting cleanup would
+        itself be cancelled. The zombie is reaped later by ``proc.wait()`` / the
+        child watcher. Use this on the hard-stop path (a delegation is cancelled
+        or times out); ``close()`` is the graceful one."""
+        proc = self._proc
+        if proc and proc.returncode is None:
+            self._signal_group(proc, signal.SIGKILL)
+        for task in (self._reader_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+
     async def close(self) -> None:
-        if self._reader_task and not self._reader_task.done():
-            self._reader_task.cancel()
-        if self._proc and self._proc.returncode is None:
+        """Cancel the I/O tasks and reap the subprocess TREE. Sends a best-effort
+        ``session/close`` first (graceful), then SIGTERM→SIGKILL the agent's whole
+        PROCESS GROUP — not just the direct child — so the backend it spawned dies
+        with it instead of reparenting to init. Crucially ``await``s
+        ``proc.wait()`` so the child is reaped while the loop is alive (else the
+        transport's ``__del__`` fires "Event loop is closed" after shutdown)."""
+        with contextlib.suppress(Exception):
+            await self._close_session()
+        for task in (self._reader_task, self._stderr_task):
+            if task and not task.done():
+                task.cancel()
+        proc = self._proc
+        if proc and proc.returncode is None:
+            self._signal_group(proc, signal.SIGTERM)
             try:
-                self._proc.terminate()
-            except ProcessLookupError:
-                pass
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self._signal_group(proc, signal.SIGKILL)
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+            except asyncio.CancelledError:
+                # We're being torn down — guarantee the tree is dead, then let the
+                # cancellation propagate (don't swallow it).
+                self._signal_group(proc, signal.SIGKILL)
+                raise
+        # Close the subprocess transport too, so its pipe transports don't linger
+        # to a post-loop-close GC ("Event loop is closed").
+        transport = getattr(proc, "_transport", None) if proc else None
+        if transport is not None:
+            transport.close()
 
     # -- I/O loops -----------------------------------------------------------
 
@@ -189,7 +310,18 @@ class AcpClient:
         method = msg.get("method")
         rid = msg.get("id")
         if method == "session/request_permission":
-            option_id = self._auto_allow(msg.get("params") or {})
+            params = msg.get("params") or {}
+            option_id = self._auto_allow(params)
+            # Trace the decision — a permission the resolver can't answer (→
+            # cancelled) can leave the agent blocked silently (a prime idle-freeze
+            # suspect), so it's worth a log line at INFO.
+            kind = str(((params.get("toolCall") or {}).get("kind") or "")).lower()
+            logger.info(
+                "[acp/%s] request_permission kind=%s → %s",
+                self.name,
+                kind or "?",
+                "selected" if option_id else "cancelled",
+            )
             outcome = (
                 {"outcome": "selected", "optionId": option_id}
                 if option_id
@@ -246,20 +378,66 @@ class AcpClient:
             {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
         )
 
+    async def _notify_session(self, method: str) -> None:
+        """Fire-and-forget a session lifecycle notification (``session/cancel`` on
+        abort, ``session/close`` on teardown). Notifications have no id and no
+        response. Best-effort by contract — it runs on abort/teardown paths and
+        must never raise: no-op when the process is gone or no session is open,
+        and any send error is swallowed."""
+        proc = self._proc
+        if not (proc and proc.returncode is None and proc.stdin and self._session_id):
+            return
+        try:
+            proc.stdin.write(
+                (
+                    json.dumps(
+                        {"jsonrpc": "2.0", "method": method, "params": {"sessionId": self._session_id}}
+                    )
+                    + "\n"
+                ).encode()
+            )
+            await proc.stdin.drain()
+        except Exception as exc:  # noqa: BLE001 — abort/teardown path is best-effort
+            logger.debug("[acp/%s] %s failed (best-effort): %s", self.name, method, exc)
+
+    async def _cancel_session(self) -> None:
+        """Tell the agent to abandon the in-flight turn so a reused session isn't
+        left mid-generation. Runs on the prompt abort path (timeout / external
+        cancel / transport failure)."""
+        await self._notify_session("session/cancel")
+
+    async def _close_session(self) -> None:
+        """Tell the agent to release the session before the subprocess is reaped —
+        the graceful, spec-aligned counterpart to the SIGTERM in ``close()``."""
+        await self._notify_session("session/close")
+
     # -- handshake -----------------------------------------------------------
 
     async def _initialize(self) -> None:
-        await self._request(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                # PR1: no client-served fs/terminal — the local agent uses its own.
-                "clientCapabilities": {
-                    "fs": {"readTextFile": False, "writeTextFile": False},
-                    "terminal": False,
+        result = (
+            await self._request(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    # PR1: no client-served fs/terminal — the local agent uses its own.
+                    "clientCapabilities": {
+                        "fs": {"readTextFile": False, "writeTextFile": False},
+                        "terminal": False,
+                    },
                 },
-            },
-            timeout=30.0,
+                timeout=30.0,
+            )
+            or {}
+        )
+        # Log the handshake outcome so the ACP round-trip (initialize → session →
+        # prompt → permission → result) is traceable from sidecar.log — an idle
+        # freeze with no diagnostics is the hard-to-debug failure mode.
+        caps = result.get("agentCapabilities") or {}
+        logger.info(
+            "[acp/%s] initialize OK (protocol v%s, loadSession=%s)",
+            self.name,
+            result.get("protocolVersion", PROTOCOL_VERSION),
+            bool(caps.get("loadSession")),
         )
 
     async def _new_session(self) -> None:
@@ -287,6 +465,13 @@ class AcpClient:
         await self._ensure_started()
         self._answer = ""
         self._progress = progress_callback
+        logger.info(
+            "[acp/%s] → session/prompt (session=%s, %d chars, timeout=%ss)",
+            self.name,
+            self._session_id,
+            len(text),
+            int(timeout),
+        )
         try:
             result = await self._request(
                 "session/prompt",
@@ -296,6 +481,13 @@ class AcpClient:
                 },
                 timeout=timeout,
             )
+        except (AcpError, asyncio.CancelledError):
+            # Turn abandoned — internal timeout, external cancel (an orchestrator's
+            # wait_for watchdog, a verbal stop), or transport failure. Tell the
+            # agent to drain it so the reused session isn't left mid-generation.
+            # (The adapter additionally hard-reaps the process group on cancel.)
+            await self._cancel_session()
+            raise
         finally:
             self._progress = None
         stop = (result or {}).get("stopReason")
