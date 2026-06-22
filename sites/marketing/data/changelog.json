@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.2.141",
+    "date": "2026-06-22",
+    "changes": [
+      "Replaces static command checks with a real handshake probe to ensure delegates are functional before dispatch.",
+      "Implements process group reaping to prevent orphaned subprocesses and sidecar leaks when a dispatch is cancelled or timed out.",
+      "Adds synchronous SIGKILL capabilities to ensure immediate termination of the entire agent process tree.",
+      "Increases stdout and StreamReader line limits to 32 MB to accommodate large ACP messages.",
+      "Adds round-trip logging for initialization and session turns to improve sidecar diagnostics.",
+      "Augments the sidecar PATH on macOS to ensure binaries from Homebrew, nvm, and asdf are discoverable.",
+      "Strips existing Claude environment variables during delegate launch to prevent session conflicts when running within Claude Code.",
+      "Ensures the ACP client correctly inherits the user's login shell PATH for reliable binary resolution."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.141/ORBIS-0.2.141-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.140",
     "date": "2026-06-13",
     "changes": [
