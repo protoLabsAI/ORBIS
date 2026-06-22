@@ -3,9 +3,45 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import changelog from '../../data/changelog.json';
 
 const latest = changelog[0];
+
+// Buttondown newsletter — non-Mac visitors can't run the aarch64 .dmg, so we
+// capture an email and tell them when their platform lands. Demand here helps
+// us prioritise what ships next (iPhone/iPad, Windows, Linux); web/PWA stays
+// out. Same account protoAgent uses; flip this one line if ORBIS gets its own
+// list.
+const BUTTONDOWN_USER = 'protoLabsAI';
+const subscribeAction = `https://buttondown.com/api/emails/embed-subscribe/${BUTTONDOWN_USER}`;
+const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
 ---
 
 <BaseLayout title="Download ORBIS" description="Download ORBIS — the voice-first AI companion for Mac. Free public beta for Apple Silicon.">
+  <!-- Detect the OS before paint so the right block is visible with no flash. -->
+  <script is:inline>
+    (function () {
+      function detect() {
+        var ua = (navigator.userAgent || '').toLowerCase();
+        var plat =
+          ((navigator.userAgentData && navigator.userAgentData.platform) ||
+            navigator.platform ||
+            '').toLowerCase();
+        var s = plat + ' ' + ua;
+        // iPadOS reports as a Mac in desktop Safari — touch-Macs can't run the
+        // desktop app, so route them to the "other" (notify-me) experience.
+        if (/mac/.test(s) && navigator.maxTouchPoints > 1) return 'other';
+        if (/iphone|ipad|ipod/.test(s)) return 'other';
+        if (/mac/.test(s)) return 'mac';
+        if (/win/.test(s)) return 'windows';
+        if (/linux|android|cros/.test(s)) return 'linux';
+        return 'other';
+      }
+      try {
+        document.documentElement.setAttribute('data-os', detect());
+      } catch (e) {
+        document.documentElement.setAttribute('data-os', 'mac');
+      }
+    })();
+  </script>
+
   <div class="max-w-2xl mx-auto px-6 py-24">
     <div class="mb-10">
       <h1 class="text-4xl font-bold text-white mb-3">Download ORBIS</h1>
@@ -18,74 +54,129 @@ const latest = changelog[0];
       </div>
     </div>
 
-    <!-- Primary download -->
-    <a
-      href={latest.dmgUrl}
-      class="flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl font-semibold text-white text-lg mb-10 transition-colors"
-      style="background: #818cf8;"
-      onmouseover="this.style.background='#6366f1'"
-      onmouseout="this.style.background='#818cf8'"
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-        <polyline points="7 10 12 15 17 10"/>
-        <line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      Download ORBIS {latest.version} (.dmg)
-    </a>
+    <!-- ===== macOS: the only shipping download ===== -->
+    <div class="dl-os dl-os-mac">
+      <!-- Primary download -->
+      <a
+        href={latest.dmgUrl}
+        class="flex items-center justify-center gap-3 w-full py-4 px-6 rounded-xl font-semibold text-white text-lg mb-10 transition-colors"
+        style="background: #818cf8;"
+        onmouseover="this.style.background='#6366f1'"
+        onmouseout="this.style.background='#818cf8'"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download ORBIS {latest.version} (.dmg)
+      </a>
 
-    <!-- System requirements -->
-    <div class="grid sm:grid-cols-2 gap-4 mb-10">
-      {[
-        {
-          label: 'Minimum',
-          items: ['macOS 13 Ventura', 'Apple Silicon (M1 or later)', '8 GB RAM'],
-        },
-        {
-          label: 'Recommended',
-          items: ['macOS 14+', 'Apple Silicon M1+', '16 GB RAM (for on-device MLX)'],
-        },
-      ].map(({ label, items }) => (
-        <div class="border border-white/5 rounded-xl p-5" style="background: rgba(255,255,255,0.02)">
-          <h3 class="text-white font-semibold mb-3">{label}</h3>
-          <ul class="space-y-1.5">
-            {items.map((item) => (
-              <li class="text-zinc-400 text-sm flex items-start gap-2">
-                <span class="text-zinc-600 mt-0.5">—</span>
-                {item}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </div>
-
-    <!-- Install steps -->
-    <div class="mb-10">
-      <h2 class="text-lg font-semibold text-white mb-5">Installation</h2>
-      <ol class="space-y-4">
+      <!-- System requirements -->
+      <div class="grid sm:grid-cols-2 gap-4 mb-10">
         {[
-          'Download the .dmg above.',
-          'Open it and drag ORBIS to Applications.',
-          'Launch ORBIS — allow microphone access when prompted.',
-          'The setup wizard walks through the rest.',
-        ].map((step, i) => (
-          <li class="flex gap-4 items-start">
-            <span class="font-mono text-sm text-accent w-5 shrink-0 pt-0.5">{i + 1}</span>
-            <span class="text-zinc-300 text-sm">{step}</span>
-          </li>
+          {
+            label: 'Minimum',
+            items: ['macOS 13 Ventura', 'Apple Silicon (M1 or later)', '8 GB RAM'],
+          },
+          {
+            label: 'Recommended',
+            items: ['macOS 14+', 'Apple Silicon M1+', '16 GB RAM (for on-device MLX)'],
+          },
+        ].map(({ label, items }) => (
+          <div class="border border-white/5 rounded-xl p-5" style="background: rgba(255,255,255,0.02)">
+            <h3 class="text-white font-semibold mb-3">{label}</h3>
+            <ul class="space-y-1.5">
+              {items.map((item) => (
+                <li class="text-zinc-400 text-sm flex items-start gap-2">
+                  <span class="text-zinc-600 mt-0.5">—</span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
-      </ol>
+      </div>
+
+      <!-- Install steps -->
+      <div class="mb-10">
+        <h2 class="text-lg font-semibold text-white mb-5">Installation</h2>
+        <ol class="space-y-4">
+          {[
+            'Download the .dmg above.',
+            'Open it and drag ORBIS to Applications.',
+            'Launch ORBIS — allow microphone access when prompted.',
+            'The setup wizard walks through the rest.',
+          ].map((step, i) => (
+            <li class="flex gap-4 items-start">
+              <span class="font-mono text-sm text-accent w-5 shrink-0 pt-0.5">{i + 1}</span>
+              <span class="text-zinc-300 text-sm">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <!-- Signed + beta note -->
+      <div class="border-l-2 border-indigo-400/40 pl-4 mb-10">
+        <p class="text-zinc-400 text-sm">
+          <strong class="text-zinc-200">Signed &amp; notarized by Apple</strong> — opens cleanly, no Gatekeeper workarounds. ORBIS is in <strong class="text-zinc-200">public beta</strong>; expect rough edges and frequent updates.
+        </p>
+      </div>
     </div>
 
-    <!-- Signed + beta note -->
-    <div class="border-l-2 border-indigo-400/40 pl-4 mb-10">
-      <p class="text-zinc-400 text-sm">
-        <strong class="text-zinc-200">Signed &amp; notarized by Apple</strong> — opens cleanly, no Gatekeeper workarounds. ORBIS is in <strong class="text-zinc-200">public beta</strong>; expect rough edges and frequent updates.
+    <!-- ===== Windows / Linux / iOS / other: not downloadable yet ===== -->
+    <div class="dl-os dl-os-other">
+      <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
+        <h2 class="text-lg font-semibold text-white mb-2">ORBIS is Mac-only for now</h2>
+        <p class="text-zinc-400 text-sm">
+          ORBIS is a native Apple-Silicon Mac app today. We want it everywhere —
+          <strong class="text-zinc-200">iPhone, iPad, Windows, and Linux are all on the table</strong>, and
+          the more people ask for a platform, the sooner it ships. Drop your email below and we’ll tell you
+          the moment ORBIS lands on your device — or build it from source today.
+        </p>
+      </div>
+    </div>
+
+    <!-- ===== Mailing list (shown to everyone) ===== -->
+    <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
+      <h2 class="text-lg font-semibold text-white mb-1">Get notified about new platforms</h2>
+      <p class="text-zinc-400 text-sm mb-5">
+        ORBIS ships on Apple Silicon Mac today — iPhone, iPad, Windows, and Linux are what’s next, and your
+        signup helps us decide what to build first. We’ll email you the moment it reaches your device.
       </p>
+      <form
+        action={subscribeAction}
+        method="post"
+        target="popupwindow"
+        onsubmit={`window.open('${subscribePopup}', 'popupwindow')`}
+        class="embeddable-buttondown-form flex flex-col sm:flex-row gap-3"
+      >
+        <label for="bd-email" class="sr-only">Email</label>
+        <input
+          type="email"
+          name="email"
+          id="bd-email"
+          required
+          placeholder="you@example.com"
+          class="flex-1 rounded-lg border border-white/[0.08] px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none transition-colors"
+          style="background: #18181b;"
+          onfocus="this.style.borderColor='#818cf8'"
+          onblur="this.style.borderColor='rgba(255,255,255,0.08)'"
+        />
+        <button
+          type="submit"
+          class="rounded-lg px-5 py-3 font-medium text-white whitespace-nowrap transition-colors"
+          style="background: #818cf8;"
+          onmouseover="this.style.background='#6366f1'"
+          onmouseout="this.style.background='#818cf8'"
+        >
+          Notify me
+        </button>
+      </form>
+      <p class="text-zinc-500 text-xs mt-3">No spam — release announcements only. Unsubscribe anytime.</p>
     </div>
 
-    <!-- Build from source -->
+    <!-- Build from source (shown to everyone) -->
     <div class="border-l-2 border-white/10 pl-4 mb-10">
       <p class="text-zinc-400 text-sm">
         <strong class="text-zinc-200">Prefer to build it yourself?</strong> ORBIS is open source — clone
@@ -100,4 +191,23 @@ const latest = changelog[0];
       <a href="/changelog" class="text-zinc-400 hover:text-zinc-200 transition-colors underline underline-offset-2">View full release history →</a>
     </p>
   </div>
+
+  <style is:global>
+    /* OS-gated blocks — the inline head script sets data-os on <html>. */
+    .dl-os {
+      display: none;
+    }
+    :root[data-os='mac'] .dl-os-mac {
+      display: block;
+    }
+    :root[data-os='windows'] .dl-os-other,
+    :root[data-os='linux'] .dl-os-other,
+    :root[data-os='other'] .dl-os-other {
+      display: block;
+    }
+    /* No-JS / pre-detection fallback: show the Mac download (the shipping platform). */
+    :root:not([data-os]) .dl-os-mac {
+      display: block;
+    }
+  </style>
 </BaseLayout>
