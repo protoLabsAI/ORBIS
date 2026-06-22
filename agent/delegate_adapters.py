@@ -598,8 +598,12 @@ class AcpAdapter(DelegateAdapter):
                 )
         return out
 
+    @staticmethod
+    def _key(delegate: Delegate) -> tuple:
+        return (delegate.name, delegate.command, tuple(delegate.args), delegate.workdir)
+
     def client_for(self, delegate: Delegate) -> AcpClient:
-        key = (delegate.name, delegate.command, tuple(delegate.args), delegate.workdir)
+        key = self._key(delegate)
         client = self._clients.get(key)
         if client is None:
             client = AcpClient(
@@ -608,6 +612,12 @@ class AcpAdapter(DelegateAdapter):
             )
             self._clients[key] = client
         return client
+
+    def _drop_client(self, delegate: Delegate) -> AcpClient | None:
+        """Synchronously evict the cached client (no await) so a hard-reap path
+        can pop it and SIGKILL its process group without leaving a dead handle in
+        the pool that the next turn would reuse."""
+        return self._clients.pop(self._key(delegate), None)
 
     async def dispatch(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
@@ -624,6 +634,15 @@ class AcpAdapter(DelegateAdapter):
                 progress_callback=progress_callback,
                 timeout=max(timeout, 600.0),
             )
+        except asyncio.CancelledError:
+            # The turn was cancelled — an orchestrator's wait_for watchdog fired,
+            # or the caller bailed. The client is pooled, so drop it AND hard-reap
+            # its process group synchronously (no awaits in a cancel handler), or a
+            # wedged coding run keeps running with no way back to it. The client's
+            # own session/cancel notify is best-effort and may not land in time.
+            self._drop_client(delegate)
+            client.kill_now()
+            raise
         except AcpError as exc:
             raise DelegateError(f"{delegate.name}: {exc}") from exc
         if not text:
@@ -631,8 +650,8 @@ class AcpAdapter(DelegateAdapter):
         return text
 
     async def probe(self, delegate: Delegate, *, timeout: float = 8.0) -> dict:
-        # No URL to ping — an acp agent is "reachable" if its binary is on PATH
-        # and its workdir exists (ORBIS launches it on demand).
+        # No URL to ping — ORBIS launches an acp agent on demand. Cheap pre-flight
+        # first (fail fast, no spawn): binary on PATH + workdir exists.
         import shutil
         from pathlib import Path
 
@@ -644,6 +663,29 @@ class AcpAdapter(DelegateAdapter):
         wd = Path((delegate.workdir or "").strip()).expanduser()
         if not wd.is_dir():
             return {"ok": False, "error": f"workdir not found: {wd}"}
+
+        # Then a real liveness check: spawn an EPHEMERAL client and run the ACP
+        # ``initialize`` round-trip (no session/new — inert + cheap). The static
+        # check alone false-greens a command that's on PATH but can't actually
+        # speak ACP (e.g. `claude` without its ACP adapter), then every dispatch
+        # dies with an opaque "agent exited". A throwaway client (not the pooled
+        # dispatch one) so the probe never tears down a live session; PR-B's
+        # process-group reaping guarantees the spawned tree is cleaned up even if
+        # the handshake times out.
+        probe_client = AcpClient(
+            delegate.command, delegate.args,
+            cwd=delegate.workdir, name=f"{delegate.name}:probe",
+        )
+        try:
+            await asyncio.wait_for(probe_client.handshake(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": f"no ACP handshake within {timeout:.0f}s"}
+        except AcpError as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — a probe must never raise to the loop
+            return {"ok": False, "error": f"handshake failed: {exc}"}
+        finally:
+            await probe_client.close()
         return {"ok": True}
 
 
