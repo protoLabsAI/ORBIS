@@ -154,10 +154,10 @@ export function App() {
           // Fully collapsed → a slim rail on the right edge that brings it back.
           <button
             type="button"
-            onClick={panel.toggleCollapse}
-            title="Show panel"
-            aria-label="Show editor panel"
-            className="flex w-8 shrink-0 items-center justify-center border-l border-edge bg-panel text-fg-subtle transition-colors hover:bg-edge/30 hover:text-fg"
+            {...panel.reopenProps}
+            title="Drag to open · click to expand"
+            aria-label="Open editor panel"
+            className="flex w-8 shrink-0 cursor-col-resize touch-none items-center justify-center border-l border-edge bg-panel text-fg-subtle outline-none transition-colors hover:bg-edge/30 hover:text-fg focus-visible:text-fg"
           >
             <PanelRightOpen className="h-4 w-4" strokeWidth={1.75} />
           </button>
@@ -173,8 +173,8 @@ export function App() {
               aria-valuemax={panel.max}
               aria-valuetext={`Panel ${panel.width}px`}
               tabIndex={0}
-              title="Drag to resize · double-click to reset"
-              {...panel.handleProps}
+              title="Drag to resize · drag in to collapse · double-click to reset"
+              {...panel.dividerProps}
               className={
                 'w-1.5 shrink-0 cursor-col-resize touch-none outline-none transition-colors ' +
                 (panel.dragging ? 'bg-brand' : 'bg-edge hover:bg-brand focus-visible:bg-brand')
@@ -199,7 +199,7 @@ export function App() {
                 ))}
                 <button
                   type="button"
-                  onClick={panel.toggleCollapse}
+                  onClick={panel.collapse}
                   title="Collapse panel"
                   aria-label="Collapse editor panel"
                   className="ml-auto grid h-8 w-8 place-items-center text-fg-subtle transition-colors hover:text-fg"

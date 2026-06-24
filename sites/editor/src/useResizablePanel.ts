@@ -1,13 +1,21 @@
 /**
- * Resizable side panel — the same divider gesture protoAgent's DS AppShell
- * uses (window-level pointer listeners so the drag survives the pointer
- * roaming over the WebGL preview canvas; keyboard nudge + ARIA on the
- * handle), distilled to what this single-panel editor needs.
+ * Resizable + collapsible side panel — the collapse/reopen model from
+ * protoContent-ds `AppShell` (ADR 0035 dual-rail shell), distilled to this
+ * editor's single right panel.
  *
- * The panel is pinned to the RIGHT edge, so it grows as the pointer moves
- * left: width = startWidth + (startX − pointerX). Double-click the handle
- * (or call `reset`) to snap back to the default width. Width persists to
- * localStorage, debounced like the editor's draft save.
+ * The panel is pinned to the RIGHT edge, so it grows as the pointer moves left:
+ * width = startWidth + (startX − pointerX). The gesture runs on WINDOW pointer
+ * listeners so it survives the layout change when the panel closes.
+ *
+ * Behavior (the "nice" part):
+ *  - Drag the divider IN past half the min width and release → the panel
+ *    collapses. Collapse is only COMMITTED on pointer-up, so dragging back out
+ *    before releasing recovers an accidental close. During the drag the panel
+ *    may shrink past its min toward the edge (it doesn't fight you).
+ *  - Collapsed → a slim reopen rail you can DRAG back open (it sizes under the
+ *    pointer) or just CLICK / press Enter to pop back to its last width.
+ *  - Double-click the divider (or `reset`) snaps to the default width; ←/→
+ *    nudge it. Width + collapsed state persist to localStorage.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,19 +28,30 @@ export const DEFAULT_PANEL_WIDTH = 680;
 const MIN_PANEL_WIDTH = 380;
 /** Always leave the preview at least this much room — the orb never vanishes. */
 const MIN_PREVIEW_WIDTH = 420;
+/** Drag the panel narrower than this and release → collapse (DS: half the min). */
+const COLLAPSE_AT = Math.round(MIN_PANEL_WIDTH * 0.5);
+/** Pointer travel (px) under which a reopen gesture counts as a click, not a drag. */
+const CLICK_SLOP = 3;
 
 function maxPanelWidth(): number {
   return Math.max(MIN_PANEL_WIDTH, window.innerWidth - MIN_PREVIEW_WIDTH);
 }
 
-function clampWidth(w: number): number {
+/** Width snapped into the valid OPEN range [min, max] — for rest / reopen / reset. */
+function clampOpen(w: number): number {
   return Math.round(Math.min(maxPanelWidth(), Math.max(MIN_PANEL_WIDTH, w)));
+}
+
+/** Width allowed DURING a drag: 0..max, so the panel can slide past its min
+ *  toward the edge (the collapse gesture needs to reach below min). */
+function clampDrag(w: number): number {
+  return Math.round(Math.max(0, Math.min(maxPanelWidth(), w)));
 }
 
 function loadWidth(): number {
   try {
     const saved = Number(localStorage.getItem(STORAGE_KEY));
-    if (Number.isFinite(saved) && saved > 0) return clampWidth(saved);
+    if (Number.isFinite(saved) && saved > 0) return clampOpen(saved);
   } catch {
     /* hardened browser context — fall back to the default */
   }
@@ -54,24 +73,33 @@ export interface ResizablePanel {
   collapsed: boolean;
   min: number;
   max: number;
+  /** Explicit collapse (e.g. a chevron in the panel header). */
+  collapse: () => void;
+  /** Explicit open to the last width (rail click / Enter). */
+  expand: () => void;
+  /** Snap to the default width (double-click the divider). */
   reset: () => void;
-  toggleCollapse: () => void;
-  /** Spread onto the divider element (give it `role="separator"`). */
-  handleProps: {
+  /** Spread onto the divider separator shown while OPEN. */
+  dividerProps: {
     onPointerDown: (e: ReactPointerEvent) => void;
     onKeyDown: (e: ReactKeyboardEvent) => void;
     onDoubleClick: () => void;
+  };
+  /** Spread onto the reopen rail shown while COLLAPSED. */
+  reopenProps: {
+    onPointerDown: (e: ReactPointerEvent) => void;
+    onKeyDown: (e: ReactKeyboardEvent) => void;
   };
 }
 
 export function useResizablePanel(): ResizablePanel {
   const [width, setWidth] = useState(loadWidth);
-  const [dragging, setDragging] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
-  const gesture = useRef<{ move: (e: PointerEvent) => void; up: () => void } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const gesture = useRef<{ move: (e: PointerEvent) => void; up: (e: PointerEvent) => void } | null>(null);
 
-  // Persist, debounced — a drag fires setWidth ~per frame; one write at rest
-  // is enough (mirrors the store's draft-save cadence).
+  // Persist width, debounced — a drag fires setWidth ~per frame; one write at
+  // rest is enough (mirrors the store's draft-save cadence).
   useEffect(() => {
     const id = setTimeout(() => {
       try {
@@ -93,7 +121,7 @@ export function useResizablePanel(): ResizablePanel {
 
   // Re-clamp when the window shrinks under a wide panel.
   useEffect(() => {
-    const onResize = () => setWidth((w) => clampWidth(w));
+    const onResize = () => setWidth((w) => clampOpen(w));
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -112,32 +140,102 @@ export function useResizablePanel(): ResizablePanel {
   // Detach any live gesture if the editor unmounts mid-drag.
   useEffect(() => () => endGesture(), [endGesture]);
 
-  const onPointerDown = useCallback(
-    (e: ReactPointerEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startW = width;
-      const move = (ev: PointerEvent) => setWidth(clampWidth(startW + (startX - ev.clientX)));
-      const up = () => endGesture();
+  const attach = useCallback(
+    (move: (e: PointerEvent) => void, up: (e: PointerEvent) => void) => {
       gesture.current = { move, up };
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
       window.addEventListener('pointercancel', up);
       setDragging(true);
     },
-    [width, endGesture],
+    [],
   );
 
-  const onKeyDown = useCallback((e: ReactKeyboardEvent) => {
+  // Divider drag (panel open): resize, and collapse if dragged in past the
+  // threshold — committed on release so you can back out.
+  const onDividerPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = width;
+      const widthAt = (clientX: number) => clampDrag(startW + (startX - clientX));
+      const move = (ev: PointerEvent) => setWidth(widthAt(ev.clientX));
+      const up = (ev: PointerEvent) => {
+        const raw = widthAt(ev.clientX);
+        if (raw < COLLAPSE_AT) {
+          setCollapsed(true);
+          setWidth(clampOpen(startW)); // sane width for next open
+        } else {
+          setWidth(clampOpen(raw));
+        }
+        endGesture();
+      };
+      attach(move, up);
+    },
+    [width, attach, endGesture],
+  );
+
+  // Reopen rail (panel collapsed): a click pops it back to its last width; a
+  // drag reveals it and sizes it under the pointer (re-collapses if released
+  // before clearing the threshold).
+  const onReopenPointerDown = useCallback(
+    (e: ReactPointerEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      let revealed = false;
+      const move = (ev: PointerEvent) => {
+        if (!revealed && Math.abs(ev.clientX - startX) > CLICK_SLOP) {
+          revealed = true;
+          setCollapsed(false);
+        }
+        if (revealed) setWidth(clampDrag(startX - ev.clientX));
+      };
+      const up = (ev: PointerEvent) => {
+        if (!revealed) {
+          // Click, not drag → pop open to the remembered width.
+          setCollapsed(false);
+          setWidth((w) => clampOpen(w || DEFAULT_PANEL_WIDTH));
+        } else {
+          const raw = clampDrag(startX - ev.clientX);
+          if (raw < COLLAPSE_AT) setCollapsed(true);
+          else {
+            setCollapsed(false);
+            setWidth(clampOpen(raw));
+          }
+        }
+        endGesture();
+      };
+      attach(move, up);
+    },
+    [attach, endGesture],
+  );
+
+  const onDividerKeyDown = useCallback((e: ReactKeyboardEvent) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
     const step = e.shiftKey ? 48 : 16;
     // ArrowLeft grows the panel (matches the drag direction); ArrowRight shrinks it.
-    setWidth((w) => clampWidth(w + (e.key === 'ArrowLeft' ? step : -step)));
+    setWidth((w) => clampOpen(w + (e.key === 'ArrowLeft' ? step : -step)));
   }, []);
 
-  const reset = useCallback(() => setWidth(clampWidth(DEFAULT_PANEL_WIDTH)), []);
-  const toggleCollapse = useCallback(() => setCollapsed((c) => !c), []);
+  const collapse = useCallback(() => setCollapsed(true), []);
+  const expand = useCallback(() => {
+    setCollapsed(false);
+    setWidth((w) => clampOpen(w || DEFAULT_PANEL_WIDTH));
+  }, []);
+  const reset = useCallback(() => {
+    setCollapsed(false);
+    setWidth(clampOpen(DEFAULT_PANEL_WIDTH));
+  }, []);
+
+  const onReopenKeyDown = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      expand();
+    },
+    [expand],
+  );
 
   return {
     width,
@@ -145,8 +243,10 @@ export function useResizablePanel(): ResizablePanel {
     collapsed,
     min: MIN_PANEL_WIDTH,
     max: maxPanelWidth(),
+    collapse,
+    expand,
     reset,
-    toggleCollapse,
-    handleProps: { onPointerDown, onKeyDown, onDoubleClick: reset },
+    dividerProps: { onPointerDown: onDividerPointerDown, onKeyDown: onDividerKeyDown, onDoubleClick: reset },
+    reopenProps: { onPointerDown: onReopenPointerDown, onKeyDown: onReopenKeyDown },
   };
 }
