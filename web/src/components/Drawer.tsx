@@ -16,12 +16,10 @@ import { useDevMode } from '@/shared/devMode';
 import { cn } from '@/lib/utils';
 
 const STORAGE_TAB = 'orbis.tab';
-// 'orb' (the paid customization editor) is intentionally absent: premium-orb
-// selection surfaces are off until the post-beta paywall go-live. The
-// orb-settings plugin stays in-tree (slot 'drawer-orb', nothing renders it);
-// a persisted 'orb' pick from an older build fails isTabName → Quick.
-type TabName = 'quick' | 'voice' | 'brain' | 'settings' | 'dev';
-const ALL_TABS: readonly TabName[] = ['quick', 'voice', 'brain', 'settings', 'dev'];
+// The orb editor is free + open source (no paywall). The orb-settings plugin
+// renders into the 'drawer-orb' slot via the Orb tab below.
+type TabName = 'quick' | 'voice' | 'brain' | 'orb' | 'settings' | 'dev';
+const ALL_TABS: readonly TabName[] = ['quick', 'voice', 'brain', 'orb', 'settings', 'dev'];
 const isTabName = (value: string): value is TabName =>
   (ALL_TABS as readonly string[]).includes(value);
 
@@ -107,10 +105,11 @@ export function Drawer() {
             isMobile ? 'px-4 pt-3' : 'px-4',
           )}
         >
-          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-5' : 'grid-cols-4')}>
+          <TabsList className={cn('grid w-full', devMode ? 'grid-cols-6' : 'grid-cols-5')}>
             <TabsTrigger value="quick">Quick</TabsTrigger>
             <TabsTrigger value="voice">Voice</TabsTrigger>
             <TabsTrigger value="brain">Brain</TabsTrigger>
+            <TabsTrigger value="orb">Orb</TabsTrigger>
             <TabsTrigger value="settings">Settings</TabsTrigger>
             {devMode && <TabsTrigger value="dev">Dev</TabsTrigger>}
           </TabsList>
@@ -122,6 +121,9 @@ export function Drawer() {
           </TabsContent>
           <TabsContent value="brain" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-brain" />
+          </TabsContent>
+          <TabsContent value="orb" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
+            <Slot name="drawer-orb" />
           </TabsContent>
           <TabsContent value="settings" className="flex-1 min-h-0 overflow-y-auto pt-4 pb-6 space-y-4">
             <Slot name="drawer-settings" />
