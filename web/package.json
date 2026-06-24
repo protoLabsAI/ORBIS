@@ -27,6 +27,8 @@
     "radix-ui": "^1.4.3",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "react-markdown": "^9",
+    "remark-gfm": "^4",
     "shadcn": "^4.4.0",
     "tailwind-merge": "^3.5.0",
     "three": "^0.184.0",

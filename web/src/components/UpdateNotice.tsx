@@ -2,13 +2,22 @@ import { useEffect, useState } from 'react';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Markdown } from '@/components/ui/Markdown';
 
 /**
  * In-app update notice. Tauri's updater checks the signed `latest.json` on the
  * GitHub release; when a newer version is published this surfaces a subtle pill
- * (ambient, like the status pill — never a modal that interrupts a voice turn).
- * Click it for the notes + a one-click "Update & Restart". Stays silent in dev /
- * non-Tauri / offline / when there's no update.
+ * (ambient, like the status pill — never an unprompted modal over a voice turn).
+ * Click it for a **full modal** with the release **changelog rendered as
+ * markdown** + a one-click "Update & Restart". Stays silent in dev / non-Tauri /
+ * offline / when there's no update.
  *
  * User-driven by design (approach A): we detect + notify, the user chooses when
  * to apply. No silent background install.
@@ -69,9 +78,11 @@ export function UpdateNotice() {
     }
   };
 
-  // Collapsed: an ambient pill, top-right under the title bar.
-  if (!open) {
-    return (
+  const downloading = phase === 'downloading';
+
+  return (
+    <>
+      {/* Ambient pill, top-right under the title bar — opens the changelog modal. */}
       <button
         type="button"
         onClick={() => setOpen(true)}
@@ -81,66 +92,59 @@ export function UpdateNotice() {
         <span className="h-1.5 w-1.5 rounded-full bg-brand" />
         Update · {update.version}
       </button>
-    );
-  }
 
-  return (
-    <div className="fixed right-3 top-9 z-40 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border border-edge bg-raised/95 p-4 shadow-xl backdrop-blur-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-sm text-fg-body">
-          Update available
-          <span className="ml-1.5 font-mono text-xs text-brand">{update.version}</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          className="text-helper text-fg-subtle hover:text-fg-body"
-          aria-label="Dismiss"
-        >
-          ✕
-        </button>
-      </div>
+      <Dialog open={open} onOpenChange={(next) => { if (!downloading) setOpen(next); }}>
+        <DialogContent showCloseButton={!downloading}>
+          <DialogHeader>
+            <DialogTitle>
+              What's new
+              <span className="ml-1.5 font-mono text-xs text-brand">{update.version}</span>
+              {update.currentVersion && (
+                <span className="ml-1.5 text-helper font-normal text-fg-subtle">
+                  · you have {update.currentVersion}
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
 
-      {update.body ? (
-        <div className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap text-helper text-fg-muted">
-          {update.body}
-        </div>
-      ) : (
-        <p className="mt-2 text-helper text-fg-muted">A newer version of ORBIS is ready.</p>
-      )}
-
-      {phase === 'downloading' && (
-        <div className="mt-3 space-y-1.5">
-          <div className="h-1 rounded-full bg-edge overflow-hidden">
-            <div
-              className="h-full rounded-full bg-brand transition-[width] duration-200"
-              style={{ width: `${pct}%` }}
-            />
+          <div className="-mr-1 max-h-[55vh] overflow-y-auto pr-1">
+            {update.body ? (
+              <Markdown>{update.body}</Markdown>
+            ) : (
+              <p className="text-sm text-fg-muted">A newer version of ORBIS is ready.</p>
+            )}
           </div>
-          <div className="text-center text-helper text-fg-subtle tabular-nums">
-            Downloading… {pct}%
-          </div>
-        </div>
-      )}
 
-      {phase === 'error' && error && (
-        <p className="mt-2 text-helper text-danger">Update failed: {error}</p>
-      )}
+          {downloading && (
+            <div className="space-y-1.5">
+              <div className="h-1 overflow-hidden rounded-full bg-edge">
+                <div
+                  className="h-full rounded-full bg-brand transition-[width] duration-200"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <div className="text-center text-helper tabular-nums text-fg-subtle">
+                Downloading… {pct}%
+              </div>
+            </div>
+          )}
 
-      <div className="mt-3 flex items-center justify-end gap-2">
-        {phase !== 'downloading' && (
-          <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-            Later
-          </Button>
-        )}
-        <Button size="sm" onClick={install} disabled={phase === 'downloading'}>
-          {phase === 'downloading'
-            ? 'Updating…'
-            : phase === 'error'
-              ? 'Retry'
-              : 'Update & Restart'}
-        </Button>
-      </div>
-    </div>
+          {phase === 'error' && error && (
+            <p className="text-helper text-danger">Update failed: {error}</p>
+          )}
+
+          <DialogFooter>
+            {!downloading && (
+              <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+                Later
+              </Button>
+            )}
+            <Button size="sm" onClick={install} disabled={downloading}>
+              {downloading ? 'Updating…' : phase === 'error' ? 'Retry' : 'Update & Restart'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
