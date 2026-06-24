@@ -10,8 +10,7 @@ built-in orbs instead, see [Customize your orb](/how-to/customize-your-orb).
 
 ## Before you start
 
-- Custom-orb import is part of the **paid customization unlock** (the same one
-  that opens the orb editor tab in the app).
+- The editor and custom-orb import are **free and open source** — no unlock.
 - The editor runs entirely in your browser — nothing you author is uploaded
   anywhere. Drafts autosave locally; **Export** is how you keep your work.
 
