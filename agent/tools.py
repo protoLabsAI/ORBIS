@@ -714,6 +714,12 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
 
 
+# TEMP (2026-06-24): set_orb_visual is disabled — buggy in practice. The handler
+# above is kept so re-enabling is just deleting this pop. (#560 shipped it;
+# remove this line to restore.)
+_TOOL_REGISTRY.pop("set_orb_visual", None)
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).

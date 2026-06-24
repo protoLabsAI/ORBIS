@@ -2,7 +2,6 @@ import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
 import { LLMSettings } from './LLMSettings';
 import { DelegatesSettings } from './DelegatesSettings';
 import { VerbositySelector } from './VerbositySelector';
-import { OrbControlToggle } from './OrbControlToggle';
 
 /**
  * Agent tab — how the orb thinks, routes, and acts: the brain LLM, the
@@ -17,10 +16,9 @@ export function AgentPanel() {
         <LLMSettings />
         <DelegatesSettings />
         <Panel title="Behavior">
-          <div className="space-y-4">
-            <VerbositySelector />
-            <OrbControlToggle />
-          </div>
+          {/* OrbControlToggle is parked with the set_orb_visual tool (disabled
+              for now — buggy). Re-add both to restore agent orb control. */}
+          <VerbositySelector />
         </Panel>
       </div>
     </CollapsiblePanelProvider>
