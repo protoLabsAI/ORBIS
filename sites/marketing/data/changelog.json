@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.2.142",
+    "date": "2026-06-24",
+    "changes": [
+      "Removes all entitlement gates and paywalls from the Orb settings panel and drawer.",
+      "Restores the Orb tab to the main application drawer for easier access.",
+      "Adds a direct link from the Orb settings to the full web-based editor.",
+      "Enables full panel collapsing to maximize stage workspace.",
+      "Adds a floating toggle button to expand or hide the editor panel.",
+      "Introduces icon-based header actions for Import, Export, Documentation, and Bug reporting.",
+      "Implements persistent panel width and state via localStorage.",
+      "Exposes Orb authoring capabilities via WebMCP tools, allowing AI agents to programmatically manipulate shaders, controls, bindings, and metadata.",
+      "Provides a comprehensive toolset for agentic workflows, including `get_orb_state`, `set_fragment_shader`, and `add_binding`.",
+      "Integrates real-time validation and WebGL compilation checks to provide immediate feedback during automated authoring sessions."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.142/ORBIS-0.2.142-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.141",
     "date": "2026-06-22",
     "changes": [
