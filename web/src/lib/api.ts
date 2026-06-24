@@ -173,6 +173,11 @@ export type OrbisConfig = {
   setup?: {
     complete?: boolean;
   };
+  /** User-toggleable agent capabilities. */
+  agent?: {
+    /** Let the voice agent restyle the orb (the `set_orb_visual` tool). */
+    allow_orb_control?: boolean;
+  };
 };
 
 /** One entry in the wake-word model catalog (GET /api/wakeword/models). */

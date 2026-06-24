@@ -19,6 +19,7 @@
  *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
  *   delegation-progress { type, source, text }
  *   widget     { action: 'open'|'close', id, props? } — render_widget tool
+ *   orb-config { variant?, palette?, params? } — set_orb_visual tool
  *   __connected — synthetic, emitted by the bridge on (re)connect
  *
  * Pre-2026-04-28 this was useNativeBridge gated behind a WebRTC path;
@@ -29,6 +30,7 @@ import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
 import { widgetWorkspace } from '../widgets/store';
+import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
 
 interface SsePayload {
   event: string;
@@ -109,6 +111,22 @@ function handleSse(event: string, data: string): void {
         const props = parsed.props;
         if (props && typeof props === 'object') {
           widgetWorkspace.setProps(id, props as Record<string, unknown>);
+        }
+      }
+      break;
+    }
+    case 'orb-config': {
+      // Voice-driven orb restyling (set_orb_visual tool): apply live so the
+      // on-screen orb changes without a reload. Variant + palette swap; params
+      // merge onto the current knobs.
+      const variant = parsed.variant as string | undefined;
+      const palette = parsed.palette as string | undefined;
+      if (variant) setVariant(variant);
+      if (palette) applyPreset(palette);
+      const p = parsed.params;
+      if (p && typeof p === 'object') {
+        for (const [k, v] of Object.entries(p as Record<string, unknown>)) {
+          applyParam(k, v);
         }
       }
       break;

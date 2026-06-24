@@ -146,3 +146,9 @@ orb:
   params:
     density: 2.0
     speed: 0.55
+
+agent:
+  # Let the voice agent restyle the orb on request (the set_orb_visual tool):
+  # "use the nebula orb", "more glow", "switch to the aurora palette". Toggle
+  # it off here or in Settings → Agent → Behavior to deny that access.
+  allow_orb_control: true
