@@ -68,6 +68,10 @@ _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_ov
 _ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
 _ALLOWED_STT_KEYS = {"backend", "whisper_model", "url", "model", "api_key"}
 _ALLOWED_WAKEWORD_KEYS = {"enabled", "model", "threshold"}
+# User-toggleable agent capabilities. `allow_orb_control` gates the
+# `set_orb_visual` tool — when false the voice agent can't change the orb's
+# variant/palette/params (the tool refuses). Default-on; the settings UI flips it.
+_ALLOWED_AGENT_KEYS = {"allow_orb_control"}
 # First-run wizard completion — the durable source of truth for "has setup been
 # done". The frontend's localStorage flag is a fast-path cache that gets wiped by
 # a rebuild / "clear browsing data"; this survives, so the wizard doesn't re-ask
@@ -362,6 +366,20 @@ def _validate_setup(block: Any) -> dict:
     return out
 
 
+def _validate_agent(block: Any) -> dict:
+    """Filter an agent block: user-toggleable agent capabilities."""
+    if not isinstance(block, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for k, v in block.items():
+        if k not in _ALLOWED_AGENT_KEYS:
+            logger.warning(f"[config_store] dropping unknown agent key {k!r}")
+            continue
+        if k == "allow_orb_control":
+            out[k] = bool(v)
+    return out
+
+
 def validate_and_normalize(data: dict) -> dict:
     """Apply schema filtering across the top-level blocks. Raises
     ValueError on typed validation failures; silently drops unknown
@@ -395,9 +413,13 @@ def validate_and_normalize(data: dict) -> dict:
         block = _validate_setup(data["setup"])
         if block:
             out["setup"] = block
+    if "agent" in data:
+        block = _validate_agent(data["agent"])
+        if block:
+            out["agent"] = block
     # Unknown top-level keys — drop with warning.
     for k in data:
-        if k not in ("persona", "voice", "llm", "stt", "orb", "wakeword", "setup"):
+        if k not in ("persona", "voice", "llm", "stt", "orb", "wakeword", "setup", "agent"):
             logger.warning(f"[config_store] dropping unknown top-level key {k!r}")
     return out
 
@@ -437,7 +459,7 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
     """
     current = read_config(path)
     merged: dict[str, Any] = dict(current)
-    for block_key in ("persona", "voice", "llm", "stt", "orb", "wakeword", "setup"):
+    for block_key in ("persona", "voice", "llm", "stt", "orb", "wakeword", "setup", "agent"):
         if block_key not in patch:
             continue
         block_patch = patch[block_key]

@@ -633,6 +633,87 @@ if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
     _TOOL_REGISTRY.pop("render_widget", None)
 
 
+@tool(
+    "set_orb_visual",
+    (
+        "Change how the orb LOOKS — its variant (overall visual style), palette "
+        "(color scheme), and/or individual control knobs. Use when the user asks "
+        "to restyle the orb: 'use the nebula orb', 'switch to the aurora palette', "
+        "'more glow', 'slow it down', 'brighter'. Pass any of `variant`, `palette`, "
+        "or `params` ({knob: number}). Still give your normal short spoken reply too."
+    ),
+    parameters={
+        "variant": {"type": "string", "description": "Variant id, e.g. 'fractal', 'nebula'."},
+        "palette": {"type": "string", "description": "Palette name on the active variant."},
+        "params": {
+            "type": "object",
+            "description": 'Numeric knob overrides, e.g. {"glow": 1.4, "speed": 0.8}.',
+            "additionalProperties": {"type": "number"},
+        },
+    },
+    required=[],
+    latency=Latency.FAST,
+)
+async def set_orb_visual_handler(params: FunctionCallParams) -> None:
+    """Restyle the live orb. Gated at call time by `agent.allow_orb_control`
+    (so the settings toggle takes effect without a restart). Persists the
+    change to config + pushes an `orb-config` SSE event the frontend applies
+    to the on-screen orb without a reload."""
+    from agent.config_store import merge_patch, read_config
+    from voice.sse_bus import sse_bus
+
+    cfg = read_config()
+    if not cfg.get("agent", {}).get("allow_orb_control", True):
+        await params.result_callback(
+            "Orb control is off — turn it on under Agent → Behavior in settings."
+        )
+        return
+
+    variant = (params.arguments.get("variant") or "").strip()
+    palette = (params.arguments.get("palette") or "").strip()
+    raw_params = params.arguments.get("params")
+    new_params: dict[str, Any] = {}
+    if isinstance(raw_params, dict):
+        for k, v in raw_params.items():
+            # numbers (knobs) or hex strings (color knobs); never bools
+            if isinstance(v, (int, float, str)) and not isinstance(v, bool):
+                new_params[str(k)] = v
+
+    if not variant and not palette and not new_params:
+        await params.result_callback("Tell me what to change — a variant, palette, or a knob.")
+        return
+
+    orb_patch: dict[str, Any] = {}
+    if variant:
+        orb_patch["variant"] = variant
+    if palette:
+        orb_patch["palette"] = palette
+    if new_params:
+        # The per-block merge replaces `params` wholesale, so write the full
+        # merged set rather than just the delta (else other knobs are wiped).
+        current = (cfg.get("orb") or {}).get("params")
+        merged = {**current, **new_params} if isinstance(current, dict) else dict(new_params)
+        orb_patch["params"] = merged
+
+    try:
+        merge_patch({"orb": orb_patch})
+    except ValueError as e:
+        await params.result_callback(f"Couldn't change the orb: {e}")
+        return
+
+    # Live-apply on the on-screen orb (frontend useVoiceBridge → orb store).
+    await sse_bus.publish("orb-config", orb_patch)
+
+    bits: list[str] = []
+    if variant:
+        bits.append(f"variant {variant}")
+    if palette:
+        bits.append(f"palette {palette}")
+    if new_params:
+        bits.append(", ".join(new_params.keys()))
+    await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).
