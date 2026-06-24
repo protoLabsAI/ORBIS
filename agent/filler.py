@@ -490,8 +490,8 @@ class FillerGenerator:
             "You generate ONE tiny spoken acknowledgement for a voice agent "
             "that just heard the user and is taking a beat before it answers. "
             "1 to 3 words, natural and low-key — like 'one sec', 'let me see', "
-            "'hmm', 'right', 'okay so', 'hang on'. Not a question, not a "
-            "sentence, no promise about what you'll do. Output only the words."
+            "'hmm', 'right', 'okay so', 'hang on'. Don't promise what you'll "
+            "do. Output only the words."
         )
         user = "\n".join([
             _backend_style(tts_backend).strip(),

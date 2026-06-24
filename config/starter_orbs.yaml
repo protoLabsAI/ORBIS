@@ -1,8 +1,8 @@
 # ORBIS starter orb pool.
 #
 # The set of orbs users pick from during the setup wizard. Fresh
-# installs pick one of these; no customization is offered until the
-# user unlocks the paid tier (see DECISIONS.md § Monetization).
+# installs pick one of these; deeper customization (the orb editor +
+# custom .orbis import) is free and open source.
 #
 # Each entry:
 #   slug          — stable id referenced from UI + config/orbis.yaml

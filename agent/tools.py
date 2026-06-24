@@ -633,27 +633,10 @@ if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
     _TOOL_REGISTRY.pop("render_widget", None)
 
 
-@tool(
-    "set_orb_visual",
-    (
-        "Change how the orb LOOKS — its variant (overall visual style), palette "
-        "(color scheme), and/or individual control knobs. Use when the user asks "
-        "to restyle the orb: 'use the nebula orb', 'switch to the aurora palette', "
-        "'more glow', 'slow it down', 'brighter'. Pass any of `variant`, `palette`, "
-        "or `params` ({knob: number}). Still give your normal short spoken reply too."
-    ),
-    parameters={
-        "variant": {"type": "string", "description": "Variant id, e.g. 'fractal', 'nebula'."},
-        "palette": {"type": "string", "description": "Palette name on the active variant."},
-        "params": {
-            "type": "object",
-            "description": 'Numeric knob overrides, e.g. {"glow": 1.4, "speed": 0.8}.',
-            "additionalProperties": {"type": "number"},
-        },
-    },
-    required=[],
-    latency=Latency.FAST,
-)
+# set_orb_visual is PARKED — buggy in practice (disabled #562). The handler is
+# kept so re-enabling is just restoring its @tool(...) decorator: name
+# "set_orb_visual", params variant/palette/params (numeric), latency FAST. Left
+# UN-decorated so its description never reaches the LLM tool surface while off.
 async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     """Restyle the live orb. Gated at call time by `agent.allow_orb_control`
     (so the settings toggle takes effect without a restart). Persists the
@@ -712,12 +695,6 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     if new_params:
         bits.append(", ".join(new_params.keys()))
     await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
-
-
-# TEMP (2026-06-24): set_orb_visual is disabled — buggy in practice. The handler
-# above is kept so re-enabling is just deleting this pop. (#560 shipped it;
-# remove this line to restore.)
-_TOOL_REGISTRY.pop("set_orb_visual", None)
 
 
 # ---------------------------------------------------------------------------
