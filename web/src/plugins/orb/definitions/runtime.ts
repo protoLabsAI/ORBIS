@@ -101,7 +101,7 @@ export async function importOrbisFile(file: File): Promise<ImportResult> {
  * origin every launch (ephemeral sidecar port), so localStorage doesn't
  * survive — configDriver re-hydrates the orb from /api/config at boot,
  * and an un-persisted pick resets on refresh. Same posture as
- * select_starter, same entitlement gate as the import itself. */
+ * select_starter. */
 export function persistSelection(variantId: string, palette?: string): void {
   api
     .putConfig({ orb: { variant: variantId, ...(palette ? { palette } : {}) } })

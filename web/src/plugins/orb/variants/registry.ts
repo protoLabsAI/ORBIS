@@ -41,7 +41,12 @@ export interface VariantSpec {
    * without this still react via the user-authored override path.
    */
   moodDefaults?: MoodOverrides;
-  /** Paid/premium variant — gated behind the customization unlock + beta flag. */
+  /**
+   * Flags a variant as outside the default first-run starter set. Everything is
+   * free and open source now, so this no longer gates anything — it's just
+   * curation metadata (the variant is fully usable; it's simply not offered
+   * during first-run setup). Starter membership itself is config/starter_orbs.yaml.
+   */
   premium?: boolean;
   /**
    * Optional postprocessing rendered inside OrbStage's EffectComposer while
