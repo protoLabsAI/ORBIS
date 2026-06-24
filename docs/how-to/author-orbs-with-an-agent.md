@@ -82,8 +82,8 @@ A good authoring loop looks like:
    orb brightens when ORBIS speaks, or `mood.arousal` for energy.
 6. `preview_voice_state` / `set_mood` to check how it looks while listening,
    thinking, and speaking.
-7. `export_orb` to get the `.orbis`, then **Import** it in ORBIS (custom-orb
-   import is part of the paid customization unlock).
+7. `export_orb` to get the `.orbis`, then **Import** it in ORBIS — free and
+   open source, no unlock.
 
 Because the agent and the editor share one source of truth, you'll see the orb
 morph step by step as each tool lands — which is the whole point.
