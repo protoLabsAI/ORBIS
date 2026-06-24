@@ -6,8 +6,8 @@ import { LogsPanel } from '@/plugins/logs-panel/LogsPanel';
  * personality/mood observability panel was pulled for the beta along with the
  * paused emotional-companion layer (PersonalityPanel is kept in-tree for an
  * easy re-enable). The premium-orbs picker (BetaOrbsPanel) was removed
- * outright pre-paywall-go-live; preview premium variants via `vite dev`
- * and the variant registry. Logs sit inside a collapsed-by-default
+ * outright; preview the non-starter variants via `vite dev` and the
+ * variant registry. Logs sit inside a collapsed-by-default
  * <details> so the panel doesn't scroll past everything by default.
  */
 export function DevPanel() {

@@ -4,8 +4,8 @@ import { ReactorPost } from './ReactorPost';
 import { REACTOR_FIELDS } from './schema';
 import { REACTOR_PRESETS } from './presets';
 
-// Premium (paid): not in the free starter pool; `premium` gates it behind the
-// customization paywall in the picker.
+// Not a default first-run starter (`premium: true`) — free and fully usable
+// like every variant, just not offered during setup.
 registerVariant({
   id: 'reactor',
   name: 'Reactor',

@@ -8,10 +8,11 @@
  * Adding a variant is: drop a `variants/<id>/index.tsx` that calls
  * registerVariant(...). No edit here.
  *
- * Free vs paid is NOT decided here (every variant registers). Free access is
- * the curated starter pool in config/starter_orbs.yaml — which only draws on
- * fractal / nebula / crystal / particles. Every other variant sets
- * `premium: true` and is reached only through the paid customization editor.
+ * Nothing is gated here — every variant registers unconditionally. The first-run
+ * starter pool is curated in config/starter_orbs.yaml (it draws on fractal /
+ * nebula / crystal / particles); the other variants carry `premium: true` purely
+ * as "not a default starter" metadata. All of them are free and fully usable via
+ * the orb editor + `.orbis` import.
  */
 import.meta.glob('./*/index.tsx', { eager: true });
 

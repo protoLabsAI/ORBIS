@@ -4,8 +4,8 @@ import { EdisonPost } from './EdisonPost';
 import { EDISON_FIELDS } from './schema';
 import { EDISON_PRESETS } from './presets';
 
-// Premium (paid): `premium` gates it behind the customization paywall in the
-// picker. Not in the free starter pool, so free users never see it.
+// Not a default first-run starter (`premium: true`) — free and fully usable
+// like every variant, just not offered during setup.
 registerVariant({
   id: 'edison',
   name: 'Edison',

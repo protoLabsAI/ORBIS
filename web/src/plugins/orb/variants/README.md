@@ -2,7 +2,8 @@
 
 A **variant** is a visual style for the orb — its geometry, shader, palettes, and
 how it reacts to voice and mood. `fractal`, `nebula`, `crystal`, and `particles`
-are the free starters; the rest are premium.
+are the default first-run starters; the rest ship too and are fully usable —
+they're just not offered during setup.
 
 Variants are **auto-discovered**. Every `variants/<id>/index.tsx` that calls
 `registerVariant()` at module top-level is wired in by the eager glob in
@@ -49,12 +50,15 @@ registerVariant({
 and should react to `voiceState` (idle/listening/thinking/speaking). The
 `fields` schema is what the customize panel renders, so users can tune it.
 
-## Free vs premium
+## Starters vs the rest
 
-- Omit `premium` → the variant is **free**. To put it in the first-run starter
-  pool, add an entry to `config/starter_orbs.yaml` referencing its `id`.
-- `premium: true` → registered like any other but reachable only through the
-  paid customization editor; never in the free starter pool.
+Everything is free and open source — `premium` no longer gates anything.
+
+- Omit `premium` → eligible to be a first-run starter. To actually offer it
+  during setup, add an entry to `config/starter_orbs.yaml` referencing its `id`.
+- `premium: true` → registered like any other and fully usable; it's just
+  flagged "not a default starter," so it's reached via the orb editor / `.orbis`
+  import rather than the first-run picker.
 
 ## Gotchas
 

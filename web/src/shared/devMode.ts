@@ -5,8 +5,8 @@ const STORAGE_KEY = 'orbis.devMode';
 /**
  * Developer tools — the Dev drawer tab + the dev-mode toggle in Settings —
  * are a BUILD-TIME capability, never a user-flippable one. Exposing them in a
- * shipped build has opened paywall bypasses before (the dev-gated premium-orb
- * surfaces, pre-2026-06-05; those surfaces are now removed outright).
+ * shipped build has leaked dev-only surfaces before (the dev-gated premium-orb
+ * surfaces, pre-2026-06-05; since removed outright).
  *
  * They're enabled only in a real dev server (`vite dev`) or when a build sets
  * `VITE_ORBIS_DEVTOOLS=1` — `nuke-and-rebuild.sh` sets it only with the

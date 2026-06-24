@@ -182,8 +182,8 @@ type OrbEntry =
 
 /**
  * Orb switcher — cycles the curated starter pool plus any imported
- * `.orbis` orbs (the only selection surface for them while the paid
- * Orb tab is off for beta). Starters persist via select_starter;
+ * `.orbis` orbs (the only selection surface for them while the full
+ * Orb editor tab is off for beta). Starters persist via select_starter;
  * imported picks persist through the orb store's local storage.
  * The row beneath imports a `.orbis` file and removes the active
  * imported orb.
@@ -288,8 +288,8 @@ function OrbSwitcher() {
 
 /** Quiet utility row under the orb switcher: import a `.orbis` file
  * (authored at orbis.protolabs.studio/editor) and remove the active
- * imported orb. The sidecar enforces the customization entitlement on
- * import — a 403 surfaces through the status pill. */
+ * imported orb. Invalid files are rejected server-side — the error
+ * surfaces through the status pill. */
 function ImportOrbRow({ activeVariantId }: { activeVariantId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
