@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.2.145",
+    "date": "2026-06-24",
+    "changes": [
+      "Async delegate and orchestrate responses drop automatically when a user interrupts, preventing out-of-turn narration.",
+      "Dead tool handlers and unimplemented persona traits drop from the LLM prompt to reduce context noise.",
+      "Micro-acknowledge prompts simplify by dropping restrictive negative constraints that smaller models ignore.",
+      "The orb variant picker removes the \"Premium\" badge to align with open-source customization."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.145/ORBIS-0.2.145-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.144",
     "date": "2026-06-24",
     "changes": [
