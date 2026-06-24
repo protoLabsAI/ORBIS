@@ -19,7 +19,7 @@ const BUG_URL =
 const DOCS_URL = 'https://orbis.protolabs.studio/docs/how-to/create-custom-orbs';
 // Shared chrome for the header's ghost icon buttons.
 const ICON_BTN =
-  'grid h-7 w-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-edge/40 hover:text-fg';
+  'grid h-7 w-7 cursor-pointer place-items-center rounded-md text-fg-subtle transition-colors hover:bg-edge/40 hover:text-fg';
 
 const TABS = ['Shader', 'Controls', 'Bindings', 'JSON', 'Meta'] as const;
 type Tab = (typeof TABS)[number];
@@ -104,7 +104,7 @@ export function App() {
             onClick={() => exportDefinition(store().getSnapshot().definition)}
             title="Export .orbis"
             aria-label="Export .orbis"
-            className="grid h-7 w-7 place-items-center rounded-md bg-brand-deep text-white transition-opacity hover:opacity-90"
+            className={ICON_BTN}
           >
             <Download className="h-4 w-4" strokeWidth={1.75} />
           </button>
