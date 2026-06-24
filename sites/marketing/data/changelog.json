@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.2.143",
+    "date": "2026-06-24",
+    "changes": [
+      "The voice agent can now restyle the orb’s variant, palette, and parameter knobs live, with no reload required.",
+      "A toggle in Agent → Behavior disables the agent’s orb control capability, letting you turn it off at any time.",
+      "How-to, Reference, and Explanation overview pages now group content by domain (Voice & conversation, The orb, etc.) to match the sidebar structure.",
+      "Inside each documentation section, the sidebar groups pages by domain instead of an alphabetical flat list, with unplaced pages falling into a “More” group.",
+      "Post-paywall audit: removed stale billing references, clarified the `premium` flag as legacy, and listed three previously missing how-to guides in the overview.",
+      "The hero section now features a “Try the orb editor →” call-to-action, giving instant access to the zero-install interactive showcase.",
+      "Orphaned `/unlock` and `/unlock/success` pages, tied to a discontinued $9 unlock, have been removed to avoid confusion."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.143/ORBIS-0.2.143-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.142",
     "date": "2026-06-24",
     "changes": [
