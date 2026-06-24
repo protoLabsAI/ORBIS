@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.2.144",
+    "date": "2026-06-24",
+    "changes": [
+      "The `set_orb_visual` tool is disabled to prevent unstable orb styling, and the related settings toggle is removed.",
+      "The update changelog now opens in a centered modal that properly renders markdown formatting instead of a raw text popover."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.144/ORBIS-0.2.144-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.143",
     "date": "2026-06-24",
     "changes": [
