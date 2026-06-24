@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 
 const STORAGE_KEY = 'orbis-editor.panelWidth.v1';
+const COLLAPSE_KEY = 'orbis-editor.panelCollapsed.v1';
 
 export const DEFAULT_PANEL_WIDTH = 680;
 const MIN_PANEL_WIDTH = 380;
@@ -38,12 +39,23 @@ function loadWidth(): number {
   return DEFAULT_PANEL_WIDTH;
 }
 
+function loadCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    /* hardened browser context — default to expanded */
+  }
+  return false;
+}
+
 export interface ResizablePanel {
   width: number;
   dragging: boolean;
+  collapsed: boolean;
   min: number;
   max: number;
   reset: () => void;
+  toggleCollapse: () => void;
   /** Spread onto the divider element (give it `role="separator"`). */
   handleProps: {
     onPointerDown: (e: ReactPointerEvent) => void;
@@ -55,6 +67,7 @@ export interface ResizablePanel {
 export function useResizablePanel(): ResizablePanel {
   const [width, setWidth] = useState(loadWidth);
   const [dragging, setDragging] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
   const gesture = useRef<{ move: (e: PointerEvent) => void; up: () => void } | null>(null);
 
   // Persist, debounced — a drag fires setWidth ~per frame; one write at rest
@@ -69,6 +82,14 @@ export function useResizablePanel(): ResizablePanel {
     }, 300);
     return () => clearTimeout(id);
   }, [width]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
+    } catch {
+      /* best-effort */
+    }
+  }, [collapsed]);
 
   // Re-clamp when the window shrinks under a wide panel.
   useEffect(() => {
@@ -116,13 +137,16 @@ export function useResizablePanel(): ResizablePanel {
   }, []);
 
   const reset = useCallback(() => setWidth(clampWidth(DEFAULT_PANEL_WIDTH)), []);
+  const toggleCollapse = useCallback(() => setCollapsed((c) => !c), []);
 
   return {
     width,
     dragging,
+    collapsed,
     min: MIN_PANEL_WIDTH,
     max: maxPanelWidth(),
     reset,
+    toggleCollapse,
     handleProps: { onPointerDown, onKeyDown, onDoubleClick: reset },
   };
 }

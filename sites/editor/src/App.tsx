@@ -10,8 +10,16 @@ import { ControlsPane } from './panes/ControlsPane';
 import { BindingsPane } from './panes/BindingsPane';
 import { JsonPane } from './panes/JsonPane';
 import { MetaPane } from './panes/MetaPane';
+import { Upload, Download, BookOpen, Bug, PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 initStore(TEMPLATES[0].definition);
+
+const BUG_URL =
+  'https://github.com/protoLabsAI/ORBIS/issues/new?labels=bug&title=%5Borb+editor%5D+';
+const DOCS_URL = 'https://orbis.protolabs.studio/docs/how-to/create-custom-orbs';
+// Shared chrome for the header's ghost icon buttons.
+const ICON_BTN =
+  'grid h-7 w-7 place-items-center rounded-md text-fg-subtle transition-colors hover:bg-edge/40 hover:text-fg';
 
 const TABS = ['Shader', 'Controls', 'Bindings', 'JSON', 'Meta'] as const;
 type Tab = (typeof TABS)[number];
@@ -83,24 +91,42 @@ export function App() {
             onChange={(e) => onImport(e.target.files?.[0])}
           />
           <button
+            type="button"
             onClick={() => fileRef.current?.click()}
-            className="rounded-md border border-edge px-2.5 py-1 text-fg-subtle hover:text-fg"
+            title="Import .orbis"
+            aria-label="Import .orbis"
+            className={ICON_BTN}
           >
-            Import
+            <Upload className="h-4 w-4" strokeWidth={1.75} />
           </button>
           <button
+            type="button"
             onClick={() => exportDefinition(store().getSnapshot().definition)}
-            className="rounded-md bg-brand-deep px-2.5 py-1 font-medium text-white hover:opacity-90"
+            title="Export .orbis"
+            aria-label="Export .orbis"
+            className="grid h-7 w-7 place-items-center rounded-md bg-brand-deep text-white transition-opacity hover:opacity-90"
           >
-            Export .orbis
+            <Download className="h-4 w-4" strokeWidth={1.75} />
           </button>
           <a
-            href="https://orbis.protolabs.studio/docs/how-to/create-custom-orbs"
+            href={DOCS_URL}
             target="_blank"
             rel="noreferrer"
-            className="text-fg-subtle hover:text-fg"
+            title="Docs"
+            aria-label="Documentation"
+            className={ICON_BTN}
           >
-            docs
+            <BookOpen className="h-4 w-4" strokeWidth={1.75} />
+          </a>
+          <a
+            href={BUG_URL}
+            target="_blank"
+            rel="noreferrer"
+            title="Report a bug"
+            aria-label="Report a bug on GitHub"
+            className={ICON_BTN}
+          >
+            <Bug className="h-4 w-4" strokeWidth={1.75} />
           </a>
         </div>
       </header>
@@ -124,49 +150,73 @@ export function App() {
           <SimulatorBar />
         </div>
 
-        {/* Drag to resize the panel · double-click to reset · ←/→ to nudge */}
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize panel"
-          aria-valuenow={panel.width}
-          aria-valuemin={panel.min}
-          aria-valuemax={panel.max}
-          aria-valuetext={`Panel ${panel.width}px`}
-          tabIndex={0}
-          title="Drag to resize · double-click to reset"
-          {...panel.handleProps}
-          className={
-            'w-1.5 shrink-0 cursor-col-resize touch-none outline-none transition-colors ' +
-            (panel.dragging ? 'bg-brand' : 'bg-edge hover:bg-brand focus-visible:bg-brand')
-          }
-        />
+        {panel.collapsed ? (
+          // Fully collapsed → a slim rail on the right edge that brings it back.
+          <button
+            type="button"
+            onClick={panel.toggleCollapse}
+            title="Show panel"
+            aria-label="Show editor panel"
+            className="flex w-8 shrink-0 items-center justify-center border-l border-edge bg-panel text-fg-subtle transition-colors hover:bg-edge/30 hover:text-fg"
+          >
+            <PanelRightOpen className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        ) : (
+          <>
+            {/* Drag to resize the panel · double-click to reset · ←/→ to nudge */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize panel"
+              aria-valuenow={panel.width}
+              aria-valuemin={panel.min}
+              aria-valuemax={panel.max}
+              aria-valuetext={`Panel ${panel.width}px`}
+              tabIndex={0}
+              title="Drag to resize · double-click to reset"
+              {...panel.handleProps}
+              className={
+                'w-1.5 shrink-0 cursor-col-resize touch-none outline-none transition-colors ' +
+                (panel.dragging ? 'bg-brand' : 'bg-edge hover:bg-brand focus-visible:bg-brand')
+              }
+            />
 
-        <div className="flex shrink-0 flex-col" style={{ width: panel.width }}>
-          <nav className="flex border-b border-edge bg-panel text-xs">
-            {TABS.map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={
-                  'px-3.5 py-2 transition-colors ' +
-                  (tab === t
-                    ? 'border-b-2 border-brand text-fg'
-                    : 'text-fg-subtle hover:text-fg')
-                }
-              >
-                {t}
-              </button>
-            ))}
-          </nav>
-          <div className="min-h-0 flex-1">
-            {tab === 'Shader' && <ShaderPane />}
-            {tab === 'Controls' && <ControlsPane />}
-            {tab === 'Bindings' && <BindingsPane />}
-            {tab === 'JSON' && <JsonPane />}
-            {tab === 'Meta' && <MetaPane />}
-          </div>
-        </div>
+            <div className="flex shrink-0 flex-col" style={{ width: panel.width }}>
+              <nav className="flex items-center border-b border-edge bg-panel text-xs">
+                {TABS.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTab(t)}
+                    className={
+                      'px-3.5 py-2 transition-colors ' +
+                      (tab === t
+                        ? 'border-b-2 border-brand text-fg'
+                        : 'text-fg-subtle hover:text-fg')
+                    }
+                  >
+                    {t}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={panel.toggleCollapse}
+                  title="Collapse panel"
+                  aria-label="Collapse editor panel"
+                  className="ml-auto grid h-8 w-8 place-items-center text-fg-subtle transition-colors hover:text-fg"
+                >
+                  <PanelRightClose className="h-4 w-4" strokeWidth={1.75} />
+                </button>
+              </nav>
+              <div className="min-h-0 flex-1">
+                {tab === 'Shader' && <ShaderPane />}
+                {tab === 'Controls' && <ControlsPane />}
+                {tab === 'Bindings' && <BindingsPane />}
+                {tab === 'JSON' && <JsonPane />}
+                {tab === 'Meta' && <MetaPane />}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
