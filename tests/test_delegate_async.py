@@ -50,9 +50,17 @@ class FakeDelivery:
 
     def __init__(self):
         self.progress: list[tuple] = []
+        self._barge_epoch = 0
 
     async def note_progress(self, text, *, source=None):
         self.progress.append((text, source))
+
+    @property
+    def barge_epoch(self) -> int:
+        return self._barge_epoch
+
+    def bump_barge(self) -> None:
+        self._barge_epoch += 1
 
 
 def _delegate():
@@ -174,3 +182,59 @@ async def test_no_immediate_ack_before_dispatch_completes(monkeypatch) -> None:
 
     # No "on it / asking ava" ack string anywhere — just the final answer.
     assert params.results == [("done", True)]
+
+
+@pytest.mark.asyncio
+async def test_answer_dropped_when_barged_in_midflight(monkeypatch) -> None:
+    """If the user talks over us while the delegate is in flight, the barge epoch
+    advances and the (now-stale) answer is dropped rather than narrated into a
+    turn that already moved on — delegate_dispatch can't be cancelled, so dropping
+    the result is the gate."""
+    delivery = FakeDelivery()
+
+    async def fake_dispatch(d, query, *, progress_callback=None, **kw):
+        delivery.bump_barge()  # user barges in mid-delegation
+        return "stale answer the user already talked over"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    # No spoken result — the superseded answer is dropped.
+    assert params.results == []
+
+
+@pytest.mark.asyncio
+async def test_error_dropped_when_barged_in_midflight(monkeypatch) -> None:
+    """The error narration is suppressed after a barge-in too — you don't hear
+    'couldn't reach ava' for a delegation you already abandoned."""
+    delivery = FakeDelivery()
+
+    async def boom(d, query, *, progress_callback=None, **kw):
+        delivery.bump_barge()
+        raise DelegateError("connection refused")
+
+    monkeypatch.setattr(tools, "delegate_dispatch", boom)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "x"})
+    await handler(params)
+
+    assert params.results == []
+
+
+@pytest.mark.asyncio
+async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
+    """Sanity: epoch unchanged → the gate doesn't false-positive; the fresh
+    answer still speaks exactly once."""
+    delivery = FakeDelivery()
+
+    async def fake_dispatch(d, query, *, progress_callback=None, **kw):
+        return "fresh answer"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    assert params.results == [("fresh answer", True)]
