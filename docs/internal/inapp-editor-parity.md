@@ -1,8 +1,8 @@
 # In-app orb editor → parity with the live editor (plan of record)
 
-Status: **proposed** (2026-06-24). Tracking epic: see GitHub issues at the
-bottom. Direction: **everything is free + open source; the orb editor is
-unblocked** (no paywall).
+Status: **proposed** (2026-06-24). Tracking epic: **#549** (phases #545–#548).
+Direction: **everything is free + open source; the orb editor is unblocked**
+(no paywall).
 
 ## Goal
 
@@ -50,19 +50,19 @@ Recommended over the alternatives:
 
 ## Phases (→ GitHub sub-issues)
 
-- **P0 — Unblock & expose.** Remove the entitlement gate on orb editing; restore
+- **P0 — Unblock & expose (#545).** Remove the entitlement gate on orb editing; restore
   the `orb` tab in the Drawer (`TabName` + render the `drawer-orb` slot); drop
   paywall/"unlock" language from docs + UI (`UnlockCustomization`). Ships the
   *current* in-app editor to everyone, free.
-- **P1 — Extract panes → shared package** (`packages/editor-ui`, name TBD).
+- **P1 — Extract panes → shared package (#546)** (`packages/editor-ui`, name TBD).
   `ShaderPane` / `ControlsPane` / `BindingsPane` / `MetaPane` / `JsonPane` as
   controlled components on `@orbis/orb-runtime`. Refactor `sites/editor` to
   consume them with **no behavior change** (the proof the extraction is clean).
-- **P2 — Robust in-app editor.** Mount the shared panes in the app's `orb` tab
+- **P2 — Robust in-app editor (#547).** Mount the shared panes in the app's `orb` tab
   against a full `OrbDefinition`; wire to the orb store + runtime import/export +
   a live preview of the actual app orb; in-app file import + export. The `orb`
   tab becomes a real authoring surface (shader/controls/bindings/meta/json).
-- **P3 — Unify authoring polish.** Port the in-app **state/mood delta**
+- **P3 — Unify authoring polish (#548).** Port the in-app **state/mood delta**
   authoring (`FieldDeltaSlider` / `AuthoringContext`) into the shared controls so
   both editors get it; preview parity (voice-state/mood sim).
 
