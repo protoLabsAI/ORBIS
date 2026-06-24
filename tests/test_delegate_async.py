@@ -20,7 +20,7 @@ import pytest
 
 import agent.tools as tools
 from agent.delegates import DelegateError
-from agent.tools import ASYNC_TOOL_NAMES, _delegate_to_handler
+from agent.tools import ASYNC_TOOL_NAMES, _delegate_to_handler, _orchestrate_handler
 
 
 class FakeParams:
@@ -50,9 +50,17 @@ class FakeDelivery:
 
     def __init__(self):
         self.progress: list[tuple] = []
+        self._barge_epoch = 0
 
     async def note_progress(self, text, *, source=None):
         self.progress.append((text, source))
+
+    @property
+    def barge_epoch(self) -> int:
+        return self._barge_epoch
+
+    def bump_barge(self) -> None:
+        self._barge_epoch += 1
 
 
 def _delegate():
@@ -174,3 +182,102 @@ async def test_no_immediate_ack_before_dispatch_completes(monkeypatch) -> None:
 
     # No "on it / asking ava" ack string anywhere — just the final answer.
     assert params.results == [("done", True)]
+
+
+@pytest.mark.asyncio
+async def test_answer_dropped_when_barged_in_midflight(monkeypatch) -> None:
+    """If the user talks over us while the delegate is in flight, the barge epoch
+    advances and the (now-stale) answer is dropped rather than narrated into a
+    turn that already moved on — delegate_dispatch can't be cancelled, so dropping
+    the result is the gate."""
+    delivery = FakeDelivery()
+
+    async def fake_dispatch(d, query, *, progress_callback=None, **kw):
+        delivery.bump_barge()  # user barges in mid-delegation
+        return "stale answer the user already talked over"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    # No spoken result — the superseded answer is dropped.
+    assert params.results == []
+
+
+@pytest.mark.asyncio
+async def test_error_dropped_when_barged_in_midflight(monkeypatch) -> None:
+    """The error narration is suppressed after a barge-in too — you don't hear
+    'couldn't reach ava' for a delegation you already abandoned."""
+    delivery = FakeDelivery()
+
+    async def boom(d, query, *, progress_callback=None, **kw):
+        delivery.bump_barge()
+        raise DelegateError("connection refused")
+
+    monkeypatch.setattr(tools, "delegate_dispatch", boom)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "x"})
+    await handler(params)
+
+    assert params.results == []
+
+
+@pytest.mark.asyncio
+async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
+    """Sanity: epoch unchanged → the gate doesn't false-positive; the fresh
+    answer still speaks exactly once."""
+    delivery = FakeDelivery()
+
+    async def fake_dispatch(d, query, *, progress_callback=None, **kw):
+        return "fresh answer"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    assert params.results == [("fresh answer", True)]
+
+
+# --- orchestrate: the same barge-in gate on the multi-step loop ------------
+# orchestrate runs a bounded ReAct loop that can't be torn down mid-flight, so
+# the gate is identical to delegate_to: snapshot the epoch at dispatch, drop the
+# synthesized answer if the user talked over the loop. The per-step progress
+# (VISUAL pill) is mid-flow and NOT gated.
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_answer_dropped_when_barged_in(monkeypatch) -> None:
+    delivery = FakeDelivery()
+
+    async def fake_runner(goal, *, progress=None, ask_user=None):
+        await progress("working on step 1")  # visual pill — fine mid-flow
+        delivery.bump_barge()  # user barges in while the loop runs
+        return "the synthesized multi-step answer"
+
+    handler = _orchestrate_handler(
+        FakeRegistry(_delegate()), delivery=delivery, runner=fake_runner
+    )
+    params = FakeParams({"goal": "do the multi-step thing"})
+    await handler(params)
+
+    # Synthesis dropped (no spoken result); the in-flight progress still pilled.
+    assert params.results == []
+    assert ("working on step 1", "orchestrator") in delivery.progress
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_answer_kept_when_no_bargein(monkeypatch) -> None:
+    delivery = FakeDelivery()
+
+    async def fake_runner(goal, *, progress=None, ask_user=None):
+        return "the synthesized multi-step answer"
+
+    handler = _orchestrate_handler(
+        FakeRegistry(_delegate()), delivery=delivery, runner=fake_runner
+    )
+    params = FakeParams({"goal": "do the multi-step thing"})
+    await handler(params)
+
+    assert params.results == [("the synthesized multi-step answer", True)]

@@ -785,6 +785,19 @@ def _delegate_to_handler(
             except Exception:  # noqa: BLE001
                 pass
 
+        # Snapshot the barge epoch — if the user talks over us while the delegate
+        # is in flight, the epoch advances and we drop the (now stale) answer
+        # rather than narrating it into a turn that already moved on. The
+        # dispatch itself can't be cancelled, so dropping the result is the gate.
+        _epoch0 = delivery.barge_epoch if delivery is not None else None
+
+        def _superseded() -> bool:
+            return (
+                delivery is not None
+                and _epoch0 is not None
+                and delivery.barge_epoch != _epoch0
+            )
+
         try:
             result = await delegate_dispatch(
                 delegate, query,
@@ -796,12 +809,19 @@ def _delegate_to_handler(
             logger.info(
                 f"[delegate_to] {target} → answered ({len(result or '')} chars)"
             )
+            if _superseded():
+                logger.info(f"[delegate_to] {target} answered after barge-in — dropping.")
+                return
             await params.result_callback(_strip_markdown_for_speech(result))
         except DelegateError as e:
             logger.warning(f"[delegate_to] {target} failed: {e}")
+            if _superseded():
+                return
             await params.result_callback(f"Couldn't reach {target}: {e}")
         except Exception as e:  # noqa: BLE001
             logger.exception(f"[delegate_to] {target} errored: {e}")
+            if _superseded():
+                return
             await params.result_callback(f"Delegation to {target} errored: {e}")
 
     return _handler
@@ -904,11 +924,28 @@ def _orchestrate_handler(
             finally:
                 take_pending_ask()  # clear if it timed out / wasn't answered
 
+        # Drop the synthesized answer if the user barged in while the loop ran
+        # (same stale-result gate as delegate_to). The ask_user intermediate
+        # above is mid-flow and intentionally NOT gated.
+        _epoch0 = delivery.barge_epoch if delivery is not None else None
+
+        def _superseded() -> bool:
+            return (
+                delivery is not None
+                and _epoch0 is not None
+                and delivery.barge_epoch != _epoch0
+            )
+
         try:
             result = await runner(goal, progress=_progress, ask_user=_ask_user)
+            if _superseded():
+                logger.info("[orchestrate] completed after barge-in — dropping result.")
+                return
             await params.result_callback(_strip_markdown_for_speech(result))
         except Exception as e:  # noqa: BLE001
             logger.exception(f"[orchestrate] goal failed: {e}")
+            if _superseded():
+                return
             await params.result_callback(
                 "that multi-step thing I was working on ran into trouble."
             )

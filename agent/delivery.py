@@ -213,6 +213,12 @@ class DeliveryController(FrameProcessor):
         self._voice_framer: "Callable[[str], object] | None" = None
         # Most recent delegate status line (visual rail), for grounding fillers.
         self._last_progress: str | None = None
+        # Barge-in epoch. Bumped on every tool cancellation (barge-in); an async
+        # delegate/orchestrate captures it at dispatch and drops its result if the
+        # epoch advanced while it was in flight — so an answer the user already
+        # talked over isn't narrated out of context. Monotonic (never resets), so
+        # a fresh tool call can't accidentally un-invalidate an older one.
+        self._barge_epoch = 0
         # Shared LLMContext (orbis-3ta). When set, real proactive deliveries
         # are recorded as assistant turns so the orb remembers saying them and
         # can reference them in conversation. Fillers/bids/storm-notice are
@@ -276,6 +282,15 @@ class DeliveryController(FrameProcessor):
 
     def clear_progress(self) -> None:
         self._last_progress = None
+
+    @property
+    def barge_epoch(self) -> int:
+        """Monotonic counter, bumped on each barge-in (tool cancellation)."""
+        return self._barge_epoch
+
+    def bump_barge(self) -> None:
+        """Record a barge-in — invalidates any in-flight async delegate result."""
+        self._barge_epoch += 1
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending

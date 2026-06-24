@@ -2004,6 +2004,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         async def _on_tool_cancel(_svc, _calls):
             logger.info("[filler] tool cancelled (barge-in)")
             _cancel_progress(publish_end=False)
+            # Invalidate any in-flight async delegate/orchestrate result so an
+            # answer the user just talked over isn't narrated out of context
+            # (delegate_dispatch can't be cancelled, but its result is dropped).
+            delivery.bump_barge()
             # Cancel any opening ack still being generated so it can't speak
             # over the user who just barged in (already-queued acks are out
             # of our hands, but a pending micro-LLM line is killed here).
