@@ -19,6 +19,17 @@ export default defineConfig({
         __dirname,
         '../../packages/orb-runtime/src/index.ts',
       ),
+      // Shared editor panes + store — consumed as source, reused by the in-app editor.
+      '@orbis/editor-ui': path.resolve(
+        __dirname,
+        '../../packages/editor-ui/src/index.ts',
+      ),
+      // editor-ui's CodeMirror deps live in THIS app's node_modules, but its
+      // sources sit outside this root — pin the entry packages so bare imports
+      // from packages/editor-ui resolve (their internal deps then resolve here).
+      '@uiw/react-codemirror': path.resolve(__dirname, 'node_modules/@uiw/react-codemirror'),
+      '@codemirror/lang-cpp': path.resolve(__dirname, 'node_modules/@codemirror/lang-cpp'),
+      '@codemirror/lang-json': path.resolve(__dirname, 'node_modules/@codemirror/lang-json'),
     },
     // orb-runtime sources sit outside this root; pin their peer deps to
     // this app's single copy.

@@ -43,7 +43,7 @@ import {
   type SectionId,
   type VoiceState,
 } from '@orbis/orb-runtime';
-import { store } from './state';
+import { store } from '@orbis/editor-ui';
 
 const VOICE_STATES: readonly VoiceState[] = ['idle', 'listening', 'thinking', 'speaking'];
 const SECTIONS: readonly SectionId[] = ['color', 'energy', 'motion', 'fractal', 'perf'];
