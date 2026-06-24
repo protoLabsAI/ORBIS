@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { DefinitionOrb, composeBase, type ParamMap } from '@orbis/orb-runtime';
-import { store } from '../state';
+import { store } from '@orbis/editor-ui';
 import { LevelSimulator } from './simulator';
 
 /**

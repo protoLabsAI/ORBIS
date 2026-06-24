@@ -8,10 +8,14 @@
     "paths": {
       "@/*": ["./src/*"],
       "@orbis/orb-runtime": ["../../packages/orb-runtime/src/index.ts"],
+      "@orbis/editor-ui": ["../../packages/editor-ui/src/index.ts"],
       "three": ["./node_modules/@types/three"],
       "react": ["./node_modules/@types/react"],
       "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
-      "@react-three/fiber": ["./node_modules/@react-three/fiber"]
+      "@react-three/fiber": ["./node_modules/@react-three/fiber"],
+      "@uiw/react-codemirror": ["./node_modules/@uiw/react-codemirror"],
+      "@codemirror/lang-cpp": ["./node_modules/@codemirror/lang-cpp"],
+      "@codemirror/lang-json": ["./node_modules/@codemirror/lang-json"]
     },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -24,5 +28,5 @@
     "noFallthroughCasesInSwitch": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "../../packages/orb-runtime/src"]
+  "include": ["src", "../../packages/orb-runtime/src", "../../packages/editor-ui/src"]
 }

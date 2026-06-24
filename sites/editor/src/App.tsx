@@ -1,15 +1,18 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
-import { initStore, store } from './state';
+import {
+  initStore,
+  store,
+  ShaderPane,
+  ControlsPane,
+  BindingsPane,
+  JsonPane,
+  MetaPane,
+} from '@orbis/editor-ui';
 import { useResizablePanel } from './useResizablePanel';
 import { TEMPLATES } from './templates';
 import { exportDefinition, parseOrbisFile } from './export';
 import { Preview } from './preview/Preview';
 import { SimulatorBar } from './preview/SimulatorBar';
-import { ShaderPane } from './panes/ShaderPane';
-import { ControlsPane } from './panes/ControlsPane';
-import { BindingsPane } from './panes/BindingsPane';
-import { JsonPane } from './panes/JsonPane';
-import { MetaPane } from './panes/MetaPane';
 import { Upload, Download, BookOpen, Bug, PanelRightClose, PanelRightOpen } from 'lucide-react';
 
 initStore(TEMPLATES[0].definition);
