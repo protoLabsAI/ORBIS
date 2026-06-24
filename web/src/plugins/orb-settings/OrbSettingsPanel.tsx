@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
 import { FieldSlider } from './FieldSlider';
 import { FieldColor } from './FieldColor';
@@ -195,6 +196,18 @@ export function OrbSettingsPanel() {
   return (
     <CollapsiblePanelProvider storageKey="orbis.orbPanel">
       <div className="space-y-5">
+      {/* Authoring your own orb (shader/controls/bindings) lives in the full
+          editor on the marketing site — route out rather than duplicating it
+          in-app for now. */}
+      <button
+        type="button"
+        onClick={() =>
+          invoke('open_url', { url: 'https://orbis.protolabs.studio/editor/' }).catch(() => {})
+        }
+        className="text-left text-helper text-brand/80 underline-offset-2 hover:text-brand hover:underline"
+      >
+        Build your own orb in the full editor →
+      </button>
       <VariantPicker />
       <PresetControls
         palette={palette}
