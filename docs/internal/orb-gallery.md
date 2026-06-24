@@ -15,19 +15,17 @@ Curation surfaces: **Featured** and **Orb of the Day**. The flywheel is
 | --- | --- | --- |
 | Identity (submit + vote) | **GitHub sign-in (OAuth)** | Real identity → sybil-resistant votes; fits the creative-coding/dev audience. |
 | Moderation posture | **Open publish + report/takedown** | Fastest growth; community flags, we remove. Needs a takedown path + name/GPU caps. |
-| Access | **Fully free** — browse, vote, submit, *and use shared orbs in-app* | The gallery is top-of-funnel growth; "consume free, create paid" (the editor stays the paid product). |
+| Access | **Fully free + open source** — browse, vote, submit, and use shared orbs in-app | No paywall — everything is free; the gallery grows the community. |
 
-**Paywall reconciliation (explicit task, not silent):** custom-orb *import* is
-currently part of the paid customization unlock. Gallery orbs must import
-**free**; arbitrary local `.orbis` import + the **editor** stay gated. The app
-distinguishes "gallery-sourced orb" (fetched from our API) from "arbitrary file
-import." See Phase 1.
+**Everything is free + open source** (direction change 2026-06-24): the orb
+editor is unblocked and there is no paywall. Gallery orbs, local `.orbis`
+import, and the editor are all free.
 
 ## Why this is a new backend (and why it's cheap)
 
 The site is static/backendless today (Astro + Vite SPA on Cloudflare Pages).
 Sharing/voting needs persistence — the **first real backend** for the site. We
-reuse the stack the paywall already runs on:
+reuse our existing **Cloudflare** infra (the same we built for licensing):
 
 - **Cloudflare Worker** — the gallery API (+ GitHub OAuth, scheduled ranking).
 - **D1** (SQLite) — orb metadata, votes, reports, featured.
@@ -100,7 +98,7 @@ the server enforces structure + size caps.)
 
 - **P0 — Backend foundation (#538):** Worker + D1 schema + R2 + GitHub OAuth/session.
 - **P1 — Publish from editor (#539):** poster capture, `POST /api/orbs`, server
-  validation, storage; paywall carve-out for gallery-sourced import.
+  validation, storage.
 - **P2 — Browse (#540):** list API + `/gallery` grid + SSR orb detail with OG
   previews + live `DefinitionOrb`.
 - **P3 — Voting + ranking (#541):** votes, toggle, hot score + Cron recompute,
