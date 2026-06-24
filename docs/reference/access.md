@@ -38,11 +38,6 @@ you. You can optionally enable a **speaker gate**: a voiceprint check that
 verifies it's the owner's voice before acting, and chooses how to handle a
 stranger (warn / refuse). Configured under `persona.behavior.speaker_gate`.
 
-## Webhooks
-
-The Stripe webhook endpoint (if you use billing features) is intentionally
-unauthenticated — its security is the request signature, not a key.
-
 ## See also
 
 - [Privacy](/explanation/privacy)

@@ -35,7 +35,7 @@ GPU). Bindings are data, not scripts — that's what makes importing a stranger'
   "defaultPalette": "Aurora",
   "bindings": [ … ],
   "moodDefaults": { … },        // optional
-  "premium": true,               // optional; imported orbs default to true
+  "premium": true,               // optional; legacy flag — no longer gates anything (customization is free)
   "post": null                   // optional; { "bloom": { "intensity": 1.0 } }
 }
 ```
