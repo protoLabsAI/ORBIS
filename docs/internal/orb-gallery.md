@@ -1,7 +1,6 @@
 # Orb gallery — community sharing, voting & curation (plan of record)
 
-Status: **proposed** (decisions locked 2026-06-24). Tracking epic: see the
-ORBIS GitHub issues linked at the bottom.
+Status: **proposed** (decisions locked 2026-06-24). Tracking epic: **#543**.
 
 ## Goal
 
@@ -97,15 +96,16 @@ the server enforces structure + size caps.)
   compile; pause render when offscreen; `MAX_FRAGMENT_CHARS` already caps size.
 - **Payload** — server `validateOrbDefinition` + size caps before R2 write.
 
-## Phases (→ GitHub sub-issues)
+## Phases (→ GitHub sub-issues, epic #543)
 
-- **P0 — Backend foundation:** Worker + D1 schema + R2 + GitHub OAuth/session.
-- **P1 — Publish from editor:** poster capture, `POST /api/orbs`, server
+- **P0 — Backend foundation (#538):** Worker + D1 schema + R2 + GitHub OAuth/session.
+- **P1 — Publish from editor (#539):** poster capture, `POST /api/orbs`, server
   validation, storage; paywall carve-out for gallery-sourced import.
-- **P2 — Browse:** list API + `/gallery` grid + SSR orb detail with OG previews +
-  live `DefinitionOrb`.
-- **P3 — Voting + ranking:** votes, toggle, hot score + Cron recompute, Hot/New/Top.
-- **P4 — Curation + moderation:** Featured, Orb of the Day (Cron + admin),
+- **P2 — Browse (#540):** list API + `/gallery` grid + SSR orb detail with OG
+  previews + live `DefinitionOrb`.
+- **P3 — Voting + ranking (#541):** votes, toggle, hot score + Cron recompute,
+  Hot/New/Top.
+- **P4 — Curation + moderation (#542):** Featured, Orb of the Day (Cron + admin),
   report/takedown, admin surface.
 - **P5 — Flywheel (stretch):** remix lineage UI, creator profiles, and
   **WebMCP gallery tools** (agent can `publish_orb` from the editor / browse +
