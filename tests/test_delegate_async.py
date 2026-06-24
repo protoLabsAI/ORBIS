@@ -20,7 +20,7 @@ import pytest
 
 import agent.tools as tools
 from agent.delegates import DelegateError
-from agent.tools import ASYNC_TOOL_NAMES, _delegate_to_handler
+from agent.tools import ASYNC_TOOL_NAMES, _delegate_to_handler, _orchestrate_handler
 
 
 class FakeParams:
@@ -238,3 +238,46 @@ async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
     await handler(params)
 
     assert params.results == [("fresh answer", True)]
+
+
+# --- orchestrate: the same barge-in gate on the multi-step loop ------------
+# orchestrate runs a bounded ReAct loop that can't be torn down mid-flight, so
+# the gate is identical to delegate_to: snapshot the epoch at dispatch, drop the
+# synthesized answer if the user talked over the loop. The per-step progress
+# (VISUAL pill) is mid-flow and NOT gated.
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_answer_dropped_when_barged_in(monkeypatch) -> None:
+    delivery = FakeDelivery()
+
+    async def fake_runner(goal, *, progress=None, ask_user=None):
+        await progress("working on step 1")  # visual pill — fine mid-flow
+        delivery.bump_barge()  # user barges in while the loop runs
+        return "the synthesized multi-step answer"
+
+    handler = _orchestrate_handler(
+        FakeRegistry(_delegate()), delivery=delivery, runner=fake_runner
+    )
+    params = FakeParams({"goal": "do the multi-step thing"})
+    await handler(params)
+
+    # Synthesis dropped (no spoken result); the in-flight progress still pilled.
+    assert params.results == []
+    assert ("working on step 1", "orchestrator") in delivery.progress
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_answer_kept_when_no_bargein(monkeypatch) -> None:
+    delivery = FakeDelivery()
+
+    async def fake_runner(goal, *, progress=None, ask_user=None):
+        return "the synthesized multi-step answer"
+
+    handler = _orchestrate_handler(
+        FakeRegistry(_delegate()), delivery=delivery, runner=fake_runner
+    )
+    params = FakeParams({"goal": "do the multi-step thing"})
+    await handler(params)
+
+    assert params.results == [("the synthesized multi-step answer", True)]
