@@ -141,7 +141,7 @@ export function App() {
       )}
 
       <div
-        className={'flex min-h-0 flex-1' + (panel.dragging ? ' cursor-col-resize select-none' : '')}
+        className={'relative flex min-h-0 flex-1' + (panel.dragging ? ' cursor-col-resize select-none' : '')}
       >
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative min-h-0 flex-1 bg-black">
@@ -150,20 +150,9 @@ export function App() {
           <SimulatorBar />
         </div>
 
-        {panel.collapsed ? (
-          // Fully collapsed → a slim rail on the right edge that brings it back.
-          <button
-            type="button"
-            {...panel.reopenProps}
-            title="Drag to open · click to expand"
-            aria-label="Open editor panel"
-            className="flex w-8 shrink-0 cursor-col-resize touch-none items-center justify-center border-l border-edge bg-panel text-fg-subtle outline-none transition-colors hover:bg-edge/30 hover:text-fg focus-visible:text-fg"
-          >
-            <PanelRightOpen className="h-4 w-4" strokeWidth={1.75} />
-          </button>
-        ) : (
+        {!panel.collapsed && (
           <>
-            {/* Drag to resize the panel · double-click to reset · ←/→ to nudge */}
+            {/* Drag to resize · drag in to collapse · double-click to reset · ←/→ to nudge */}
             <div
               role="separator"
               aria-orientation="vertical"
@@ -197,15 +186,6 @@ export function App() {
                     {t}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  onClick={panel.collapse}
-                  title="Collapse panel"
-                  aria-label="Collapse editor panel"
-                  className="ml-auto grid h-8 w-8 place-items-center text-fg-subtle transition-colors hover:text-fg"
-                >
-                  <PanelRightClose className="h-4 w-4" strokeWidth={1.75} />
-                </button>
               </nav>
               <div className="min-h-0 flex-1">
                 {tab === 'Shader' && <ShaderPane />}
@@ -217,6 +197,24 @@ export function App() {
             </div>
           </>
         )}
+
+        {/* Floating panel toggle — top-right, under the header. The single
+            manage control now that the collapsed rail is gone (panel fully
+            collapses to the bare orb). */}
+        <button
+          type="button"
+          onClick={panel.collapsed ? panel.expand : panel.collapse}
+          title={panel.collapsed ? 'Show panel' : 'Hide panel'}
+          aria-label={panel.collapsed ? 'Show editor panel' : 'Hide editor panel'}
+          aria-pressed={!panel.collapsed}
+          className="absolute right-3 top-3 z-10 grid h-8 w-8 cursor-pointer place-items-center rounded-md border border-edge bg-panel/80 text-fg-subtle backdrop-blur transition-colors hover:bg-panel hover:text-fg"
+        >
+          {panel.collapsed ? (
+            <PanelRightOpen className="h-4 w-4" strokeWidth={1.75} />
+          ) : (
+            <PanelRightClose className="h-4 w-4" strokeWidth={1.75} />
+          )}
+        </button>
       </div>
     </div>
   );
