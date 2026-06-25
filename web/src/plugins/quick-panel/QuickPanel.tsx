@@ -26,9 +26,10 @@ import {
   removeRuntimeOrb,
 } from '@/plugins/orb/definitions/runtime';
 import { useActivationConfig, type ActivationStyle } from './useActivationConfig';
+import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
 
 const STYLE_LABELS: Record<ActivationStyle, string> = {
-  push_to_talk: 'Push-to-talk',
+  push_to_talk: 'Tap to talk',
   wake_word: 'Wake word',
   open_mic: 'Open mic',
 };
@@ -120,8 +121,10 @@ export function QuickPanel() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="push_to_talk">Push-to-talk</SelectItem>
-                <SelectItem value="wake_word">Wake word</SelectItem>
+                <SelectItem value="push_to_talk">Tap to talk</SelectItem>
+                {/* Wake word hidden until the retrained model ships — see
+                    @/shared/wakeword/enabled. */}
+                {WAKE_WORD_ENABLED && <SelectItem value="wake_word">Wake word</SelectItem>}
                 <SelectItem value="open_mic">Open mic</SelectItem>
               </SelectContent>
             </Select>

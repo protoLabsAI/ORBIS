@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { api, type WakeModel } from '@/lib/api';
 import { useWakewordDownloads } from '@/shared/wakeword/useWakewordDownloads';
+import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
 
 const fmtSize = (kb: number) =>
   kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
@@ -31,7 +32,7 @@ const DEFAULTS: ActivationConfig = {
 };
 
 const STYLES: { id: Style; label: string; hint: string }[] = [
-  { id: 'push_to_talk', label: 'Push-to-talk', hint: 'Double-click the orb to talk (default).' },
+  { id: 'push_to_talk', label: 'Tap to talk', hint: 'Double-click the orb to talk (default).' },
   { id: 'wake_word', label: 'Wake word', hint: 'Hands-free — say the phrase to start a turn.' },
   { id: 'open_mic', label: 'Open mic', hint: 'Always listening; never auto-closes.' },
 ];
@@ -64,15 +65,21 @@ export function WakeWordSettings() {
     }
   };
 
+  // Wake-word disabled: don't hit the model catalog at all (no load /
+  // no "hey_orbis" suggestion). Activation config still loads — it drives
+  // push-to-talk / open-mic too. See @/shared/wakeword/enabled.
+  const loadCatalog = (): Promise<{ models: WakeModel[] }> =>
+    WAKE_WORD_ENABLED ? api.wakeword.models() : Promise.resolve({ models: [] });
+
   const refresh = async () => {
-    const [cat, act] = await Promise.all([api.wakeword.models(), loadActivation()]);
+    const [cat, act] = await Promise.all([loadCatalog(), loadActivation()]);
     setModels(cat.models);
     setCfg(act);
   };
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.wakeword.models(), loadActivation()])
+    Promise.all([loadCatalog(), loadActivation()])
       .then(([cat, act]) => {
         if (cancelled) return;
         setModels(cat.models);
@@ -167,9 +174,10 @@ export function WakeWordSettings() {
       <div className="space-y-3">
         <Hint className="-mt-1">How the mic goes hot. Wake word runs entirely on-device.</Hint>
 
-        {/* Style selector */}
+        {/* Style selector — wake_word hidden until the retrained model
+            ships (see @/shared/wakeword/enabled). */}
         <div className="space-y-1.5">
-          {STYLES.map((s) => {
+          {STYLES.filter((s) => WAKE_WORD_ENABLED || s.id !== 'wake_word').map((s) => {
             const isActive = cfg.style === s.id;
             const disabled = s.id === 'wake_word' && !canWake;
             return (
@@ -200,7 +208,7 @@ export function WakeWordSettings() {
             );
           })}
         </div>
-        {!canWake && (
+        {WAKE_WORD_ENABLED && !canWake && (
           <Hint className="text-fg-faint">
             Open “Wake words &amp; tuning” below to download a wake word and enable
             hands-free listening.
@@ -252,7 +260,10 @@ export function WakeWordSettings() {
         </div>
 
         {/* Advanced — folded so the common push-to-talk / open-mic choice
-            isn't buried under wake-word setup + tuning. */}
+            isn't buried under wake-word setup + tuning. Whole block hidden
+            while wake word is disabled (no catalog, no "hey_orbis"
+            suggestion) — see @/shared/wakeword/enabled. */}
+        {WAKE_WORD_ENABLED && (
         <details className="group rounded-md border border-edge bg-raised/30">
           <summary className="flex cursor-pointer select-none items-center justify-between px-3 py-2 text-helper uppercase tracking-wider text-fg-muted hover:text-fg-body">
             <span>Wake words &amp; tuning</span>
@@ -401,6 +412,7 @@ export function WakeWordSettings() {
         )}
           </div>
         </details>
+        )}
 
         {needsRelaunch && (
           <Hint className="text-brand/70">Takes effect when ORBIS next launches.</Hint>
