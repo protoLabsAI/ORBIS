@@ -1,3 +1,8 @@
+// TEMPORARILY DISABLED 2026-06-25 — Edison needs more work before it's
+// shippable. Variant auto-discovery globs `variants/*/index.tsx` (see
+// ../index.ts), so naming this file `index.disabled.tsx` keeps it out of
+// the registry and out of the bundle while preserving all the code.
+// To re-enable: rename this file back to `index.tsx`.
 import { registerVariant } from '@/sdk';
 import { EdisonVariant } from './EdisonVariant';
 import { EdisonPost } from './EdisonPost';
