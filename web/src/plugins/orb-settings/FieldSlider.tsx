@@ -6,10 +6,14 @@ export function FieldSlider({
   field,
   value,
   onChange,
+  onCommit,
 }: {
   field: SliderField;
   value: number;
   onChange: (key: string, value: number) => void;
+  /** Fires on pointer release (drag end) — persist the final value
+   * immediately so a reload can't beat the live update's debounce. */
+  onCommit?: (key: string) => void;
 }) {
   const id = `orb-${field.key}`;
   return (
@@ -27,6 +31,7 @@ export function FieldSlider({
         step={field.step}
         value={[value]}
         onValueChange={(vals) => onChange(field.key, vals[0])}
+        onValueCommit={() => onCommit?.(field.key)}
       />
     </Field>
   );

@@ -139,6 +139,21 @@ class OrbStore {
     saveParams(nextParams as Record<string, unknown>);
   }
 
+  /** Layer persisted params over the current snapshot. Called by the
+   * config-hydration step, which runs AFTER setVariant/setPreset have
+   * already reset params to the palette defaults — so this restores the
+   * user's saved edits on top, mirroring the constructor's
+   * `{ ...paletteParams, ...savedParams }` precedence (a saved value
+   * wins over the palette default for the same key). Does NOT round-trip
+   * to the server (the caller is the server hydration); writes through
+   * to localStorage for parity. */
+  setParams(saved: Record<string, unknown>): void {
+    const nextParams = { ...this.snap.params, ...saved };
+    this.snap = { ...this.snap, params: nextParams, epoch: this.snap.epoch + 1 };
+    this.listeners.forEach((l) => l());
+    saveParams(nextParams);
+  }
+
   /** Switch palette — overwrites params with the palette's defaults. */
   setPreset(paletteName: string): void {
     if (this.pending) {

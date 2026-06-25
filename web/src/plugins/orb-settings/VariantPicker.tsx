@@ -12,6 +12,7 @@ import {
 import { pushStatusTransient } from '@/shared/statusBus';
 import { variantRegistry } from '../orb/variants/registry';
 import { setVariant } from '../orb/broadcast';
+import { commitOrbNow } from './overrideWriter';
 import { useOrbState } from '../orb/useOrbState';
 import {
   importOrbisFile,
@@ -34,6 +35,16 @@ export function VariantPicker() {
   const { variantId } = useOrbState();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+
+  // Switching variant resets palette + params to the new variant's
+  // defaults; persist the whole orb block immediately so the pick
+  // survives a relaunch (desktop localStorage doesn't — see
+  // overrideWriter). Immediate, not debounced: the user may reload
+  // right after picking, before a 400ms timer would fire.
+  const onSelectVariant = (id: string) => {
+    setVariant(id);
+    commitOrbNow();
+  };
 
   const onFile = async (file: File | undefined) => {
     if (!file || busy) return;
@@ -68,7 +79,7 @@ export function VariantPicker() {
   return (
     <Panel title="Style">
       <Field label="Orb variant" htmlFor="variant">
-        <Select value={variantId} onValueChange={setVariant}>
+        <Select value={variantId} onValueChange={onSelectVariant}>
           <SelectTrigger id="variant" className="w-full">
             <SelectValue />
           </SelectTrigger>
