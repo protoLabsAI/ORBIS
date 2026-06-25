@@ -103,8 +103,12 @@ export async function importOrbisFile(file: File): Promise<ImportResult> {
  * and an un-persisted pick resets on refresh. Same posture as
  * select_starter. */
 export function persistSelection(variantId: string, palette?: string): void {
+  // Include the (just-reset) params so a variant/import swap doesn't
+  // leave the previous orb's params behind in config.orb.params — which
+  // configDriver would otherwise layer back on top at the next boot.
+  const params = orbStore.getSnapshot().params;
   api
-    .putConfig({ orb: { variant: variantId, ...(palette ? { palette } : {}) } })
+    .putConfig({ orb: { variant: variantId, params, ...(palette ? { palette } : {}) } })
     .catch(() => {
       console.warn('[orb] could not persist orb selection to config');
     });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { CollapsiblePanelProvider, Panel } from '@/components/ui/panel';
 import { FieldSlider } from './FieldSlider';
@@ -13,6 +13,8 @@ import {
   type AuthoringContext,
 } from './AuthoringContext';
 import {
+  commitOrbNow,
+  commitParam,
   flushSave,
   resetBucket,
   setMoodDelta,
@@ -72,25 +74,24 @@ export function OrbSettingsPanel() {
     setCustomName('');
   }, [variant?.id]);
 
-  // Debounced save timer — broadcast.applyParam already persists, so this
-  // is just a ref holder for any future flush-on-unmount needs.
-  const saveTimerRef = useRef<number | null>(null);
-  useEffect(() => {
-    return () => {
-      if (saveTimerRef.current != null) window.clearTimeout(saveTimerRef.current);
-    };
-  }, []);
-
+  // Live (debounced) updates during a slider/color drag.
   const updateParam = useCallback((key: string, value: unknown) => {
-    applyParam(key, value);
+    commitParam(key, value);
+  }, []);
+  // Commit edge of a base edit — slider release / color blur. Flushes
+  // the pending debounced write immediately so a reload can't beat it.
+  const commitBase = useCallback(() => {
+    commitOrbNow();
   }, []);
 
   const onPaletteChange = (name: string) => {
     applyPreset(name);
+    commitOrbNow();
   };
 
   const onReset = () => {
     applyPreset(palette);
+    commitOrbNow();
     setCustomName('');
   };
 
@@ -105,6 +106,7 @@ export function OrbSettingsPanel() {
       const v = spec.kind === 'color' ? randomHex() : randomSliderValue(spec);
       applyParam(spec.key, v);
     }
+    commitOrbNow();
     setCustomName('');
   };
 
@@ -145,6 +147,7 @@ export function OrbSettingsPanel() {
   const onLoadCustom = (name: string) => {
     if (!name) return;
     loadCustomPreset(name);
+    commitOrbNow();
     setCustomName(name);
   };
 
@@ -244,6 +247,7 @@ export function OrbSettingsPanel() {
           ctx={ctx}
           bucket={activeBucket}
           onBaseChange={updateParam}
+          onBaseCommit={commitBase}
           onStateDelta={onStateDelta}
           onMoodDelta={onMoodDelta}
           onDeltaReset={onDeltaReset}
@@ -285,6 +289,7 @@ function SettingsSection({
   ctx,
   bucket,
   onBaseChange,
+  onBaseCommit,
   onStateDelta,
   onMoodDelta,
   onDeltaReset,
@@ -295,6 +300,7 @@ function SettingsSection({
   ctx: AuthoringContext;
   bucket: Record<string, number | string | boolean | undefined>;
   onBaseChange: (key: string, value: unknown) => void;
+  onBaseCommit: () => void;
   onStateDelta: (key: string, delta: number) => void;
   onMoodDelta: (key: string, delta: number) => void;
   onDeltaReset: (key: string) => void;
@@ -312,6 +318,7 @@ function SettingsSection({
               field={f}
               value={String(params[f.key] ?? '#000000')}
               onChange={(k, v) => onBaseChange(k, v)}
+              onCommit={onBaseCommit}
             />
           ) : (
             <FieldSlider
@@ -319,6 +326,7 @@ function SettingsSection({
               field={f}
               value={Number(params[f.key] ?? f.min)}
               onChange={(k, v) => onBaseChange(k, v)}
+              onCommit={onBaseCommit}
             />
           );
         }

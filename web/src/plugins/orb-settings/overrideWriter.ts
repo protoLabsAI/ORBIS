@@ -1,10 +1,21 @@
 /**
- * Edit `orb.state_overrides` / `orb.mood_overrides` maps in the store
- * and persist the result to the server (debounced).
+ * Persist the orb authoring state — variant / palette / base params /
+ * `state_overrides` / `mood_overrides` — to the server (debounced).
  *
- * The server's merge_patch shallow-merges at the top-level block
- * level, so we always POST the full overrides maps — partial POSTs
- * would replace-not-merge the nested dict and lose sibling fields.
+ * On the desktop build localStorage does NOT survive a relaunch: the
+ * sidecar binds a fresh ephemeral port each launch, so the webview
+ * lands on a new origin and configDriver re-hydrates the orb from
+ * /api/config. The server config is therefore the only durable store,
+ * and every panel edit funnels through here so it round-trips.
+ *
+ * All orb writes go through THIS single debounced + single-flight
+ * writer on purpose. The server's merge_patch is a read-modify-write
+ * that rewrites the whole config file (agent/config_store.py), so two
+ * concurrent /api/config POSTs race — the slower request's stale read
+ * clobbers the faster one's change. One writer ⇒ one in-flight POST ⇒
+ * no race. We always POST the full block because merge_patch shallow-
+ * merges at the orb-subkey level: a partial nested map replaces, not
+ * merges, so omitting a field would not preserve it.
  */
 
 import { api, type OrbisConfig } from '@/lib/api';
@@ -94,6 +105,29 @@ export function resetBucket(ctx:
   scheduleSave();
 }
 
+/** Live-update a single base param during a slider/color drag. Debounced
+ * — the stream of drag events coalesces into one POST. Pair with a
+ * commit flush (slider release / input blur, via commitOrbNow) so a
+ * reload right after the drag doesn't beat the 400ms timer. */
+export function commitParam(key: string, value: unknown): void {
+  orbStore.get().setParam(key, value);
+  _dirty = true;
+  scheduleSave();
+}
+
+/** Persist the current orb snapshot RIGHT NOW (no debounce). For the
+ * discrete actions a user expects to stick immediately — variant /
+ * palette switch, preset load, reset, randomize, and the commit edge of
+ * a slider/color edit. A hard reload or relaunch tears the page down
+ * without running React unmount cleanup, so debounce-then-flush-on-
+ * unmount isn't enough on its own; an immediate flush has already
+ * reached the sidecar by the time the user hits reload. The writer posts
+ * the full snapshot — variant, palette, params and overrides together. */
+export function commitOrbNow(): void {
+  _dirty = true;
+  void flushSave();
+}
+
 function scheduleSave(): void {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => { void flushSave(); }, SAVE_DEBOUNCE_MS);
@@ -135,6 +169,9 @@ async function runSaveLoop(): Promise<void> {
     const snap = orbStore.getSnapshot();
     const patch: { orb: NonNullable<OrbisConfig['orb']> } = {
       orb: {
+        variant: snap.variantId,
+        palette: snap.palette,
+        params: snap.params,
         state_overrides: toWire(snap.stateOverrides),
         mood_overrides: toWire(snap.moodOverrides),
       },
@@ -178,4 +215,18 @@ function toWire<K extends string>(
 
 function deepClone<T>(v: T): T {
   return JSON.parse(JSON.stringify(v));
+}
+
+// Safety net for the debounced path. A hard reload / relaunch tears the
+// page down without running the panel's flush-on-unmount effect, so a
+// pending edit (mid-debounce) would be lost. Flush when the window is
+// hidden or unloading. The Tauri api_request invoke is handed to the
+// Rust core before teardown, so the POST still lands on the sidecar.
+if (typeof window !== 'undefined') {
+  const flushOnExit = (): void => { void flushSave(); };
+  window.addEventListener('pagehide', flushOnExit);
+  window.addEventListener('beforeunload', flushOnExit);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushOnExit();
+  });
 }

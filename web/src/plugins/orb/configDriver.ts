@@ -1,7 +1,7 @@
 /**
  * Fetches ``/api/config`` once on mount and pushes the server's idea
- * of the orb (`orb.variant` / `orb.palette` / overrides) into the
- * client store. Server is the source of truth for these — localStorage
+ * of the orb (`orb.variant` / `orb.palette` / `orb.params` / overrides)
+ * into the client store. Server is the source of truth — localStorage
  * is just a per-origin cache, which on the desktop build is
  * effectively wiped every launch because the sidecar listens on a
  * fresh ephemeral port and the webview navigates to a new origin.
@@ -30,6 +30,11 @@ export async function loadOrbOverrides(): Promise<void> {
     const { config } = await api.config();
     if (config?.orb?.variant) setVariant(config.orb.variant);
     if (config?.orb?.palette) applyPreset(config.orb.palette);
+    // Layer saved base params AFTER variant/palette — both reset params
+    // to the palette defaults, so this has to come last to win.
+    if (config?.orb?.params) {
+      orbStore.get().setParams(config.orb.params as Record<string, unknown>);
+    }
     const state = (config?.orb?.state_overrides ?? {}) as StateOverrides;
     const mood = (config?.orb?.mood_overrides ?? {}) as MoodOverrides;
     orbStore.get().setOverrides(state, mood);
