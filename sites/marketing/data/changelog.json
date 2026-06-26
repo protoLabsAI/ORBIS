@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.2.146",
+    "date": "2026-06-26",
+    "changes": [
+      "Persist all Orb tab edits, including sliders, colors, and palette selections, to the server-side configuration.",
+      "Ensure immediate persistence for discrete actions like variant swaps or preset loads to prevent data loss on reload.",
+      "Implement automatic configuration flushing during page visibility changes and window unloads.",
+      "Synchronize parameter hydration to ensure saved settings are correctly applied when switching variants or palettes.",
+      "Rename \"Push-to-talk\" to \"Tap to talk\" to accurately reflect the toggle-based interaction model.",
+      "Hide the wake word option from activation pickers and disable the on-device model catalog.",
+      "Temporarily remove the Edison variant from the available orb registry."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.146/ORBIS-0.2.146-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.145",
     "date": "2026-06-24",
     "changes": [
