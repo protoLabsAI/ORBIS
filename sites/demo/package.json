@@ -11,6 +11,7 @@
   "//": "Runtime deps mirror web/package.json so the real app source (aliased via @ -> ../../web/src) bundles cleanly. The @tauri-apps/* packages are intentionally absent — every entrypoint the app imports is aliased to src/tauri-shim/* instead (see vite.config.ts). A missing alias therefore fails the build loudly rather than resolving to a real Tauri call that throws at runtime.",
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
+    "@huggingface/transformers": "^4.2.0",
     "@protolabsai/design": "^0.5.0",
     "@protolabsai/ui": "^0.26.2",
     "@react-three/drei": "^10.7.7",
