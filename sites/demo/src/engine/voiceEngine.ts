@@ -14,6 +14,7 @@
 import { emitSse } from '../tauri-shim/bus';
 import { gemmaEngine, type ProgressCb } from './gemmaEngine';
 import { primeMicPermission, startCapture, stopCapture, playPCM } from './audio';
+import { trackProgress, type FileProgress } from './progress';
 
 const VOICE = 'af_heart';
 
@@ -27,6 +28,7 @@ class VoiceEngine {
   private speechReject: ((e: Error) => void) | null = null;
   private pendingTranscribe: ((t: string) => void) | null = null;
   private pendingAudio: ((a: { pcm: Float32Array; rate: number }) => void) | null = null;
+  private speechFileProg: FileProgress = new Map();
 
   private listening = false;
   private busy = false;
@@ -54,8 +56,8 @@ class VoiceEngine {
   // ---- loading ----
   async load(onProgress: ProgressCb): Promise<void> {
     this.onProgress = onProgress;
-    await gemmaEngine.load((s, p) => onProgress(`brain · ${s}`, p));
-    await this.loadSpeech((s, p) => onProgress(`voice · ${s}`, p));
+    await gemmaEngine.load((s, p) => onProgress(s === 'ready' ? 'Brain ready' : 'Downloading brain', p));
+    await this.loadSpeech((s, p) => onProgress(s === 'ready' ? 'Voice ready' : 'Downloading voice', p));
   }
 
   private loadSpeech(onProgress: ProgressCb): Promise<void> {
@@ -185,14 +187,9 @@ class VoiceEngine {
   private onSpeech(e: MessageEvent, onProgress: ProgressCb): void {
     const { type, data, text, pcm, rate } = e.data ?? {};
     switch (type) {
-      case 'progress': {
-        const pct = typeof data?.progress === 'number' ? data.progress : null;
-        onProgress(
-          data?.status === 'progress' ? `downloading ${data?.file ?? 'model'}` : (data?.status ?? 'loading'),
-          pct,
-        );
+      case 'progress':
+        onProgress('downloading', trackProgress(this.speechFileProg, data));
         break;
-      }
       case 'ready':
         this.speechLoaded = true;
         this.speechResolve?.();

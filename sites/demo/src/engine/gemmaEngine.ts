@@ -6,6 +6,8 @@
  * (voiceEngine) owns conversation state + presentation so the same LLM
  * serves both the voice loop and the typed fallback.
  */
+import { trackProgress, type FileProgress } from './progress';
+
 export type ProgressCb = (status: string, pct: number | null) => void;
 
 const SYSTEM =
@@ -14,12 +16,6 @@ const SYSTEM =
   'short sentences, no markdown, no lists, no emoji. If asked what you are, ' +
   'mention you are a preview of ORBIS running fully on-device (Gemma for the ' +
   'brain, with speech in and out) — nothing is sent to a server.';
-
-interface ProgressData {
-  status?: string;
-  file?: string;
-  progress?: number;
-}
 
 class GemmaEngine {
   private worker: Worker | null = null;
@@ -34,6 +30,7 @@ class GemmaEngine {
   private acc = '';
   private onToken: ((full: string) => void) | null = null;
   private genResolve: (() => void) | null = null;
+  private fileProg: FileProgress = new Map();
 
   get isLoaded(): boolean {
     return this.loaded;
@@ -78,14 +75,10 @@ class GemmaEngine {
   private onMessage(e: MessageEvent): void {
     const { type, data } = e.data ?? {};
     switch (type) {
-      case 'progress': {
-        const d = data as ProgressData;
-        const pct = typeof d?.progress === 'number' ? d.progress : null;
-        const label =
-          d?.status === 'progress' ? `downloading ${d?.file ?? 'model'}` : (d?.status ?? 'loading');
-        this.onProgress?.(label, pct);
+      case 'progress':
+        // One aggregate %, no file names (see progress.ts).
+        this.onProgress?.('downloading', trackProgress(this.fileProg, data));
         break;
-      }
       case 'ready':
         this.loaded = true;
         this.onProgress?.('ready', 100);

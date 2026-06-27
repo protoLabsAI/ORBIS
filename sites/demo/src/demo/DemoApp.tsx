@@ -24,9 +24,6 @@ function Transcript() {
       {botText && (state === 'speaking' || state === 'idle') && (
         <p className="max-w-xl text-lg font-medium leading-snug text-zinc-100">{botText}</p>
       )}
-      {!userText && !botText && (
-        <p className="text-sm text-zinc-600">Tap the orb, or the mic below, and say hello.</p>
-      )}
     </div>
   );
 }
