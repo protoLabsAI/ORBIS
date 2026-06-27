@@ -7,6 +7,7 @@
  * AnalyserNode feeding levels.playback so the orb pulses while it speaks.
  */
 import { setMic, setPlayback } from './levels';
+import { deviceStore } from './devices';
 
 function rms(buf: Float32Array): number {
   let sum = 0;
@@ -38,8 +39,14 @@ export async function primeMicPermission(): Promise<boolean> {
 }
 
 export async function startCapture(): Promise<void> {
+  const inputId = deviceStore.get().inputId;
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      ...(inputId ? { deviceId: { exact: inputId } } : {}),
+    },
   });
   const ctx = new AudioContext({ sampleRate: 16000 });
   if (ctx.state === 'suspended') await ctx.resume();
@@ -100,6 +107,9 @@ export function playPCM(pcm: Float32Array, rate: number): Promise<void> {
   return new Promise((resolve) => {
     if (!playCtx) playCtx = new AudioContext();
     const ctx = playCtx;
+    const outputId = deviceStore.get().outputId;
+    const sink = ctx as AudioContext & { setSinkId?: (id: string) => Promise<void> };
+    if (outputId && sink.setSinkId) void sink.setSinkId(outputId).catch(() => {});
     if (ctx.state === 'suspended') void ctx.resume();
     const buffer = ctx.createBuffer(1, pcm.length, rate);
     buffer.getChannelData(0).set(pcm);

@@ -1,8 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
-import App from '@/App';
-import { DemoComposer } from './components/DemoComposer';
+import { DemoApp } from './demo/DemoApp';
 import { voiceEngine } from './engine/voiceEngine';
 
 // The real ORBIS app expects a dark, data-theme="dark" document (set by
@@ -17,7 +16,6 @@ voiceEngine.init();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
-    <DemoComposer />
+    <DemoApp />
   </StrictMode>,
 );

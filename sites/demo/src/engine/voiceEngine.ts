@@ -41,6 +41,9 @@ class VoiceEngine {
   get ready(): boolean {
     return gemmaEngine.isLoaded && this.speechLoaded;
   }
+  get voiceReady(): boolean {
+    return this.speechLoaded;
+  }
   get isListening(): boolean {
     return this.listening;
   }
