@@ -640,6 +640,26 @@ async fn clear_browsing_data(webview: tauri::Webview) -> Result<(), String> {
         .map_err(|e| format!("clear_all_browsing_data: {e}"))
 }
 
+/// Reveal the log directory in Finder so a user can grab logs for a bug
+/// report without hunting for the `~/Library/Logs/...` path. First slice
+/// of in-app diagnostics (#488). The dir holds the Python sidecar log
+/// (`sidecar.log`) plus the Rust/tauri-plugin-log output. macOS-only
+/// `open` (the app is Apple-Silicon-only), so no extra plugin/capability
+/// is needed; transcripts are already kept out of these logs.
+#[tauri::command]
+fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("resolve log dir: {e}"))?;
+    let _ = std::fs::create_dir_all(&dir);
+    std::process::Command::new("open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| format!("open {}: {e}", dir.display()))?;
+    Ok(())
+}
+
 /// Tauri-managed state: the currently-spawned sidecar child, guarded
 /// so the exit handler can kill it from outside the async task.
 struct Sidecar {
@@ -1473,6 +1493,7 @@ pub fn run() {
                     request_microphone_permission,
                     open_microphone_settings,
                     clear_browsing_data,
+                    reveal_logs,
                     backend_url,
                     set_mic_listening,
                     mic_listening,
@@ -1501,6 +1522,7 @@ pub fn run() {
                     open_microphone_settings,
                     get_audio_input_mode,
                     clear_browsing_data,
+                    reveal_logs,
                     backend_url,
                     get_discoverable,
                     set_discoverable,
