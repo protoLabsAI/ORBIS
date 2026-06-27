@@ -20,8 +20,17 @@ env:
   IMAGE_NAME: protolabsai/orbis
 
 jobs:
+  # Pre-release gate (#490): a tag must pass the backend suite before we
+  # build/push the Docker image or cut the GitHub release. Same suite that
+  # gates PRs (reusable pytest.yml).
+  test:
+    name: Test gate
+    if: github.repository == 'protoLabsAI/ORBIS'
+    uses: ./.github/workflows/pytest.yml
+
   release:
     name: Release
+    needs: test
     runs-on: ubuntu-latest
     if: github.repository == 'protoLabsAI/ORBIS'
     permissions:

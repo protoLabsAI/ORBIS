@@ -11,6 +11,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Callable as a pre-release gate by release.yml + desktop-build.yml so a
+  # tag never ships a red suite (#490). Single source of truth for "the
+  # backend test suite" — the same job that gates PRs gates releases.
+  workflow_call:
 
 concurrency:
   group: pytest-${{ github.ref }}

@@ -33,8 +33,17 @@ permissions:
   contents: write  # needed for uploading release assets
 
 jobs:
+  # Pre-release gate (#490): don't spend ~20-40 min on a signed/notarized
+  # DMG for a commit that fails the backend suite. Same reusable suite that
+  # gates PRs + release.yml.
+  test:
+    name: Test gate
+    if: github.repository == 'protoLabsAI/ORBIS'
+    uses: ./.github/workflows/pytest.yml
+
   build:
     name: ${{ matrix.target }}
+    needs: test
     if: github.repository == 'protoLabsAI/ORBIS'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
