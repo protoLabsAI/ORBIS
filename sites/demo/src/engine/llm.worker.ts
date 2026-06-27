@@ -12,9 +12,15 @@ import {
   AutoModelForCausalLM,
   TextStreamer,
   InterruptableStoppingCriteria,
+  env,
   type PreTrainedTokenizer,
   type PreTrainedModel,
 } from '@huggingface/transformers';
+
+// Persist model files in the browser Cache API so a full download only
+// happens once; always resolve from the HF hub.
+env.useBrowserCache = true;
+env.allowLocalModels = false;
 
 const MODEL_ID = 'onnx-community/gemma-4-E2B-it-ONNX';
 

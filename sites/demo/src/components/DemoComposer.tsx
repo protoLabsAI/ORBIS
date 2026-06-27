@@ -113,7 +113,9 @@ export function DemoComposer() {
         />
       </form>
       <p className="text-[11px] text-zinc-600">
-        on-device · nothing leaves your machine · or double-click the orb
+        {loading
+          ? 'one-time download — cached after this, then instant'
+          : 'on-device · nothing leaves your machine · or double-click the orb'}
       </p>
     </div>
   );

@@ -9,8 +9,13 @@
  * Protocol (main → worker): 'load' | { transcribe, audio } | { synthesize, text, voice }
  * Protocol (worker → main): 'progress' | 'ready' | 'transcript' | 'audio' | 'error'
  */
-import { pipeline, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
+import { pipeline, env, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
 import { KokoroTTS } from 'kokoro-js';
+
+// Cache model files (Moonshine here; Kokoro's bundled transformers caches
+// by default too) so a download happens once.
+env.useBrowserCache = true;
+env.allowLocalModels = false;
 
 const STT_MODEL = 'onnx-community/moonshine-base-ONNX';
 const TTS_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
