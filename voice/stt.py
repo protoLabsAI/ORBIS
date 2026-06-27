@@ -17,6 +17,7 @@ Both backends expose the same module-level helpers:
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import os
@@ -29,14 +30,18 @@ import soundfile as sf
 import soxr
 
 from agent import tracing
-import torch
 from openai import AsyncOpenAI
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
 from pipecat.services.openai.stt import OpenAISTTService
 from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601
-from transformers import pipeline as hf_pipeline
+
+# torch + transformers are imported lazily (only on the local Whisper path —
+# see _whisper_device / _whisper_dtype / _get_local_pipe). Importing this
+# module must stay cheap: the shipped default backend is Parakeet, and the
+# openai/sensevoice backends never need torch either, so paying the heavy
+# torch+transformers import at module load is pure boot-time cost for them. (#483)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,7 @@ def _detect_torch_device() -> str:
     budget for production-shaped workloads)."""
     if os.environ.get("ORBIS_ALLOW_CPU") == "1":
         return "cpu"
+    import torch
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -67,16 +73,27 @@ def _detect_torch_device() -> str:
     return "cpu"
 
 
-DEVICE = _detect_torch_device()
-# Half-precision on accelerators (CUDA + Apple MPS). Locally benchmarked
-# Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s audio (1.0x rtf)
-# vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x speedup with correct
-# output. CPU stays float32 since fp16 on CPU is slower.
-_WHISPER_DTYPE = torch.float16 if DEVICE in ("cuda", "mps") else torch.float32
-# `sdpa` attention is CUDA-only in transformers; MPS uses the eager path.
-_WHISPER_MODEL_KWARGS = (
-    {"attn_implementation": "sdpa"} if DEVICE == "cuda" else {}
-)
+# Device/dtype/kwargs are resolved lazily + cached so they don't drag torch
+# into the import path (#483) — only the local Whisper pipeline touches them.
+@functools.lru_cache(maxsize=1)
+def _whisper_device() -> str:
+    return _detect_torch_device()
+
+
+@functools.lru_cache(maxsize=1)
+def _whisper_dtype():
+    # Half-precision on accelerators (CUDA + Apple MPS). Locally benchmarked
+    # Whisper-large-v3-turbo at fp16/MPS = ~2.6s for 2.6s audio (1.0x rtf)
+    # vs ~4.5s on CPU/fp32 (1.7x rtf) — clean 1.7x speedup with correct
+    # output. CPU stays float32 since fp16 on CPU is slower.
+    import torch
+    return torch.float16 if _whisper_device() in ("cuda", "mps") else torch.float32
+
+
+@functools.lru_cache(maxsize=1)
+def _whisper_model_kwargs() -> dict:
+    # `sdpa` attention is CUDA-only in transformers; MPS uses the eager path.
+    return {"attn_implementation": "sdpa"} if _whisper_device() == "cuda" else {}
 
 # OpenAI-compatible backend (also used by LocalAI / OpenRouter / etc.)
 STT_URL = os.environ.get("STT_URL", "https://api.openai.com/v1")
@@ -141,7 +158,11 @@ def _get_local_pipe():
     global _local_pipe
     if _local_pipe is not None:
         return _local_pipe
-    logger.info(f"Loading {WHISPER_MODEL} on {DEVICE}")
+    # Lazy import — keeps torch+transformers out of the boot path for the
+    # non-Whisper backends (#483).
+    from transformers import pipeline as hf_pipeline
+    device = _whisper_device()
+    logger.info(f"Loading {WHISPER_MODEL} on {device}")
     t0 = time.time()
     _local_pipe = hf_pipeline(
         "automatic-speech-recognition",
@@ -150,9 +171,9 @@ def _get_local_pipe():
         # transformers >=4.46 routes `torch_dtype` through an internal
         # dtype path that conflicts with model_kwargs ("use only one"),
         # which surfaced as intermittent "STT inference failed" errors.
-        dtype=_WHISPER_DTYPE,
-        device=DEVICE,
-        model_kwargs=_WHISPER_MODEL_KWARGS,
+        dtype=_whisper_dtype(),
+        device=device,
+        model_kwargs=_whisper_model_kwargs(),
     )
     _local_pipe({"raw": np.zeros(16000, dtype=np.float32), "sampling_rate": 16000})
     logger.info(f"Whisper ready in {time.time() - t0:.1f}s")
