@@ -13,6 +13,7 @@ import { loadOrbOverrides } from '@/plugins/orb/configDriver';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { DemoComposer } from '../components/DemoComposer';
 import { DemoPanel } from '../components/DemoPanel';
+import { IntroDialog } from '../components/IntroDialog';
 
 function Transcript() {
   const state = useVoiceStateSelector((s) => s.state);
@@ -40,6 +41,7 @@ export function DemoApp() {
       <Transcript />
       <DemoComposer />
       <DemoPanel />
+      <IntroDialog />
     </div>
   );
 }
