@@ -2270,10 +2270,6 @@ async def lifespan(app: FastAPI):
         _reminder_scheduler.run(), name="orbis-reminders"
     )
 
-    # Entitlement needs no background loop: licenses are offline Ed25519 keys
-    # verified at activation + re-verified on each gate check (agent/license.py).
-    # Nothing to poll.
-
     from agent.delegates import health_loop as _delegate_health_loop
     delegate_health_task = asyncio.create_task(
         _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",
@@ -3700,22 +3696,10 @@ async def list_orbs(user: User = Depends(require_user)):
 async def import_orb(body: dict, user: User = Depends(require_user)):
     """Import (or update — same id replaces) a ``.orbis`` definition.
 
-    Custom orbs are part of the paid customization unlock, same gate as
-    the ``orb`` config block below. Validation mirrors the frontend
-    package's validator; a definition accepted here is one the engine
-    will load."""
-    from agent.entitlement import has_customization
+    Validation mirrors the frontend package's validator; a definition
+    accepted here is one the engine will load."""
     from agent.orb_definitions import OrbDefinitionError, save_definition
 
-    if not has_customization(get_memory()):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Importing custom orbs is part of the paid unlock. "
-                "Use /api/orb/select_starter to pick from the free "
-                "starter pool, or purchase the unlock."
-            ),
-        )
     try:
         _, replaced = save_definition(body)
     except OrbDefinitionError as e:
@@ -3837,40 +3821,6 @@ async def select_starter(body: dict, user: User = Depends(require_user)):
     }
 
 
-@app.get("/api/entitlement")
-async def get_entitlement(user: User = Depends(require_user)):
-    """Return the owner's current entitlement state — used by the UI
-    to gate paid-tier features (customization editor, variant picker)."""
-    from agent.entitlement import entitlement_state
-    return entitlement_state(get_memory())
-
-
-@app.post("/api/entitlement/activate")
-async def activate_entitlement(body: dict, user: User = Depends(require_user)):
-    """Activate a paid feature with a signed license key.
-
-    Body: ``{"license_key": "ORBIS-…"}``. The key is verified offline against
-    the build's bundled public key (no network, no Stripe secret). Returns the
-    post-activation entitlement state; 400 on a malformed/invalid key."""
-    from agent.entitlement import EntitlementError, activate_license
-
-    key = (body or {}).get("license_key", "")
-    if not isinstance(key, str) or not key.strip():
-        raise HTTPException(status_code=400, detail="license_key is required")
-    try:
-        return activate_license(get_memory(), key)
-    except EntitlementError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.post("/api/entitlement/deactivate")
-async def deactivate_entitlement(user: User = Depends(require_user)):
-    """Remove the stored license key (e.g. to move it to another machine)."""
-    from agent.entitlement import deactivate
-
-    return deactivate(get_memory())
-
-
 def _reconfigure_live_llm(llm_cfg: dict, *, user_id: str | None = None) -> dict:
     """Reconfigure the LIVE LLM service in place so a model/endpoint change
     applies to the next turn — no pipeline rebuild, no audio reconnect. Mirrors
@@ -3929,33 +3879,16 @@ async def put_config(patch: dict, user: User = Depends(require_user)):
 
         {"persona": {"name": "Atlas"}}              # rename
         {"voice": {"tts_backend": "elevenlabs"}}    # swap provider
-        {"orb": {"variant": "nebula", "palette": "Helios"}}   # paid
+        {"orb": {"variant": "nebula", "palette": "Helios"}}   # restyle
 
-    ``persona`` + ``voice`` blocks are always editable. The ``orb``
-    block requires the paid customization unlock — requests with an
-    ``orb`` block while the caller lacks the entitlement return 403.
-    Starter-orb selection happens via /api/orb/select_starter and is
-    always allowed (restricted to the curated pool).
+    All blocks are freely editable — ORBIS is free + open source, so orb
+    customization is ungated. Starter-orb selection happens via
+    /api/orb/select_starter (restricted to the curated pool).
 
     Drops unknown keys with a warning. Raises 400 on typed failures
     (invalid tts_backend, non-numeric temperature, etc.).
     """
     from agent.config_store import merge_patch
-    from agent.entitlement import has_customization
-
-    # Paid-tier gate — orb block changes require the customization
-    # unlock. This is the authoritative gate on direct /api/config
-    # POST requests.
-    if isinstance(patch, dict) and patch.get("orb"):
-        if not has_customization(get_memory()):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Orb customization is part of the paid unlock. "
-                    "Use /api/orb/select_starter to pick from the free "
-                    "starter pool, or purchase the unlock."
-                ),
-            )
 
     try:
         normalized = merge_patch(patch)

@@ -148,14 +148,6 @@ CREATE TABLE IF NOT EXISTS mood (
     updated_at   TEXT NOT NULL
 );
 
--- Local cache of Stripe entitlement verification.
-CREATE TABLE IF NOT EXISTS entitlement_cache (
-    key          TEXT PRIMARY KEY,
-    value        TEXT NOT NULL,
-    verified_at  TEXT NOT NULL,
-    expires_at   TEXT NOT NULL
-);
-
 -- Inbox: messages pushed in by external systems (webhooks, cron,
 -- other agents) that the voice agent can pull on demand. Read-then-
 -- mark-delivered semantics — undelivered messages surface again on
@@ -319,14 +311,12 @@ class Memory:
         from .sessions import SessionsDAL
         from .facts import FactsDAL
         from .personality import PersonalityDAL
-        from .entitlement import EntitlementDAL
         from .inbox import InboxDAL
         from .reminders import RemindersDAL
 
         self.sessions = SessionsDAL(self.conn)
         self.facts = FactsDAL(self.conn)
         self.personality = PersonalityDAL(self.conn)
-        self.entitlement = EntitlementDAL(self.conn)
         self.inbox = InboxDAL(self.conn)
         self.reminders = RemindersDAL(self.conn)
 

@@ -202,10 +202,7 @@ def test_api_list_empty(client: TestClient):
     assert r.json() == {"orbs": []}
 
 
-def test_api_import_roundtrip(client: TestClient, monkeypatch: pytest.MonkeyPatch):
-    import agent.entitlement
-    monkeypatch.setattr(agent.entitlement, "has_customization", lambda _mem: True)
-
+def test_api_import_roundtrip(client: TestClient):
     r = client.post("/api/orbs", json=make_definition())
     assert r.status_code == 200
     assert r.json() == {"ok": True, "id": "test-orb", "replaced": False}
@@ -221,19 +218,7 @@ def test_api_import_roundtrip(client: TestClient, monkeypatch: pytest.MonkeyPatc
     assert client.get("/api/orbs").json() == {"orbs": []}
 
 
-def test_api_import_403_when_not_entitled(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch,
-):
-    import agent.entitlement
-    monkeypatch.setattr(agent.entitlement, "has_customization", lambda _mem: False)
-    r = client.post("/api/orbs", json=make_definition())
-    assert r.status_code == 403
-    assert "unlock" in r.json()["detail"].lower()
-
-
-def test_api_import_400_on_invalid(client: TestClient, monkeypatch: pytest.MonkeyPatch):
-    import agent.entitlement
-    monkeypatch.setattr(agent.entitlement, "has_customization", lambda _mem: True)
+def test_api_import_400_on_invalid(client: TestClient):
     r = client.post("/api/orbs", json=make_definition(engine="nope"))
     assert r.status_code == 400
     assert r.json()["errors"]

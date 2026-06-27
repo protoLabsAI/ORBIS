@@ -300,11 +300,6 @@ jobs:
           # baked into tauri.conf.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Paid-unlock gate: the production license PUBLIC key (a repo
-          # *variable*, not a secret — it's public). When set, lib.rs bakes it
-          # in and ships ORBIS_GATE=closed; when empty the build stays open.
-          # This is the one switch that turns the customization paywall on.
-          ORBIS_LICENSE_PUBKEY: ${{ vars.ORBIS_LICENSE_PUBKEY }}
           MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           cd src-tauri

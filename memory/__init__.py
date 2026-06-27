@@ -12,8 +12,6 @@ Single-file embedded store holding:
     auditing / visualization.
   - **mood** — short-term emotional weather (valence / arousal /
     guardedness). Updated continuously.
-  - **entitlement_cache** — local cache of Stripe verification so
-    paid-tier checks tolerate being offline for N days.
 
 FTS5 virtual tables give hybrid BM25 retrieval on session text and
 fact objects without a vector-DB dependency. ``sqlite-vec`` can be
@@ -27,7 +25,6 @@ Layout:
       sessions.py  — session add / list / search / prior-N
       facts.py     — facts add / search / decay / prune
       personality.py — axes + events + mood DALs
-      entitlement.py — local cache read/write
 
 Import the DALs from the package root:
 
