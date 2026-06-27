@@ -26,7 +26,10 @@ export async function handleInvoke(
     case 'get_audio_level':
       return 0;
     case 'get_audio_levels':
-      return { input: 0, output: 0 };
+      // Shape MUST match the Rust command: { mic, playback }. The orb's
+      // audio-envelope hook reads nat.playback / nat.mic — wrong keys make
+      // `undefined * gain = NaN`, which poisons uDensity → a black orb.
+      return { mic: 0, playback: 0 };
     case 'list_audio_inputs':
     case 'list_audio_outputs':
       return [];
