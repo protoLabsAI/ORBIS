@@ -194,18 +194,6 @@ export interface WakeModel {
   downloaded: boolean;
 }
 
-export type EntitlementState = {
-  customization: {
-    active: boolean;
-    /** A valid license key is on file (distinct from the dev open-gate). */
-    licensed: boolean;
-    gate_mode?: 'open' | 'closed';
-    /** Display-only license provenance, present when licensed. */
-    sub?: string;
-    lid?: string;
-  };
-};
-
 export type PersonalityAxis = {
   axis: string;
   value: number;
@@ -434,11 +422,6 @@ export const api = {
   config: () => get<{ config: OrbisConfig }>('/api/config'),
   putConfig: (patch: OrbisConfig) =>
     postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string; llm_applied_live?: boolean }>('/api/config', patch),
-  entitlement: () => get<EntitlementState>('/api/entitlement'),
-  activateLicense: (license_key: string) =>
-    postJSON<EntitlementState>('/api/entitlement/activate', { license_key }),
-  deactivateLicense: () =>
-    postJSON<EntitlementState>('/api/entitlement/deactivate', {}),
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),

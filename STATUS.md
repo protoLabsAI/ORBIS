@@ -1,11 +1,87 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-11 late (v0.2.136 — .orbis orbs + the editor live, DS
-boot surfaces, wake auto-close fixes). On `main`, all PRs merged. Josh tests
-the released build in the morning.*
+*Last updated 2026-06-26 (v0.2.146 — free + OSS pivot, orb editor unblocked
+in-app, activation UX). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-26 (v0.2.146 — free + OSS, the orb editor comes in-app)
+
+Two weeks of cadence past the 06-11 snapshot (PRs #527–#572). The headline is
+a **direction change**: ORBIS is now **fully free + open source — the paywall
+is dropped** (see the `project_free_oss_direction` memory, 2026-06-24). That
+un-gated the orb editor, which is the bulk of the recent work.
+
+**Free + OSS pivot.**
+- Paywall *direction* reversed: no more $9 edit gate. Paywall marketing pages
+  removed (#556), "Premium" orb tag dropped + stale paywall comments scrubbed
+  (#566).
+- **Subsystem removed (#551).** Deleted `agent/entitlement.py`,
+  `agent/license.py`, `memory/entitlement.py` (+ the `entitlement_cache` table),
+  the `/api/entitlement*` endpoints, the orb-config 403 gate, the
+  `ORBIS_LICENSE_PUBKEY`/`ORBIS_GATE` bake-in (`lib.rs`/`build.rs`/CI), the
+  `sites/license-issuer` Cloudflare worker, and the entitlement tests. Orb
+  customization is ungated everywhere. This **supersedes** the old "paywall
+  go-live pending" line below.
+
+**Orb editor: free, in-app, heading to parity.**
+- In-app editor unblocked + Orb tab restored (#550, closed #545); the Orb tab
+  routes to the full editor (#554); Orb-tab edits persist to the sidecar config
+  (#568); collapsible DS-inspired panel (#552).
+- **In-app ↔ live editor parity epic #549** (P1 #546 extract panes to a shared
+  package → P2 #547 mount the full editor in-app → P3 #548 authoring polish).
+  Plan: `docs/internal/inapp-editor-parity.md`.
+- **WebMCP authoring** (#532): the editor exposes orb controls as WebMCP tools.
+  Path B (#533) = ORBIS voice-drives the editor via embedded webview; #536 =
+  ship `@orbis/orb-mcp`, a one-line bridge.
+- **Orb gallery epic #543** (community share/vote/curate; Cloudflare
+  Worker+D1+R2+GitHub OAuth) — phases #538–542, not started. Plan:
+  `docs/internal/orb-gallery.md`.
+
+**Voice-drives-the-orb — shipped then PARKED.** `set_orb_visual` lets the voice
+agent restyle the live orb (#560), but it's **disabled** (#562, buggy) — see
+the parked-handler note at `agent/tools.py:636` and the settings toggle at
+`agent/config_store.py:72`. Blocks the #534 demo.
+
+**Activation UX.** Wake word hidden + "Push-to-talk" → "Tap to talk" (#572).
+**#571 open**: add a real "talk" affordance (button + optional hold-to-talk
+hotkey) — #572 was a partial step. Edison orb variant temporarily disabled
+(#570).
+
+**Other.** Barge-in now drops stale delegate/orchestrate answers (#565); the
+updater renders the changelog as a markdown modal (#561); ACP delegates get the
+user's real login PATH + hard process-group reaping (#529/#530/#531); agent
+prompt-surface cleanup from the audit (#564).
+
+**Distribution / perf / robustness audit (#481–491) — ALL STILL OPEN.**
+Re-verified against current code 2026-06-26: none fixed, aging unaddressed since
+06-10. The real ones, with evidence:
+- #481 Kokoro TTS + ECAPA speaker-gate still block the asyncio loop
+  (`voice/tts/kokoro.py:240`, `agent/speaker_gate.py:307`).
+- #482 `sessions.add()` still runs a full FTS `'rebuild'` per write
+  (`memory/sessions.py:68`).
+- #483 `voice/stt.py` still imports torch/transformers at module top (boot cost).
+- #484 CPAL callbacks still lock mutexes + alloc per callback
+  (`engine.rs:585/675`).
+- #485 sidecar shutdown is still bare SIGKILL → orphans grandchildren
+  (`lib.rs:665`).
+- #486 audio socket still binds-once / single-shot accept → silent dead audio on
+  sidecar restart (`socket.rs:139`). This is the Phase-2 blocker for
+  pipeline-rebuild hot-swap (see `reference_runtime_hotswap`).
+- #487 `protolabs-a2a` still a `git+` dep → needs git/CLT on a customer's first
+  run (`pyproject.toml:34`).
+- #488 no crash reporting; #489 updater still re-downloads the 1.7GB sidecar +
+  no pyapp-env GC; #490 release has no test gate; #491 zero frontend tests +
+  thin Tauri-wiring coverage.
+
+**Still-open from the 06-11 snapshot that remains real:**
+- **LLMErrorAnnouncer** — silent "thinking forever" on a dead/401 LLM.
+  Designed, not built. Still the worst first-user failure.
+- Orb Phase 2: Rust FFT bands (`bot.band.N` signals), port the remaining
+  raymarch built-ins to definitions, frame-time watchdog for imports.
 
 ---
 

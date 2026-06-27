@@ -1,8 +1,7 @@
 """Smoke tests for the SQLite memory backend.
 
-Covers schema creation, DAL round-trips, FTS search, fact decay, and
-entitlement expiry. Each test gets a fresh temp DB so there's no
-cross-pollution.
+Covers schema creation, DAL round-trips, FTS search, and fact decay.
+Each test gets a fresh temp DB so there's no cross-pollution.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ def test_schema_creates_tables(mem: Memory):
     names = {r["name"] for r in rows}
     for expected in (
         "_meta", "sessions", "facts", "personality_axes", "personality_events",
-        "mood", "entitlement_cache",
+        "mood",
     ):
         assert expected in names, f"missing table: {expected}"
 
@@ -403,29 +402,3 @@ def test_drift_mood_no_args_does_not_touch_db(mem: Memory):
     after = mem.personality.get_mood()
     assert before.updated_at == after.updated_at, \
         "no-op drift_mood must not touch the row"
-
-
-# --- entitlement -------------------------------------------------------------
-
-
-def test_entitlement_active_when_future_expiry(mem: Memory):
-    future = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=future)
-    assert mem.entitlement.is_active("customization")
-
-
-def test_entitlement_inactive_when_expired(mem: Memory):
-    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=past)
-    assert not mem.entitlement.is_active("customization")
-
-
-def test_entitlement_inactive_when_missing(mem: Memory):
-    assert not mem.entitlement.is_active("nonexistent")
-
-
-def test_entitlement_clear(mem: Memory):
-    future = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat()
-    mem.entitlement.set("customization", "active", expires_at=future)
-    mem.entitlement.clear("customization")
-    assert not mem.entitlement.is_active("customization")

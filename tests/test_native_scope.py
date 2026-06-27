@@ -246,7 +246,6 @@ def test_env_example_documents_native_runtime_scope():
         "#AUDIO_TRANSPORT=native",
         "#ORBIS_AUDIO_SOCK=/tmp/orbis-audio-{pid}.sock",
         "#ORBIS_AUDIO_INPUT_MODE=voice_processing",
-        "#ORBIS_GATE=open",
         "#INBOX_INGEST_TOKEN=",
         "Session = native voice session",
     )

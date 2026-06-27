@@ -2017,22 +2017,6 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         command = command.env("ORBIS_AUDIO_SOCK", sock_path);
     }
 
-    // Paid-unlock gate. Distribution builds are compiled with the production
-    // license PUBLIC key baked in (CI sets ORBIS_LICENSE_PUBKEY from a repo
-    // variable — it's a public key, not a secret). When present, lock orb
-    // customization to a verified Ed25519 license: agent/entitlement.py reads
-    // ORBIS_GATE and agent/license.py verifies activated keys against
-    // ORBIS_LICENSE_PUBKEY. Local/dev builds compile without it → the gate
-    // stays open (entitlement.py default) so nothing is blocked. Empty is
-    // treated as unset, so an unconfigured CI var can't lock the app with no
-    // unlock path.
-    if let Some(pubkey) = option_env!("ORBIS_LICENSE_PUBKEY").filter(|s| !s.is_empty()) {
-        command = command
-            .env("ORBIS_GATE", "closed")
-            .env("ORBIS_LICENSE_PUBKEY", pubkey);
-        log::info!("sidecar env: ORBIS_GATE=closed (paid-unlock gate active)");
-    }
-
     let (mut rx, child) = command
         .spawn()
         .map_err(|e| format!("sidecar spawn failed: {e}"))?;
