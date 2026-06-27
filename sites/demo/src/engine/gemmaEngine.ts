@@ -1,24 +1,19 @@
 /**
- * On-device voice engine — PR2 (text turns via Gemma).
+ * On-device LLM (Gemma) — worker wrapper.
  *
- * Owns the Gemma worker and translates a conversation into the orbis-sse
- * events the real app consumes: user text → `transcript`(user) + `thinking`;
- * first token → `speaking`; streamed tokens → `transcript`(bot, partial);
- * completion → `transcript`(bot, final) + `idle`. The orb, status pill, and
- * transcript surfaces react exactly as in the native app.
- *
- * PR3 adds Whisper/Moonshine STT + Kokoro TTS in front of send()/the
- * speaking phase — same event surface.
+ * Pure LLM: load the model and complete a turn, streaming tokens via a
+ * callback. It emits NO orbis-sse events — the voice orchestrator
+ * (voiceEngine) owns conversation state + presentation so the same LLM
+ * serves both the voice loop and the typed fallback.
  */
-import { emitSse } from '../tauri-shim/bus';
-
 export type ProgressCb = (status: string, pct: number | null) => void;
 
 const SYSTEM =
   'You are ORBIS, a warm, concise voice companion running entirely on the ' +
-  "user's device in their browser. Reply in a natural, spoken style — 1 to 3 " +
-  'short sentences, no markdown, no lists. If asked what you are, mention you ' +
-  'are a preview of ORBIS running on-device (Gemma) with nothing sent to a server.';
+  "user's device in their browser. Reply in a natural, spoken style — 1 to 2 " +
+  'short sentences, no markdown, no lists, no emoji. If asked what you are, ' +
+  'mention you are a preview of ORBIS running fully on-device (Gemma for the ' +
+  'brain, with speech in and out) — nothing is sent to a server.';
 
 interface ProgressData {
   status?: string;
@@ -37,13 +32,8 @@ class GemmaEngine {
   private loadReject: ((e: Error) => void) | null = null;
   private onProgress: ProgressCb | null = null;
   private acc = '';
+  private onToken: ((full: string) => void) | null = null;
   private genResolve: (() => void) | null = null;
-
-  /** Announce a live session so the app's bridge flips to connected/idle. */
-  init(): void {
-    emitSse('session', { event: 'start', session_id: 'demo' });
-    emitSse('bot-state', { state: 'idle' });
-  }
 
   get isLoaded(): boolean {
     return this.loaded;
@@ -57,7 +47,6 @@ class GemmaEngine {
     this.worker.addEventListener('message', (e) => this.onMessage(e));
   }
 
-  /** Download + compile the model (lazy, on first use). Idempotent. */
   load(onProgress: ProgressCb): Promise<void> {
     this.onProgress = onProgress;
     if (this.loaded) return Promise.resolve();
@@ -71,22 +60,19 @@ class GemmaEngine {
     return this.loading;
   }
 
-  /** Run one user turn; resolves when the bot finishes speaking. */
-  async send(text: string): Promise<void> {
-    if (!this.loaded || !this.worker) return;
-    this.messages.push({ role: 'user', content: text });
-    emitSse('transcript', { source: 'user', text, final: true });
-    emitSse('bot-state', { state: 'thinking' });
+  /** Complete one turn. Streams the running text via onToken; resolves with
+   *  the full reply. No state events — the caller presents it. */
+  async complete(userText: string, onToken?: (full: string) => void): Promise<string> {
+    if (!this.loaded || !this.worker) return '';
+    this.messages.push({ role: 'user', content: userText });
     this.acc = '';
+    this.onToken = onToken ?? null;
     await new Promise<void>((resolve) => {
       this.genResolve = resolve;
       this.worker!.postMessage({ type: 'generate', data: this.messages });
     });
-  }
-
-  /** Stop the in-flight generation (PR3: verbal barge-in). */
-  interrupt(): void {
-    this.worker?.postMessage({ type: 'interrupt' });
+    this.messages.push({ role: 'assistant', content: this.acc });
+    return this.acc;
   }
 
   private onMessage(e: MessageEvent): void {
@@ -96,38 +82,26 @@ class GemmaEngine {
         const d = data as ProgressData;
         const pct = typeof d?.progress === 'number' ? d.progress : null;
         const label =
-          d?.status === 'progress'
-            ? `Downloading ${d?.file ?? 'model'}…`
-            : d?.status === 'done'
-              ? 'Compiling…'
-              : 'Loading…';
+          d?.status === 'progress' ? `downloading ${d?.file ?? 'model'}` : (d?.status ?? 'loading');
         this.onProgress?.(label, pct);
         break;
       }
-      case 'ready': {
+      case 'ready':
         this.loaded = true;
-        this.onProgress?.('Ready', 100);
+        this.onProgress?.('ready', 100);
         this.loadResolve?.();
         this.loadResolve = this.loadReject = null;
         break;
-      }
-      case 'start':
-        emitSse('bot-state', { state: 'speaking' });
-        break;
       case 'token':
         this.acc += String(data ?? '');
-        emitSse('transcript', { source: 'bot', text: this.acc, final: false });
+        this.onToken?.(this.acc);
         break;
       case 'done':
-        emitSse('transcript', { source: 'bot', text: this.acc, final: true });
-        emitSse('bot-state', { state: 'idle' });
-        this.messages.push({ role: 'assistant', content: this.acc });
         this.genResolve?.();
         this.genResolve = null;
         break;
       case 'error':
-        this.onProgress?.('Error: ' + String(data), null);
-        emitSse('bot-state', { state: 'idle' });
+        this.onProgress?.('error: ' + String(data), null);
         this.loadReject?.(new Error(String(data)));
         this.loadResolve = this.loadReject = null;
         this.genResolve?.();

@@ -5,6 +5,8 @@
  * audio engine — that arrives with the on-device voice loop in PR3).
  */
 import { httpRequest, type ApiRequestArgs } from '../backend/router';
+import { getLevels } from '../engine/levels';
+import { voiceEngine } from '../engine/voiceEngine';
 
 export async function handleInvoke(
   cmd: string,
@@ -26,10 +28,10 @@ export async function handleInvoke(
     case 'get_audio_level':
       return 0;
     case 'get_audio_levels':
-      // Shape MUST match the Rust command: { mic, playback }. The orb's
-      // audio-envelope hook reads nat.playback / nat.mic — wrong keys make
-      // `undefined * gain = NaN`, which poisons uDensity → a black orb.
-      return { mic: 0, playback: 0 };
+      // Live RMS from mic capture + TTS playback (audio.ts → levels bus),
+      // so the orb pulses to your voice and hers. Shape MUST match the Rust
+      // command: { mic, playback } — the orb reads nat.playback / nat.mic.
+      return getLevels();
     case 'list_audio_inputs':
     case 'list_audio_outputs':
       return [];
@@ -60,9 +62,12 @@ export async function handleInvoke(
       if (url) window.open(url, '_blank', 'noopener,noreferrer');
       return null;
     }
+    case 'set_mic_listening':
+      // The orb's double-click push-to-talk drives the voice loop.
+      voiceEngine.setListening(!!args.on);
+      return null;
 
     // --- setters / window ops / one-shots: no-op in the demo ---
-    case 'set_mic_listening':
     case 'set_mic_muted':
     case 'set_input_device':
     case 'set_output_device':

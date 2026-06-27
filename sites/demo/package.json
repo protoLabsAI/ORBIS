@@ -19,6 +19,7 @@
     "@react-three/postprocessing": "^3.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "kokoro-js": "^1.2.1",
     "lucide-react": "^1.8.0",
     "postprocessing": "^6.39.1",
     "radix-ui": "^1.4.3",

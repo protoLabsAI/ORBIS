@@ -1,29 +1,36 @@
 /**
- * Demo-only composer overlay.
+ * Voice-first demo control (a sibling of <App/>, so web/src stays untouched).
  *
- * The native app is voice-first with no text input; until PR3 brings mic +
- * STT, this slim bottom bar is how you talk to the in-browser Gemma. It's a
- * sibling of <App/> (not part of web/src), so the mirrored app stays
- * untouched. Gates on WebGPU, lazy-loads the model with a progress bar, then
- * exposes a single-line composer.
+ * One affordance: tap to talk. First tap primes mic permission, downloads
+ * the on-device models (brain + voice) with a progress label, then listens;
+ * after that it's just tap → talk → it replies out loud. Double-clicking the
+ * orb does the same (via the app's set_mic_listening). Typing is a thin
+ * fallback that runs the identical pipeline and speaks the reply too.
  */
-import { useState, type FormEvent } from 'react';
-import { gemmaEngine } from '../engine/gemmaEngine';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Mic, Square, Loader2 } from 'lucide-react';
+import { voiceEngine } from '../engine/voiceEngine';
 import { hasWebGPU } from '../engine/webgpu';
 import { useVoiceStateSelector } from '@/voice/hooks';
 
-type Phase = 'idle' | 'loading' | 'ready';
-
 export function DemoComposer() {
   const [supported] = useState(hasWebGPU);
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [status, setStatus] = useState('');
-  const [pct, setPct] = useState<number | null>(null);
+  const [progress, setProgress] = useState<{ label: string; pct: number | null } | null>(null);
+  const [preparing, setPreparing] = useState(false);
   const [text, setText] = useState('');
-  const botState = useVoiceStateSelector((s) => s.state);
-  const busy = botState === 'thinking' || botState === 'speaking';
+  const state = useVoiceStateSelector((s) => s.state);
+  const listening = state === 'listening';
+  const busy = state === 'thinking' || state === 'speaking';
 
-  const wrap = 'fixed bottom-16 left-1/2 -translate-x-1/2 z-50 w-[min(34rem,90vw)]';
+  useEffect(() => {
+    voiceEngine.onProgress = (label, pct) => setProgress(pct === 100 ? null : { label, pct });
+    return () => {
+      voiceEngine.onProgress = null;
+    };
+  }, []);
+
+  const wrap =
+    'fixed bottom-14 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 w-[min(34rem,92vw)]';
 
   if (!supported) {
     return (
@@ -38,51 +45,76 @@ export function DemoComposer() {
     );
   }
 
-  const startLoad = async () => {
-    setPhase('loading');
+  const tap = async () => {
+    if (busy) return;
+    setPreparing(true);
     try {
-      await gemmaEngine.load((s, p) => {
-        setStatus(s);
-        setPct(p);
-      });
-      setPhase('ready');
-    } catch {
-      // status carries the error text
+      await voiceEngine.activate();
+    } finally {
+      setPreparing(false);
+      setProgress(null);
     }
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const t = text.trim();
-    if (!t || phase !== 'ready' || busy) return;
+    if (!t || busy || listening) return;
     setText('');
-    await gemmaEngine.send(t);
+    setPreparing(true);
+    try {
+      await voiceEngine.submitText(t);
+    } finally {
+      setPreparing(false);
+      setProgress(null);
+    }
   };
+
+  const loading = !!progress || (preparing && !listening && !busy);
+  const label = progress
+    ? `${progress.label}${progress.pct != null ? ` ${Math.round(progress.pct)}%` : ''}`
+    : listening
+      ? 'Listening — tap to stop'
+      : state === 'thinking'
+        ? 'Thinking…'
+        : state === 'speaking'
+          ? 'Speaking…'
+          : preparing
+            ? 'Preparing…'
+            : 'Tap to talk';
+
+  const Icon = loading || busy ? Loader2 : listening ? Square : Mic;
 
   return (
     <div className={wrap}>
-      {phase !== 'ready' ? (
-        <button
-          onClick={startLoad}
-          disabled={phase === 'loading'}
-          className="w-full rounded-full border border-indigo-400/40 bg-indigo-400/10 px-5 py-2.5 text-sm font-medium text-indigo-100 backdrop-blur transition-colors hover:border-indigo-300/70 disabled:opacity-80"
-        >
-          {phase === 'loading'
-            ? `${status}${pct != null ? ` ${Math.round(pct)}%` : ''}`
-            : 'Load Gemma on-device to chat (~500 MB, one-time)'}
-        </button>
-      ) : (
-        <form onSubmit={submit}>
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            disabled={busy}
-            autoFocus
-            placeholder={busy ? 'Orbis is responding…' : 'Type to talk to Orbis…'}
-            className="w-full rounded-full border border-white/10 bg-black/60 px-5 py-2.5 text-sm text-white placeholder:text-zinc-500 backdrop-blur outline-none focus:border-indigo-400/60 disabled:opacity-60"
-          />
-        </form>
-      )}
+      <button
+        onClick={tap}
+        disabled={busy}
+        aria-label={label}
+        className={[
+          'flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium backdrop-blur transition-colors',
+          listening
+            ? 'border border-rose-400/50 bg-rose-500/15 text-rose-100'
+            : 'border border-indigo-400/40 bg-indigo-400/10 text-indigo-100 hover:border-indigo-300/70',
+          busy ? 'opacity-80' : '',
+        ].join(' ')}
+      >
+        <Icon className={`h-4 w-4 ${loading || busy ? 'animate-spin' : ''}`} />
+        {label}
+      </button>
+
+      <form onSubmit={submit} className="w-full">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={busy || listening}
+          placeholder="…or type to Orbis"
+          className="w-full rounded-full border border-white/10 bg-black/50 px-4 py-2 text-center text-xs text-white placeholder:text-zinc-600 backdrop-blur outline-none focus:border-indigo-400/50 disabled:opacity-50"
+        />
+      </form>
+      <p className="text-[11px] text-zinc-600">
+        on-device · nothing leaves your machine · or double-click the orb
+      </p>
     </div>
   );
 }
