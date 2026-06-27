@@ -21,6 +21,27 @@ permissions:
   contents: read
 
 jobs:
+  # Cheap ubuntu gate so we only spin up the 10x-billed macos-14 runner when
+  # the Rust / Tauri surface it actually compiles has changed. Python/web/docs
+  # PRs no longer pay for a macOS compile they can't affect. linux-source below
+  # still runs on every push/PR as the broad source gate.
+  changes:
+    name: Detect Rust/Tauri changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'src-tauri/**'
+              - 'scripts/check-macos-release-config.py'
+              - '.github/workflows/native-audio-preflight.yml'
+
   linux-source:
     name: Source and Linux host checks
     runs-on: ubuntu-22.04
@@ -99,6 +120,10 @@ jobs:
 
   macos-native-audio:
     name: macOS native-audio compile
+    needs: changes
+    # macos-14 bills at 10x Linux — only build when Rust/Tauri changed. Manual
+    # dispatch always builds so the full preflight stays one click away.
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     timeout-minutes: 20
 
