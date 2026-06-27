@@ -16,8 +16,14 @@ on:
   # backend test suite" — the same job that gates PRs gates releases.
   workflow_call:
 
+# Group includes github.workflow so that when this is reused as a release
+# gate (workflow_call from release.yml AND desktop-build.yml on the SAME tag
+# ref), the two callers land in DISTINCT groups — github.workflow resolves to
+# the *caller's* name. Keying on github.ref alone made both callers share one
+# group with cancel-in-progress, so they cancelled each other and the Release
+# job was skipped (v0.2.149 incident). PR/push runs still dedupe per ref.
 concurrency:
-  group: pytest-${{ github.ref }}
+  group: pytest-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
