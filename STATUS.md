@@ -1,10 +1,61 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-26 (v0.2.146 — free + OSS pivot, orb editor unblocked
-in-app, activation UX). On `main`, all PRs merged.*
+*Last updated 2026-06-27 (v0.2.147 shipped — paywall removed; v0.2.149
+cutting — test gate + boot/diagnostics wins). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-06-27 (paywall gone, robustness/quick-win sweep, churn-ranked backlog)
+
+Maintenance + hardening session. Cleared the stale-docs debt, removed the
+paywall, and banked the low-churn/high-value half of the distribution audit.
+**Read HANDOFF.md** for the full QA checklist + next steps.
+
+**Shipped (releases v0.2.147 → v0.2.149):**
+- **Paywall/entitlement subsystem removed** (#551, PR #573) — `entitlement.py`,
+  `license.py`, `memory/entitlement.py` + `entitlement_cache`, the
+  `/api/entitlement*` endpoints + orb-config 403 gate, the
+  `ORBIS_LICENSE_PUBKEY`/`ORBIS_GATE` bake-in, the `sites/license-issuer`
+  worker, and all entitlement tests. −1700 LoC, no behavior change (gate was
+  already open). Shipped in **v0.2.147**. (NOT touched: the macOS
+  `entitlements.plist` + Tauri updater minisign key — unrelated.)
+- **Release test gate** (#490, PR #578) — `pytest.yml` is now reusable and
+  gates both tag workflows (`release.yml` + `desktop-build.yml`); a red commit
+  can no longer be tagged-and-shipped. Branch protection on `main` is the
+  remaining half (admin settings toggle).
+- **Lazy torch/transformers** (#483, PR #580) — `voice/stt.py` no longer pulls
+  torch+transformers at import (was on the boot path); they load only on the
+  local-Whisper path. Boot-time win for the Parakeet default.
+- **"Reveal logs in Finder"** (#488 slice, PR #581) — `reveal_logs` IPC +
+  Diagnostics button so users can grab logs for a bug report. Full export-zip +
+  crash reporting still open on #488.
+- **Docs**: STATUS.md + HANDOFF.md refreshed (the 05-29 HANDOFF was stale).
+
+**Filed (were untracked):** #576 LLMErrorAnnouncer (design locked on the issue
+— observer + debounce; the error flows upstream *and* the LLMSwitcher
+re-propagates it even on successful failover), #577 set_orb_visual re-enable.
+
+**Backlog ranked by effort × impact × churn risk (next team, do in this order):**
+1. **LLMErrorAnnouncer (#576)** — top value (silent "thinking forever" on a
+   dead/401 LLM, the worst first-run failure; worse now that everyone brings
+   their own LLM). Med churn (must defer to failover) → own PR + a live 401/
+   unreachable soak. Design is locked on the issue.
+2. **set_orb_visual fix (#577)** — low churn, unblocks the #534 demo.
+3. **#488 full export-zip + crash reporting** — additive, low churn.
+4. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
+   churn** (RT audio + process lifecycle) → deliberate, device-soaked PR. #486
+   also unblocks pipeline-rebuild hot-swap.
+5. Lower tier: #571 activation affordance, #491 seed FE/Tauri tests, #482 FTS
+   incremental, #487 a2a-wheel (external publish lead time), #489 pyapp-env GC
+   (careful — deletes dirs). **#484 dropped** (high churn + Phase-2-obsoleting).
+
+Two known pre-existing test flakies (not regressions):
+`test_skill_llm_resolution::test_micro_model_defaults_to_model` (fails on clean
+main — env picks `protolabs/nano`) and `test_a2a_migration::test_closed_loop_send_returns_answer`
+(passes in isolation; flaky under the full suite).
 
 ---
 

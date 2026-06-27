@@ -79,22 +79,31 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ## Known issues / rough edges
 
-- **LLMErrorAnnouncer (not built) — worst first-user failure.** A dead/401'd
-  LLM leaves the orb silently "thinking" forever: StallWatchdog disarms on
-  `LLMFullResponseStartFrame`, the ErrorFrame flows upstream where nothing
-  re-arms. Designed, not built. (STATUS.md 06-11.)
-- **`set_orb_visual` parked (#562)** — shipped (#560) then disabled (buggy).
-  See the parked-handler note at `agent/tools.py` + the toggle in
+- **LLMErrorAnnouncer — worst first-user failure (design locked, #576).** A
+  dead/401'd LLM leaves the orb silently "thinking" forever: StallWatchdog
+  disarms on `LLMFullResponseStartFrame`, and the ErrorFrame flows *upstream*
+  where nothing re-arms. Root-caused against pipecat source: `push_error` is
+  upstream (`frame_processor.py:650`), and `LLMSwitcher` re-propagates the
+  error upstream **even on successful failover** (`service_switcher.py:302`).
+  → Fix is an **observer** with debounce (cancel if real output follows) +
+  throttle + classify. Full design + test plan on issue #576. Needs a live
+  401/unreachable soak — its own PR.
+- **`set_orb_visual` parked (#562, tracked by #577)** — shipped (#560) then
+  disabled (buggy). Parked-handler note at `agent/tools.py` + toggle in
   `agent/config_store.py`. Blocks the #534 voice-edit-orb demo.
 - **Phase 2 audio not yet validated.** AVAudioEngine voice-processing
   (AEC/AGC/NS) is wired but needs a live Apple Silicon soak before the CPAL
   band-aids come out (MIC_GAIN, STT RMS gates, backchannel/micro-ack off).
   Playbook in STATUS.md § Phase 2b.
-- **Distribution / perf / robustness audit #481–491 — all still open**
-  (re-verified 06-26). Highest-leverage: #486 binds-once audio socket → silent
-  dead audio on sidecar restart (also blocks pipeline-rebuild hot-swap), #485
-  bare-SIGKILL orphans sidecar grandchildren, #489 updater re-downloads the
-  1.7GB sidecar.
+- **Distribution / perf / robustness audit #481–491 — partially banked.**
+  Shipped: **#490** release test gate (PR #578), **#483** lazy torch off the
+  boot path (PR #580), **#488** reveal-logs slice (PR #581). Still open, ranked
+  by churn below. Highest-leverage open ones: **#486** binds-once audio socket →
+  silent dead audio on sidecar restart (also blocks pipeline-rebuild hot-swap)
+  + **#485** bare-SIGKILL orphans sidecar grandchildren (one robustness bundle,
+  high churn → device soak), and **#489** updater re-downloads the 1.7GB
+  sidecar. **#484 dropped** (high churn + the CPAL path it hardens is slated for
+  Phase-2 deletion).
 - **Two flaky/pre-existing test failures** (not regressions):
   `test_skill_llm_resolution::test_micro_model_defaults_to_model` (fails on
   clean main — env default picks `protolabs/nano`) and
@@ -124,16 +133,29 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ---
 
-## Recommended next steps (priority order)
+## Recommended next steps (effort × impact × churn — do in this order)
 
-1. **LLMErrorAnnouncer** — catch the upstream ErrorFrame, classify (auth vs
-   unreachable), speak one throttled canned line. Kills the silent-thinking
-   first-user failure.
-2. **Fix + re-enable `set_orb_visual`** (#562) → unblocks the #534 demo.
-3. **In-app editor parity** (#546 → #547 → #548).
-4. **Triage the distribution audit** — start with #486 (socket re-accept) and
-   #485 (graceful shutdown); they cause silent failures on restart.
-5. **Phase 2 audio soak** on Apple Silicon → then the cleanup commit.
+The quick low-churn wins (#490 test gate, #483 lazy torch, #488 reveal-logs)
+are already banked. What's left is bigger or higher-churn — sequence it:
+
+1. **LLMErrorAnnouncer (#576)** — top value; **med churn** (must defer to
+   failover). Design is locked on the issue (observer + debounce). Build it as
+   its own PR + a live 401/unreachable soak.
+2. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the #534
+   demo. Root-cause why #562 disabled it first.
+3. **#488 full export-zip + crash reporting** — additive, low churn (the
+   reveal-logs slice shipped).
+4. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
+   churn** (RT audio + process lifecycle) → deliberate, device-soaked PR. #486
+   also unblocks pipeline-rebuild hot-swap.
+5. **In-app editor parity (#549)** — #546 → #547 → #548. Confirm the
+   shared-package boundary first.
+6. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
+
+Lower tier (opportunistic): #571 activation affordance, #491 seed FE/Tauri
+tests, #482 FTS incremental, #487 a2a-wheel (needs an external publish),
+#489 pyapp-env GC (careful — deletes dirs on disk). **#484 dropped** (high
+churn + Phase-2-obsoleting).
 
 ---
 
