@@ -37,7 +37,7 @@ export async function primeMicPermission(): Promise<boolean> {
   }
 }
 
-export async function startCapture(): Promise<void> {
+export async function startCapture(onEndpoint?: () => void): Promise<void> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
   });
@@ -55,9 +55,32 @@ export async function startCapture(): Promise<void> {
   src.connect(node);
   node.connect(ctx.destination); // SP only fires when connected; output is silent
   const buf = new Float32Array(analyser.fftSize);
+  // Voice-activity endpointing: once you've spoken, a ~1.3s pause (or a 20s
+  // hard cap) auto-stops capture so it replies without a second tap.
+  const SPEECH_RMS = 0.015;
+  const SILENCE_HANG_MS = 1300;
+  const MAX_MS = 20000;
+  const startedAt = performance.now();
+  let spoke = false;
+  let lastVoiceAt = startedAt;
+  let fired = false;
   const tick = () => {
     analyser.getFloatTimeDomainData(buf);
-    setMic(rms(buf));
+    const level = rms(buf);
+    setMic(level);
+    const now = performance.now();
+    if (level > SPEECH_RMS) {
+      spoke = true;
+      lastVoiceAt = now;
+    }
+    if (
+      !fired &&
+      onEndpoint &&
+      ((spoke && now - lastVoiceAt > SILENCE_HANG_MS) || now - startedAt > MAX_MS)
+    ) {
+      fired = true;
+      onEndpoint();
+    }
     cap!.raf = requestAnimationFrame(tick);
   };
   cap = { ctx, stream, node, analyser, chunks, raf: 0 };

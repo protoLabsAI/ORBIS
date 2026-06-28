@@ -110,7 +110,9 @@ class VoiceEngine {
     this.listening = true;
     emitSse('bot-state', { state: 'listening' });
     try {
-      await startCapture();
+      await startCapture(() => {
+        void this.stopListening();
+      });
     } catch {
       this.listening = false;
       emitSse('bot-state', { state: 'idle' });
@@ -121,6 +123,7 @@ class VoiceEngine {
     if (!this.listening) return;
     this.listening = false;
     const pcm = await stopCapture();
+    console.info('[orbis-demo] captured', pcm.length, 'samples');
     if (pcm.length < 8000) {
       // < ~0.5s of audio — treat as a mis-tap.
       emitSse('bot-state', { state: 'idle' });
@@ -128,6 +131,7 @@ class VoiceEngine {
     }
     emitSse('bot-state', { state: 'thinking' });
     const text = await this.transcribe(pcm);
+    console.info('[orbis-demo] transcript:', JSON.stringify(text));
     if (!text) {
       emitSse('bot-state', { state: 'idle' });
       return;
@@ -156,6 +160,7 @@ class VoiceEngine {
     const reply = await gemmaEngine.complete(text, (full) =>
       emitSse('transcript', { source: 'bot', text: full, final: false }),
     );
+    console.info('[orbis-demo] reply:', JSON.stringify(reply));
     emitSse('transcript', { source: 'bot', text: reply, final: true });
     if (reply.trim()) {
       emitSse('bot-state', { state: 'speaking' });
@@ -204,6 +209,7 @@ class VoiceEngine {
         this.pendingAudio = null;
         break;
       case 'error':
+        console.error('[orbis-demo] speech worker error:', data);
         this.speechReject?.(new Error(String(data)));
         this.speechResolve = this.speechReject = null;
         this.pendingTranscribe?.('');
