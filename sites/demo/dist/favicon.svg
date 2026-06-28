@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <!-- protoLabs brand gradient: lavender → indigo (#9b87f2 → #818cf8 → #6366f1). -->
+    <radialGradient id="orb" cx="40%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="45%" stop-color="#9b87f2"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#818cf8" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer glow -->
+  <circle cx="32" cy="32" r="32" fill="url(#glow)"/>
+  <!-- Orb sphere -->
+  <circle cx="32" cy="32" r="24" fill="url(#orb)"/>
+</svg>
