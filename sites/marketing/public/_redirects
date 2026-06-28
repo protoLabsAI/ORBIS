@@ -1,0 +1,5 @@
+# The in-browser demo was pulled (on-device latency was too slow for a good
+# first impression). Send any lingering /demo links home. Note: edge-cached
+# copies need a Cloudflare cache purge to clear immediately.
+/demo/*  /  301
+/demo  /  301
