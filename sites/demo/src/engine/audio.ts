@@ -65,6 +65,7 @@ export async function startCapture(onEndpoint?: () => void): Promise<void> {
   let lastVoiceAt = startedAt;
   let fired = false;
   const tick = () => {
+    if (!cap) return; // capture stopped — end the loop
     analyser.getFloatTimeDomainData(buf);
     const level = rms(buf);
     setMic(level);
@@ -79,9 +80,9 @@ export async function startCapture(onEndpoint?: () => void): Promise<void> {
       ((spoke && now - lastVoiceAt > SILENCE_HANG_MS) || now - startedAt > MAX_MS)
     ) {
       fired = true;
-      onEndpoint();
+      onEndpoint(); // may synchronously stop capture (nulls cap)
     }
-    cap!.raf = requestAnimationFrame(tick);
+    if (cap) cap.raf = requestAnimationFrame(tick); // don't reschedule after stop
   };
   cap = { ctx, stream, node, analyser, chunks, raf: 0 };
   tick();
