@@ -16,15 +16,12 @@ import { DemoPanel } from '../components/DemoPanel';
 import { IntroDialog } from '../components/IntroDialog';
 
 function Transcript() {
-  const state = useVoiceStateSelector((s) => s.state);
+  // Voice-first: the orb speaks the reply, so we only print what the user
+  // said (handy to confirm what was heard) — not the bot's response text.
   const userText = useVoiceStateSelector((s) => s.lastUserTranscript);
-  const botText = useVoiceStateSelector((s) => s.lastBotText);
   return (
     <div className="pointer-events-none fixed inset-x-0 top-[15%] z-40 flex flex-col items-center gap-2 px-6 text-center">
       {userText && <p className="text-sm text-zinc-500">“{userText}”</p>}
-      {botText && (state === 'speaking' || state === 'idle') && (
-        <p className="max-w-xl text-lg font-medium leading-snug text-zinc-100">{botText}</p>
-      )}
     </div>
   );
 }
