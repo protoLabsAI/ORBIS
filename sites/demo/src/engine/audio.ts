@@ -58,8 +58,9 @@ export async function startCapture(onEndpoint?: () => void): Promise<void> {
   // Voice-activity endpointing: once you've spoken, a ~1.3s pause (or a 20s
   // hard cap) auto-stops capture so it replies without a second tap.
   const SPEECH_RMS = 0.015;
-  const SILENCE_HANG_MS = 1300;
-  const MAX_MS = 20000;
+  const SILENCE_HANG_MS = 1300; // pause after speech that ends a turn
+  const NO_SPEECH_MS = 6000; // tapped but never spoke → give up
+  const MAX_MS = 20000; // hard cap on a single utterance
   const startedAt = performance.now();
   let spoke = false;
   let lastVoiceAt = startedAt;
@@ -77,7 +78,9 @@ export async function startCapture(onEndpoint?: () => void): Promise<void> {
     if (
       !fired &&
       onEndpoint &&
-      ((spoke && now - lastVoiceAt > SILENCE_HANG_MS) || now - startedAt > MAX_MS)
+      ((spoke && now - lastVoiceAt > SILENCE_HANG_MS) ||
+        (!spoke && now - startedAt > NO_SPEECH_MS) ||
+        now - startedAt > MAX_MS)
     ) {
       fired = true;
       onEndpoint(); // may synchronously stop capture (nulls cap)
@@ -126,8 +129,16 @@ let playAnalyser: AnalyserNode | null = null;
 let nextStartAt = 0;
 let active = 0; // scheduled-but-not-ended sources
 let closed = true; // no more chunks coming
+let started = false; // at least one chunk enqueued this session
+let lastLoudAt = 0; // last time playback actually had sound
 let drainResolve: (() => void) | null = null;
 let levelRaf = 0;
+
+// Safety net: if playback stays silent this long after speaking has started,
+// end the turn regardless of the chunk/closed bookkeeping. Covers a stalled
+// stream (a tts-done / onended that never arrives) that would otherwise leave
+// the orb stuck in "speaking".
+const SILENCE_END_MS = 1500;
 
 function ensurePlayCtx(): AudioContext {
   if (!playCtx) {
@@ -139,46 +150,58 @@ function ensurePlayCtx(): AudioContext {
   return playCtx;
 }
 
+function finishDrain(): void {
+  if (!drainResolve) return; // idempotent — drain once per session
+  cancelAnimationFrame(levelRaf);
+  setPlayback(0);
+  const resolve = drainResolve;
+  drainResolve = null;
+  resolve();
+}
+
 function levelLoop(): void {
   const a = playAnalyser;
   if (!a) return;
   const b = new Float32Array(a.fftSize);
   cancelAnimationFrame(levelRaf);
   const tick = () => {
+    if (!drainResolve) return; // session already drained
     a.getFloatTimeDomainData(b);
-    setPlayback(rms(b));
+    const level = rms(b);
+    setPlayback(level);
+    const now = performance.now();
+    if (level > 0.01) lastLoudAt = now;
+    if (started && now - lastLoudAt > SILENCE_END_MS) {
+      finishDrain(); // stalled or finished — stop "speaking"
+      return;
+    }
     levelRaf = requestAnimationFrame(tick);
   };
   tick();
 }
 
-function finishDrain(): void {
-  cancelAnimationFrame(levelRaf);
-  setPlayback(0);
-  const r = drainResolve;
-  drainResolve = null;
-  r?.();
-}
-
-/** Open a playback session; the returned promise resolves once every
- *  enqueued chunk has finished AND endPlayback() has been called. */
+/** Open a playback session; resolves once playback finishes (queue drained
+ *  after endPlayback(), or the silence safety net trips). */
 export function beginPlayback(): Promise<void> {
   const ctx = ensurePlayCtx();
   if (ctx.state === 'suspended') void ctx.resume();
   nextStartAt = ctx.currentTime;
   active = 0;
   closed = false;
-  levelLoop();
-  return new Promise((resolve) => {
+  started = false;
+  lastLoudAt = performance.now();
+  const p = new Promise<void>((resolve) => {
     drainResolve = resolve;
   });
+  levelLoop();
+  return p;
 }
 
 /** Queue one synthesized chunk, scheduled right after the previous one. */
 export function enqueuePlayback(pcm: Float32Array, rate: number): void {
   const ctx = playCtx;
   const a = playAnalyser;
-  if (!ctx || !a) return;
+  if (!ctx || !a || pcm.length === 0) return;
   const buffer = ctx.createBuffer(1, pcm.length, rate);
   buffer.getChannelData(0).set(pcm);
   const src = ctx.createBufferSource();
@@ -187,6 +210,8 @@ export function enqueuePlayback(pcm: Float32Array, rate: number): void {
   const startAt = Math.max(ctx.currentTime, nextStartAt);
   src.start(startAt);
   nextStartAt = startAt + buffer.duration;
+  started = true;
+  lastLoudAt = performance.now(); // reset the silence timer for the new chunk
   active++;
   src.onended = () => {
     active--;
@@ -194,7 +219,7 @@ export function enqueuePlayback(pcm: Float32Array, rate: number): void {
   };
 }
 
-/** No more chunks coming; the session drains once playback catches up. */
+/** No more chunks coming; drains once playback catches up. */
 export function endPlayback(): void {
   closed = true;
   if (active === 0) finishDrain();
