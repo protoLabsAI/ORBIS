@@ -10,7 +10,7 @@ const SESSION_KEY = 'orbis-demo-intro-seen';
 
 const MODELS = [
   { Icon: Brain, label: 'Brain', sub: 'Gemma · language model', size: '~500 MB' },
-  { Icon: Ear, label: 'Ears', sub: 'Moonshine · speech-to-text', size: '~150 MB' },
+  { Icon: Ear, label: 'Ears', sub: 'Moonshine · speech-to-text', size: '~60 MB' },
   { Icon: Volume2, label: 'Voice', sub: 'Kokoro · text-to-speech', size: '~80 MB' },
 ];
 
@@ -72,7 +72,7 @@ export function IntroDialog() {
             ))}
           </ul>
           <p className="mt-2 text-[11px] text-zinc-600">
-            ~730 MB total · requires WebGPU (Chrome, Edge, or Safari 26+)
+            ~640 MB total · requires WebGPU (Chrome, Edge, or Safari 26+)
           </p>
         </div>
 

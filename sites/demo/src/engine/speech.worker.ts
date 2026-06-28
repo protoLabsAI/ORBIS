@@ -17,7 +17,7 @@ import { KokoroTTS, TextSplitterStream } from 'kokoro-js';
 env.useBrowserCache = true;
 env.allowLocalModels = false;
 
-const STT_MODEL = 'onnx-community/moonshine-base-ONNX';
+const STT_MODEL = 'onnx-community/moonshine-tiny-ONNX';
 const TTS_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
 let asr: AutomaticSpeechRecognitionPipeline | null = null;
