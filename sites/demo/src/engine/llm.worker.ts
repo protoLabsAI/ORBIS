@@ -64,7 +64,7 @@ async function generate(messages: Array<{ role: string; content: string }>): Pro
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await model.generate({
     ...(inputs as any),
-    max_new_tokens: 384,
+    max_new_tokens: 128,
     do_sample: false,
     streamer,
     stopping_criteria: stopper,
