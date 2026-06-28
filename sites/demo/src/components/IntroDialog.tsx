@@ -76,6 +76,11 @@ export function IntroDialog() {
           </p>
         </div>
 
+        <p className="mb-4 text-xs leading-relaxed text-zinc-500">
+          It runs smaller models in your browser, so speed depends on your GPU — this preview isn't
+          representative of the native Mac app's performance.
+        </p>
+
         <button
           onClick={dismiss}
           className="w-full rounded-lg bg-indigo-500/90 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500"

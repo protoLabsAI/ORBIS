@@ -57,7 +57,8 @@ export function DemoPanel() {
             <Row label="Voice · Moonshine + Kokoro" value={voiceReady ? 'loaded' : 'on demand'} good={voiceReady} />
             <p className="pt-1 text-zinc-600">
               Everything runs on your device — nothing leaves it. Audio uses your system's default
-              mic &amp; speaker.
+              mic &amp; speaker. Speed depends on your GPU; this in-browser preview isn't
+              representative of the native app.
             </p>
           </div>
 
