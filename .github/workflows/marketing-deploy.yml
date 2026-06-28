@@ -100,6 +100,13 @@ jobs:
       # --- Browser demo (Vite SPA / bun) served at /demo ---
       # Runs the real app (web/src) in the browser via a Tauri shim; see
       # sites/demo/vite.config.ts.
+      # The demo bundles web/src as source, so web's deps must be installed for
+      # its bare imports (lucide-react, @react-three/postprocessing, …) to
+      # resolve here — locally web/node_modules already exists, but CI is clean.
+      - name: Install web app dependencies (bundled as source by the demo)
+        run: bun install
+        working-directory: web
+
       - name: Install demo dependencies
         run: bun install
         working-directory: sites/demo
