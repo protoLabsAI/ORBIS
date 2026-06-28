@@ -1,8 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
-import App from '@/App';
-import { startDemoEngine } from './engine/mockEngine';
+import { DemoApp } from './demo/DemoApp';
+import { voiceEngine } from './engine/voiceEngine';
 
 // The real ORBIS app expects a dark, data-theme="dark" document (set by
 // the Tauri shell's index.html). index.html here mirrors that; belt-and-
@@ -10,13 +10,12 @@ import { startDemoEngine } from './engine/mockEngine';
 document.documentElement.classList.add('dark');
 document.documentElement.dataset.theme = 'dark';
 
-// Bring the in-browser "backend" to life: emit the session/voice events
-// the app's bridge listens for. PR1 = a scripted mock; PR2 swaps in the
-// on-device Gemma/Whisper/Kokoro engine behind the same event surface.
-startDemoEngine();
+// Open a session so the app's bridge flips to connected/idle. Models load
+// lazily on first interaction (tap the orb or the mic button).
+voiceEngine.init();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <DemoApp />
   </StrictMode>,
 );
