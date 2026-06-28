@@ -1,6 +1,0 @@
-/* Pull in the real app's stylesheet (Tailwind + design-system tokens +
-   ORBIS chrome tokens). It lives outside this vite root, so Tailwind's
-   automatic content detection won't find the app's class usage — point
-   it at the real sources explicitly with @source. */
-@import "../../../web/src/index.css";
-@source "../../../web/src";

@@ -1,12 +1,11 @@
 name: Deploy Marketing Site
 
-# Builds the Astro marketing site, the VitePress docs, the orb editor SPA,
-# AND the browser demo SPA, then deploys the combined bundle to Cloudflare
-# Pages (project: orbis-marketing → https://orbis.protolabs.studio). The
-# docs are served at /docs (built with DOCS_BASE=/docs/), the editor at
-# /editor (Vite base=/editor/), and the browser demo at /demo (Vite
-# base=/demo/) — all copied into the Astro output before deploy, so one
-# Cloudflare Pages project serves them.
+# Builds the Astro marketing site, the VitePress docs, AND the orb editor
+# SPA, then deploys the combined bundle to Cloudflare Pages (project:
+# orbis-marketing → https://orbis.protolabs.studio). The docs are served at
+# /docs (built with DOCS_BASE=/docs/) and the editor at /editor (Vite
+# base=/editor/) — both copied into the Astro output before deploy, so one
+# Cloudflare Pages project serves all three.
 
 on:
   push:
@@ -14,11 +13,7 @@ on:
     paths:
       - 'sites/marketing/**'
       - 'sites/editor/**'
-      - 'sites/demo/**'
       - 'packages/orb-runtime/**'
-      # The browser demo (sites/demo) bundles the real app from web/src as
-      # source, so app changes must redeploy it or /demo serves stale code.
-      - 'web/**'
       - 'docs/**'
       - 'package.json'
       - 'package-lock.json'
@@ -96,30 +91,6 @@ jobs:
           rm -rf sites/marketing/dist/editor
           mkdir -p sites/marketing/dist/editor
           cp -R sites/editor/dist/. sites/marketing/dist/editor/
-
-      # --- Browser demo (Vite SPA / bun) served at /demo ---
-      # Runs the real app (web/src) in the browser via a Tauri shim; see
-      # sites/demo/vite.config.ts.
-      # The demo bundles web/src as source, so web's deps must be installed for
-      # its bare imports (lucide-react, @react-three/postprocessing, …) to
-      # resolve here — locally web/node_modules already exists, but CI is clean.
-      - name: Install web app dependencies (bundled as source by the demo)
-        run: bun install
-        working-directory: web
-
-      - name: Install demo dependencies
-        run: bun install
-        working-directory: sites/demo
-
-      - name: Build browser demo (base /demo/)
-        run: bun run build
-        working-directory: sites/demo
-
-      - name: Fold demo into the marketing bundle at /demo
-        run: |
-          rm -rf sites/marketing/dist/demo
-          mkdir -p sites/marketing/dist/demo
-          cp -R sites/demo/dist/. sites/marketing/dist/demo/
 
       - name: Deploy to Cloudflare Pages
         run: bunx wrangler pages deploy dist --project-name=orbis-marketing --branch=main
