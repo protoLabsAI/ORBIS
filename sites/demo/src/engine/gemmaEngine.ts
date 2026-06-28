@@ -28,7 +28,7 @@ class GemmaEngine {
   private loadReject: ((e: Error) => void) | null = null;
   private onProgress: ProgressCb | null = null;
   private acc = '';
-  private onToken: ((full: string) => void) | null = null;
+  private onToken: ((full: string, delta: string) => void) | null = null;
   private genResolve: (() => void) | null = null;
   private fileProg: FileProgress = new Map();
 
@@ -59,7 +59,7 @@ class GemmaEngine {
 
   /** Complete one turn. Streams the running text via onToken; resolves with
    *  the full reply. No state events — the caller presents it. */
-  async complete(userText: string, onToken?: (full: string) => void): Promise<string> {
+  async complete(userText: string, onToken?: (full: string, delta: string) => void): Promise<string> {
     if (!this.loaded || !this.worker) return '';
     this.messages.push({ role: 'user', content: userText });
     this.acc = '';
@@ -85,10 +85,12 @@ class GemmaEngine {
         this.loadResolve?.();
         this.loadResolve = this.loadReject = null;
         break;
-      case 'token':
-        this.acc += String(data ?? '');
-        this.onToken?.(this.acc);
+      case 'token': {
+        const delta = String(data ?? '');
+        this.acc += delta;
+        this.onToken?.(this.acc, delta);
         break;
+      }
       case 'done':
         this.genResolve?.();
         this.genResolve = null;

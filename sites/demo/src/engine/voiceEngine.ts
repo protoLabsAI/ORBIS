@@ -13,7 +13,14 @@
  */
 import { emitSse } from '../tauri-shim/bus';
 import { gemmaEngine, type ProgressCb } from './gemmaEngine';
-import { primeMicPermission, startCapture, stopCapture, playPCM } from './audio';
+import {
+  primeMicPermission,
+  startCapture,
+  stopCapture,
+  beginPlayback,
+  enqueuePlayback,
+  endPlayback,
+} from './audio';
 import { trackProgress, type FileProgress } from './progress';
 
 const VOICE = 'af_heart';
@@ -27,12 +34,12 @@ class VoiceEngine {
   private speechResolve: (() => void) | null = null;
   private speechReject: ((e: Error) => void) | null = null;
   private pendingTranscribe: ((t: string) => void) | null = null;
-  private pendingAudio: ((a: { pcm: Float32Array; rate: number }) => void) | null = null;
   private speechFileProg: FileProgress = new Map();
 
   private listening = false;
   private busy = false;
   private transitioning = false;
+  private firstChunk = false;
 
   /** Open a session so the app's bridge flips to connected/idle. */
   init(): void {
@@ -155,37 +162,32 @@ class VoiceEngine {
 
   private async handleInput(text: string): Promise<void> {
     this.busy = true;
+    this.firstChunk = true;
     emitSse('transcript', { source: 'user', text, final: true });
     emitSse('bot-state', { state: 'thinking' });
-    const reply = await gemmaEngine.complete(text, (full) =>
-      emitSse('transcript', { source: 'bot', text: full, final: false }),
-    );
-    console.info('[orbis-demo] reply:', JSON.stringify(reply));
-    emitSse('transcript', { source: 'bot', text: reply, final: true });
-    if (reply.trim()) {
-      emitSse('bot-state', { state: 'speaking' });
-      try {
-        const { pcm, rate } = await this.synthesize(reply);
-        await playPCM(pcm, rate);
-      } catch {
-        /* TTS failed — still finish the turn */
-      }
+    try {
+      // Open playback + a streaming TTS session, then pipe Gemma's tokens
+      // into the splitter so it speaks sentence-by-sentence while generating.
+      const drained = beginPlayback();
+      this.speech!.postMessage({ type: 'tts-start', data: { voice: VOICE } });
+      const reply = await gemmaEngine.complete(text, (full, delta) => {
+        emitSse('transcript', { source: 'bot', text: full, final: false });
+        if (delta) this.speech!.postMessage({ type: 'tts-push', data: { text: delta } });
+      });
+      console.info('[orbis-demo] reply:', JSON.stringify(reply));
+      emitSse('transcript', { source: 'bot', text: reply, final: true });
+      this.speech!.postMessage({ type: 'tts-close' });
+      await drained; // resolves once all spoken audio has played out
+    } finally {
+      emitSse('bot-state', { state: 'idle' });
+      this.busy = false;
     }
-    emitSse('bot-state', { state: 'idle' });
-    this.busy = false;
   }
 
   private transcribe(pcm: Float32Array): Promise<string> {
     return new Promise((resolve) => {
       this.pendingTranscribe = resolve;
       this.speech!.postMessage({ type: 'transcribe', data: { audio: pcm } }, [pcm.buffer]);
-    });
-  }
-
-  private synthesize(text: string): Promise<{ pcm: Float32Array; rate: number }> {
-    return new Promise((resolve) => {
-      this.pendingAudio = resolve;
-      this.speech!.postMessage({ type: 'synthesize', data: { text, voice: VOICE } });
     });
   }
 
@@ -204,9 +206,15 @@ class VoiceEngine {
         this.pendingTranscribe?.(String(text ?? ''));
         this.pendingTranscribe = null;
         break;
-      case 'audio':
-        this.pendingAudio?.({ pcm: pcm as Float32Array, rate: rate as number });
-        this.pendingAudio = null;
+      case 'tts-chunk':
+        if (this.firstChunk) {
+          this.firstChunk = false;
+          emitSse('bot-state', { state: 'speaking' });
+        }
+        enqueuePlayback(pcm as Float32Array, rate as number);
+        break;
+      case 'tts-done':
+        endPlayback();
         break;
       case 'error':
         console.error('[orbis-demo] speech worker error:', data);
@@ -214,8 +222,7 @@ class VoiceEngine {
         this.speechResolve = this.speechReject = null;
         this.pendingTranscribe?.('');
         this.pendingTranscribe = null;
-        emitSse('bot-state', { state: 'idle' });
-        this.busy = false;
+        // The turn resolves via tts-done → endPlayback; don't force idle here.
         break;
     }
   }

@@ -10,7 +10,7 @@
  * Protocol (worker → main): 'progress' | 'ready' | 'transcript' | 'audio' | 'error'
  */
 import { pipeline, env, type AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
-import { KokoroTTS } from 'kokoro-js';
+import { KokoroTTS, TextSplitterStream } from 'kokoro-js';
 
 // Cache model files (Moonshine here; Kokoro's bundled transformers caches
 // by default too) so a download happens once.
@@ -22,6 +22,7 @@ const TTS_MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
 let asr: AutomaticSpeechRecognitionPipeline | null = null;
 let tts: KokoroTTS | null = null;
+let splitter: TextSplitterStream | null = null;
 
 const post = (msg: Record<string, unknown>, transfer?: Transferable[]) =>
   (self as unknown as Worker).postMessage(msg, transfer ?? []);
@@ -52,11 +53,29 @@ self.addEventListener('message', async (e: MessageEvent) => {
       const out = await asr(data.audio as Float32Array);
       const text = (Array.isArray(out) ? out[0]?.text : out?.text) ?? '';
       post({ type: 'transcript', text: String(text).trim() });
-    } else if (type === 'synthesize') {
+    } else if (type === 'tts-start') {
+      // Streaming TTS: tokens are pushed into a splitter; Kokoro yields one
+      // audio chunk per sentence as soon as it's ready, so playback starts
+      // before the full reply is generated.
       if (!tts) throw new Error('TTS not loaded');
-      const audio = await tts.generate(data.text as string, { voice: data.voice ?? 'af_heart' });
-      const pcm = audio.audio as Float32Array;
-      post({ type: 'audio', pcm, rate: audio.sampling_rate }, [pcm.buffer]);
+      splitter = new TextSplitterStream();
+      const stream = tts.stream(splitter, { voice: data?.voice ?? 'af_heart' });
+      void (async () => {
+        try {
+          for await (const { audio } of stream) {
+            const pcm = audio.audio as Float32Array;
+            post({ type: 'tts-chunk', pcm, rate: audio.sampling_rate }, [pcm.buffer]);
+          }
+        } catch (err) {
+          post({ type: 'error', data: String((err as Error)?.message ?? err) });
+        } finally {
+          post({ type: 'tts-done' });
+        }
+      })();
+    } else if (type === 'tts-push') {
+      splitter?.push(String(data?.text ?? ''));
+    } else if (type === 'tts-close') {
+      splitter?.close();
     }
   } catch (err) {
     post({ type: 'error', data: String((err as Error)?.message ?? err) });

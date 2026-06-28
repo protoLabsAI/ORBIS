@@ -117,35 +117,85 @@ export async function stopCapture(): Promise<Float32Array> {
   return out;
 }
 
-// ---- Playback (Kokoro Float32 → speakers + levels.playback) ----
+// ---- Streaming playback (Kokoro sentence chunks → gapless speakers) ----
+// Chunks arrive while earlier ones are still playing, so each is scheduled
+// back-to-back on a shared AudioContext; one AnalyserNode drives
+// levels.playback so the orb pulses for the whole utterance.
 let playCtx: AudioContext | null = null;
+let playAnalyser: AnalyserNode | null = null;
+let nextStartAt = 0;
+let active = 0; // scheduled-but-not-ended sources
+let closed = true; // no more chunks coming
+let drainResolve: (() => void) | null = null;
+let levelRaf = 0;
 
-export function playPCM(pcm: Float32Array, rate: number): Promise<void> {
+function ensurePlayCtx(): AudioContext {
+  if (!playCtx) {
+    playCtx = new AudioContext();
+    playAnalyser = playCtx.createAnalyser();
+    playAnalyser.fftSize = 1024;
+    playAnalyser.connect(playCtx.destination);
+  }
+  return playCtx;
+}
+
+function levelLoop(): void {
+  const a = playAnalyser;
+  if (!a) return;
+  const b = new Float32Array(a.fftSize);
+  cancelAnimationFrame(levelRaf);
+  const tick = () => {
+    a.getFloatTimeDomainData(b);
+    setPlayback(rms(b));
+    levelRaf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function finishDrain(): void {
+  cancelAnimationFrame(levelRaf);
+  setPlayback(0);
+  const r = drainResolve;
+  drainResolve = null;
+  r?.();
+}
+
+/** Open a playback session; the returned promise resolves once every
+ *  enqueued chunk has finished AND endPlayback() has been called. */
+export function beginPlayback(): Promise<void> {
+  const ctx = ensurePlayCtx();
+  if (ctx.state === 'suspended') void ctx.resume();
+  nextStartAt = ctx.currentTime;
+  active = 0;
+  closed = false;
+  levelLoop();
   return new Promise((resolve) => {
-    if (!playCtx) playCtx = new AudioContext();
-    const ctx = playCtx;
-    if (ctx.state === 'suspended') void ctx.resume();
-    const buffer = ctx.createBuffer(1, pcm.length, rate);
-    buffer.getChannelData(0).set(pcm);
-    const src = ctx.createBufferSource();
-    src.buffer = buffer;
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    src.connect(analyser);
-    analyser.connect(ctx.destination);
-    const buf = new Float32Array(analyser.fftSize);
-    let raf = 0;
-    const tick = () => {
-      analyser.getFloatTimeDomainData(buf);
-      setPlayback(rms(buf));
-      raf = requestAnimationFrame(tick);
-    };
-    src.onended = () => {
-      cancelAnimationFrame(raf);
-      setPlayback(0);
-      resolve();
-    };
-    src.start();
-    tick();
+    drainResolve = resolve;
   });
+}
+
+/** Queue one synthesized chunk, scheduled right after the previous one. */
+export function enqueuePlayback(pcm: Float32Array, rate: number): void {
+  const ctx = playCtx;
+  const a = playAnalyser;
+  if (!ctx || !a) return;
+  const buffer = ctx.createBuffer(1, pcm.length, rate);
+  buffer.getChannelData(0).set(pcm);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(a);
+  const startAt = Math.max(ctx.currentTime, nextStartAt);
+  src.start(startAt);
+  nextStartAt = startAt + buffer.duration;
+  active++;
+  src.onended = () => {
+    active--;
+    if (active === 0 && closed) finishDrain();
+  };
+}
+
+/** No more chunks coming; the session drains once playback catches up. */
+export function endPlayback(): void {
+  closed = true;
+  if (active === 0) finishDrain();
 }
