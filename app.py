@@ -123,7 +123,7 @@ from voice.llm import make_llm
 from voice.local_transport import LocalAudioTransport, audio_runtime_info
 from voice.native_bargein import NativeBargeInObserver
 from voice.sse_bus import sse_bus
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
 
 from a2a_server import register_a2a_routes
 from agent.backchannel import BackchannelController
@@ -1270,6 +1270,22 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # down) automatically switches to the next member for the rest of the
     # session. When unconfigured, `_llm_members == [llm]` and the pipeline
     # uses the bare `llm` — byte-for-byte the single-LLM path as before.
+    # LLM error announcer (#576): a dead/401'd LLM otherwise leaves the orb
+    # in "thinking" forever — the ErrorFrame flows upstream where the (long
+    # since disarmed) StallWatchdog never looks. Must be an observer, not a
+    # processor: LLMSwitcher re-propagates the ErrorFrame upstream even on a
+    # successful failover, so anything positional would announce recovered
+    # outages. Constructed here (before the switcher) so the failover event
+    # handler below can reclassify a pending announcement; registered in the
+    # task's observers list; emitter (task.queue_frame) wired after task
+    # creation.
+    llm_error_announcer = LLMErrorAnnouncer(
+        debounce_secs=float(os.environ.get("LLM_ERROR_DEBOUNCE_SECS", "2.5")),
+        throttle_secs=float(os.environ.get("LLM_ERROR_THROTTLE_SECS", "20")),
+        enabled=os.environ.get("LLM_ERROR_ANNOUNCER", "1") == "1",
+        tts_backend=tts_backend,
+    )
+
     _fallback_cfg = _resolve_fallback_llm(skill)
     _llm_members = [llm]
     if _fallback_cfg is not None:
@@ -1633,6 +1649,11 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             strategy_type=ServiceSwitcherStrategyFailover,
         )
 
+        # The switcher does NOT retry the failed generation — it only routes
+        # subsequent turns. Budgeted so an all-dead member list can't
+        # ping-pong retries forever: members-1 retries per incident window.
+        _failover_retry = {"used": 0, "window_start": float("-inf")}
+
         @pipeline_llm.strategy.event_handler("on_service_switched")
         async def _on_llm_failover(_strategy, service):
             # Surface failover so a dropped primary is visible, not silent.
@@ -1640,6 +1661,25 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             role = "primary" if idx == 0 else f"backup#{idx}"
             logger.warning("[llm] failover → now using %s (%s)", role, service.name)
             _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
+            # Reclassify the announcer's pending line: if the retry below
+            # can't run (budget spent), "ask me again" beats "check
+            # settings"; a second failover in the same window means the
+            # backup died too, and the announcer falls back to the error
+            # class (#576).
+            llm_error_announcer.note_failover()
+            # Retry the failed generation on the new active member so the
+            # user's question is answered without re-asking: LLMRunFrame
+            # re-pushes the aggregated context — which still holds the
+            # unanswered turn — through the switcher to the backup. The
+            # retry's own output cancels the announcer's debounce, so a
+            # successful failover is completely silent (live-soak 07-11).
+            now = time.monotonic()
+            if now - _failover_retry["window_start"] > 15.0:
+                _failover_retry.update(used=0, window_start=now)
+            if _failover_retry["used"] < len(_llm_members) - 1:
+                _failover_retry["used"] += 1
+                logger.warning("[llm] failover retry — re-running the turn on %s", role)
+                await task.queue_frame(LLMRunFrame())
             await sse_bus.publish("llm", {"event": "failover", "active": role})
 
     pipeline = Pipeline([
@@ -1759,19 +1799,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Barge-in observer flushes the Rust CPAL playback ring immediately
     # when the user interrupts the bot.
     _native_observers = [NativeBargeInObserver(transport)]
-
-    # LLM error announcer (#576): a dead/401'd LLM otherwise leaves the orb
-    # in "thinking" forever — the ErrorFrame flows upstream where the (long
-    # since disarmed) StallWatchdog never looks. Must be an observer, not a
-    # processor: LLMSwitcher re-propagates the ErrorFrame upstream even on a
-    # successful failover, so anything positional would announce recovered
-    # outages. Emitter (task.queue_frame) is wired after task creation.
-    llm_error_announcer = LLMErrorAnnouncer(
-        debounce_secs=float(os.environ.get("LLM_ERROR_DEBOUNCE_SECS", "2.5")),
-        throttle_secs=float(os.environ.get("LLM_ERROR_THROTTLE_SECS", "20")),
-        enabled=os.environ.get("LLM_ERROR_ANNOUNCER", "1") == "1",
-        tts_backend=tts_backend,
-    )
 
     task = PipelineTask(
         pipeline,

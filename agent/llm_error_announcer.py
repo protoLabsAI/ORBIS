@@ -70,6 +70,16 @@ _LINES: dict[str, str] = {
         "My language model just hit an error — "
         "if this keeps happening, check the model settings."
     ),
+    # LLMSwitcher failover does NOT retry the failed generation — it only
+    # routes subsequent turns to the backup (pipecat
+    # ServiceSwitcherStrategyFailover.handle_error switches and returns).
+    # The erroring turn still dies unanswered and deserves an announcement,
+    # but "check settings" is the wrong advice when a backup just took
+    # over: the useful action is simply to ask again.
+    "failover": (
+        "My main language model isn't responding, so I've switched to my "
+        "backup — ask me that again."
+    ),
 }
 
 _AUTH_MARKERS = (
@@ -153,6 +163,8 @@ class LLMErrorAnnouncer(BaseObserver):
         self._timer: asyncio.Task | None = None
         self._pending_class: str | None = None
         self._last_spoke_at = float("-inf")
+        self._last_failover_at = float("-inf")
+        self._failover_streak = 0
         # The SAME ErrorFrame is observed once per upstream hop (transport →
         # … → LLM is many pushes); announce per frame, not per hop. Bounded so
         # a long session can't grow it.
@@ -161,6 +173,21 @@ class LLMErrorAnnouncer(BaseObserver):
     def set_emitter(self, emit: Callable[[Frame], Awaitable[None]]) -> None:
         """Wired by app.py post-construction (task.queue_frame)."""
         self._emit = emit
+
+    def note_failover(self) -> None:
+        """Called from app.py's on_service_switched handler.
+
+        The FIRST failover of an incident reclassifies a pending
+        announcement to the "switched to backup — ask again" line (pipecat
+        does not retry the failed generation, so the turn died either way).
+        A SECOND failover inside the same window means the backup errored
+        too — the member list wrapped, everything is down — so the streak
+        keeps the original error-class line ("check settings")."""
+        now = time.monotonic()
+        if now - self._last_failover_at > self._debounce_secs + 5.0:
+            self._failover_streak = 0
+        self._failover_streak += 1
+        self._last_failover_at = now
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
@@ -205,7 +232,17 @@ class LLMErrorAnnouncer(BaseObserver):
                 logger.info("[llm-error] throttled — spoke recently")
                 return
             self._last_spoke_at = now
-            line = _LINES[self._pending_class or "generic"]
+            error_class = self._pending_class or "generic"
+            # A single failover since (just before) the debounce armed means
+            # a live backup took over — small grace because the switcher and
+            # the observer see the same ErrorFrame in the same instant. A
+            # streak ≥ 2 means the backup died too: keep the class line.
+            if (
+                now - self._last_failover_at < self._debounce_secs + 5.0
+                and self._failover_streak == 1
+            ):
+                error_class = "failover"
+            line = _LINES[error_class]
             if self._tts_backend == "fish":
                 line = f"[softly] {line}"
             logger.warning(f"[llm-error] announcing: {line!r}")
