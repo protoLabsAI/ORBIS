@@ -131,6 +131,7 @@ from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
 from agent.micro_ack import MicroAckInjector, opening_ack_line
 from agent.stall_watchdog import StallWatchdog
+from agent.llm_error_announcer import LLMErrorAnnouncer
 from agent.echo_guard import (
     ECHO_GUARD_MS,
     HALF_DUPLEX,
@@ -1759,6 +1760,19 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # when the user interrupts the bot.
     _native_observers = [NativeBargeInObserver(transport)]
 
+    # LLM error announcer (#576): a dead/401'd LLM otherwise leaves the orb
+    # in "thinking" forever — the ErrorFrame flows upstream where the (long
+    # since disarmed) StallWatchdog never looks. Must be an observer, not a
+    # processor: LLMSwitcher re-propagates the ErrorFrame upstream even on a
+    # successful failover, so anything positional would announce recovered
+    # outages. Emitter (task.queue_frame) is wired after task creation.
+    llm_error_announcer = LLMErrorAnnouncer(
+        debounce_secs=float(os.environ.get("LLM_ERROR_DEBOUNCE_SECS", "2.5")),
+        throttle_secs=float(os.environ.get("LLM_ERROR_THROTTLE_SECS", "20")),
+        enabled=os.environ.get("LLM_ERROR_ANNOUNCER", "1") == "1",
+        tts_backend=tts_backend,
+    )
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
@@ -1783,6 +1797,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # egress to the SSE bus on /api/events. One observer covers
             # what used to be two.
             SseBusObserver(rtvi),
+            llm_error_announcer,
             *_native_observers,
         ],
     )
@@ -1791,6 +1806,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # now that the task exists. queue_frame is the only safe way to inject
     # frames from a foreign coroutine.
     delivery.set_emitter(task.queue_frame)
+    # The announcer's canned line goes through TTS only — no LLM round-trip,
+    # since the LLM is exactly what's broken.
+    llm_error_announcer.set_emitter(task.queue_frame)
     # Per-delivery voice override (kokoro): lets a delivery speak in another
     # voice for one utterance then revert — e.g. notifications attributed to
     # different agents in distinct voices. Only kokoro honours the frame.
