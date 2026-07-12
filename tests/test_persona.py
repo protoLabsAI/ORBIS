@@ -333,3 +333,93 @@ orb:
     assert "valence" in persona.orb_mood_overrides
     assert persona.orb_mood_overrides["valence"] == {"atmosphereGlow": 0.2}
     assert "curiosity" not in persona.orb_mood_overrides
+
+
+# --- llm block key coverage (#601) ------------------------------------------
+# _resolve_skill_llm / _resolve_fallback_llm (app.py) read these keys off
+# persona.llm; the loader whitelist used to strip everything it didn't
+# know, so the yaml path for fallback/provider/router/micro silently
+# never worked — only the env fallbacks did.
+
+
+def test_llm_fallback_block_survives_load(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        llm:
+          url: https://gateway.example/v1
+          model: primary-model
+          fallback:
+            url: http://127.0.0.1:11434/v1
+            model: backup-model
+            api_key_env: BACKUP_KEY
+    """)
+    p = load_persona(yaml_path)
+    assert p.llm["fallback"] == {
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "backup-model",
+        "api_key_env": "BACKUP_KEY",
+    }
+
+
+def test_llm_fallback_reaches_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # End-to-end: yaml → load_persona → _resolve_fallback_llm. This is the
+    # exact path that never worked before #601 (verified live 2026-07-11:
+    # yaml fallback → no failover at boot; env fallback → switcher armed).
+    monkeypatch.delenv("LLM_FALLBACK_URL", raising=False)
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        llm:
+          url: https://gateway.example/v1
+          fallback:
+            url: http://127.0.0.1:11434/v1
+            model: backup-model
+    """)
+    p = load_persona(yaml_path)
+    import app as _app
+    cfg = _app._resolve_fallback_llm(p)
+    assert cfg is not None
+    assert cfg["url"] == "http://127.0.0.1:11434/v1"
+    assert cfg["model"] == "backup-model"
+
+
+def test_llm_fallback_non_mapping_dropped(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        llm:
+          url: https://gateway.example/v1
+          fallback: "http://127.0.0.1:11434/v1"
+    """)
+    p = load_persona(yaml_path)
+    assert "fallback" not in p.llm
+
+
+def test_llm_fallback_unknown_keys_filtered(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        llm:
+          url: https://gateway.example/v1
+          fallback:
+            url: http://127.0.0.1:11434/v1
+            bogus_key: nope
+    """)
+    p = load_persona(yaml_path)
+    assert p.llm["fallback"] == {"url": "http://127.0.0.1:11434/v1"}
+
+
+def test_llm_provider_router_micro_keys_survive_load(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        llm:
+          url: https://gateway.example/v1
+          provider: openai
+          router_model: smart-model
+          content_model: fast-model
+          micro_url: http://127.0.0.1:11434/v1
+          micro_model: tiny-model
+          micro_api_key: not-needed
+    """)
+    p = load_persona(yaml_path)
+    for key, want in {
+        "provider": "openai",
+        "router_model": "smart-model",
+        "content_model": "fast-model",
+        "micro_url": "http://127.0.0.1:11434/v1",
+        "micro_model": "tiny-model",
+        "micro_api_key": "not-needed",
+    }.items():
+        assert p.llm[key] == want, key
