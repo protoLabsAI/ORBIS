@@ -1,5 +1,21 @@
 [
   {
+    "version": "v0.2.159",
+    "date": "2026-07-12",
+    "changes": [
+      "Drop-in `personas/<slug>.md` files now define voice, LLM overrides, orb presets, and system prompts.",
+      "A new Quick-tab picker and manager dialog let you create, edit, duplicate, and delete personas without touching the filesystem.",
+      "Voice commands like \"put on the chef\" or \"switch to Sage\" now hot-swap the active persona mid-session.",
+      "Failed LLM generations automatically retry on a configured backup endpoint before the user notices.",
+      "Dead or unreachable LLM endpoints now trigger a spoken error instead of leaving the orb stuck in a thinking state.",
+      "The `set_orb_visual` handler validates variants and palettes server-side, preventing the frontend from persisting invalid states.",
+      "Tool schemas now render live options at schema build time so voice routing matches current vocabulary without a restart.",
+      "LLM fallback, micro-tier, and router keys now persist correctly through the settings UI and persona files.",
+      "The active persona pointer and orb configuration round-trip through the config store without stripping nested keys."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.159/ORBIS-0.2.159-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.146",
     "date": "2026-06-26",
     "changes": [
