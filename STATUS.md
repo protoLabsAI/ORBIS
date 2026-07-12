@@ -1,10 +1,70 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-11 (v0.2.154 shipped; #576 LLM-failure UX done +
-live-soaked; editor-parity P1 banked). On `main`, all PRs merged.*
+*Last updated 2026-07-12 (personas epic #611: P1+P2 SHIPPED — drop-in
+frontmatter-md personas with live switch; #601 fixed; spoken QA of the
+switch pending). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-07-12 (personas: format → live switch, in one session)
+
+Josh asked for protoVoice's skills mechanic in ORBIS ("call it persona,
+frontmatter-md, orb ref / voice / model"). Research → plan → epic → P1 →
+P2, all merged; the running build is armed for spoken QA.
+
+**Shipped (all merged to main):**
+- **Plan of record `docs/internal/personas.md` (PR #612)** + epic **#611**
+  with phases #607–#610. Key findings: protoVoice skills are YAML (the
+  frontmatter-md format is our upgrade); protoVoice applies at session
+  connect but ORBIS's persistent pipeline needs a live hot-swap — and
+  every primitive already existed.
+- **#601 CLOSED (PR #614)** — the persona loader's llm whitelist was
+  stripping `fallback` AND `provider`/`router_model`/`content_model`/
+  `micro_*`; the yaml paths for all of those never worked. Extracted
+  `filter_llm_block` (single shared whitelist). Also fixed the suite's
+  documented flake (`test_micro_model_defaults_to_model` — env leak in
+  the fixture).
+- **config_store write-path twin (PR #616)** — a drawer save was
+  stripping hand-authored `llm.fallback`/micro/router keys out of
+  orbis.yaml on write; nested secret handling for `fallback.api_key`
+  (redaction + echo-back guard), `micro_api_key` in `_SECRET_FIELDS`.
+- **Personas P1 — #607 CLOSED (PR #617).** `agent/personas.py` loader
+  (`personas/<slug>.md`, frontmatter + body=prompt, `extends:`
+  inheritance with the orbis.yaml persona as implicit parent, user dir
+  shadows bundled), composition via `dataclasses.replace`, orb ref
+  resolution (starter slug / definition id / inline), CRUD API
+  (`GET/POST/PUT/DELETE /api/personas*`), Tauri wiring
+  (`ORBIS_PERSONAS_DIR` app-data + `ORBIS_BUNDLED_PERSONAS` Resource),
+  starters Chef Bruno + Sage, 27 tests. Persona files refuse `api_key`
+  (shareable text — `api_key_env` only). Drive-by: `starter_orbs` env
+  now read at call time (import-order staleness).
+- **Personas P2 — #608 CLOSED (PR #619).** Live switch: `run_bot`
+  `refresh_persona` hook (rebinds the closure persona → prompt/tools
+  re-render next turn; `_resolve_skill_llm` → `_reconfigure_live_llm`;
+  `_switch_live_voice` same-backend; filler generator dropped so the
+  micro tier follows the persona), `_apply_persona_switch` (all live
+  sessions + orb synced into the yaml `orb:` block + `persona-switched`
+  SSE), Quick-tab Persona picker. Honest restart notes: cross-backend
+  TTS (#486), temperature/max_tokens.
+
+**Live-verified on the rebuilt app (00:35):** POST bruno → `applies:
+live`, `[personas/hot] live session → 'bruno' voice='am_michael'`, LLM
+live-reconfigured, viz fractal/Ember over SSE; switch back to default
+restored `af_heart`. Failover (gateway → local Ornith) re-armed on boot.
+**Pending: Josh's spoken QA** — flip the Quick-tab Persona picker
+mid-conversation; the next reply should BE Bruno in Bruno's voice with
+the ember orb.
+
+**Still open in the epic:** **#609** manager dialog (create/edit/
+duplicate/delete UI — the CRUD endpoints + raw meta/prompt in GET are
+already there for it), then **#610** `switch_persona` voice tool
+(blocked by #577). Nuance noted for later: with failover configured,
+`_reconfigure_live_llm` retargets `state.active_llm` — a persona llm
+override doesn't update the switcher's backup member (fine today: no
+shipped persona overrides the LLM).
 
 ---
 

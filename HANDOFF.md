@@ -1,6 +1,6 @@
 # HANDOFF — ORBIS
 
-*Refreshed 2026-07-11 (v0.2.154). This is the durable handoff doc — the
+*Refreshed 2026-07-12 (v0.2.156+). This is the durable handoff doc — the
 QA checklist, open design questions, and ordered next steps. For the
 point-in-time state, read [STATUS.md](./STATUS.md) first; it carries the
 live snapshot and is updated every session.*
@@ -58,6 +58,12 @@ CLAUDE.md for why a partial rebuild silently misleads you).
       within ~3s of your turn; wrong URL → the unreachable line. With
       `LLM_FALLBACK_URL` set: dead primary → the *answer* arrives ~1s late,
       no error line at all.
+- [ ] **Persona switch (#608):** mid-conversation, flip Quick tab →
+      Persona → "Chef Bruno" → the orb turns Ember immediately and the
+      NEXT reply is Bruno — his prompt, `am_michael` voice, no restart.
+      Ask a cooking question, then switch back to Default and confirm
+      the old voice + orb return. Edit `personas/` md by hand → PUT/GET
+      via the dialog comes with #609.
 
 ### Orb editor (free, in-app)
 - [ ] Orb tab → edit shader/controls → changes persist to the sidecar config
@@ -88,10 +94,21 @@ CLAUDE.md for why a partial rebuild silently misleads you).
   configured, failover retries the failed turn on the backup (seamless,
   live-verified sub-second). Caveat: **v0.2.154 shipped with only the basic
   announcer** — the failover line + retry (#603) ride the next release.
-- **#601 — yaml failover config has never worked.** `persona.llm.fallback`
-  is silently stripped by the persona loader whitelist
-  (`agent/persona.py:309`); only `LLM_FALLBACK_URL` env works. Small,
-  low-churn fix; unblocks putting failover in settings UI.
+- **#601 — FIXED 2026-07-12 (PRs #614 + #616).** The whitelist hole was
+  wider than filed: `fallback`, `provider`, `router_model`/`content_model`,
+  and the `micro_*` keys were all stripped — on the read path (persona
+  loader) AND the write path (config_store, where a drawer save wiped
+  hand-authored blocks). Both share `filter_llm_block` semantics now;
+  `fallback.api_key` is redacted + echo-back-guarded. The yaml failover
+  path works end to end — settings-UI failover is now unblocked.
+- **Personas (epic #611) — P1+P2 SHIPPED 2026-07-12 (PRs #617 + #619),
+  spoken QA pending.** Drop-in `personas/<slug>.md` (frontmatter + body =
+  prompt) with live switch (prompt/LLM/voice/filler/orb) and a Quick-tab
+  picker. Left: **#609** manager dialog, **#610** voice tool (after #577).
+  Known nuances: cross-backend TTS switch needs a restart (#486);
+  temperature/max_tokens are service-constructor params (restart);
+  a persona llm override retargets the active service, not the failover
+  switcher's backup member.
 - **#602 — one-off mic wedge (soak observation).** Rust engine stopped
   delivering mic frames mid-session while reporting `mic listening = true`;
   relaunch cleared it. #485/#486 family — treat as extra evidence for the
@@ -144,24 +161,26 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 ## Recommended next steps (effort × impact × churn — do in this order)
 
 Banked so far: #490 test gate, #483 lazy torch, #488 reveal-logs slice,
-**#576 LLM-failure UX (announcer + seamless failover, live-soaked)**, and
-**#546 editor-ui extraction (epic #549 P1)**. Sequence what's left:
+**#576 LLM-failure UX**, **#546 editor-ui extraction**, **#601 llm-key
+round-trip (both paths)**, and **personas P1+P2 (#607/#608)**. Sequence
+what's left:
 
-1. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the #534
-   demo. Root-cause why #562 disabled it first.
-2. **#601 persona fallback whitelist fix** — small + low churn; the yaml
-   failover path has never worked, and failover is genuinely valuable now
-   that it retries seamlessly. Then surface it in settings UI
-   (elevate-config-to-UI convention).
-3. **#488 full export-zip + crash reporting** — additive, low churn (the
+1. **Personas P3 — manager dialog (#609)** — pure frontend on live,
+   smoke-tested CRUD endpoints; finishes the user-facing story P2
+   started. Then **#610** voice tool once #577 clears.
+2. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the
+   #534 demo AND personas #610. Root-cause why #562 disabled it first.
+3. **Failover in settings UI** — #601 unblocked the yaml backing store;
+   elevate-config-to-UI convention says surface it.
+4. **#488 full export-zip + crash reporting** — additive, low churn (the
    reveal-logs slice shipped).
-4. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
+5. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
    churn** (RT audio + process lifecycle) → deliberate, device-soaked PR. #486
-   also unblocks pipeline-rebuild hot-swap. **#602** (mic-stream wedge seen
-   live 07-11) is extra evidence for this bundle.
-5. **In-app editor parity (#549)** — P1 (#546) done; next **#547** mount the
+   also unblocks pipeline-rebuild hot-swap (and cross-backend persona voice
+   switching). **#602** (mic-stream wedge seen live 07-11) is extra evidence.
+6. **In-app editor parity (#549)** — P1 (#546) done; next **#547** mount the
    full editor in-app, then #548.
-6. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
+7. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
 
 Lower tier (opportunistic): #571 activation affordance, #491 seed FE/Tauri
 tests, #482 FTS incremental, #487 a2a-wheel (needs an external publish),
