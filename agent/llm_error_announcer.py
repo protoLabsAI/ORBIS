@@ -70,6 +70,16 @@ _LINES: dict[str, str] = {
         "My language model just hit an error — "
         "if this keeps happening, check the model settings."
     ),
+    # LLMSwitcher failover does NOT retry the failed generation — it only
+    # routes subsequent turns to the backup (pipecat
+    # ServiceSwitcherStrategyFailover.handle_error switches and returns).
+    # The erroring turn still dies unanswered and deserves an announcement,
+    # but "check settings" is the wrong advice when a backup just took
+    # over: the useful action is simply to ask again.
+    "failover": (
+        "My main language model isn't responding, so I've switched to my "
+        "backup — ask me that again."
+    ),
 }
 
 _AUTH_MARKERS = (
@@ -153,6 +163,7 @@ class LLMErrorAnnouncer(BaseObserver):
         self._timer: asyncio.Task | None = None
         self._pending_class: str | None = None
         self._last_spoke_at = float("-inf")
+        self._last_failover_at = float("-inf")
         # The SAME ErrorFrame is observed once per upstream hop (transport →
         # … → LLM is many pushes); announce per frame, not per hop. Bounded so
         # a long session can't grow it.
@@ -161,6 +172,15 @@ class LLMErrorAnnouncer(BaseObserver):
     def set_emitter(self, emit: Callable[[Frame], Awaitable[None]]) -> None:
         """Wired by app.py post-construction (task.queue_frame)."""
         self._emit = emit
+
+    def note_failover(self) -> None:
+        """Called from app.py's on_service_switched handler.
+
+        A failover inside the debounce window reclassifies the pending
+        announcement: the turn still died (pipecat does not retry it), but
+        the right line is "switched to backup — ask again", not "check
+        settings"."""
+        self._last_failover_at = time.monotonic()
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
@@ -205,7 +225,13 @@ class LLMErrorAnnouncer(BaseObserver):
                 logger.info("[llm-error] throttled — spoke recently")
                 return
             self._last_spoke_at = now
-            line = _LINES[self._pending_class or "generic"]
+            error_class = self._pending_class or "generic"
+            # A failover since (just before) the debounce armed means a
+            # backup took over — small grace because the switcher and the
+            # observer see the same ErrorFrame in the same instant.
+            if now - self._last_failover_at < self._debounce_secs + 5.0:
+                error_class = "failover"
+            line = _LINES[error_class]
             if self._tts_backend == "fish":
                 line = f"[softly] {line}"
             logger.warning(f"[llm-error] announcing: {line!r}")
