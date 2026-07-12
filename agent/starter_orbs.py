@@ -19,9 +19,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PATH = os.environ.get(
-    "ORBIS_STARTER_ORBS", "config/starter_orbs.yaml"
-)
+DEFAULT_PATH = "config/starter_orbs.yaml"
 
 
 @dataclass(frozen=True)
@@ -45,8 +43,13 @@ class StarterOrb:
 
 
 def load_starters(path: str | Path | None = None) -> list[StarterOrb]:
-    """Read the starter pool YAML. Returns [] on any error (never raises)."""
-    p = Path(path) if path else Path(DEFAULT_PATH)
+    """Read the starter pool YAML. Returns [] on any error (never raises).
+
+    ``ORBIS_STARTER_ORBS`` is read at call time (not import time) so
+    late importers — e.g. agent/personas.py resolving an ``orb:`` ref —
+    see the same file the wizard does regardless of import order.
+    """
+    p = Path(path or os.environ.get("ORBIS_STARTER_ORBS") or DEFAULT_PATH)
     if not p.exists():
         logger.info(f"[starter_orbs] {p} not found; no starters available")
         return []

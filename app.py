@@ -220,7 +220,7 @@ _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
 # Single ORBIS persona loaded from config/orbis.yaml (see agent/persona.py).
 # Module-level cache refreshes via reload_persona().
-from agent.persona import get_active_persona, reload_persona  # noqa: E402
+from agent.persona import get_active_persona, load_persona, reload_persona  # noqa: E402
 
 # Memory backend — SQLite-embedded sessions + facts + personality + mood.
 from memory import Memory  # noqa: E402
@@ -3764,6 +3764,135 @@ async def delete_orb(orb_id: str, user: User = Depends(require_user)):
         return JSONResponse(
             status_code=404, content={"error": f"orb {orb_id!r} not found"},
         )
+    return {"ok": True}
+
+
+@app.get("/api/personas")
+async def list_personas(user: User = Depends(require_user)):
+    """Persona catalog (epic #611): the yaml default + every persona
+    file across the bundled + user dirs, plus which one is active.
+    ``meta``/``prompt`` are the raw file contents so the manager dialog
+    can populate its editor without a second round-trip (persona files
+    can't hold api_key — the loader refuses it — so nothing to redact).
+    """
+    from agent.personas import load_persona_files
+    default = load_persona(os.environ.get("ORBIS_CONFIG", "config/orbis.yaml"))
+    files = load_persona_files()
+    active = default.active_persona
+    if active and active not in files:
+        active = ""  # broken pointer — surface the fallback the boot uses
+    return {
+        "active": active or "default",
+        "personas": [
+            {
+                "slug": "default",
+                "name": default.name,
+                "description": "The persona configured in orbis.yaml.",
+                "source": "config",
+                "editable": False,
+            },
+            *(
+                {
+                    "slug": pf.slug,
+                    "name": pf.name,
+                    "description": pf.description,
+                    "source": pf.source,
+                    "editable": pf.source == "user",
+                    "meta": pf.meta,
+                    "prompt": pf.body,
+                }
+                for pf in sorted(files.values(), key=lambda p: p.slug)
+            ),
+        ],
+    }
+
+
+@app.post("/api/personas/active")
+async def set_active_persona(body: dict, user: User = Depends(require_user)):
+    """Select the active persona. Persists ``persona.active_persona``
+    to orbis.yaml and refreshes the module cache so new sessions (and
+    the A2A text path) compose it immediately. P1: the LIVE voice
+    pipeline keeps its snapshot until restart — the live hot-swap is
+    P2 (#608)."""
+    from agent.config_store import merge_patch
+    from agent.personas import load_persona_files
+    slug = str(body.get("slug") or "").strip().lower()
+    if not slug:
+        return JSONResponse(status_code=400, content={"error": "slug is required"})
+    if slug in ("default", "orbis"):
+        slug = ""
+    elif slug not in load_persona_files():
+        return JSONResponse(
+            status_code=404, content={"error": f"unknown persona {slug!r}"},
+        )
+    merge_patch({"persona": {"active_persona": slug}})
+    persona = reload_persona()
+    return {
+        "ok": True,
+        "active": slug or "default",
+        "name": persona.name,
+        "applies": "restart",
+    }
+
+
+@app.put("/api/personas/{slug}")
+async def put_persona(slug: str, body: dict, user: User = Depends(require_user)):
+    """Create or update a USER persona file. Body: the frontmatter
+    fields (name, description, extends, voice, llm, orb, temperature,
+    max_tokens, filler_verbosity, tools) + ``prompt`` (the markdown
+    body). Writing a bundled starter's slug creates a user *shadow* —
+    that's the edit path for shipped personas; deleting the shadow
+    restores the original."""
+    from agent.personas import load_persona_files, write_persona_file
+    meta = {k: v for k, v in body.items() if k != "prompt"}
+    prompt = str(body.get("prompt") or "")
+    try:
+        path = write_persona_file(slug, meta, prompt)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    slug = slug.strip().lower()
+    # A freshly-written ACTIVE persona should take effect like a config
+    # save does (same restart caveat as POST /active).
+    if get_active_persona().active_persona == slug:
+        reload_persona()
+    return {
+        "ok": True,
+        "slug": slug,
+        "path": str(path),
+        "shadows_bundled": _persona_shadows_bundled(slug),
+    }
+
+
+def _persona_shadows_bundled(slug: str) -> bool:
+    """True when a user persona file sits over a bundled one with the
+    same slug (deleting the user file un-shadows the original)."""
+    from agent.personas import bundled_personas_dir
+    return (bundled_personas_dir() / f"{slug}.md").is_file()
+
+
+@app.delete("/api/personas/{slug}")
+async def delete_persona(slug: str, user: User = Depends(require_user)):
+    """Delete a USER persona file (bundled starters are read-only; a
+    shadow delete un-shadows the bundled original). Clears the active
+    pointer when it referenced the deleted file."""
+    from agent.config_store import merge_patch
+    from agent.personas import delete_persona_file, load_persona_files
+    slug = slug.strip().lower()
+    if not delete_persona_file(slug):
+        files = load_persona_files()
+        detail = (
+            "bundled personas are read-only"
+            if slug in files
+            else f"unknown persona {slug!r}"
+        )
+        return JSONResponse(status_code=404, content={"error": detail})
+    if slug not in load_persona_files():  # no bundled file un-shadowed
+        default = load_persona(
+            os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
+        )
+        if default.active_persona == slug:
+            merge_patch({"persona": {"active_persona": ""}})
+    reload_persona()
     return {"ok": True}
 
 
