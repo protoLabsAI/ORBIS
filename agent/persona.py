@@ -301,15 +301,42 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     )
 
     # LLM routing — when the block is present, it wins over env.
-    # run_bot reads persona.llm.{url, model, api_key, api_key_env}
-    # and falls back to env defaults for each field individually.
+    # The key list must cover everything _resolve_skill_llm and
+    # _resolve_fallback_llm (app.py) read from persona.llm — a key
+    # missing here is SILENTLY stripped and the yaml path for that
+    # feature never works, only its env fallback (#601: `fallback`
+    # was dropped this way; provider/router/micro had the same hole).
     llm: dict | None = None
     if isinstance(llm_block, dict) and llm_block:
         llm = {}
-        for k in ("url", "model", "api_key", "api_key_env", "extra_body"):
+        for k in (
+            "url", "model", "api_key", "api_key_env", "extra_body",
+            "provider",
+            # two-model routing (orbis-3it)
+            "router_model", "content_model",
+            # micro tier — fillers / acks / progress narration
+            "micro_url", "micro_model", "micro_api_key",
+        ):
             v = llm_block.get(k)
             if v is not None:
                 llm[k] = v
+        # Failover backup (#601) — same shape as the llm block itself.
+        fallback = llm_block.get("fallback")
+        if isinstance(fallback, dict) and fallback:
+            fb = {
+                k: v for k, v in fallback.items()
+                if k in (
+                    "url", "model", "api_key", "api_key_env",
+                    "provider", "extra_body",
+                ) and v is not None
+            }
+            if fb:
+                llm["fallback"] = fb
+        elif fallback is not None:
+            logger.warning(
+                "[persona] llm.fallback must be a mapping "
+                f"(got {type(fallback).__name__}); dropping"
+            )
 
     stt: dict | None = None
     if isinstance(stt_block, dict) and stt_block:
