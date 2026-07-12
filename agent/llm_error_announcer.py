@@ -164,6 +164,7 @@ class LLMErrorAnnouncer(BaseObserver):
         self._pending_class: str | None = None
         self._last_spoke_at = float("-inf")
         self._last_failover_at = float("-inf")
+        self._failover_streak = 0
         # The SAME ErrorFrame is observed once per upstream hop (transport →
         # … → LLM is many pushes); announce per frame, not per hop. Bounded so
         # a long session can't grow it.
@@ -176,11 +177,17 @@ class LLMErrorAnnouncer(BaseObserver):
     def note_failover(self) -> None:
         """Called from app.py's on_service_switched handler.
 
-        A failover inside the debounce window reclassifies the pending
-        announcement: the turn still died (pipecat does not retry it), but
-        the right line is "switched to backup — ask again", not "check
-        settings"."""
-        self._last_failover_at = time.monotonic()
+        The FIRST failover of an incident reclassifies a pending
+        announcement to the "switched to backup — ask again" line (pipecat
+        does not retry the failed generation, so the turn died either way).
+        A SECOND failover inside the same window means the backup errored
+        too — the member list wrapped, everything is down — so the streak
+        keeps the original error-class line ("check settings")."""
+        now = time.monotonic()
+        if now - self._last_failover_at > self._debounce_secs + 5.0:
+            self._failover_streak = 0
+        self._failover_streak += 1
+        self._last_failover_at = now
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
@@ -226,10 +233,14 @@ class LLMErrorAnnouncer(BaseObserver):
                 return
             self._last_spoke_at = now
             error_class = self._pending_class or "generic"
-            # A failover since (just before) the debounce armed means a
-            # backup took over — small grace because the switcher and the
-            # observer see the same ErrorFrame in the same instant.
-            if now - self._last_failover_at < self._debounce_secs + 5.0:
+            # A single failover since (just before) the debounce armed means
+            # a live backup took over — small grace because the switcher and
+            # the observer see the same ErrorFrame in the same instant. A
+            # streak ≥ 2 means the backup died too: keep the class line.
+            if (
+                now - self._last_failover_at < self._debounce_secs + 5.0
+                and self._failover_streak == 1
+            ):
                 error_class = "failover"
             line = _LINES[error_class]
             if self._tts_backend == "fish":
