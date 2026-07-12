@@ -20,6 +20,7 @@
  *   delegation-progress { type, source, text }
  *   widget     { action: 'open'|'close', id, props? } — render_widget tool
  *   orb-config { variant?, palette?, params? } — set_orb_visual tool
+ *   persona-switched { slug, name, applies, notes, viz? } — persona change
  *   __connected — synthetic, emitted by the bridge on (re)connect
  *
  * Pre-2026-04-28 this was useNativeBridge gated behind a WebRTC path;
@@ -126,6 +127,23 @@ function handleSse(event: string, data: string): void {
       const p = parsed.params;
       if (p && typeof p === 'object') {
         for (const [k, v] of Object.entries(p as Record<string, unknown>)) {
+          applyParam(k, v);
+        }
+      }
+      break;
+    }
+    case 'persona-switched': {
+      // Persona switch (epic #611 P2): the backend hot-swapped prompt/
+      // LLM/voice; the orb identity is applied here. Same apply shape as
+      // orb-config so any switch source (picker, dialog, voice tool)
+      // lands identically.
+      const viz = parsed.viz as
+        | { variant?: string; palette?: string; params?: Record<string, unknown> }
+        | undefined;
+      if (viz?.variant) setVariant(viz.variant);
+      if (viz?.palette) applyPreset(viz.palette);
+      if (viz?.params) {
+        for (const [k, v] of Object.entries(viz.params)) {
           applyParam(k, v);
         }
       }

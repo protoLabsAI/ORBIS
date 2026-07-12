@@ -101,6 +101,29 @@ export type StarterOrb = {
 
 export type StarterOrbsResponse = { starters: StarterOrb[] };
 
+// Persona catalog (epic #611). `meta`/`prompt` are the raw persona-file
+// contents for the manager dialog; the composed identity lives server-side.
+export type PersonaEntry = {
+  slug: string;
+  name: string;
+  description: string;
+  source: 'config' | 'bundled' | 'user';
+  editable: boolean;
+  meta?: Record<string, unknown>;
+  prompt?: string;
+};
+
+export type PersonasResponse = { active: string; personas: PersonaEntry[] };
+
+export type PersonaSwitchResult = {
+  ok: boolean;
+  active: string;
+  name: string;
+  applies: 'live' | 'restart';
+  notes: string[];
+  viz: { variant?: string; palette?: string; params?: Record<string, unknown> };
+};
+
 export type OrbisConfig = {
   persona?: {
     slug?: string;
@@ -425,6 +448,9 @@ export const api = {
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
+  personas: () => get<PersonasResponse>('/api/personas'),
+  setActivePersona: (slug: string) =>
+    postJSON<PersonaSwitchResult>('/api/personas/active', { slug }),
   orbs: {
     // Imported `.orbis` definitions — typed loosely here; the orb-runtime
     // validator is the real contract (validateOrbDefinition on load).

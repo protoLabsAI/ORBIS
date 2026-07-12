@@ -1510,6 +1510,57 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     user_state.refresh_delegates = _refresh_delegates
 
+    # Hot-swap: apply a persona switch (epic #611 P2) to THIS live session.
+    # Rebinds the closure `skill` — every later read (prompt re-render via
+    # _refresh_delegates, tool handlers, watchers) sees the new persona —
+    # then retargets the live LLM + TTS voice and drops the cached filler
+    # generator so the micro tier follows the persona (known tripwire).
+    # Called by /api/personas endpoints via _hot_refresh_persona_sessions.
+    def _refresh_persona() -> dict:
+        nonlocal skill
+        old = skill
+        new = _active_skill(user_id)
+        skill = new
+        notes: list[str] = []
+        if new.filler_verbosity:
+            try:
+                user_state.filler_settings.verbosity = Verbosity(new.filler_verbosity)
+            except ValueError:
+                pass
+        # Prompt + tool schema re-render (reads the rebound `skill`).
+        _refresh_delegates()
+        # LLM endpoint/model — resolve first so api_key_env and env
+        # defaults land the same way they do at pipeline build.
+        try:
+            res = _reconfigure_live_llm(_resolve_skill_llm(new), user_id=user_id)
+            if res.get("needs_restart"):
+                notes.append(str(res.get("error")))
+        except Exception as e:  # noqa: BLE001 — never break the live session
+            logger.warning(f"[personas/hot] llm reconfigure failed: {e}")
+        # Voice — live swap within the running TTS backend; an engine
+        # change is a pipeline-topology change (binds-once audio socket,
+        # #486) and honestly needs a restart.
+        new_backend = (new.tts_backend or TTS_BACKEND).lower()
+        if new_backend != tts_backend:
+            notes.append(
+                f"voice engine {tts_backend} → {new_backend} applies on restart"
+            )
+        elif new.voice and new.voice != old.voice:
+            res = _switch_live_voice(new.voice, user_id=user_id)
+            if not res.get("ok"):
+                notes.append(str(res.get("error") or "voice switch failed"))
+        if (new.temperature, new.max_tokens) != (old.temperature, old.max_tokens):
+            notes.append("temperature / max tokens apply on restart")
+        # Filler micro tier — rebuilt lazily against the new persona.
+        user_state.filler_generator = None
+        logger.info(
+            f"[personas/hot] live session → {new.slug!r} "
+            f"voice={new.voice!r} notes={notes}"
+        )
+        return {"ok": True, "notes": notes}
+
+    user_state.refresh_persona = _refresh_persona
+
     _turn_strategies = _build_user_turn_strategies()
     # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
     # the runtime .env). stop_secs is the dominant fixed per-turn delay;
@@ -3807,13 +3858,53 @@ async def list_personas(user: User = Depends(require_user)):
     }
 
 
+def _apply_persona_switch(persona) -> dict:
+    """Live-apply the (re)composed active persona (epic #611 P2):
+    refresh every live voice session (prompt / LLM / voice / filler via
+    the run_bot ``refresh_persona`` hook), and sync the persona's orb
+    into the yaml ``orb:`` block — the orb's boot source of truth, same
+    posture as /api/orb/select_starter. Returns the applies/notes/viz
+    payload shared by the API response and the SSE announcement."""
+    from agent.config_store import merge_patch
+    notes: list[str] = []
+    applied_live = False
+    for st in all_user_states():
+        fn = getattr(st, "refresh_persona", None)
+        if callable(fn):
+            try:
+                r = fn()
+                applied_live = applied_live or bool(r.get("ok"))
+                notes.extend(r.get("notes") or [])
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[personas/hot] session refresh failed: {e}")
+    viz: dict = {
+        k: v
+        for k, v in {
+            "variant": persona.orb_variant,
+            "palette": persona.orb_palette,
+            "params": dict(persona.orb_params or {}),
+        }.items()
+        if v is not None
+    }
+    if viz.get("variant"):
+        try:
+            merge_patch({"orb": viz})
+        except ValueError as e:
+            logger.warning(f"[personas] orb sync failed: {e}")
+    return {
+        "applies": "live" if applied_live else "restart",
+        "notes": notes,
+        "viz": viz,
+    }
+
+
 @app.post("/api/personas/active")
 async def set_active_persona(body: dict, user: User = Depends(require_user)):
     """Select the active persona. Persists ``persona.active_persona``
-    to orbis.yaml and refreshes the module cache so new sessions (and
-    the A2A text path) compose it immediately. P1: the LIVE voice
-    pipeline keeps its snapshot until restart — the live hot-swap is
-    P2 (#608)."""
+    to orbis.yaml, recomposes, and hot-swaps every live session —
+    prompt/tools next turn, LLM + voice + filler immediately, orb via
+    the ``persona-switched`` SSE event. ``notes`` carries anything that
+    still needs a restart (TTS engine change, temperature)."""
     from agent.config_store import merge_patch
     from agent.personas import load_persona_files
     slug = str(body.get("slug") or "").strip().lower()
@@ -3827,11 +3918,16 @@ async def set_active_persona(body: dict, user: User = Depends(require_user)):
         )
     merge_patch({"persona": {"active_persona": slug}})
     persona = reload_persona()
+    result = _apply_persona_switch(persona)
+    await sse_bus.publish(
+        "persona-switched",
+        {"slug": slug or "default", "name": persona.name, **result},
+    )
     return {
         "ok": True,
         "active": slug or "default",
         "name": persona.name,
-        "applies": "restart",
+        **result,
     }
 
 
@@ -3851,10 +3947,18 @@ async def put_persona(slug: str, body: dict, user: User = Depends(require_user))
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     slug = slug.strip().lower()
-    # A freshly-written ACTIVE persona should take effect like a config
-    # save does (same restart caveat as POST /active).
-    if get_active_persona().active_persona == slug:
-        reload_persona()
+    # Editing the ACTIVE persona re-applies it live, same as switching
+    # to it (the composed cache + live sessions would otherwise keep
+    # serving the pre-edit text).
+    if load_persona(
+        os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
+    ).active_persona == slug:
+        persona = reload_persona()
+        result = _apply_persona_switch(persona)
+        await sse_bus.publish(
+            "persona-switched",
+            {"slug": slug, "name": persona.name, **result},
+        )
     return {
         "ok": True,
         "slug": slug,
@@ -3886,13 +3990,21 @@ async def delete_persona(slug: str, user: User = Depends(require_user)):
             else f"unknown persona {slug!r}"
         )
         return JSONResponse(status_code=404, content={"error": detail})
-    if slug not in load_persona_files():  # no bundled file un-shadowed
-        default = load_persona(
-            os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
+    was_active = load_persona(
+        os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
+    ).active_persona == slug
+    if was_active and slug not in load_persona_files():
+        # No bundled file un-shadowed — the pointer now dangles; clear it.
+        merge_patch({"persona": {"active_persona": ""}})
+    persona = reload_persona()
+    if was_active:
+        # Whatever the delete resolved to (un-shadowed bundled original
+        # or the default) should take over live, same as a switch.
+        result = _apply_persona_switch(persona)
+        await sse_bus.publish(
+            "persona-switched",
+            {"slug": persona.slug, "name": persona.name, **result},
         )
-        if default.active_persona == slug:
-            merge_patch({"persona": {"active_persona": ""}})
-    reload_persona()
     return {"ok": True}
 
 

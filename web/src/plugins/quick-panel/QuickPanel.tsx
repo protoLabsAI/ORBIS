@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
 import { pushStatusTransient } from '@/sdk';
-import { api, type OrbisConfig, type StarterOrb } from '@/lib/api';
+import { api, type OrbisConfig, type PersonaEntry, type StarterOrb } from '@/lib/api';
 import { VerbositySelector } from '@/plugins/settings-panel/VerbositySelector';
 import { SectionLabel } from '@/components/ui/section-label';
 import { Hint } from '@/components/ui/hint';
@@ -111,6 +111,8 @@ export function QuickPanel() {
         <SwitchRow label="Microphone" on={!micMuted} onToggle={toggleMute} />
         <SwitchRow label="Allow interruptions" on={act.full_duplex} onToggle={() => act.setFullDuplex(!act.full_duplex)} />
 
+        <PersonaSwitcher />
+
         <OrbSwitcher />
 
         <div className="space-y-1.5">
@@ -175,6 +177,80 @@ function SwitchRow({
     <div className="flex items-center justify-between">
       <span className="text-sm text-fg-body">{label}</span>
       <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
+    </div>
+  );
+}
+
+/**
+ * Persona switcher (epic #611 P2) — who the orb *is*: prompt, voice,
+ * model override, orb identity in one pick. The backend hot-swaps the
+ * live session (prompt/tools next turn, LLM + voice + filler now); the
+ * orb visual applies from the response viz (and the persona-switched
+ * SSE event covers every other window). Hidden until a persona file
+ * exists beyond the built-in default.
+ */
+function PersonaSwitcher() {
+  const [personas, setPersonas] = useState<PersonaEntry[]>([]);
+  const [active, setActive] = useState('default');
+  const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .personas()
+      .then((r) => {
+        if (cancelled) return;
+        setPersonas(r.personas);
+        setActive(r.active);
+      })
+      .catch(() => {
+        /* endpoint unreachable — the row just doesn't appear */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pick = async (slug: string) => {
+    if (busy || slug === active) return;
+    setBusy(true);
+    const prev = active;
+    setActive(slug);
+    try {
+      const r = await api.setActivePersona(slug);
+      if (r.viz?.variant) setVariant(r.viz.variant);
+      if (r.viz?.palette) applyPreset(r.viz.palette);
+      setNote(r.notes?.[0] ?? null);
+      pushStatusTransient(`persona: ${r.name}`, 2400);
+    } catch {
+      setActive(prev);
+      pushStatusTransient('persona switch failed', 2400);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (personas.length <= 1) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm text-fg-body">Persona</span>
+        <Select value={active} onValueChange={pick} disabled={busy}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {personas.map((p) => (
+              <SelectItem key={p.slug} value={p.slug}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {note && <Hint className="text-fg-subtle">{note}</Hint>}
     </div>
   );
 }
