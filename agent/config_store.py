@@ -40,10 +40,13 @@ REDACTED_SECRET = "__redacted__"  # noqa: S105 — not a credential
 # Top-level block + field pairs holding provider secrets, used for both
 # redaction (app.py GET) and the keep-existing guard in merge_patch.
 _SECRET_FIELDS = {
-    "llm": ("api_key",),
+    "llm": ("api_key", "micro_api_key"),
     "stt": ("api_key",),
     "voice": ("tts_api_key",),
 }
+# llm.fallback.api_key is nested one level deeper than the flat
+# block/field model above — redact_secrets + merge_patch handle it
+# explicitly.
 
 # Keys we allow at each level of the YAML. Anything else is dropped
 # from the write (with a log message) so the UI can't inject garbage
@@ -65,7 +68,19 @@ _ALLOWED_VOICE_KEYS = {
     "local_models",
 }
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
-_ALLOWED_LLM_KEYS = {"url", "model", "api_key", "api_key_env", "extra_body"}
+# Must round-trip everything the persona loader (agent/persona.py)
+# accepts off the llm block — a key missing here is stripped from
+# orbis.yaml on the next UI save (#601's write-path twin).
+_ALLOWED_LLM_KEYS = {
+    "url", "model", "api_key", "api_key_env", "extra_body",
+    "provider",
+    "router_model", "content_model",
+    "micro_url", "micro_model", "micro_api_key",
+    "fallback",
+}
+_ALLOWED_LLM_FALLBACK_KEYS = {
+    "url", "model", "api_key", "api_key_env", "provider", "extra_body",
+}
 _ALLOWED_STT_KEYS = {"backend", "whisper_model", "url", "model", "api_key"}
 _ALLOWED_WAKEWORD_KEYS = {"enabled", "model", "threshold"}
 # User-toggleable agent capabilities. `allow_orb_control` gates the
@@ -278,9 +293,31 @@ def _validate_orb(block: Any) -> dict:
     return out
 
 
+def _validate_llm_fallback(block: Any) -> dict:
+    """Filter the nested llm.fallback block — same shape as llm itself
+    minus the routing/micro tiers (a backup endpoint is one URL)."""
+    if not isinstance(block, dict):
+        raise ValueError("llm.fallback must be a mapping")
+    out: dict[str, Any] = {}
+    for k, v in block.items():
+        if k not in _ALLOWED_LLM_FALLBACK_KEYS:
+            logger.warning(f"[config_store] dropping unknown llm.fallback key {k!r}")
+            continue
+        if k == "extra_body":
+            if v is None or isinstance(v, dict):
+                out[k] = v if v else None
+            else:
+                raise ValueError("llm.fallback.extra_body must be a mapping or null")
+        elif v is not None:
+            out[k] = str(v)
+    return out
+
+
 def _validate_llm(block: Any) -> dict:
     """Filter an llm block — URL + model + either direct api_key or
-    api_key_env reference + optional extra_body."""
+    api_key_env reference + optional extra_body, plus the provider /
+    two-model-routing / micro-tier strings and the nested failover
+    ``fallback`` block."""
     if not isinstance(block, dict):
         return {}
     out: dict[str, Any] = {}
@@ -288,14 +325,19 @@ def _validate_llm(block: Any) -> dict:
         if k not in _ALLOWED_LLM_KEYS:
             logger.warning(f"[config_store] dropping unknown llm key {k!r}")
             continue
-        if k in ("url", "model", "api_key", "api_key_env"):
-            if v is not None:
-                out[k] = str(v)
-        elif k == "extra_body":
+        if k == "extra_body":
             if v is None or isinstance(v, dict):
                 out[k] = v if v else None
             else:
                 raise ValueError("llm.extra_body must be a mapping or null")
+        elif k == "fallback":
+            if v is None:
+                continue
+            fb = _validate_llm_fallback(v)
+            if fb:
+                out[k] = fb
+        elif v is not None:
+            out[k] = str(v)
     return out
 
 
@@ -475,6 +517,17 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
         for field in _SECRET_FIELDS.get(block_key, ()):
             if block_patch.get(field) == REDACTED_SECRET:
                 block_patch.pop(field, None)
+        # Same guard one level deeper for llm.fallback.api_key — the
+        # shallow block merge replaces the fallback dict wholesale, so
+        # re-inject the stored key when the patch echoes the redaction.
+        if block_key == "llm" and isinstance(block_patch.get("fallback"), dict):
+            fb_patch = dict(block_patch["fallback"])
+            if fb_patch.get("api_key") == REDACTED_SECRET:
+                fb_patch.pop("api_key", None)
+                fb_existing = existing.get("fallback")
+                if isinstance(fb_existing, dict) and fb_existing.get("api_key"):
+                    fb_patch["api_key"] = fb_existing["api_key"]
+            block_patch["fallback"] = fb_patch
         merged[block_key] = {**existing, **block_patch}
     return write_config(merged, path)
 
@@ -493,4 +546,13 @@ def redact_secrets(cfg: dict) -> dict:
             if block.get(field):
                 block[field] = REDACTED_SECRET
         out[block_key] = block
+    # Nested: llm.fallback.api_key (see _SECRET_FIELDS note).
+    llm = out.get("llm")
+    if isinstance(llm, dict) and isinstance(llm.get("fallback"), dict):
+        fb = dict(llm["fallback"])
+        if fb.get("api_key"):
+            fb["api_key"] = REDACTED_SECRET
+        llm = dict(llm)
+        llm["fallback"] = fb
+        out["llm"] = llm
     return out
