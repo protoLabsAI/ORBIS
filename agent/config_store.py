@@ -54,6 +54,9 @@ _SECRET_FIELDS = {
 _ALLOWED_PERSONA_KEYS = {
     "slug", "name", "user_name", "system_prompt", "system_prompt_file",
     "temperature", "max_tokens", "filler_verbosity",
+    # Selection pointer to a persona FILE (agent/personas.py, epic
+    # #611). Empty / "default" → the yaml persona as-is.
+    "active_persona",
     # Advanced per-session behavior overrides (speaker_gate / backchannel /
     # micro_ack / bargein / audio_tags). Interpreted in app.py
     # (_resolve_behavior_block); config_store only round-trips the nested block
@@ -128,7 +131,10 @@ def _validate_persona(block: Any) -> dict:
         if k not in _ALLOWED_PERSONA_KEYS:
             logger.warning(f"[config_store] dropping unknown persona key {k!r}")
             continue
-        if k in ("slug", "name", "user_name", "system_prompt", "system_prompt_file"):
+        if k in (
+            "slug", "name", "user_name", "system_prompt",
+            "system_prompt_file", "active_persona",
+        ):
             if v is not None:
                 out[k] = str(v)
         elif k == "temperature":

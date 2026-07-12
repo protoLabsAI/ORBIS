@@ -111,6 +111,49 @@ def _normalize_override_map(
     return out
 
 
+def filter_llm_block(llm_block: Any) -> dict | None:
+    """Key-filter an ``llm:`` mapping to everything the resolvers
+    (_resolve_skill_llm / _resolve_fallback_llm in app.py) consume.
+    Shared by this loader and the persona-file loader
+    (agent/personas.py) so the two whitelists can't drift — a key
+    missing here is SILENTLY stripped and the yaml path for that
+    feature never works, only its env fallback (#601: ``fallback``
+    was dropped this way; provider/router/micro had the same hole).
+    """
+    if not isinstance(llm_block, dict) or not llm_block:
+        return None
+    llm: dict = {}
+    for k in (
+        "url", "model", "api_key", "api_key_env", "extra_body",
+        "provider",
+        # two-model routing (orbis-3it)
+        "router_model", "content_model",
+        # micro tier — fillers / acks / progress narration
+        "micro_url", "micro_model", "micro_api_key",
+    ):
+        v = llm_block.get(k)
+        if v is not None:
+            llm[k] = v
+    # Failover backup (#601) — same shape as the llm block itself.
+    fallback = llm_block.get("fallback")
+    if isinstance(fallback, dict) and fallback:
+        fb = {
+            k: v for k, v in fallback.items()
+            if k in (
+                "url", "model", "api_key", "api_key_env",
+                "provider", "extra_body",
+            ) and v is not None
+        }
+        if fb:
+            llm["fallback"] = fb
+    elif fallback is not None:
+        logger.warning(
+            "[persona] llm.fallback must be a mapping "
+            f"(got {type(fallback).__name__}); dropping"
+        )
+    return llm or None
+
+
 @dataclass(frozen=True)
 class Persona:
     """The single ORBIS persona loaded from config/orbis.yaml."""
@@ -155,6 +198,10 @@ class Persona:
     # Unset → make_stt falls back to STT_* env defaults.
     stt: dict | None = None
     tools: list = field(default_factory=list)
+    # Selection pointer, not identity: the slug of the persona FILE
+    # (agent/personas.py) that get_active_persona composes over this
+    # default. Empty / "default" / "orbis" → the default persona as-is.
+    active_persona: str = ""
 
     @property
     def viz(self) -> dict:
@@ -301,42 +348,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     )
 
     # LLM routing — when the block is present, it wins over env.
-    # The key list must cover everything _resolve_skill_llm and
-    # _resolve_fallback_llm (app.py) read from persona.llm — a key
-    # missing here is SILENTLY stripped and the yaml path for that
-    # feature never works, only its env fallback (#601: `fallback`
-    # was dropped this way; provider/router/micro had the same hole).
-    llm: dict | None = None
-    if isinstance(llm_block, dict) and llm_block:
-        llm = {}
-        for k in (
-            "url", "model", "api_key", "api_key_env", "extra_body",
-            "provider",
-            # two-model routing (orbis-3it)
-            "router_model", "content_model",
-            # micro tier — fillers / acks / progress narration
-            "micro_url", "micro_model", "micro_api_key",
-        ):
-            v = llm_block.get(k)
-            if v is not None:
-                llm[k] = v
-        # Failover backup (#601) — same shape as the llm block itself.
-        fallback = llm_block.get("fallback")
-        if isinstance(fallback, dict) and fallback:
-            fb = {
-                k: v for k, v in fallback.items()
-                if k in (
-                    "url", "model", "api_key", "api_key_env",
-                    "provider", "extra_body",
-                ) and v is not None
-            }
-            if fb:
-                llm["fallback"] = fb
-        elif fallback is not None:
-            logger.warning(
-                "[persona] llm.fallback must be a mapping "
-                f"(got {type(fallback).__name__}); dropping"
-            )
+    llm = filter_llm_block(llm_block)
 
     stt: dict | None = None
     if isinstance(stt_block, dict) and stt_block:
@@ -351,6 +363,8 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
                 stt[k] = v
         if not stt:
             stt = None
+
+    active_persona = str(persona_block.get("active_persona") or "").strip().lower()
 
     persona = Persona(
         slug=slug,
@@ -372,9 +386,31 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         orb_mood_overrides=orb_mood_overrides,
         llm=llm,
         stt=stt,
+        active_persona=active_persona,
     )
     logger.info(f"[persona] loaded {persona.slug!r} from {path}")
     return persona
+
+
+def _compose_active(default: Persona) -> Persona:
+    """When ``persona.active_persona`` names a persona file, compose it
+    over the default (epic #611). Falls back to the default — loudly —
+    when the file is missing/broken, so a deleted persona can't brick
+    the boot."""
+    slug = default.active_persona
+    if not slug or slug in ("default", "orbis"):
+        return default
+    # Lazy import — agent.personas imports Persona/filter_llm_block
+    # from this module at its top level.
+    from agent.personas import compose_persona
+    composed = compose_persona(slug, default)
+    if composed is None:
+        logger.warning(
+            f"[persona] active persona {slug!r} unavailable; using the default"
+        )
+        return default
+    logger.info(f"[persona] active persona {slug!r} composed over the default")
+    return composed
 
 
 # Module-level cache. Updated by ``reload_persona``.
@@ -382,18 +418,21 @@ _active_persona: Persona | None = None
 
 
 def get_active_persona() -> Persona:
-    """Return the module-cached active persona, loading lazily on first use."""
+    """Return the module-cached active persona, loading lazily on first
+    use. This is the composed persona when a persona file is selected
+    (persona.active_persona in orbis.yaml), else the yaml default."""
     global _active_persona
     if _active_persona is None:
-        _active_persona = load_persona(
+        _active_persona = _compose_active(load_persona(
             os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
-        )
+        ))
     return _active_persona
 
 
 def reload_persona(config_path: str | Path | None = None) -> Persona:
-    """Re-read the YAML file and replace the cached persona."""
+    """Re-read the YAML file (+ any selected persona file) and replace
+    the cached persona."""
     global _active_persona
     path = config_path or os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
-    _active_persona = load_persona(path)
+    _active_persona = _compose_active(load_persona(path))
     return _active_persona

@@ -2022,6 +2022,23 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
         log::info!("sidecar env: ORBIS_ORBS_DIR={}", orbs.display());
         command = command.env("ORBIS_ORBS_DIR", orbs);
     }
+    // Personas (epic #611): user-authored persona files live in app-data
+    // (writable, survive updates); bundled starters ship as a read-only
+    // Resource dir. Without these envs the sidecar falls back to a
+    // cwd-relative "config/personas" the installed app can't find.
+    // See agent/personas.py.
+    if let Ok(data) = app.path().app_data_dir() {
+        let personas = data.join("personas");
+        if let Err(e) = std::fs::create_dir_all(&personas) {
+            log::warn!("personas dir create failed: {e}");
+        }
+        log::info!("sidecar env: ORBIS_PERSONAS_DIR={}", personas.display());
+        command = command.env("ORBIS_PERSONAS_DIR", personas);
+    }
+    if let Some(p) = resolve_bundled_personas_dir(&app) {
+        log::info!("sidecar env: ORBIS_BUNDLED_PERSONAS={}", p.display());
+        command = command.env("ORBIS_BUNDLED_PERSONAS", p);
+    }
     // Pass AUDIO_TRANSPORT=native + socket path to Python. Python reads
     // both to activate the native socket pipeline and to report the
     // correct transport in /healthz.
@@ -2163,6 +2180,31 @@ fn resolve_starter_orbs_path(app: &AppHandle) -> Option<PathBuf> {
         }
         Err(e) => {
             log::warn!("starter_orbs resource resolve failed: {e}");
+            None
+        }
+    }
+}
+
+/// Resolve the bundled `config/personas/` Resource dir for the
+/// sidecar's `ORBIS_BUNDLED_PERSONAS` env var. Same graceful-miss
+/// posture as `resolve_starter_orbs_path`: agent/personas.py treats a
+/// missing dir as an empty catalog, so an absent resource just means
+/// no shipped starters.
+fn resolve_bundled_personas_dir(app: &AppHandle) -> Option<PathBuf> {
+    match app
+        .path()
+        .resolve("config/personas", BaseDirectory::Resource)
+    {
+        Ok(p) if p.is_dir() => Some(p),
+        Ok(p) => {
+            log::warn!(
+                "bundled personas resolved to {} but isn't a directory",
+                p.display()
+            );
+            None
+        }
+        Err(e) => {
+            log::warn!("bundled personas resolve failed: {e}");
             None
         }
     }
