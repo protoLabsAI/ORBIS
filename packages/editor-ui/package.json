@@ -1,0 +1,17 @@
+{
+  "name": "@orbis/editor-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared orb-editor UI — the .orbis authoring panes + editor store, consumed as source via bundler alias by the standalone editor (sites/editor) and the in-app editor (web/).",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "@codemirror/lang-cpp": ">=6",
+    "@codemirror/lang-json": ">=6",
+    "@orbis/orb-runtime": "*",
+    "@uiw/react-codemirror": ">=4",
+    "react": ">=19"
+  }
+}

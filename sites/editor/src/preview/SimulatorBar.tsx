@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { VoiceState } from '@orbis/orb-runtime';
-import { store, type LevelMode } from '../state';
+import { store, type LevelMode } from '@orbis/editor-ui';
 
 const STATES: VoiceState[] = ['idle', 'listening', 'thinking', 'speaking'];
 const BOT_MODES: LevelMode[] = ['off', 'pulse', 'manual'];

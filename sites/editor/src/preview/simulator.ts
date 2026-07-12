@@ -12,7 +12,7 @@
  */
 
 import { Envelope, ENV_BOT, ENV_USER, DISP_ALPHA, clamp01, lerp } from '@orbis/orb-runtime';
-import type { LevelMode } from '../state';
+import type { LevelMode } from '@orbis/editor-ui';
 
 export class LevelSimulator {
   readonly botRef: { current: number } = { current: 0 };
