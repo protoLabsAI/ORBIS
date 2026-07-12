@@ -68,12 +68,12 @@ CLAUDE.md for why a partial rebuild silently misleads you).
       `~/Library/Application Support/studio.protolabs.orbis/personas/`
       and confirm the dialog reflects it; delete restores the bundled
       original.
-- [ ] **Voice switch + orb control (#610/#577):** say "be Bruno" →
-      confirmation arrives in Bruno's voice, ember orb. "Switch to
-      someone called Batman" → spoken list of real options, orb
-      unaffected. "Use the nebula orb" → orb changes; "make it
-      sparkleberry" → options listed, orb NOT wedged (follow-up "use
-      ember" still works — that was the #562 bug).
+- [ ] **Voice persona switch (#610):** say "be Bruno" → confirmation
+      arrives in Bruno's voice, ember orb (VERIFIED live 07-12, 4/4
+      switches). "Put on the chef" → routes to bruno via the schema
+      description hints (#626). "Switch to someone called Batman" →
+      spoken list of real personas. (Voice ORB control is parked by
+      choice — #627; nothing to QA there until re-enabled.)
 
 ### Orb editor (free, in-app)
 - [ ] Orb tab → edit shader/controls → changes persist to the sidecar config
@@ -118,10 +118,18 @@ CLAUDE.md for why a partial rebuild silently misleads you).
   cross-backend TTS switch needs a restart (#486); temperature/max_tokens
   are service-constructor params (restart); a persona llm override
   retargets the active service, not the failover switcher's backup member.
-- **`set_orb_visual` re-enabled (#577 CLOSED, PR #622).** #562's root
-  cause: unvalidated LLM names applied + persisted; unknown variant wedges
-  the frontend orb store's pending path. Now vocabulary-validated
-  (`agent/orb_vocab.py`) with spoken options on a miss. Unblocked #534.
+- **`set_orb_visual` — fixed (#577/#622, #626) then PARKED BY CHOICE
+  (#627).** #562's root cause (unvalidated names persisted + the orb
+  store's pending-path wedge) is fixed via `agent/orb_vocab.py`, and
+  #626 renders the live vocabulary into the tool schema. Josh parked it
+  as not-needed; re-enable = delete the registry-pop in `agent/tools.py`
+  + restore OrbControlToggle and the 4 commented eval scenarios. #534
+  (voice-edit demo) waits on that re-enable.
+- **#625 — summary/context poisoning (OPEN).** A user's "X is broken"
+  statement gets summarized into durable context (and `summary.txt`
+  recall across boots) and suppresses tool routing for X. The routing
+  half is fixed (#626 options-in-schema); the memory-hygiene half needs
+  design.
 - **#602 — one-off mic wedge (soak observation).** Rust engine stopped
   delivering mic frames mid-session while reporting `mic listening = true`;
   relaunch cleared it. #485/#486 family — treat as extra evidence for the
@@ -178,12 +186,13 @@ Banked so far: #490 test gate, #483 lazy torch, #488 reveal-logs slice,
 round-trip (both paths)**, **personas epic #611 complete (#607–#610)**,
 and **#577 set_orb_visual re-enabled**. Sequence what's left:
 
-1. **QA pass on the running build** — personas (picker/dialog/voice
-   tool) + orb voice control; checklist above. Anything broken gets
+1. **QA pass on the running build (v0.2.159)** — persona picker /
+   manager dialog / voice switch; checklist above. Anything broken gets
    fixed before new work.
-2. **#534 voice-edit-orb demo** — freshly unblocked by #577.
-3. **Failover in settings UI** — #601 unblocked the yaml backing store;
+2. **Failover in settings UI** — #601 unblocked the yaml backing store;
    elevate-config-to-UI convention says surface it.
+3. **#625 memory-hygiene half** — capability claims in summaries;
+   design before building.
 4. **#488 full export-zip + crash reporting** — additive, low churn (the
    reveal-logs slice shipped).
 5. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
