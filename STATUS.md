@@ -1,8 +1,8 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-12 (personas epic #611: P1+P2 SHIPPED — drop-in
-frontmatter-md personas with live switch; #601 fixed; spoken QA of the
-switch pending). On `main`, all PRs merged.*
+*Last updated 2026-07-12 (personas epic #611 COMPLETE — all 4 phases +
+the #577 orb-tool fix; #601 fixed; voice/dialog QA pending on the
+running build). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -58,10 +58,39 @@ restored `af_heart`. Failover (gateway → local Ornith) re-armed on boot.
 mid-conversation; the next reply should BE Bruno in Bruno's voice with
 the ember orb.
 
-**Still open in the epic:** **#609** manager dialog (create/edit/
-duplicate/delete UI — the CRUD endpoints + raw meta/prompt in GET are
-already there for it), then **#610** `switch_persona` voice tool
-(blocked by #577). Nuance noted for later: with failover configured,
+**Second half of the session — the epic CLOSED (all 4 phases):**
+- **P3 manager dialog — #609 CLOSED (PR #621).** "Manage…" under the
+  Quick-tab picker → Radix dialog: catalog + editor (name/description/
+  voice-with-kokoro-suggestions/orb-preset/temperature/verbosity/model
+  override/prompt). Files stay the source of truth; unedited frontmatter
+  keys round-trip verbatim; Duplicate is the bundled-edit path (slug
+  re-derives from the final name at save → keeping the name shadows the
+  original); empty = inherit; two-click delete.
+- **#577 CLOSED (PR #622) — set_orb_visual re-enabled.** Root cause of
+  the #562 parking found: unvalidated LLM-invented names were applied
+  AND persisted; an unknown variant parks the frontend orb store in its
+  pending-registration state (swallows all later applies) and the junk
+  in orbis.yaml re-armed the wedge every boot. Fix: `agent/orb_vocab.py`
+  resolves asks against the real vocabulary (base variants + starter
+  slugs/names/palettes + imported .orbis ids) BEFORE apply/persist;
+  unresolvable → spoken options list (LLM self-corrects). Toggle back in
+  Settings → Agent → Behavior. Unblocked #534 + #610.
+- **P4 voice tool — #610 CLOSED (PR #623).** "Put on the chef" /
+  "go back to normal" — same `_apply_persona_switch` path as the picker
+  and dialog; confirmation narrates AFTER the voice swap so it arrives
+  in the new persona's voice.
+
+**Observed during the session:** Josh flipped the picker to Sage on the
+P3 bundle (active=sage appeared without any API call from this side) —
+the picker works live on-device. The final bundle (P4 + #577) was
+rebuilt + relaunched at session end with his config intact.
+
+**QA owed (one pass on the running build):** persona picker mid-
+conversation → next reply in the new voice+orb; manager dialog CRUD;
+"be Bruno" / "switch to someone called Batman" (spoken options, no orb
+wedge) / "use the nebula orb" / "go back to normal".
+
+Nuance noted for later: with failover configured,
 `_reconfigure_live_llm` retargets `state.active_llm` — a persona llm
 override doesn't update the switcher's backup member (fine today: no
 shipped persona overrides the LLM).

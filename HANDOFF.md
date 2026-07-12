@@ -62,8 +62,18 @@ CLAUDE.md for why a partial rebuild silently misleads you).
       Persona → "Chef Bruno" → the orb turns Ember immediately and the
       NEXT reply is Bruno — his prompt, `am_michael` voice, no restart.
       Ask a cooking question, then switch back to Default and confirm
-      the old voice + orb return. Edit `personas/` md by hand → PUT/GET
-      via the dialog comes with #609.
+      the old voice + orb return.
+- [ ] **Persona manager (#609):** Quick tab → Manage… → duplicate Sage,
+      tweak the prompt, save, set active; hand-edit the md in
+      `~/Library/Application Support/studio.protolabs.orbis/personas/`
+      and confirm the dialog reflects it; delete restores the bundled
+      original.
+- [ ] **Voice switch + orb control (#610/#577):** say "be Bruno" →
+      confirmation arrives in Bruno's voice, ember orb. "Switch to
+      someone called Batman" → spoken list of real options, orb
+      unaffected. "Use the nebula orb" → orb changes; "make it
+      sparkleberry" → options listed, orb NOT wedged (follow-up "use
+      ember" still works — that was the #562 bug).
 
 ### Orb editor (free, in-app)
 - [ ] Orb tab → edit shader/controls → changes persist to the sidecar config
@@ -101,14 +111,17 @@ CLAUDE.md for why a partial rebuild silently misleads you).
   hand-authored blocks). Both share `filter_llm_block` semantics now;
   `fallback.api_key` is redacted + echo-back-guarded. The yaml failover
   path works end to end — settings-UI failover is now unblocked.
-- **Personas (epic #611) — P1+P2 SHIPPED 2026-07-12 (PRs #617 + #619),
-  spoken QA pending.** Drop-in `personas/<slug>.md` (frontmatter + body =
-  prompt) with live switch (prompt/LLM/voice/filler/orb) and a Quick-tab
-  picker. Left: **#609** manager dialog, **#610** voice tool (after #577).
-  Known nuances: cross-backend TTS switch needs a restart (#486);
-  temperature/max_tokens are service-constructor params (restart);
-  a persona llm override retargets the active service, not the failover
-  switcher's backup member.
+- **Personas (epic #611) — COMPLETE 2026-07-12 (PRs #617/#619/#621/#623),
+  voice + dialog QA pending.** Drop-in `personas/<slug>.md` with live
+  switch (prompt/LLM/voice/filler/orb), Quick-tab picker, manager dialog
+  ("Manage…"), and the `switch_persona` voice tool. Known nuances:
+  cross-backend TTS switch needs a restart (#486); temperature/max_tokens
+  are service-constructor params (restart); a persona llm override
+  retargets the active service, not the failover switcher's backup member.
+- **`set_orb_visual` re-enabled (#577 CLOSED, PR #622).** #562's root
+  cause: unvalidated LLM names applied + persisted; unknown variant wedges
+  the frontend orb store's pending path. Now vocabulary-validated
+  (`agent/orb_vocab.py`) with spoken options on a miss. Unblocked #534.
 - **#602 — one-off mic wedge (soak observation).** Rust engine stopped
   delivering mic frames mid-session while reporting `mic listening = true`;
   relaunch cleared it. #485/#486 family — treat as extra evidence for the
@@ -162,14 +175,13 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 Banked so far: #490 test gate, #483 lazy torch, #488 reveal-logs slice,
 **#576 LLM-failure UX**, **#546 editor-ui extraction**, **#601 llm-key
-round-trip (both paths)**, and **personas P1+P2 (#607/#608)**. Sequence
-what's left:
+round-trip (both paths)**, **personas epic #611 complete (#607–#610)**,
+and **#577 set_orb_visual re-enabled**. Sequence what's left:
 
-1. **Personas P3 — manager dialog (#609)** — pure frontend on live,
-   smoke-tested CRUD endpoints; finishes the user-facing story P2
-   started. Then **#610** voice tool once #577 clears.
-2. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the
-   #534 demo AND personas #610. Root-cause why #562 disabled it first.
+1. **QA pass on the running build** — personas (picker/dialog/voice
+   tool) + orb voice control; checklist above. Anything broken gets
+   fixed before new work.
+2. **#534 voice-edit-orb demo** — freshly unblocked by #577.
 3. **Failover in settings UI** — #601 unblocked the yaml backing store;
    elevate-config-to-UI convention says surface it.
 4. **#488 full export-zip + crash reporting** — additive, low churn (the
