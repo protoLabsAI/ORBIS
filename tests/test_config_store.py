@@ -597,3 +597,109 @@ def test_merge_patch_setup_preserves_other_blocks(tmp_path: Path):
     final2 = yaml.safe_load(p.read_text())
     assert final2["setup"] == {"complete": False}
     assert final2["voice"]["local_models"] == "on_device"
+
+
+# --- llm fallback / micro / router round-trip (#601 write path) --------------
+# The persona loader (read path) accepts these keys; config_store must
+# round-trip them or a drawer save silently strips a hand-authored
+# failover / micro-tier / two-model block from orbis.yaml.
+
+
+def test_validate_llm_roundtrips_fallback_and_tier_keys():
+    out = validate_and_normalize({
+        "llm": {
+            "url": "http://x",
+            "provider": "openai",
+            "router_model": "smart",
+            "content_model": "fast",
+            "micro_url": "http://127.0.0.1:11434/v1",
+            "micro_model": "tiny",
+            "micro_api_key": "not-needed",
+            "fallback": {
+                "url": "http://127.0.0.1:11434/v1",
+                "model": "backup",
+                "api_key_env": "BACKUP_KEY",
+            },
+        },
+    })
+    llm = out["llm"]
+    assert llm["provider"] == "openai"
+    assert llm["router_model"] == "smart"
+    assert llm["content_model"] == "fast"
+    assert llm["micro_url"] == "http://127.0.0.1:11434/v1"
+    assert llm["fallback"] == {
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "backup",
+        "api_key_env": "BACKUP_KEY",
+    }
+
+
+def test_validate_llm_fallback_filters_unknown_keys(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level("WARNING"):
+        out = validate_and_normalize({
+            "llm": {"url": "http://x", "fallback": {"url": "http://y", "bogus": 1}},
+        })
+    assert out["llm"]["fallback"] == {"url": "http://y"}
+
+
+def test_validate_llm_fallback_rejects_non_mapping():
+    with pytest.raises(ValueError, match="fallback"):
+        validate_and_normalize({
+            "llm": {"url": "http://x", "fallback": "http://y"},
+        })
+
+
+def test_redact_secrets_masks_micro_and_fallback_keys():
+    cfg = {
+        "llm": {
+            "url": "http://x",
+            "api_key": "sk-main",
+            "micro_api_key": "sk-micro",
+            "fallback": {"url": "http://y", "api_key": "sk-backup"},
+        },
+    }
+    out = redact_secrets(cfg)
+    assert out["llm"]["api_key"] == REDACTED_SECRET
+    assert out["llm"]["micro_api_key"] == REDACTED_SECRET
+    assert out["llm"]["fallback"]["api_key"] == REDACTED_SECRET
+    # Non-secret fallback fields untouched; original not mutated.
+    assert out["llm"]["fallback"]["url"] == "http://y"
+    assert cfg["llm"]["fallback"]["api_key"] == "sk-backup"
+
+
+def test_merge_patch_redacted_fallback_key_keeps_existing(tmp_path: Path):
+    p = tmp_path / "orbis.yaml"
+    write_config({
+        "llm": {
+            "url": "http://x",
+            "fallback": {"url": "http://y", "api_key": "sk-real"},
+        },
+    }, p)
+    # Client echoes the GET-redacted fallback back with an edit.
+    merged = merge_patch({
+        "llm": {"fallback": {
+            "url": "http://y",
+            "model": "new-backup",
+            "api_key": REDACTED_SECRET,
+        }},
+    }, p)
+    assert merged["llm"]["fallback"]["api_key"] == "sk-real"
+    assert merged["llm"]["fallback"]["model"] == "new-backup"
+
+
+def test_merge_patch_fallback_survives_unrelated_save(tmp_path: Path):
+    # The original bug shape: a hand-authored fallback block must survive
+    # a drawer save that patches something else in the llm block.
+    p = tmp_path / "orbis.yaml"
+    write_config({
+        "llm": {
+            "url": "http://x",
+            "fallback": {"url": "http://127.0.0.1:11434/v1", "model": "backup"},
+        },
+    }, p)
+    merged = merge_patch({"llm": {"model": "new-primary"}}, p)
+    assert merged["llm"]["model"] == "new-primary"
+    assert merged["llm"]["fallback"] == {
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "backup",
+    }
