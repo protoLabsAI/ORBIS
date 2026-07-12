@@ -188,3 +188,45 @@ async def test_handler_respects_allow_orb_control_gate(capture, monkeypatch):
 def test_tool_is_registered_again():
     # The #562 parking left the handler un-decorated; #577 restores it.
     assert "set_orb_visual" in tools_mod._TOOL_REGISTRY
+
+
+# --- options rendered INTO the schema (#625) ---------------------------------
+# The model gets the live vocabulary up front instead of guessing a name
+# and being corrected after the call.
+
+
+def test_orb_schema_lists_live_options():
+    from agent.tools import _TOOL_REGISTRY, _schema_for
+    schema = _schema_for(_TOOL_REGISTRY["set_orb_visual"])
+    v_desc = schema.properties["variant"]["description"]
+    p_desc = schema.properties["palette"]["description"]
+    assert "nebula" in v_desc and "fractal" in v_desc
+    assert "aurora" in v_desc          # named look (starter slug)
+    assert "Ember" in p_desc
+
+
+def test_persona_schema_lists_live_catalog(tmp_path, monkeypatch):
+    _dir = tmp_path / "personas"
+    _dir.mkdir()
+    (_dir / "bruno.md").write_text("---\nname: Chef Bruno\n---\nPrompt.", encoding="utf-8")
+    monkeypatch.setenv("ORBIS_PERSONAS_DIR", str(_dir))
+    monkeypatch.setenv("ORBIS_BUNDLED_PERSONAS", str(_dir))
+    from agent.tools import _TOOL_REGISTRY, _schema_for
+    schema = _schema_for(_TOOL_REGISTRY["switch_persona"])
+    desc = schema.properties["persona"]["description"]
+    assert "default" in desc and "bruno" in desc
+
+
+def test_callable_parameters_reevaluated_per_build(tmp_path, monkeypatch):
+    # A starter pool swap must show up in the NEXT schema build — the
+    # whole point of callable parameters.
+    from agent.tools import _TOOL_REGISTRY, _schema_for
+    p = tmp_path / "one.yaml"
+    p.write_text(
+        "starters:\n  - {slug: solo, name: Solo, description: x, "
+        "variant: fractal, palette: Solitude}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORBIS_STARTER_ORBS", str(p))
+    schema = _schema_for(_TOOL_REGISTRY["set_orb_visual"])
+    assert "Solitude" in schema.properties["palette"]["description"]

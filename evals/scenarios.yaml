@@ -96,3 +96,26 @@ scenarios:
     fleet: lean
     utterance: "what's our current test coverage percentage?"
     expect: { tool: any_handoff, target: codeBot, grounding: must_not_fabricate }  # codeBot can find it; don't guess a number
+
+  # --- orb + persona voice control (#577 / #610) — added after the 07-12 QA
+  # found orb asks never routed to set_orb_visual while switch_persona
+  # routed fine. These pin the decision surface for both.
+  - id: orb_variant_direct
+    utterance: "use the nebula orb"
+    expect: { tool: set_orb_visual }
+
+  - id: orb_named_look
+    utterance: "switch the orb to the ember look"
+    expect: { tool: set_orb_visual }
+
+  - id: orb_knob
+    utterance: "make the orb spin slower"
+    expect: { tool: set_orb_visual }
+
+  - id: orb_unknown_name_still_calls
+    utterance: "make the orb sparkleberry"
+    expect: { tool: set_orb_visual }   # the tool answers with options; routing must still CALL it
+
+  - id: persona_switch_voice
+    utterance: "put on the chef persona"
+    expect: { tool: switch_persona }

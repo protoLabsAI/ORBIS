@@ -74,14 +74,28 @@ def _vocabulary() -> tuple[dict, dict, dict]:
     return variants, palettes, starters
 
 
+def options() -> dict[str, list[str]]:
+    """The valid vocabulary right now, for rendering into the tool
+    SCHEMA — the model gets the real options up front instead of
+    guessing and being corrected after the call (#625)."""
+    variants, palettes, starters = _vocabulary()
+    # Starter slugs only (names duplicate them with casing noise).
+    looks = sorted({k for k in starters if " " not in k})
+    return {
+        "variants": sorted(set(variants.values())),
+        "palettes": sorted({p for p, _ in palettes.values()}),
+        "looks": looks,
+    }
+
+
 def describe_options() -> str:
     """Human/LLM-readable summary of what's valid right now. Used in the
     tool description and in the can't-resolve reply."""
-    variants, palettes, starters = _vocabulary()
+    o = options()
     return (
-        f"variants: {', '.join(sorted(set(variants.values())))}; "
-        f"palettes: {', '.join(sorted({p for p, _ in palettes.values()}))}; "
-        f"named looks: {', '.join(sorted(starters))}"
+        f"variants: {', '.join(o['variants'])}; "
+        f"palettes: {', '.join(o['palettes'])}; "
+        f"named looks: {', '.join(o['looks'])}"
     )
 
 
