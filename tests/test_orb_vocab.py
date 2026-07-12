@@ -185,9 +185,12 @@ async def test_handler_respects_allow_orb_control_gate(capture, monkeypatch):
     assert "off" in params.results[0]
 
 
-def test_tool_is_registered_again():
-    # The #562 parking left the handler un-decorated; #577 restores it.
-    assert "set_orb_visual" in tools_mod._TOOL_REGISTRY
+def test_tool_is_parked_by_choice():
+    # Parked 2026-07-12 (product call, not the #562 bug): the full stack
+    # stays wired — delete the pop line in tools.py to re-enable. These
+    # tests keep the handler + vocabulary honest meanwhile.
+    assert "set_orb_visual" not in tools_mod._TOOL_REGISTRY
+    assert "switch_persona" in tools_mod._TOOL_REGISTRY
 
 
 # --- options rendered INTO the schema (#625) ---------------------------------
@@ -196,10 +199,12 @@ def test_tool_is_registered_again():
 
 
 def test_orb_schema_lists_live_options():
-    from agent.tools import _TOOL_REGISTRY, _schema_for
-    schema = _schema_for(_TOOL_REGISTRY["set_orb_visual"])
-    v_desc = schema.properties["variant"]["description"]
-    p_desc = schema.properties["palette"]["description"]
+    # The tool is parked (popped from the registry) but the parameter
+    # builder stays wired for re-enable — exercise it directly.
+    from agent.tools import _orb_visual_parameters
+    props = _orb_visual_parameters()
+    v_desc = props["variant"]["description"]
+    p_desc = props["palette"]["description"]
     assert "nebula" in v_desc and "fractal" in v_desc
     assert "aurora" in v_desc          # named look (starter slug)
     assert "Ember" in p_desc
@@ -219,8 +224,10 @@ def test_persona_schema_lists_live_catalog(tmp_path, monkeypatch):
 
 def test_callable_parameters_reevaluated_per_build(tmp_path, monkeypatch):
     # A starter pool swap must show up in the NEXT schema build — the
-    # whole point of callable parameters.
-    from agent.tools import _TOOL_REGISTRY, _schema_for
+    # whole point of callable parameters. switch_persona (live) proves
+    # the _schema_for resolution path; the orb builder is exercised
+    # directly since the tool itself is parked.
+    from agent.tools import _orb_visual_parameters
     p = tmp_path / "one.yaml"
     p.write_text(
         "starters:\n  - {slug: solo, name: Solo, description: x, "
@@ -228,5 +235,4 @@ def test_callable_parameters_reevaluated_per_build(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setenv("ORBIS_STARTER_ORBS", str(p))
-    schema = _schema_for(_TOOL_REGISTRY["set_orb_visual"])
-    assert "Solitude" in schema.properties["palette"]["description"]
+    assert "Solitude" in _orb_visual_parameters()["palette"]["description"]
