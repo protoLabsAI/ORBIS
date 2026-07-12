@@ -1,10 +1,65 @@
 # STATUS — current snapshot
 
-*Last updated 2026-06-27 (v0.2.147 shipped — paywall removed; v0.2.149
-cutting — test gate + boot/diagnostics wins). On `main`, all PRs merged.*
+*Last updated 2026-07-11 (v0.2.154 shipped; #576 LLM-failure UX done +
+live-soaked; editor-parity P1 banked). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-07-11 (LLM failure UX: announce + seamless failover; editor-ui P1 banked)
+
+Session ran the branch-triage → ship → live-soak loop (Josh on mic for the
+soak turns). Two-week gap before it (last commits 06-27).
+
+**Shipped:**
+- **LLMErrorAnnouncer + seamless failover — #576 CLOSED (PRs #599 + #603).**
+  A dead/401'd LLM now speaks ONE classified line (auth / unreachable /
+  generic; 2.5s debounce, 20s throttle; `LLM_ERROR_ANNOUNCER` /
+  `LLM_ERROR_DEBOUNCE_SECS` / `LLM_ERROR_THROTTLE_SECS`) instead of silent
+  "thinking forever". Observer-based (LLMSwitcher re-propagates ErrorFrame
+  upstream even on successful failover — a positional processor would
+  false-fire). **Soak finding:** pipecat's failover strategy does NOT retry
+  the failed generation → added `LLMRunFrame` retry on `on_service_switched`
+  (budgeted members−1 per 15s window) + failover-aware line. Live-verified:
+  dead primary + live backup → **answer plays 0.96s after the connection
+  error, zero spoken error lines**; both-dead → one honest class line.
+  ⚠️ #599 was merged minutes after opening (pre-soak), so **v0.2.154
+  shipped with only the basic announcer** — the failover line + retry
+  (#603) ride the next release.
+- **`@orbis/editor-ui` extraction — #546 CLOSED (epic #549 P1; PR #597).**
+  Found complete on the stale `feat/editor-ui-package` branch (06-23);
+  merged clean (nothing on main had touched `sites/editor/` or
+  `packages/`), plus the missing `packages/editor-ui/**` marketing-deploy
+  path trigger. Next: **#547** mount the full editor in-app.
+- Releases **v0.2.153** (editor-ui) + **v0.2.154** (basic announcer).
+
+**Filed from the live soak:**
+- **#601** — `persona.llm.fallback` in orbis.yaml is silently stripped by
+  the persona loader's key whitelist (`agent/persona.py:309`); the yaml
+  failover path has NEVER worked. The env path works and is now live on
+  Josh's machine: `LLM_FALLBACK_URL=http://127.0.0.1:11434/v1` + Ornith-9B
+  (runtime `.env`) — gateway primary → local Ollama backup. Small fix +
+  test, low churn → good quick win.
+- **#602** — one-off mic wedge: the Rust engine stopped delivering mic
+  frames mid-session while reporting `mic listening = true`; taps toggled
+  listening but the stream never resumed; relaunch cleared it. #485/#486
+  family (also reproduced #485 directly during the soak: killing the Tauri
+  shell orphans the sidecar on port 7866).
+
+**Housekeeping:** stale local branches `chore/dmg-publish-to-main-repo` and
+`docs-memory-domain` deleted — both verified superseded by main content.
+
+**Backlog re-ranked (effort × impact × churn):**
+1. **#577 set_orb_visual fix** — low churn, unblocks the #534 demo.
+2. **#601 persona fallback whitelist** — small, low churn; unblocks
+   yaml/settings-UI failover config (failover is now genuinely valuable).
+3. **#488 full export-zip + crash reporting** — additive.
+4. **#485 + #486 (+ #602 evidence) sidecar/socket robustness bundle** —
+   highest value, high churn → deliberate device-soaked PR.
+5. **#547** — in-app editor parity P2 (P1 done).
+6. **Phase 2 audio soak** → CPAL cleanup commit.
 
 ---
 

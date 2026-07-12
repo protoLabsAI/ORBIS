@@ -1,6 +1,6 @@
 # HANDOFF — ORBIS
 
-*Refreshed 2026-06-26 (v0.2.146). This is the durable handoff doc — the
+*Refreshed 2026-07-11 (v0.2.154). This is the durable handoff doc — the
 QA checklist, open design questions, and ordered next steps. For the
 point-in-time state, read [STATUS.md](./STATUS.md) first; it carries the
 live snapshot and is updated every session.*
@@ -54,6 +54,10 @@ CLAUDE.md for why a partial rebuild silently misleads you).
       answer is dropped, not spoken late (#565).
 - [ ] Add/remove a delegate in Settings while running → seen on the next turn
       (hot-swap, no restart).
+- [ ] **LLM-failure UX (#576):** break the API key → speak → the auth line
+      within ~3s of your turn; wrong URL → the unreachable line. With
+      `LLM_FALLBACK_URL` set: dead primary → the *answer* arrives ~1s late,
+      no error line at all.
 
 ### Orb editor (free, in-app)
 - [ ] Orb tab → edit shader/controls → changes persist to the sidecar config
@@ -79,15 +83,19 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ## Known issues / rough edges
 
-- **LLMErrorAnnouncer — worst first-user failure (design locked, #576).** A
-  dead/401'd LLM leaves the orb silently "thinking" forever: StallWatchdog
-  disarms on `LLMFullResponseStartFrame`, and the ErrorFrame flows *upstream*
-  where nothing re-arms. Root-caused against pipecat source: `push_error` is
-  upstream (`frame_processor.py:650`), and `LLMSwitcher` re-propagates the
-  error upstream **even on successful failover** (`service_switcher.py:302`).
-  → Fix is an **observer** with debounce (cancel if real output follows) +
-  throttle + classify. Full design + test plan on issue #576. Needs a live
-  401/unreachable soak — its own PR.
+- **LLMErrorAnnouncer — DONE + live-soaked 2026-07-11 (#576 closed, PRs
+  #599 + #603).** Dead/401 LLM speaks one classified line; with a fallback
+  configured, failover retries the failed turn on the backup (seamless,
+  live-verified sub-second). Caveat: **v0.2.154 shipped with only the basic
+  announcer** — the failover line + retry (#603) ride the next release.
+- **#601 — yaml failover config has never worked.** `persona.llm.fallback`
+  is silently stripped by the persona loader whitelist
+  (`agent/persona.py:309`); only `LLM_FALLBACK_URL` env works. Small,
+  low-churn fix; unblocks putting failover in settings UI.
+- **#602 — one-off mic wedge (soak observation).** Rust engine stopped
+  delivering mic frames mid-session while reporting `mic listening = true`;
+  relaunch cleared it. #485/#486 family — treat as extra evidence for the
+  robustness bundle.
 - **`set_orb_visual` parked (#562, tracked by #577)** — shipped (#560) then
   disabled (buggy). Parked-handler note at `agent/tools.py` + toggle in
   `agent/config_store.py`. Blocks the #534 voice-edit-orb demo.
@@ -135,21 +143,24 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ## Recommended next steps (effort × impact × churn — do in this order)
 
-The quick low-churn wins (#490 test gate, #483 lazy torch, #488 reveal-logs)
-are already banked. What's left is bigger or higher-churn — sequence it:
+Banked so far: #490 test gate, #483 lazy torch, #488 reveal-logs slice,
+**#576 LLM-failure UX (announcer + seamless failover, live-soaked)**, and
+**#546 editor-ui extraction (epic #549 P1)**. Sequence what's left:
 
-1. **LLMErrorAnnouncer (#576)** — top value; **med churn** (must defer to
-   failover). Design is locked on the issue (observer + debounce). Build it as
-   its own PR + a live 401/unreachable soak.
-2. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the #534
+1. **Fix + re-enable `set_orb_visual` (#577)** — low churn; unblocks the #534
    demo. Root-cause why #562 disabled it first.
+2. **#601 persona fallback whitelist fix** — small + low churn; the yaml
+   failover path has never worked, and failover is genuinely valuable now
+   that it retries seamlessly. Then surface it in settings UI
+   (elevate-config-to-UI convention).
 3. **#488 full export-zip + crash reporting** — additive, low churn (the
    reveal-logs slice shipped).
 4. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
    churn** (RT audio + process lifecycle) → deliberate, device-soaked PR. #486
-   also unblocks pipeline-rebuild hot-swap.
-5. **In-app editor parity (#549)** — #546 → #547 → #548. Confirm the
-   shared-package boundary first.
+   also unblocks pipeline-rebuild hot-swap. **#602** (mic-stream wedge seen
+   live 07-11) is extra evidence for this bundle.
+5. **In-app editor parity (#549)** — P1 (#546) done; next **#547** mount the
+   full editor in-app, then #548.
 6. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
 
 Lower tier (opportunistic): #571 activation affordance, #491 seed FE/Tauri
