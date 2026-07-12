@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from pipecat.frames.frames import ErrorFrame, LLMTextFrame, TTSSpeakFrame
@@ -151,3 +152,31 @@ async def test_fish_gets_softly_prefix() -> None:
     await a.on_push_frame(_pushed(_llm_error()))
     await asyncio.sleep(0.05)
     assert spoken[0].text.startswith("[softly] ")
+
+
+@pytest.mark.asyncio
+async def test_failover_reclassifies_the_line() -> None:
+    # pipecat's failover switches the active service but does NOT retry the
+    # failed generation — the erroring turn dies unanswered either way. When
+    # app.py's on_service_switched handler notes the failover, the
+    # announcement must say "switched to backup — ask again", not "check
+    # settings". (Live-soaked 2026-07-11: switcher + observer see the same
+    # ErrorFrame in the same instant.)
+    a, spoken = _make()
+    await a.on_push_frame(_pushed(_llm_error("Connection refused")))
+    a.note_failover()
+    await asyncio.sleep(0.05)
+    assert len(spoken) == 1
+    assert spoken[0].text == _LINES["failover"]
+
+
+@pytest.mark.asyncio
+async def test_stale_failover_does_not_reclassify() -> None:
+    # A failover from a much earlier incident must not relabel a fresh,
+    # unrelated LLM error (e.g. the backup itself dying minutes later).
+    a, spoken = _make()
+    a._last_failover_at = time.monotonic() - 60.0
+    await a.on_push_frame(_pushed(_llm_error("Connection refused")))
+    await asyncio.sleep(0.05)
+    assert len(spoken) == 1
+    assert spoken[0].text == _LINES["unreachable"]
