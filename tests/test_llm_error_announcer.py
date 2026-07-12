@@ -175,8 +175,23 @@ async def test_stale_failover_does_not_reclassify() -> None:
     # A failover from a much earlier incident must not relabel a fresh,
     # unrelated LLM error (e.g. the backup itself dying minutes later).
     a, spoken = _make()
+    a._failover_streak = 1
     a._last_failover_at = time.monotonic() - 60.0
     await a.on_push_frame(_pushed(_llm_error("Connection refused")))
+    await asyncio.sleep(0.05)
+    assert len(spoken) == 1
+    assert spoken[0].text == _LINES["unreachable"]
+
+
+@pytest.mark.asyncio
+async def test_double_failover_means_all_dead_keeps_class_line() -> None:
+    # Primary dies → failover → retry on backup → backup dies → second
+    # failover (the member list wrapped). "Switched to my backup — ask me
+    # that again" would be a lie; the class line is the honest one.
+    a, spoken = _make()
+    await a.on_push_frame(_pushed(_llm_error("Connection refused")))
+    a.note_failover()
+    a.note_failover()  # backup errored too, switcher wrapped around
     await asyncio.sleep(0.05)
     assert len(spoken) == 1
     assert spoken[0].text == _LINES["unreachable"]
