@@ -100,7 +100,10 @@ _HANDWIRED_ASYNC_NAMES = frozenset({"delegate_to", "orchestrate"})
 class ToolSpec:
     name: str
     description: str
-    parameters: dict[str, dict[str, Any]]  # JSON-schema properties
+    # JSON-schema properties, or a zero-arg callable returning them —
+    # resolved per schema build so live options (orb vocabulary, persona
+    # catalog) render into the schema instead of being guessed at.
+    parameters: dict[str, dict[str, Any]] | Callable[[], dict[str, dict[str, Any]]]
     required: list[str]
     handler: Callable                       # async (params) -> None
     latency: Latency = Latency.MEDIUM
@@ -114,7 +117,7 @@ def tool(
     name: str,
     description: str,
     *,
-    parameters: dict[str, dict[str, Any]] | None = None,
+    parameters: dict[str, dict[str, Any]] | Callable[[], dict[str, dict[str, Any]]] | None = None,
     required: list[str] | None = None,
     latency: Latency = Latency.MEDIUM,
     async_tool: bool = False,
@@ -229,10 +232,18 @@ ASYNC_TOOL_NAMES = _AsyncToolNames()
 
 
 def _schema_for(spec: ToolSpec) -> FunctionSchema:
+    # `parameters` may be a callable (evaluated here, at schema-build
+    # time) so a tool can enumerate LIVE options in its schema — the
+    # orb vocabulary, the persona catalog — instead of making the model
+    # guess and correcting it after the call (#625: the guess-first
+    # loop let one miss poison the session). Schemas rebuild at session
+    # start and on every hot refresh, so the lists track runtime state
+    # (imported orbs, new persona files) without a restart.
+    params = spec.parameters() if callable(spec.parameters) else spec.parameters
     return FunctionSchema(
         name=spec.name,
         description=spec.description,
-        properties=spec.parameters,
+        properties=params,
         required=spec.required,
     )
 
@@ -640,32 +651,30 @@ if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
 # the wedge every boot. Names now resolve against the real vocabulary
 # (agent/orb_vocab.py) BEFORE anything is applied or persisted; an
 # unresolvable ask answers with the valid options so the LLM self-corrects.
-@tool(
-    "set_orb_visual",
-    (
-        "Restyle the on-screen orb: switch its shader variant, apply a "
-        "color palette, or adjust numeric knobs. Use when the user asks "
-        "to change how the orb looks — 'use the nebula orb', 'switch to "
-        "the ember look', 'more glow', 'slow it down'. Named looks like "
-        "'aurora' or 'ember' can go in either field — they resolve to "
-        "the right variant + palette pair. If the exact name is unknown "
-        "the tool replies with the valid options; relay them briefly. "
-        "GOOD examples: {variant: 'nebula'}; {palette: 'Ember'}; "
-        "{variant: 'aurora'} (a named look); {params: {speed: 0.3}}."
-    ),
-    parameters={
+def _orb_visual_parameters() -> dict[str, dict[str, Any]]:
+    """Schema properties with the LIVE vocabulary rendered in — the model
+    picks from real options up front instead of guessing a name and being
+    corrected after the call (#625). Callable: re-evaluated per schema
+    build, so imported orbs appear without a restart."""
+    from agent.orb_vocab import options
+    o = options()
+    return {
         "variant": {
             "type": "string",
             "description": (
-                "Shader variant id, imported orb id, or a named look "
-                "(starter slug). Omit to keep the current variant."
+                f"One of: {', '.join(o['variants'])}. A named look "
+                f"({', '.join(o['looks'])}) also works and picks its "
+                "palette too. For a descriptive ask ('something "
+                "geometric'), choose the closest option — or ask the "
+                "user, offering a few of these. Omit to keep the "
+                "current variant."
             ),
         },
         "palette": {
             "type": "string",
             "description": (
-                "Palette name or a named look. Omit to keep the current "
-                "palette."
+                f"One of: {', '.join(o['palettes'])}. Omit to keep the "
+                "current palette."
             ),
         },
         "params": {
@@ -675,7 +684,28 @@ if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
                 "or hex color strings. Merged onto the current knobs."
             ),
         },
-    },
+    }
+
+
+@tool(
+    "set_orb_visual",
+    (
+        # First sentence doubles as the capabilities-block line — keep the
+        # ALWAYS-call framing there, not in a later sentence (#625: one
+        # answered-without-calling miss cascades into the model treating
+        # orb control as broken for the rest of the session).
+        "Change how the on-screen orb looks — ALWAYS call this for any "
+        "request about the orb's appearance; the valid variants, "
+        "palettes, and named looks are listed in the parameter "
+        "descriptions, so pick from those. Examples of asks: 'use the "
+        "nebula orb', 'switch to the ember look', 'make it geometric', "
+        "'more glow', 'slow it down'. Never answer an orb-appearance "
+        "request from memory or refuse it yourself: this tool is the "
+        "source of truth for what exists. "
+        "GOOD examples: {variant: 'nebula'}; {palette: 'Ember'}; "
+        "{variant: 'aurora'} (a named look); {params: {speed: 0.3}}."
+    ),
+    parameters=_orb_visual_parameters,
     required=[],
     latency=Latency.FAST,
 )
@@ -748,6 +778,33 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
 # recompose, hot-swap the live session (prompt/LLM/voice/filler), announce
 # the orb over SSE. The confirmation text is narrated AFTER the voice swap,
 # so it comes out in the NEW persona's voice by construction.
+def _switch_persona_parameters() -> dict[str, dict[str, Any]]:
+    """Schema with the LIVE persona catalog listed — same options-up-front
+    posture as _orb_visual_parameters (#625). Re-evaluated per schema
+    build, so a persona saved in the manager dialog appears without a
+    restart."""
+    from agent.personas import load_persona_files
+    entries = ["'default' (the base persona)"]
+    try:
+        for slug, pf in sorted(load_persona_files().items()):
+            hint = pf.name
+            if pf.description:
+                hint += f" — {pf.description[:60].rstrip()}"
+            entries.append(f"'{slug}' ({hint})")
+    except Exception:  # noqa: BLE001 — schema rendering must never break registration
+        pass
+    return {
+        "persona": {
+            "type": "string",
+            "description": (
+                # Name + description per slug so indirect asks map ("put
+                # on the chef" → bruno). Slug is the value to pass.
+                f"One of: {'; '.join(entries)}."
+            ),
+        },
+    }
+
+
 @tool(
     "switch_persona",
     (
@@ -755,17 +812,12 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
         "look change together. Use when the user asks to become or talk "
         "to a different persona: 'put on the chef', 'switch to Sage', "
         "'be Bruno', 'go back to normal' (normal/default = the base "
-        "persona). Pass the persona's name or slug; an unknown or empty "
-        "ask returns the available personas — relay them briefly. "
-        "GOOD examples: {persona: 'bruno'}; {persona: 'Sage'}; "
+        "persona). The available personas are listed in the parameter "
+        "description — pick from those, or relay them if the ask matches "
+        "none. GOOD examples: {persona: 'bruno'}; {persona: 'sage'}; "
         "{persona: 'default'}."
     ),
-    parameters={
-        "persona": {
-            "type": "string",
-            "description": "Name or slug of a saved persona, or 'default'.",
-        },
-    },
+    parameters=_switch_persona_parameters,
     required=["persona"],
     latency=Latency.FAST,
 )
