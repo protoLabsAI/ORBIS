@@ -451,6 +451,12 @@ export const api = {
   personas: () => get<PersonasResponse>('/api/personas'),
   setActivePersona: (slug: string) =>
     postJSON<PersonaSwitchResult>('/api/personas/active', { slug }),
+  putPersona: (slug: string, body: Record<string, unknown>) =>
+    putJSON<{ ok: boolean; slug: string; path: string; shadows_bundled: boolean }>(
+      `/api/personas/${encodeURIComponent(slug)}`, body,
+    ),
+  deletePersona: (slug: string) =>
+    deleteJSON<{ ok: boolean }>(`/api/personas/${encodeURIComponent(slug)}`),
   orbs: {
     // Imported `.orbis` definitions — typed loosely here; the orb-runtime
     // validator is the real contract (validateOrbDefinition on load).

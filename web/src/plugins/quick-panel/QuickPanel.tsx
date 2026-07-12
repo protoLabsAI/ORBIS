@@ -27,6 +27,7 @@ import {
 } from '@/plugins/orb/definitions/runtime';
 import { useActivationConfig, type ActivationStyle } from './useActivationConfig';
 import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
+import { PersonaManagerDialog } from '@/plugins/personas/PersonaManagerDialog';
 
 const STYLE_LABELS: Record<ActivationStyle, string> = {
   push_to_talk: 'Tap to talk',
@@ -194,23 +195,23 @@ function PersonaSwitcher() {
   const [active, setActive] = useState('default');
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refetch = useCallback(() => {
     api
       .personas()
       .then((r) => {
-        if (cancelled) return;
         setPersonas(r.personas);
         setActive(r.active);
       })
       .catch(() => {
         /* endpoint unreachable — the row just doesn't appear */
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
 
   const pick = async (slug: string) => {
     if (busy || slug === active) return;
@@ -231,7 +232,7 @@ function PersonaSwitcher() {
     }
   };
 
-  if (personas.length <= 1) return null;
+  if (personas.length === 0) return null;
 
   return (
     <div className="space-y-1.5">
@@ -250,7 +251,21 @@ function PersonaSwitcher() {
           </SelectContent>
         </Select>
       </div>
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => setManageOpen(true)}
+          className="text-helper text-fg-subtle transition-colors hover:text-fg-body"
+        >
+          Manage…
+        </button>
+      </div>
       {note && <Hint className="text-fg-subtle">{note}</Hint>}
+      <PersonaManagerDialog
+        open={manageOpen}
+        onOpenChange={setManageOpen}
+        onChanged={refetch}
+      />
     </div>
   );
 }
