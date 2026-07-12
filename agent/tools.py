@@ -713,7 +713,12 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     """Restyle the live orb. Gated at call time by `agent.allow_orb_control`
     (so the settings toggle takes effect without a restart). Resolves names
     against the real vocabulary first (#577), then persists to config +
-    pushes an `orb-config` SSE event the frontend applies live."""
+    pushes an `orb-config` SSE event the frontend applies live.
+
+    PARKED by choice 2026-07-12 (not a bug this time): voice orb-control
+    isn't needed right now. The full stack stays wired — vocabulary
+    validation (#577), options-in-schema (#625), handler, tests — so
+    re-enabling is deleting the pop line below."""
     from agent.config_store import merge_patch, read_config
     from agent.orb_vocab import resolve_orb_ask
     from voice.sse_bus import sse_bus
@@ -771,6 +776,11 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     if new_params:
         bits.append(", ".join(new_params.keys()))
     await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
+
+
+# Parked by choice (see set_orb_visual_handler docstring) — delete this
+# line to re-enable voice orb control.
+_TOOL_REGISTRY.pop("set_orb_visual", None)
 
 
 # switch_persona (#610, epic #611) — voice-driven persona switch. Rides the
