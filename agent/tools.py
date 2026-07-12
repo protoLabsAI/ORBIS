@@ -633,16 +633,59 @@ if os.environ.get("ORBIS_SURFACE") not in ("1", "true", "on"):
     _TOOL_REGISTRY.pop("render_widget", None)
 
 
-# set_orb_visual is PARKED — buggy in practice (disabled #562). The handler is
-# kept so re-enabling is just restoring its @tool(...) decorator: name
-# "set_orb_visual", params variant/palette/params (numeric), latency FAST. Left
-# UN-decorated so its description never reaches the LLM tool surface while off.
+# set_orb_visual — re-enabled (#577). Disabled in #562 because LLM-invented
+# variant/palette names were applied AND persisted unvalidated: an unknown
+# variant parks the frontend orb store in its pending-registration state
+# (swallowing all later applies), and the junk name in orbis.yaml re-armed
+# the wedge every boot. Names now resolve against the real vocabulary
+# (agent/orb_vocab.py) BEFORE anything is applied or persisted; an
+# unresolvable ask answers with the valid options so the LLM self-corrects.
+@tool(
+    "set_orb_visual",
+    (
+        "Restyle the on-screen orb: switch its shader variant, apply a "
+        "color palette, or adjust numeric knobs. Use when the user asks "
+        "to change how the orb looks — 'use the nebula orb', 'switch to "
+        "the ember look', 'more glow', 'slow it down'. Named looks like "
+        "'aurora' or 'ember' can go in either field — they resolve to "
+        "the right variant + palette pair. If the exact name is unknown "
+        "the tool replies with the valid options; relay them briefly. "
+        "GOOD examples: {variant: 'nebula'}; {palette: 'Ember'}; "
+        "{variant: 'aurora'} (a named look); {params: {speed: 0.3}}."
+    ),
+    parameters={
+        "variant": {
+            "type": "string",
+            "description": (
+                "Shader variant id, imported orb id, or a named look "
+                "(starter slug). Omit to keep the current variant."
+            ),
+        },
+        "palette": {
+            "type": "string",
+            "description": (
+                "Palette name or a named look. Omit to keep the current "
+                "palette."
+            ),
+        },
+        "params": {
+            "type": "object",
+            "description": (
+                "Numeric knob overrides (e.g. {density: 2.0, speed: 0.5}) "
+                "or hex color strings. Merged onto the current knobs."
+            ),
+        },
+    },
+    required=[],
+    latency=Latency.FAST,
+)
 async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     """Restyle the live orb. Gated at call time by `agent.allow_orb_control`
-    (so the settings toggle takes effect without a restart). Persists the
-    change to config + pushes an `orb-config` SSE event the frontend applies
-    to the on-screen orb without a reload."""
+    (so the settings toggle takes effect without a restart). Resolves names
+    against the real vocabulary first (#577), then persists to config +
+    pushes an `orb-config` SSE event the frontend applies live."""
     from agent.config_store import merge_patch, read_config
+    from agent.orb_vocab import resolve_orb_ask
     from voice.sse_bus import sse_bus
 
     cfg = read_config()
@@ -666,11 +709,14 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
         await params.result_callback("Tell me what to change — a variant, palette, or a knob.")
         return
 
+    # Resolve BEFORE apply/persist — never let an invented name reach the
+    # orb store or orbis.yaml (#577 root cause).
     orb_patch: dict[str, Any] = {}
-    if variant:
-        orb_patch["variant"] = variant
-    if palette:
-        orb_patch["palette"] = palette
+    if variant or palette:
+        orb_patch, err = resolve_orb_ask(variant, palette)
+        if err:
+            await params.result_callback(err)
+            return
     if new_params:
         # The per-block merge replaces `params` wholesale, so write the full
         # merged set rather than just the delta (else other knobs are wiped).
@@ -688,10 +734,10 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     await sse_bus.publish("orb-config", orb_patch)
 
     bits: list[str] = []
-    if variant:
-        bits.append(f"variant {variant}")
-    if palette:
-        bits.append(f"palette {palette}")
+    if orb_patch.get("variant"):
+        bits.append(f"variant {orb_patch['variant']}")
+    if orb_patch.get("palette"):
+        bits.append(f"palette {orb_patch['palette']}")
     if new_params:
         bits.append(", ".join(new_params.keys()))
     await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
