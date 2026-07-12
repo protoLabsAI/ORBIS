@@ -477,3 +477,90 @@ def test_shipped_starters_parse_and_compose():
         assert p.voice, slug
         # Both reference real starter-orb slugs → full viz resolution.
         assert p.orb_palette in ("Ember", "Forest"), slug
+
+
+# --- switch_persona voice tool (#610) ----------------------------------------
+
+
+class _FakeToolParams:
+    def __init__(self, arguments):
+        self.arguments = arguments
+        self.results: list[str] = []
+
+    async def result_callback(self, result: str) -> None:
+        self.results.append(result)
+
+
+@pytest.fixture
+def _tool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    d = tmp_path / "personas"
+    _write(d / "bruno.md", """
+        ---
+        name: Chef Bruno
+        ---
+        Bruno prompt.
+    """)
+    monkeypatch.setenv("ORBIS_PERSONAS_DIR", str(d))
+    monkeypatch.setenv("ORBIS_BUNDLED_PERSONAS", str(d))
+
+    import agent.config_store as cs
+    import agent.persona as persona_mod
+    import voice.sse_bus as bus_mod
+    import app as app_module
+
+    written: list = []
+    published: list = []
+    switched: list = []
+    monkeypatch.setattr(cs, "merge_patch", lambda patch, *a, **k: written.append(patch) or patch)
+    monkeypatch.setattr(
+        persona_mod, "reload_persona",
+        lambda *a, **k: Persona(slug="bruno", name="Chef Bruno", system_prompt="x"),
+    )
+    monkeypatch.setattr(
+        app_module, "_apply_persona_switch",
+        lambda p: switched.append(p) or {"applies": "live", "notes": [], "viz": {}},
+    )
+
+    async def publish(event, data=None):
+        published.append((event, data))
+
+    monkeypatch.setattr(bus_mod.sse_bus, "publish", publish)
+    return written, published, switched
+
+
+@pytest.mark.asyncio
+async def test_switch_persona_tool_by_name(_tool_env):
+    written, published, switched = _tool_env
+    from agent.tools import switch_persona_handler
+    params = _FakeToolParams({"persona": "chef bruno"})
+    await switch_persona_handler(params)  # type: ignore[arg-type]
+    assert written == [{"persona": {"active_persona": "bruno"}}]
+    assert len(switched) == 1
+    assert published[0][0] == "persona-switched"
+    assert "Chef Bruno" in params.results[0]
+
+
+@pytest.mark.asyncio
+async def test_switch_persona_tool_unknown_lists_options(_tool_env):
+    written, published, _ = _tool_env
+    from agent.tools import switch_persona_handler
+    params = _FakeToolParams({"persona": "batman"})
+    await switch_persona_handler(params)  # type: ignore[arg-type]
+    assert written == [] and published == []
+    assert "batman" in params.results[0]
+    assert "Chef Bruno" in params.results[0]
+
+
+@pytest.mark.asyncio
+async def test_switch_persona_tool_default_aliases(_tool_env):
+    written, _, switched = _tool_env
+    from agent.tools import switch_persona_handler
+    params = _FakeToolParams({"persona": "normal"})
+    await switch_persona_handler(params)  # type: ignore[arg-type]
+    assert written == [{"persona": {"active_persona": ""}}]
+    assert len(switched) == 1
+
+
+def test_switch_persona_tool_registered():
+    import agent.tools as tools_mod
+    assert "switch_persona" in tools_mod._TOOL_REGISTRY

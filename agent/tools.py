@@ -743,6 +743,80 @@ async def set_orb_visual_handler(params: FunctionCallParams) -> None:
     await params.result_callback(f"Updated the orb ({'; '.join(bits)}).")
 
 
+# switch_persona (#610, epic #611) — voice-driven persona switch. Rides the
+# same validated path as POST /api/personas/active: persist the pointer,
+# recompose, hot-swap the live session (prompt/LLM/voice/filler), announce
+# the orb over SSE. The confirmation text is narrated AFTER the voice swap,
+# so it comes out in the NEW persona's voice by construction.
+@tool(
+    "switch_persona",
+    (
+        "Switch which persona ORBIS is — its personality, voice, and orb "
+        "look change together. Use when the user asks to become or talk "
+        "to a different persona: 'put on the chef', 'switch to Sage', "
+        "'be Bruno', 'go back to normal' (normal/default = the base "
+        "persona). Pass the persona's name or slug; an unknown or empty "
+        "ask returns the available personas — relay them briefly. "
+        "GOOD examples: {persona: 'bruno'}; {persona: 'Sage'}; "
+        "{persona: 'default'}."
+    ),
+    parameters={
+        "persona": {
+            "type": "string",
+            "description": "Name or slug of a saved persona, or 'default'.",
+        },
+    },
+    required=["persona"],
+    latency=Latency.FAST,
+)
+async def switch_persona_handler(params: FunctionCallParams) -> None:
+    from agent.config_store import merge_patch
+    from agent.persona import reload_persona
+    from agent.personas import load_persona_files
+    from voice.sse_bus import sse_bus
+
+    files = load_persona_files()
+    options = ", ".join(
+        sorted({pf.name for pf in files.values()} | {"Default"})
+    )
+    ask = (params.arguments.get("persona") or "").strip().lower()
+    if not ask:
+        await params.result_callback(f"Which persona? I have: {options}.")
+        return
+
+    slug: str | None = None
+    if ask in ("default", "orbis", "normal", "yourself"):
+        slug = ""
+    elif ask in files:
+        slug = ask
+    else:
+        for s, pf in files.items():
+            if pf.name.lower() == ask:
+                slug = s
+                break
+    if slug is None:
+        await params.result_callback(
+            f"I don't have a persona called '{ask}'. Available: {options}."
+        )
+        return
+
+    merge_patch({"persona": {"active_persona": slug}})
+    persona = reload_persona()
+    # _apply_persona_switch lives in app.py (it owns the live-session
+    # registry); lazy import avoids the module cycle at load time.
+    import app as app_module
+    result = app_module._apply_persona_switch(persona)
+    await sse_bus.publish(
+        "persona-switched",
+        {"slug": slug or "default", "name": persona.name, **result},
+    )
+    notes = result.get("notes") or []
+    suffix = f" ({'; '.join(notes)})" if notes else ""
+    await params.result_callback(
+        f"Switched to {persona.name}. Confirm briefly, in character.{suffix}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # delegate_to — hand-wired because its schema is dynamic per-session
 # (derived from the live DelegateRegistry).
