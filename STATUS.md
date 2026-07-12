@@ -1,8 +1,8 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-12 (personas epic #611 COMPLETE — all 4 phases +
-the #577 orb-tool fix; #601 fixed; voice/dialog QA pending on the
-running build). On `main`, all PRs merged.*
+*Last updated 2026-07-12 late (v0.2.159 RELEASED: personas epic #611
+complete + #601 + options-in-schema #626; set_orb_visual PARKED by
+choice #627). On `main`, all PRs merged.*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
@@ -85,10 +85,33 @@ P3 bundle (active=sage appeared without any API call from this side) —
 the picker works live on-device. The final bundle (P4 + #577) was
 rebuilt + relaunched at session end with his config intact.
 
-**QA owed (one pass on the running build):** persona picker mid-
-conversation → next reply in the new voice+orb; manager dialog CRUD;
-"be Bruno" / "switch to someone called Batman" (spoken options, no orb
-wedge) / "use the nebula orb" / "go back to normal".
+**Late-session QA + the routing bug (#625):** Josh's live QA proved the
+voice persona switch end-to-end ("be Bruno" → am_michael + ember, 4/4
+switches) but surfaced "orb control wedged": set_orb_visual was NEVER
+dispatched (0/~6). Root cause was routing, not the server path — the
+first ask used a style word ("geometry orb") matching nothing, the
+model answered instead of calling, and the user's "it's wedged"
+statement entered context + the rolling summary, deflecting every later
+orb ask. **Fix shipped (PR #626):** options-in-schema — ToolSpec
+parameters can be a callable resolved per schema build, so the live orb
+vocabulary and persona catalog (with description hints — "put on the
+chef" → bruno) render INTO the tool schemas up front instead of
+guess-then-correct. 5 routing evals added (all green vs protolabs/fast,
+incl. a poisoned-context probe). Poisoned summary.txt cleared (it would
+have re-injected "orb control is wedged" via recall next boot). Open in
+#625: the general summary-poisoning class.
+
+**Then set_orb_visual was PARKED BY CHOICE (PR #627)** — Josh: not
+needed right now. NOT the #562 story: the whole stack (vocab validation,
+options-in-schema, handler, tests) stays wired; re-enable = delete the
+registry-pop line + restore the toggle and the 4 commented eval
+scenarios. switch_persona stays live and keeps the callable-parameters
+mechanism in production.
+
+**Released v0.2.159** (bump PR #618 + tag): personas epic complete,
+#601 both paths, options-in-schema, park. QA still owed on the persona
+surfaces: picker mid-conversation, manager dialog CRUD, "put on the
+chef" / unknown-name persona asks.
 
 Nuance noted for later: with failover configured,
 `_reconfigure_live_llm` retargets `state.active_llm` — a persona llm
