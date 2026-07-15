@@ -18,7 +18,7 @@ import app
 def test_audio_tags_constructed_in_run_bot() -> None:
     """make_audio_tags_tap is called during run_bot construction so
     the tap is per-session (passes mem from get_memory())."""
-    src = open(app.__file__).read()
+    src = open(app.run_bot.__code__.co_filename).read()
     assert "make_audio_tags_tap(mem=get_memory())" in src
 
 
@@ -26,7 +26,7 @@ def test_audio_tags_imported_at_module_top() -> None:
     """Import is module-level — no lazy import inside run_bot. The
     [audio_tags] is part of the project's hard dep set; lazy-loading
     it would mask import failures until first session."""
-    src = open(app.__file__).read()
+    src = open(app.run_bot.__code__.co_filename).read()
     assert "from agent.audio_tags import make_audio_tags_tap" in src
 
 
@@ -41,7 +41,7 @@ def test_audio_tags_placed_between_stt_and_user_agg() -> None:
     verify ordering by string-search since constructing the full
     pipeline needs Pipecat's task/runtime which is a heavier fixture.
     """
-    src = open(app.__file__).read()
+    src = open(app.run_bot.__code__.co_filename).read()
     # Find the Pipeline([ block — ordering is ascertainable from there.
     pipe_start = src.index("pipeline = Pipeline([")
     pipe_end = src.index("])", pipe_start)
@@ -64,7 +64,7 @@ def test_audio_tags_after_speaker_gate() -> None:
     sat upstream of SpeakerGate, every emotion turn would arrive
     flagged speaker_verified=True (the tap's default) regardless of
     the gate's actual decision."""
-    src = open(app.__file__).read()
+    src = open(app.run_bot.__code__.co_filename).read()
     pipe_start = src.index("pipeline = Pipeline([")
     pipe_end = src.index("])", pipe_start)
     pipe_body = src[pipe_start:pipe_end]
