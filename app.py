@@ -4356,6 +4356,20 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    # Reap the whole worker tree cleanly on quit (#485). Become our own
+    # process-group leader so the Tauri shell can signal the entire group
+    # (kill -TERM/-KILL -<pgid>) instead of SIGKILLing just the direct child
+    # and orphaning the grandchildren that hold port 7866 / the GPU. Only
+    # advertise ORBIS_PGID when setsid actually succeeded — the shell then
+    # reaps a group we own, else falls back to the direct-child kill. A
+    # parent-death watchdog covers the case where the shell panics and never
+    # runs its exit handler at all.
+    from agent.process_guard import establish_own_process_group, start_parent_death_watchdog
+    _pgid = establish_own_process_group()
+    if _pgid is not None:
+        print(f"ORBIS_PGID {_pgid}", flush=True)
+        start_parent_death_watchdog(_pgid)
+
     # Port 0 → OS assigns. Pre-bind a socket so we can print the real
     # port BEFORE uvicorn starts (the Tauri shell reads stdout for the
     # readiness line). uvicorn's Config accepts a pre-bound fd, which

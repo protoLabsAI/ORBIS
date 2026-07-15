@@ -664,12 +664,17 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
 /// so the exit handler can kill it from outside the async task.
 struct Sidecar {
     child: Mutex<Option<CommandChild>>,
+    /// Process-group id the sidecar advertised via its `ORBIS_PGID` line —
+    /// set ONLY when it `setsid()`'d into its own session, so we reap a group
+    /// we own. `None` ⇒ fall back to a direct-child kill (#485).
+    pgid: Mutex<Option<i32>>,
 }
 
 impl Sidecar {
     fn new() -> Self {
         Self {
             child: Mutex::new(None),
+            pgid: Mutex::new(None),
         }
     }
 
@@ -679,10 +684,48 @@ impl Sidecar {
         }
     }
 
+    fn store_pgid(&self, pgid: i32) {
+        if let Ok(mut guard) = self.pgid.lock() {
+            *guard = Some(pgid);
+        }
+    }
+
+    /// Reap the sidecar. The sidecar is a process *tree* (uvicorn + Pipecat +
+    /// MLX workers); the old `child.kill()` SIGKILL'd only the direct child and
+    /// orphaned the grandchildren holding port 7866 / the GPU (#485).
+    ///
+    /// When the sidecar advertised its own process group (setsid succeeded),
+    /// SIGTERM the whole group so uvicorn runs its shutdown, then a DETACHED,
+    /// delayed SIGKILL reaps any survivor — detached so it outlives this process
+    /// exiting on quit, adding no lag to the app's own shutdown. Signals go
+    /// through `sh` for unambiguous negative-pid (process-group) syntax.
+    ///
+    /// Without an advertised group we fall back to the pre-#485 direct kill, so
+    /// this is strictly safe: never worse than before, and never signals a
+    /// group we don't own (guarded on `pgid > 1` — `kill -1` would hit every
+    /// process the user can signal).
     fn kill(&self) {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(child) = guard.take() {
-                let _ = child.kill();
+        let pgid = self.pgid.lock().ok().and_then(|g| *g);
+        let child = self.child.lock().ok().and_then(|mut g| g.take());
+
+        match pgid {
+            Some(pgid) if pgid > 1 => {
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!("kill -TERM -{pgid}"))
+                    .status();
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(format!("sleep 3; kill -KILL -{pgid} 2>/dev/null"))
+                    .spawn();
+                // The group signals cover the direct child too; just drop the
+                // handle rather than adding a redundant immediate SIGKILL.
+                drop(child);
+            }
+            _ => {
+                if let Some(child) = child {
+                    let _ = child.kill();
+                }
             }
         }
     }
@@ -2109,6 +2152,19 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                         }
                     }
                     let _ = app.emit("orbis-boot", rest.to_string());
+                }
+
+                // Parse `ORBIS_PGID <n>` — the sidecar's own process-group id,
+                // printed only when it became a session leader (setsid ok). We
+                // reap this whole group on quit instead of orphaning the tree
+                // (#485). Absent ⇒ direct-child kill fallback.
+                if let Some(rest) = line.strip_prefix("ORBIS_PGID ") {
+                    if let Ok(pgid) = rest.trim().parse::<i32>() {
+                        if let Some(state) = app.try_state::<Sidecar>() {
+                            state.store_pgid(pgid);
+                            log::info!("[sidecar] process group pgid={pgid} (group-reap armed)");
+                        }
+                    }
                 }
 
                 // Parse `ORBIS_READY http://<host>:<port>` — the
