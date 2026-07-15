@@ -95,7 +95,7 @@ def test_enroll_saves_voiceprint_to_path(
     client: TestClient, tmp_path: Path,
 ) -> None:
     wav_bytes = _make_wav(duration_secs=5.0)
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         with patch("agent.ecapa_embedder.ECAPAEmbedder", _StubEmbedder):
             r = client.post(
                 "/api/voiceprint/enroll",
@@ -115,7 +115,7 @@ def test_enroll_saves_voiceprint_to_path(
 
 
 def test_enroll_rejects_empty_body(client: TestClient) -> None:
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         r = client.post(
             "/api/voiceprint/enroll",
             content=b"",
@@ -126,7 +126,7 @@ def test_enroll_rejects_empty_body(client: TestClient) -> None:
 
 
 def test_enroll_rejects_undecodable_audio(client: TestClient) -> None:
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         r = client.post(
             "/api/voiceprint/enroll",
             content=b"this is not a wav file",
@@ -139,7 +139,7 @@ def test_enroll_rejects_undecodable_audio(client: TestClient) -> None:
 def test_enroll_rejects_too_short_recording(client: TestClient) -> None:
     """1 second of audio isn't enough for a stable embedding."""
     short = _make_wav(duration_secs=1.0)
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         with patch("agent.ecapa_embedder.ECAPAEmbedder", _StubEmbedder):
             r = client.post(
                 "/api/voiceprint/enroll",
@@ -155,7 +155,7 @@ def test_enroll_truncates_overly_long_recording(
 ) -> None:
     """31s recording shouldn't 400 — silently truncate to the cap."""
     long = _make_wav(duration_secs=45.0)
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         with patch("agent.ecapa_embedder.ECAPAEmbedder", _StubEmbedder):
             r = client.post(
                 "/api/voiceprint/enroll",
@@ -169,7 +169,7 @@ def test_enroll_truncates_overly_long_recording(
 def test_enroll_returns_501_when_speechbrain_missing(client: TestClient) -> None:
     """When the [speaker-id] extra isn't installed, the endpoint must
     refuse with an actionable hint rather than crash."""
-    with patch("app._is_speechbrain_available", return_value=False):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=False):
         r = client.post(
             "/api/voiceprint/enroll",
             content=_make_wav(5.0),
@@ -189,7 +189,7 @@ def test_enroll_handles_stereo_audio_by_downmixing(
     stereo = np.zeros((n, 2), dtype=np.float32)
     buf = io.BytesIO()
     sf.write(buf, stereo, sample_rate, format="WAV", subtype="PCM_16")
-    with patch("app._is_speechbrain_available", return_value=True):
+    with patch("server.routers.voiceprint._is_speechbrain_available", return_value=True):
         with patch("agent.ecapa_embedder.ECAPAEmbedder", _StubEmbedder):
             r = client.post(
                 "/api/voiceprint/enroll",
