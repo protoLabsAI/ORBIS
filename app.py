@@ -4488,6 +4488,23 @@ def main():
     ready_host = "127.0.0.1" if bound_host == "0.0.0.0" else bound_host
     print(f"ORBIS_READY http://{ready_host}:{bound_port}", flush=True)
 
+    # Reclaim stale pyapp sidecar envs left by previous versions (#489). Each is
+    # ~1.8 GB and every in-app update lands a new one while the old lingers
+    # forever. Runs in a daemon thread so the multi-second rmtree never delays
+    # serving; keeps only the env we're executing from and no-ops in dev
+    # (.venv, not under the pyapp base). Opt out with ORBIS_ENV_GC=0.
+    if os.environ.get("ORBIS_ENV_GC", "1") != "0":
+        import threading as _threading
+
+        def _gc_envs():
+            try:
+                from agent.env_gc import gc_stale_envs
+                gc_stale_envs()
+            except Exception as e:  # cleanup must never take down a boot
+                logger.warning(f"[env-gc] skipped: {e}")
+
+        _threading.Thread(target=_gc_envs, name="orbis-env-gc", daemon=True).start()
+
     config = uvicorn.Config(app, fd=sock.fileno())
     server = uvicorn.Server(config)
     server.run()
