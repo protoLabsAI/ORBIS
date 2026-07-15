@@ -157,6 +157,7 @@ from agent.filler import (
     audio_context_block,
     grounding_block,
     plan_block,
+    recall_block,
     repair_block,
     tool_response_block,
     tool_use_block,
@@ -531,9 +532,10 @@ def _recall_block(user_id: str) -> str:
       - the last 3 SQLite session summaries (structured), and
       - the rolling text summary produced by pipecat's summarizer
         (fallback when SQLite is empty — first-boot / fresh install).
-    """
-    parts: list[str] = []
 
+    Formatting (incl. the #625 trust-boundary framing) lives in the shared
+    ``agent.filler.recall_block``; this only loads the pieces from storage.
+    """
     # Prior-N block from SQLite. Newest first, ~3 sessions keeps the
     # prompt affordable while still giving cross-session continuity.
     try:
@@ -543,6 +545,7 @@ def _recall_block(user_id: str) -> str:
         logger.warning(f"[memory] prior_n read failed: {e}")
         prior = []
 
+    prior_sessions_xml = ""
     if prior:
         sessions_xml: list[str] = ["<prior_sessions>"]
         for row in prior:
@@ -554,24 +557,13 @@ def _recall_block(user_id: str) -> str:
                 sessions_xml.append(f"    <final_output>{final}</final_output>")
             sessions_xml.append("  </session>")
         sessions_xml.append("</prior_sessions>")
-        parts.append("\n".join(sessions_xml))
+        prior_sessions_xml = "\n".join(sessions_xml)
 
-    # Fallback / complement: the text summary file.
-    summary = load_last_summary(user_id)
-    if summary:
-        parts.append(
-            "## MEMORY — rolling summary\n\n"
-            f"{summary}"
-        )
-
-    if not parts:
-        return ""
-
-    return (
-        "\n\n".join(parts)
-        + "\n\nIF any of this fits naturally, acknowledge it in your first "
-        "turn. Otherwise IGNORE this block — do not force a callback."
-    )
+    # Fallback / complement: the rolling text summary file. Both pieces are
+    # passed to the shared formatter, which wraps them in the trust-boundary
+    # framing (#625) and is also imported by the eval harness.
+    summary = load_last_summary(user_id) or ""
+    return recall_block(summary=summary, prior_sessions_xml=prior_sessions_xml)
 
 
 def _filler_gen_for(user_id: str) -> FillerGenerator:
@@ -763,6 +755,13 @@ def _effective_prompt(
 
     return (
         base
+        # MEMORY (recall) renders BEFORE the capability/tool blocks, not after:
+        # it carries historical user/model claims, and the code-derived
+        # capabilities below must be the authoritative, most-recent word on what
+        # the agent can do. Injected last, a summary like "orb control is
+        # wedged" read as capability truth and suppressed the tool for the rest
+        # of the session (#625). The block's own framing states the rule too.
+        + (("\n\n" + recall) if recall else "")
         + "\n\n"
         + tool_use_block(verbosity, tts_backend)
         + "\n\n"
@@ -794,7 +793,6 @@ def _effective_prompt(
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
         + (("\n\n" + inbox_block) if inbox_block else "")
-        + (("\n\n" + recall) if recall else "")
     )
 
 
