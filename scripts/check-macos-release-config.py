@@ -53,6 +53,9 @@ def check_tauri_config() -> None:
             "../config/persona.md": "config/persona.md",
             "../config/starter_orbs.yaml": "config/starter_orbs.yaml",
             "../config/delegates.yaml": "config/delegates.yaml",
+            # Frontmatter-md persona catalog (#607/#617) — the shipped starter
+            # personas the first-run loader reads. Bundled dir, not a file.
+            "../config/personas": "config/personas",
         },
         "first-run config resources must stay bundled",
     )

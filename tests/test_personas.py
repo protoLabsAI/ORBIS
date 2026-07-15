@@ -19,7 +19,6 @@ from agent.personas import (
     delete_persona_file,
     load_persona_files,
     parse_frontmatter,
-    serialize_persona_md,
     write_persona_file,
 )
 
