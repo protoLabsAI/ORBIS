@@ -14,8 +14,18 @@ export function NativeLevelMeter({ deviceName }: { deviceName: string }) {
     const id = setInterval(async () => {
       try {
         const rms = await invoke<number>('get_audio_level');
-        // Boost RMS so typical speech (0.02–0.1) fills the meter visibly.
-        setLevel(Math.min(1, rms * 6));
+        // `get_audio_level` returns RAW mic RMS from the Rust engine. The
+        // compensating MIC_GAIN lives downstream in voice/local_transport.py,
+        // not here, and the RMS is computed pre-gain — so on the M1 internal
+        // mic (no hardware AGC) normal speech is only ~0.013 RMS. The old
+        // linear `rms * 6` mapped that to 0.08, lighting barely one bar, which
+        // read as "no mic pickup" in settings. A dBFS curve spans the wide
+        // dynamic range between a quiet ungained internal mic and a hot
+        // external/AGC mic (~0.1–0.3 RMS) so normal speech lands mid-meter on
+        // both, instead of a linear gain that pegs hot mics or hides quiet ones.
+        const dbfs = rms > 0 ? 20 * Math.log10(rms) : -Infinity;
+        // -50 dBFS (near-silent room floor) → empty; -6 dBFS (hot) → full.
+        setLevel(Math.max(0, Math.min(1, (dbfs + 50) / 44)));
       } catch {
         // Engine not started yet — stay at zero.
       }
