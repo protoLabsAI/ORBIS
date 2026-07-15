@@ -277,33 +277,38 @@ def check_native_audio_sources() -> None:
         "[local_transport] first speaker frame",
         "Python native transport must log first speaker frame send",
     )
+    # /healthz was extracted from app.py to server/routers/system.py in the
+    # app.py decomposition; the native-transport reads there are app.-qualified
+    # (app._native_transport) since the router reads that mutable state at call
+    # time. Scan the router, not app.py.
+    healthz = ROOT / "server" / "routers" / "system.py"
     require_contains(
-        ROOT / "app.py",
-        "**audio_runtime_info()",
+        healthz,
+        "**app.audio_runtime_info()",
         "healthz must expose the sidecar audio input mode and mic gain",
     )
     require_contains(
-        ROOT / "app.py",
+        healthz,
         '"socket_configured": bool(os.environ.get("ORBIS_AUDIO_SOCK"))',
         "healthz must expose whether the native audio socket was configured",
     )
     require_contains(
-        ROOT / "app.py",
-        '"socket_connected": bool(_native_transport and _native_transport.connected)',
+        healthz,
+        "app._native_transport and app._native_transport.connected",
         "healthz must expose whether Python is connected to the native audio socket",
     )
     require_contains(
-        ROOT / "app.py",
+        healthz,
         '"pipeline_running": bool(',
         "healthz must expose whether the native voice pipeline task is still running",
     )
     require_contains(
-        ROOT / "app.py",
+        healthz,
         '"mic_frames_received": (',
         "healthz must expose the Python-side received mic frame count",
     )
     require_contains(
-        ROOT / "app.py",
+        healthz,
         '"speaker_frames_sent": (',
         "healthz must expose the Python-side sent speaker frame count",
     )
