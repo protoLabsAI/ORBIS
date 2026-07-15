@@ -29,9 +29,13 @@ dependencies = [
     # protocol mechanics; protolabs-a2a is the thin fleet conventions layer
     # (the 4 extensions, agent-card defaults, auth schemes).
     "a2a-sdk[http-server,fastapi,sqlite]>=1.1",
-    # Public git dep (github.com/protoLabsAI/protolabs-a2a) — the repo is public,
-    # so it installs without auth; pinned to the published tag, not yet on PyPI.
-    "protolabs-a2a @ git+https://github.com/protoLabsAI/protolabs-a2a.git@v0.1.0",
+    # Thin fleet-conventions layer over a2a-sdk. A normal PyPI wheel — NOT a
+    # git ref: pyapp runs `pip install` at a customer's first run, and a
+    # git+https dep needs a working `git` (Xcode CLT) that stock consumer Macs
+    # lack, which killed the sidecar install on fresh machines (#487).
+    # Pinned to the 0.2.x line: ORBIS uses the `emit_*` DataPart API, which 0.3
+    # replaced with metadata-keyed extensions (breaking). Migrate before >=0.3.
+    "protolabs-a2a>=0.2.1,<0.3",
     "sse-starlette",
     # mDNS advertise/browse for A2A agent discovery (agent/discovery.py — sees
     # protoAgent _protoagent._tcp broadcasts; ported from protoAgent ADR 0042 §I).
@@ -87,11 +91,6 @@ orbis = "app:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-# protolabs-a2a is a direct (git) reference until it's on a package index;
-# hatchling requires this opt-in to allow direct references in dependencies.
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 only-include = ["app.py", "a2a_auth.py", "a2a_executor.py", "a2a_stores.py", "a2a_server.py", "a2a_outbound.py", "acp", "agent", "auth", "memory", "voice", "static"]
