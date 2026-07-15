@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import agent.config_store as config_store
 import agent.metrics as metrics_mod
-import app as app_module
+import app as app_module  # noqa: F401 — ensures routers are wired before build_diagnostics_report runs
 from agent.config_store import REDACTED_SECRET
+from server.routers.system import build_diagnostics_report
 
 
 def test_report_has_versions_and_log_path():
-    report = app_module.build_diagnostics_report()
+    report = build_diagnostics_report()
 
     assert set(["app", "runtime", "metrics", "config", "logs"]) <= set(report)
     app = report["app"]
@@ -35,7 +36,7 @@ def test_report_redacts_config_secrets(monkeypatch):
         "read_config",
         lambda: {"llm": {"api_key": "sk-should-never-leak", "model": "gpt-4"}},
     )
-    report = app_module.build_diagnostics_report()
+    report = build_diagnostics_report()
 
     cfg = report["config"]
     assert cfg["llm"]["api_key"] == REDACTED_SECRET
@@ -50,7 +51,7 @@ def test_report_survives_metrics_failure(monkeypatch):
         raise RuntimeError("metrics subsystem down")
 
     monkeypatch.setattr(metrics_mod, "snapshot", _boom)
-    report = app_module.build_diagnostics_report()
+    report = build_diagnostics_report()
 
     # The metrics block degrades to an error string; the rest of the bundle
     # (the whole point — versions + config) is still there.
@@ -64,7 +65,7 @@ def test_report_survives_config_failure(monkeypatch):
         raise RuntimeError("orbis.yaml unreadable")
 
     monkeypatch.setattr(config_store, "read_config", _boom)
-    report = app_module.build_diagnostics_report()
+    report = build_diagnostics_report()
 
     assert "error" in report["config"]
     assert report["app"]["version"]  # still produced a usable bundle
