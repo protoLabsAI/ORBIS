@@ -44,12 +44,27 @@ class SessionsDAL:
         if not session_id:
             logger.warning("[sessions] refusing to add row with empty session_id")
             return
+        # UPSERT (not INSERT OR REPLACE): on a re-persist of the same
+        # session_id this UPDATEs in place, keeping the rowid stable and firing
+        # the AFTER UPDATE trigger that syncs sessions_fts incrementally. A
+        # REPLACE would delete+reinsert (new rowid) and its delete wouldn't fire
+        # the FTS delete trigger without recursive_triggers. The old code
+        # sidestepped that with a full `('rebuild')` on every write — O(total
+        # content), fired on the event loop at session connect + disconnect,
+        # which became a multi-hundred-ms first-turn stall over months (#482).
         self.conn.execute(
             """
-            INSERT OR REPLACE INTO sessions
+            INSERT INTO sessions
                 (session_id, started_at, ended_at, messages, tool_calls,
                  final_output, trace_id)
             VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                started_at   = excluded.started_at,
+                ended_at     = excluded.ended_at,
+                messages     = excluded.messages,
+                tool_calls   = excluded.tool_calls,
+                final_output = excluded.final_output,
+                trace_id     = excluded.trace_id
             """,
             (
                 session_id,
@@ -61,14 +76,38 @@ class SessionsDAL:
                 trace_id,
             ),
         )
-        # Rebuild FTS row for this session (FTS virtual table doesn't
-        # auto-mirror INSERT OR REPLACE on the backing table when we
-        # use an explicit rowid).
-        self.conn.execute(
-            "INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')"
-        )
         self.conn.commit()
         logger.info(f"[sessions] persisted session={session_id!r}")
+
+    def prune(self, *, keep_last: int = 200, max_age_days: int = 90) -> int:
+        """Retention sweep: delete sessions older than ``max_age_days`` while
+        always keeping the most recent ``keep_last`` regardless of age, so a
+        returning user never loses their whole history. Full transcripts are
+        JSON blobs that otherwise accumulate forever (#482). Returns the number
+        pruned; sessions_fts rows are removed by the AFTER DELETE trigger.
+        Called from the curator loop (weekly), not the hot path.
+        """
+        from datetime import timedelta
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        cur = self.conn.execute(
+            """
+            DELETE FROM sessions
+            WHERE ended_at < ?
+              AND session_id NOT IN (
+                  SELECT session_id FROM sessions ORDER BY ended_at DESC LIMIT ?
+              )
+            """,
+            (cutoff, keep_last),
+        )
+        self.conn.commit()
+        pruned = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        if pruned:
+            logger.info(
+                f"[sessions] pruned {pruned} sessions older than {max_age_days}d "
+                f"(kept most recent {keep_last})"
+            )
+        return pruned
 
     # ---- read ---------------------------------------------------------------
 

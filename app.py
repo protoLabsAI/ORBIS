@@ -2333,7 +2333,9 @@ async def lifespan(app: FastAPI):
     asyncio.get_running_loop().run_in_executor(None, prewarm_all)
 
     # Curator task — 90-day half-life decay on facts + prune below 0.2
-    # confidence. Runs once at boot, then weekly. Uses Memory.facts.decay_and_prune().
+    # confidence, plus a session-transcript retention sweep (#482: full
+    # transcripts are JSON blobs that otherwise grow unbounded). Runs once at
+    # boot, then weekly. Uses Memory.facts.decay_and_prune() + sessions.prune().
     async def _curator_loop() -> None:
         while True:
             try:
@@ -2343,6 +2345,7 @@ async def lifespan(app: FastAPI):
                     logger.info(
                         f"[curator] decayed={result['decayed']} pruned={result['pruned']}"
                     )
+                mem.sessions.prune()
             except Exception as e:
                 logger.warning(f"[curator] run failed: {e}")
             # Sleep 7 days. Cancelled cleanly on lifespan shutdown.
