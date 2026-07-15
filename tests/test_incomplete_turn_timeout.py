@@ -33,7 +33,7 @@ def test_config_accepts_low_overrides() -> None:
 def test_app_overrides_reprompt_timeouts_when_filter_enabled() -> None:
     """Source guard: the filter block must build a UserTurnCompletionConfig
     with both re-prompt timeouts so it can never fall back to the 10s default."""
-    src = (ROOT / "app.py").read_text(encoding="utf-8")
+    src = (ROOT / "voice" / "pipeline.py").read_text(encoding="utf-8")
     # Filter enable + config construction are wired together.
     assert 'filter_incomplete_user_turns"] = True' in src
     assert "user_turn_completion_config" in src
