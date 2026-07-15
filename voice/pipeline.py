@@ -258,13 +258,15 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # mic path's AGC + browser echo cancellation. On the native CPAL
     # path the speaker-bleed-into-mic crosses VAD threshold (especially
     # with software mic gain), so the listener-acks fire on the bot's
-    # own tail. Default both off unless the persona explicitly enabled
-    # them. Phase 2 (real AEC via AVAudioEngine) lets us flip the
-    # default back to on.
+    # own tail. Default both off unless explicitly opted in — either the
+    # persona behavior block, or the BACKCHANNEL / MICRO_ACK env flags
+    # (the runtime .env tuning loop). Speaker-mode users stay off; a
+    # headphone / real-AEC setup can opt in until Phase 2 (AEC via
+    # AVAudioEngine) lets us flip the default back to on.
     if behavior.get("backchannel") is None:
-        bc_cfg["enabled"] = False
+        bc_cfg["enabled"] = os.environ.get("BACKCHANNEL", "0").lower() in ("1", "true", "on")
     if behavior.get("micro_ack") is None:
-        ma_cfg["enabled"] = False
+        ma_cfg["enabled"] = os.environ.get("MICRO_ACK", "0").lower() in ("1", "true", "on")
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
