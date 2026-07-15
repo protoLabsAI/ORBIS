@@ -26,6 +26,7 @@ from agent.llm_error_announcer import LLMErrorAnnouncer
 from agent.micro_ack import MicroAckInjector, opening_ack_line
 from agent.orchestrate import run_orchestration
 from agent.prosody import ProsodyTagStripper
+from agent.spoken_logger import SpokenTextLogger
 from agent.session_store import drain_stashed_deliveries, save_summary, stash_delivery
 from agent.stall_watchdog import StallWatchdog
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
@@ -727,6 +728,11 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
             tts_backend=tts_backend,
         ),
+        # Observability chokepoint — logs every utterance headed into TTS
+        # (streamed LLM narration + out-of-band fillers / opening acks /
+        # DeliveryController / stall recovery) so no speech path is unlogged.
+        # Must sit immediately BEFORE `tts` to see all synthesis input.
+        SpokenTextLogger(),
         # Non-Fish TTS services strip tags at the service level via their
         # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
         # consumes `[softly]` / `[pause:300]` natively, so its adapter
