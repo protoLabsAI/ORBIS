@@ -17,9 +17,12 @@ EVAL_LLM_MODEL / EVAL_LLM_KEY.
 
 The decision prompt mirrors the *deterministic core* of app.py:_effective_prompt
 (persona + tool_use/response + capabilities + fleet + grounding + repair + audio)
-— NOT the runtime user-state blocks (recall/inbox/personality), so runs are
-repeatable. grounding_block is imported (auto-syncs); only `fleet_block` is a
-local mirror — keep it in sync if app.py:_fleet_block changes materially.
+— NOT the runtime user-state blocks (inbox/personality), so runs are repeatable.
+Exception: a scenario may set a fixed `recall:` string, injected in the real
+production position (before the capability blocks) to exercise the #625 trust
+boundary — a fixed fixture stays repeatable. grounding_block and recall_block
+are imported (auto-sync); only `fleet_block` is a local mirror — keep it in sync
+if app.py:_fleet_block changes materially.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from agent.delegates import Delegate, DelegateRegistry
 from agent.filler import (
     audio_context_block,
     grounding_block,
+    recall_block,
     repair_block,
     tool_response_block,
     tool_use_block,
@@ -101,7 +105,7 @@ def make_registry(fleet: list[dict]) -> DelegateRegistry:
     return reg
 
 
-def build_decision_prompt(persona_prompt, registry, openai_tools, *, verbosity="brief", tts="kokoro"):
+def build_decision_prompt(persona_prompt, registry, openai_tools, *, verbosity="brief", tts="kokoro", recall=""):
     caps = SimpleNamespace(standard_tools=[
         SimpleNamespace(
             name=t["function"]["name"],
@@ -111,6 +115,11 @@ def build_decision_prompt(persona_prompt, registry, openai_tools, *, verbosity="
     ])
     parts = [
         persona_prompt,
+        # A scenario may set `recall:` to a rolling-summary string; it renders
+        # in the SAME production position (before the capability/tool blocks) so
+        # the eval reproduces the real trust boundary — a poisoned summary must
+        # not suppress a registered tool (#625).
+        recall_block(summary=recall) if recall else "",
         tool_use_block(verbosity, tts),
         tool_response_block(verbosity),
         capabilities_block(caps),
@@ -249,7 +258,9 @@ async def run_scenario(sem, client, model, persona_prompt, fleets, default_fleet
     async with sem:
         registry = make_registry(resolve_fleet(sc, fleets, default_fleet))
         tools = build_voice_tools(registry)
-        prompt = build_decision_prompt(persona_prompt, registry, tools)
+        prompt = build_decision_prompt(
+            persona_prompt, registry, tools, recall=sc.get("recall", "")
+        )
         expect = sc.get("expect", {})
         res = {"id": sc["id"], "utterance": sc["utterance"]}
         try:

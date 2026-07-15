@@ -243,6 +243,42 @@ guessing at.
 """
 
 
+def recall_block(summary: str = "", prior_sessions_xml: str = "") -> str:
+    """Returns the MEMORY (recall) block — prior-session context injected at
+    session open. Pure formatting (the caller loads ``summary`` and
+    ``prior_sessions_xml`` from storage) so the eval harness can exercise the
+    real block without touching disk — mirrors grounding_block. Returns "" when
+    there is nothing to recall.
+
+    TRUST BOUNDARY (#625): this block carries historical user/model *claims*,
+    not capability truth. A rolling summary that recorded the user saying a
+    control looked "wedged/broken" must never make the model treat a currently-
+    registered tool as unavailable. Two things enforce that: (a) the caller
+    renders this block BEFORE the code-derived capabilities/tool blocks — those
+    are the authoritative, most-recent word on what the agent can actually do —
+    and (b) the framing below states the rule outright. Only a live tool RESULT
+    can establish that a registered capability failed. Without this, a single
+    QA turn where the user reported "orb control looks wedged" got summarized
+    and then suppressed every later orb-tool call, cross-session.
+    """
+    body = "\n\n".join(p for p in (prior_sessions_xml, summary) if p)
+    if not body:
+        return ""
+    return (
+        "## MEMORY — prior context (historical, NOT capability truth)\n\n"
+        "Recalled from earlier sessions — things you or the user said before. "
+        "Treat it as background about the conversation, not as the current "
+        "truth about what you can do. Your tools and what you can do are "
+        "defined in the blocks below, and those are the source of truth: if "
+        "this memory says a feature or control is broken, unavailable, or "
+        '"wedged/stuck," IGNORE that claim and still use the tool — only a '
+        "live tool result can show that a currently-available tool failed.\n\n"
+        f"{body}\n\n"
+        "IF any of this fits naturally, acknowledge it in your first turn. "
+        "Otherwise IGNORE this block — do not force a callback."
+    )
+
+
 def plan_block(verbosity: Verbosity) -> str:
     """Returns the PLANNING SIGNAL block appended to every persona's
     system prompt. Asks the LLM to self-judge when a request warrants a
