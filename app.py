@@ -3937,7 +3937,7 @@ async def put_persona(slug: str, body: dict, user: User = Depends(require_user))
     body). Writing a bundled starter's slug creates a user *shadow* —
     that's the edit path for shipped personas; deleting the shadow
     restores the original."""
-    from agent.personas import load_persona_files, write_persona_file
+    from agent.personas import write_persona_file
     meta = {k: v for k, v in body.items() if k != "prompt"}
     prompt = str(body.get("prompt") or "")
     try:
