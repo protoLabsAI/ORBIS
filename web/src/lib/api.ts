@@ -431,6 +431,18 @@ export interface ReminderItem {
   repeat_secs: number | null;
 }
 
+// Support-diagnostics bundle from GET /api/diagnostics (#488). Secrets are
+// already redacted server-side; the raw log is not inlined — `logs.path`
+// points at the file to attach.
+export interface DiagnosticsReport {
+  generated_at?: string;
+  app: { version: string; python: string; platform: string; machine: string };
+  runtime: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  config: Record<string, unknown>;
+  logs: { path: string; note: string };
+}
+
 export const api = {
   whoami: () => get<Whoami>('/api/whoami'),
   reminders: {
@@ -445,6 +457,7 @@ export const api = {
   config: () => get<{ config: OrbisConfig }>('/api/config'),
   putConfig: (patch: OrbisConfig) =>
     postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string; llm_applied_live?: boolean }>('/api/config', patch),
+  diagnostics: () => get<DiagnosticsReport>('/api/diagnostics'),
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
