@@ -2551,6 +2551,101 @@ async def metrics(user: User = Depends(require_user)):
     }
 
 
+def build_diagnostics_report() -> dict:
+    """Assemble a support-diagnostics bundle: versions, runtime shape,
+    metrics, and the current config with provider secrets redacted (#488).
+
+    Deliberately robust — this is the "something's broken, send me your
+    setup" tool, so every sub-block is best-effort: a failure in one (e.g.
+    metrics not yet initialised) records an ``error`` string for that block
+    instead of blanking the whole report. Config runs through
+    ``redact_secrets`` so no provider key ever leaves the box (same exposure
+    as GET /api/config). The raw log is NOT inlined — it can carry
+    transcripts — only its path is surfaced so the user attaches it via
+    Settings → Diagnostics → Reveal logs.
+    """
+    import platform as _platform
+
+    report: dict = {}
+
+    try:
+        from datetime import datetime, timezone
+        report["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    except Exception:
+        pass
+
+    # --- app / interpreter versions -------------------------------------
+    try:
+        import importlib.metadata as _md
+        app_version = _md.version("orbis")
+    except Exception:
+        app_version = "unknown"
+    report["app"] = {
+        "version": app_version,
+        "python": _platform.python_version(),
+        "platform": _platform.platform(),
+        "machine": _platform.machine(),
+    }
+
+    # --- runtime shape (mirrors /healthz, no per-user state) -------------
+    try:
+        report["runtime"] = {
+            "uptime_secs": round(time.time() - _METRICS["boot_at"], 1),
+            "stt_backend": STT_BACKEND,
+            "tts_backend": TTS_BACKEND,
+            "transport": "native",
+            "persona": get_active_persona().slug,
+            "active_sessions": len(active_user_states()),
+            "socket_connected": bool(
+                _native_transport and _native_transport.connected
+            ),
+            "pipeline_running": bool(
+                _native_pipeline_task and not _native_pipeline_task.done()
+            ),
+            "half_duplex": HALF_DUPLEX,
+        }
+    except Exception as e:
+        report["runtime"] = {"error": f"runtime probe failed: {e}"}
+
+    # --- metrics counters -----------------------------------------------
+    try:
+        from agent import metrics as _metrics_mod
+        snap = _metrics_mod.snapshot()
+        report["metrics"] = {
+            "sessions_total": _METRICS.get("sessions_total"),
+            "tool_calls_total": _METRICS.get("tool_calls_total"),
+            "a2a_inbound_total": _METRICS.get("a2a_inbound_total"),
+            "counters": snap.get("counters", {}),
+            "gauges": snap.get("gauges", {}),
+        }
+    except Exception as e:
+        report["metrics"] = {"error": f"metrics unavailable: {e}"}
+
+    # --- config, secrets redacted (same exposure as GET /api/config) -----
+    try:
+        from agent.config_store import read_config, redact_secrets
+        report["config"] = redact_secrets(read_config())
+    except Exception as e:
+        report["config"] = {"error": f"config unavailable: {e}"}
+
+    # --- where the raw log lives (NOT inlined; may carry transcripts) ----
+    from pathlib import Path as _P
+    log_path = _P.home() / "Library/Logs/studio.protolabs.orbis/sidecar.log"
+    report["logs"] = {
+        "path": str(log_path),
+        "note": "Attach this file — Settings → Diagnostics → Reveal logs in Finder.",
+    }
+
+    return report
+
+
+@app.get("/api/diagnostics")
+async def diagnostics(user: User = Depends(require_user)):
+    """Redacted support bundle for the in-app 'Copy diagnostics' button (#488).
+    Auth'd like /api/config — it embeds the redacted config."""
+    return build_diagnostics_report()
+
+
 @app.get("/api/whoami")
 async def whoami(user: User = Depends(require_user)):
     """Return the resolved owner. Clients call this at boot to confirm
