@@ -54,6 +54,8 @@ def make(
     chosen_url = url or OPENAI_TTS_URL
     chosen_model = model or OPENAI_TTS_MODEL
     chosen_api_key = api_key or OPENAI_TTS_API_KEY
+    from voice.keycheck import warn_if_placeholder_key
+    warn_if_placeholder_key("tts", chosen_url, chosen_api_key)
     logger.info(
         f"TTS backend: openai @ {chosen_url} model={chosen_model} "
         f"voice={chosen_voice}"

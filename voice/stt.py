@@ -321,6 +321,8 @@ def make_stt(
         chosen_url = url or STT_URL
         chosen_model = model or STT_MODEL
         chosen_api_key = api_key or STT_API_KEY
+        from voice.keycheck import warn_if_placeholder_key
+        warn_if_placeholder_key("stt", chosen_url, chosen_api_key)
         logger.info(f"STT backend: openai @ {chosen_url} model={chosen_model}")
         return OpenAISTTService(
             api_key=chosen_api_key,
