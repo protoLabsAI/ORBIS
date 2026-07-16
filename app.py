@@ -619,11 +619,17 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
 
 # ---------------------------------------------------------------------------
 # Audio + turn enhancements (echo guard already imported above)
-# Env-driven so the heavy/optional deps stay opt-in.
+# Env-driven. NOISE_FILTER stays opt-in (heavy dep). SMART_TURN now defaults
+# ON: the desktop build bundles the local-smart-turn extra
+# (PYAPP_PROJECT_FEATURES in .github/workflows/desktop-build.yml) and the
+# local rebuild does too. Semantic end-of-turn discriminates a real turn-end
+# from a mid-thought pause / echo bleed, so we no longer wait out a fixed
+# silence hangover (see VAD_STOP_SECS drop to 0.2 in voice/pipeline.py). Set
+# SMART_TURN=off to fall back to naive VAD endpointing.
 # ---------------------------------------------------------------------------
 
 NOISE_FILTER = os.environ.get("NOISE_FILTER", "off").lower()  # off | rnnoise
-SMART_TURN = os.environ.get("SMART_TURN", "off").lower()      # off | local
+SMART_TURN = os.environ.get("SMART_TURN", "local").lower()    # local | off | v3
 # Shared secret for the unauth /api/inbox ingest path; read by
 # server/routers/comms.py as app.INBOX_INGEST_TOKEN (monkeypatched in tests).
 INBOX_INGEST_TOKEN = os.environ.get("INBOX_INGEST_TOKEN", "")
