@@ -27,10 +27,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
+
+from agent.paths import get_sessions_dir
 
 # fcntl is POSIX-only. ORBIS desktop ships on macOS + Linux Docker so it's
 # always present in supported environments; the import-guard keeps the
@@ -45,7 +46,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DIR = Path(os.environ.get("SESSION_STORE_DIR", "/tmp/orbis_sessions"))
+# Durable per-OS location (honors SESSION_STORE_DIR override), NOT /tmp —
+# see agent.paths.get_sessions_dir for why the old /tmp default silently
+# dropped cross-restart recall.
+_DEFAULT_DIR = get_sessions_dir()
 _DEFAULT_USER_ID = "default"
 
 

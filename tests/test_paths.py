@@ -15,6 +15,7 @@ def clear_env(monkeypatch: pytest.MonkeyPatch):
     for k in (
         "ORBIS_DB_PATH", "ORBIS_CACHE_DIR", "HF_HOME", "TRANSFORMERS_CACHE",
         "MODEL_DIR", "XDG_DATA_HOME", "XDG_CACHE_HOME", "APPDATA", "LOCALAPPDATA",
+        "SESSION_STORE_DIR",
     ):
         monkeypatch.delenv(k, raising=False)
 
@@ -188,3 +189,30 @@ def test_configure_hf_home_does_not_clobber_existing(
     p.configure_hf_home()
     import os
     assert os.environ["HF_HOME"] == "/mnt/operator-override"
+
+
+# --- sessions dir (durable, not /tmp) ----------------------------------------
+
+
+def test_sessions_dir_env_override_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    monkeypatch.setenv("SESSION_STORE_DIR", str(tmp_path / "sess"))
+    p = _reload()
+    assert p.get_sessions_dir() == tmp_path / "sess"
+
+
+def test_sessions_dir_darwin_default_is_durable_not_tmp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+):
+    # REGRESSION: the old default was /tmp/orbis_sessions, which macOS
+    # purges — silently dropping cross-restart recall. It must land in the
+    # durable app-support data dir, alongside the SQLite DB.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = _reload()
+    got = p.get_sessions_dir()
+    assert got == tmp_path / "Library" / "Application Support" / "orbis" / "sessions"
+    assert "/tmp/" not in str(got)
+    # Shares the data dir with the durable memory DB (same parent).
+    assert got.parent == p.get_db_path().parent

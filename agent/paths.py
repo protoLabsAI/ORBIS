@@ -78,6 +78,24 @@ def get_db_path() -> Path:
     return Path(override) if override else _default_data_dir() / "orbis.sqlite"
 
 
+def get_sessions_dir() -> Path:
+    """Absolute path to the per-session store — the cross-restart "last
+    summary" recall and stashed push deliveries. Durable, alongside the
+    SQLite memory DB.
+
+    This used to default to ``/tmp/orbis_sessions``, which macOS purges
+    (periodic tmp clean / reboot), so the companion's "remembers what we
+    talked about" recall silently evaporated while the SQLite memory
+    (facts/personality/mood) survived — a split-brain durability bug.
+
+    Resolution:
+      1. ``SESSION_STORE_DIR`` if set (Docker/explicit override)
+      2. ``<data_dir>/sessions`` — same per-OS data dir as the SQLite DB
+    """
+    override = os.environ.get("SESSION_STORE_DIR")
+    return Path(override) if override else _default_data_dir() / "sessions"
+
+
 def get_voiceprint_path() -> Path:
     """Absolute path to the cached owner voiceprint.
 
