@@ -32,6 +32,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Load .env BEFORE any other module reads os.environ. python-dotenv leaves
 # already-set env vars alone (shell env wins over .env — standard).
@@ -194,6 +195,32 @@ def _active_skill(user_id: str = "default"):
     return get_active_persona()
 
 
+def _wants_thinking_suppression(url: str, provider: str | None) -> bool:
+    """Should this endpoint be sent
+    ``chat_template_kwargs={"enable_thinking": False}``?
+
+    That field is a **property of the endpoint** (of its chat template),
+    so it is keyed off the resolved URL — never off *where* the URL came
+    from. It used to be `bool(persona.llm.get("url"))`, i.e. "did the
+    config name a URL", which meant the very same gateway URL behaved
+    differently depending on whether it sat in `orbis.yaml` or in the
+    `LLM_URL` env. From yaml, `enable_thinking=False` was never sent, so
+    the Qwen-family models behind `protolabs/*` streamed raw
+    chain-of-thought into `content` — and ORBIS speaks `content`, so the
+    orb narrated its own tool-call planning out loud. Since the shipped
+    `config/orbis.yaml` names the gateway URL, that was the out-of-box
+    behavior.
+
+    True for the vLLM/Qwen dialect (the protoLabs gateway; a self-hosted
+    vLLM via `provider: vllm`). False everywhere else — OpenAI,
+    Anthropic, Groq, Mistral et al. reject unknown body fields with a
+    400. An explicit `persona.llm.extra_body` always wins over this.
+    """
+    if provider:
+        return provider.lower() in ("vllm", "protolabs")
+    return (urlparse(url).hostname or "").lower() == "api.proto-labs.ai"
+
+
 def _resolve_skill_llm(skill) -> dict:
     """Resolve LLM routing for a skill. Single source of truth shared by
     the voice path (run_bot) and the inbound A2A path (text_agent).
@@ -201,18 +228,15 @@ def _resolve_skill_llm(skill) -> dict:
     Precedence per-field: persona.llm.{url,model,api_key,api_key_env}
     overrides; env var fallback; finally module-level defaults.
 
-    `extra_body` follows the same kill-switch logic as the voice path:
-    user override always wins; custom URL forces None (avoids LiteLLM
-    400s on `chat_template_kwargs`); default endpoint sends
-    `enable_thinking=False`.
+    `extra_body`: an explicit user override always wins; otherwise it's
+    derived from the resolved endpoint via `_wants_thinking_suppression`.
 
-    Returns a dict with keys: url, model, api_key, extra_body,
-    using_custom_url, provider. Callers compose request kwargs from
-    this. ``provider`` rides through to ``make_llm()`` so the adapter
-    factory can route Ollama-native vs OpenAI-compat correctly.
+    Returns a dict with keys: url, model, api_key, extra_body, provider.
+    Callers compose request kwargs from this. ``provider`` rides through
+    to ``make_llm()`` so the adapter factory can route Ollama-native vs
+    OpenAI-compat correctly.
     """
     skill_llm = (skill.llm if skill else None) or {}
-    using_custom_url = bool(skill_llm.get("url"))
     url = str(skill_llm.get("url") or LLM_URL)
     model = str(skill_llm.get("model") or LLM_SERVED_NAME)
     if skill_llm.get("api_key"):
@@ -221,12 +245,13 @@ def _resolve_skill_llm(skill) -> dict:
         api_key = os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
     else:
         api_key = LLM_API_KEY
+    provider = skill_llm.get("provider")
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
-    elif using_custom_url:
-        extra_body = None
-    else:
+    elif _wants_thinking_suppression(url, provider):
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    else:
+        extra_body = None
     # Two-model routing (orbis-3it): optional smart/fast split. When set,
     # make_llm builds a TwoModelOpenAILLMService that runs the
     # tool-decision turn on router_model and the post-tool narration turn
@@ -260,8 +285,7 @@ def _resolve_skill_llm(skill) -> dict:
         "model": model,
         "api_key": api_key,
         "extra_body": extra_body,
-        "using_custom_url": using_custom_url,
-        "provider": skill_llm.get("provider"),
+        "provider": provider,
         "router_model": router_model,
         "content_model": content_model,
         "micro_model": micro_model,
@@ -310,7 +334,6 @@ def _resolve_fallback_llm(skill) -> dict | None:
     url = fb.get("url")
     if not url:
         return None
-    using_custom_url = True  # a fallback is always an explicit, user-chosen URL
     model = str(fb.get("model") or LLM_SERVED_NAME)
     if fb.get("api_key"):
         api_key = str(fb["api_key"])
@@ -318,17 +341,23 @@ def _resolve_fallback_llm(skill) -> dict | None:
         api_key = os.environ.get(str(fb["api_key_env"]), LLM_API_KEY)
     else:
         api_key = LLM_API_KEY
-    # Mirror the custom-URL extra_body kill-switch: a user-supplied
-    # fallback endpoint may be a LiteLLM/vLLM that 400s on
-    # chat_template_kwargs, so default it off unless explicitly set.
-    extra_body = fb["extra_body"] or None if "extra_body" in fb else None
+    # Same endpoint-capability rule as the primary: explicit override
+    # wins, else derive from the resolved URL. (A fallback is typically
+    # a local Ollama/MLX, which routes to an adapter that handles
+    # `think` itself — see _resolve_ollama_think.)
+    fb_provider = fb.get("provider")
+    if "extra_body" in fb:
+        extra_body = fb["extra_body"] or None
+    elif _wants_thinking_suppression(str(url), fb_provider):
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    else:
+        extra_body = None
     return {
         "url": str(url),
         "model": model,
         "api_key": api_key,
         "extra_body": extra_body,
-        "using_custom_url": using_custom_url,
-        "provider": fb.get("provider"),
+        "provider": fb_provider,
     }
 
 

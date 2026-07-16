@@ -47,22 +47,20 @@ def test_has_tool_result_handles_objects_and_empty() -> None:
 
 def test_make_llm_single_model_when_no_split() -> None:
     svc = make_llm(base_url="https://gw/v1", model="m", api_key="k",
-                   settings=_settings("m"), using_custom_url=True)
+                   settings=_settings("m"))
     assert type(svc) is OpenAILLMService
 
 
 def test_make_llm_single_model_when_router_equals_content() -> None:
     # Both equal to base → no real split → plain service.
     svc = make_llm(base_url="https://gw/v1", model="m", api_key="k",
-                   settings=_settings("m"), using_custom_url=True,
-                   router_model="m", content_model="m")
+                   settings=_settings("m"),                   router_model="m", content_model="m")
     assert type(svc) is OpenAILLMService
 
 
 def test_make_llm_two_model_when_split() -> None:
     svc = make_llm(base_url="https://gw/v1", model="protolabs/smart", api_key="k",
-                   settings=_settings("protolabs/smart"), using_custom_url=True,
-                   router_model="protolabs/smart", content_model="protolabs/fast")
+                   settings=_settings("protolabs/smart"),                   router_model="protolabs/smart", content_model="protolabs/fast")
     assert isinstance(svc, TwoModelOpenAILLMService)
     assert svc._router_model == "protolabs/smart"
     assert svc._content_model == "protolabs/fast"
@@ -72,8 +70,7 @@ def test_make_llm_split_defaults_unset_side_to_base_model() -> None:
     # Only content_model set → router defaults to base `model`; they
     # differ → two-model.
     svc = make_llm(base_url="https://gw/v1", model="smart", api_key="k",
-                   settings=_settings("smart"), using_custom_url=True,
-                   content_model="fast")
+                   settings=_settings("smart"),                   content_model="fast")
     assert isinstance(svc, TwoModelOpenAILLMService)
     assert svc._router_model == "smart"
     assert svc._content_model == "fast"

@@ -59,8 +59,8 @@ def test_persona_fallback_resolves(helper) -> None:
     assert cfg is not None
     assert cfg["url"] == "mlx://gemma"
     assert cfg["model"] == "gemma-3n"
-    assert cfg["using_custom_url"] is True
-    # custom URL → extra_body kill-switch defaults off
+    # mlx:// isn't the Qwen-dialect gateway → no extra_body. (The MLX
+    # adapter resolves `think` itself — see _resolve_ollama_think.)
     assert cfg["extra_body"] is None
 
 

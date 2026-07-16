@@ -77,7 +77,6 @@ def make_llm(
     api_key: str,
     settings: Any,
     provider: str | None = None,
-    using_custom_url: bool = False,
     router_model: str | None = None,
     content_model: str | None = None,
 ) -> OpenAILLMService:
@@ -93,9 +92,6 @@ def make_llm(
             settings shape since OllamaLLMService extends BaseOpenAI.
         provider: optional explicit override. ``"ollama"`` /
             ``"openai"``. When unset we auto-detect.
-        using_custom_url: tells the OpenAI fallback whether the URL
-            is the project default (which doesn't accept the OpenAI
-            ``role: developer`` field) so it can disable that field.
 
     Returns:
         A constructed pipecat LLMService ready to attach to a pipeline.
@@ -172,8 +168,7 @@ def make_llm(
             router_model=_rm,
             content_model=_cm,
         )
-        if not using_custom_url:
-            svc.supports_developer_role = False
+        svc.supports_developer_role = False
         return svc
 
     logger.info(f"[llm-factory] using OpenAI-compat adapter for {base_url} model={model}")
@@ -182,11 +177,16 @@ def make_llm(
         base_url=base_url,
         settings=settings,
     )
-    if not using_custom_url:
-        # vLLM rejects OpenAI's `role: developer` field — strip it
-        # for the project's default endpoint. Custom URLs are
-        # assumed to be real OpenAI-compat gateways that accept it.
-        svc.supports_developer_role = False
+    # Always send `role: system`, never OpenAI's newer `role: developer`.
+    # `system` is accepted by every OpenAI-compat endpoint *including*
+    # OpenAI itself, whereas `developer` is rejected by vLLM and by the
+    # protoLabs gateway (which 400s "System message must be at the
+    # beginning" and then silently falls back to another model group).
+    # This used to be gated on `using_custom_url` — i.e. on whether the
+    # URL came from config or env — which is not a signal about what the
+    # endpoint accepts. There is no upside to `developer`, so don't
+    # gamble on it.
+    svc.supports_developer_role = False
     return svc
 
 
