@@ -146,7 +146,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     llm_model = llm_cfg["model"]
     llm_api_key = llm_cfg["api_key"]
     extra_body = llm_cfg["extra_body"]
-    using_custom_llm = llm_cfg["using_custom_url"]
 
     settings_kwargs: dict = {
         "model": llm_model,
@@ -159,15 +158,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # voice/llm/__init__.py picks the right adapter — Ollama instances
     # get the native /api/chat path (which honors `think: false`),
     # everything else routes through pipecat's OpenAI-compat service.
-    # The factory also handles the supports_developer_role swap for
-    # the project's default endpoint.
     llm = make_llm(
         base_url=llm_url,
         model=llm_model,
         api_key=llm_api_key,
         settings=OpenAILLMService.Settings(**settings_kwargs),
         provider=llm_cfg["provider"],
-        using_custom_url=using_custom_llm,
         router_model=llm_cfg["router_model"],
         content_model=llm_cfg["content_model"],
     )
@@ -210,7 +206,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             api_key=_fallback_cfg["api_key"],
             settings=OpenAILLMService.Settings(**_fb_settings),
             provider=_fallback_cfg["provider"],
-            using_custom_url=_fallback_cfg["using_custom_url"],
         )
         _llm_members.append(llm_fallback)
         logger.info(

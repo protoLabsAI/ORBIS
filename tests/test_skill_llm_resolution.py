@@ -52,8 +52,6 @@ def test_no_overrides_uses_env_defaults(helper) -> None:
     assert cfg["url"] == "http://env-default:8100/v1"
     assert cfg["model"] == "env-default-model"
     assert cfg["api_key"] == "env-default-key"
-    assert cfg["using_custom_url"] is False
-    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 def test_skill_none_uses_env_defaults(helper) -> None:
@@ -64,11 +62,9 @@ def test_skill_none_uses_env_defaults(helper) -> None:
 # --- per-field overrides ---------------------------------------------------
 
 
-def test_url_override_marks_custom(helper) -> None:
+def test_url_override(helper) -> None:
     cfg = helper(_skill(url="https://custom.example/v1"))
     assert cfg["url"] == "https://custom.example/v1"
-    assert cfg["using_custom_url"] is True
-    assert cfg["extra_body"] is None
 
 
 def test_model_override(helper) -> None:
@@ -99,36 +95,84 @@ def test_api_key_direct_beats_env_var(helper, monkeypatch) -> None:
     assert cfg["api_key"] == "sk-direct"
 
 
-# --- extra_body kill-switch ------------------------------------------------
+# --- extra_body / enable_thinking is an ENDPOINT capability ----------------
+#
+# `chat_template_kwargs.enable_thinking=False` stops the Qwen-family models
+# behind protolabs/* from streaming chain-of-thought into `content`. ORBIS
+# SPEAKS `content`, so getting this wrong makes the orb narrate its own
+# tool-call planning out loud. It's a property of the endpoint, so it must
+# be decided by the resolved URL — never by where that URL came from.
+
+_THINKING_OFF = {"chat_template_kwargs": {"enable_thinking": False}}
+_GATEWAY = "https://api.proto-labs.ai/v1"
+
+
+def test_gateway_url_from_config_suppresses_thinking(helper) -> None:
+    """The shipped config/orbis.yaml names the gateway URL — that must
+    still send enable_thinking=False."""
+    cfg = helper(_skill(url=_GATEWAY))
+    assert cfg["extra_body"] == _THINKING_OFF
+
+
+def test_gateway_url_from_env_suppresses_thinking(helper, monkeypatch) -> None:
+    import app as _app
+    monkeypatch.setattr(_app, "LLM_URL", _GATEWAY)
+    cfg = helper(_skill())
+    assert cfg["extra_body"] == _THINKING_OFF
+
+
+def test_provenance_does_not_change_behavior(helper, monkeypatch) -> None:
+    """REGRESSION: the same URL must resolve identically whether it came
+    from persona.llm.url or the LLM_URL env.
+
+    The old rule was `using_custom_url = bool(skill_llm.get("url"))`, so
+    naming the gateway in orbis.yaml silently dropped enable_thinking (and
+    kept role:developer) while the identical URL in env did not. The orb
+    spoke its reasoning aloud, out of the box.
+    """
+    from_config = helper(_skill(url=_GATEWAY))
+    import app as _app
+    monkeypatch.setattr(_app, "LLM_URL", _GATEWAY)
+    from_env = helper(_skill())
+    assert from_config["url"] == from_env["url"] == _GATEWAY
+    assert from_config["extra_body"] == from_env["extra_body"] == _THINKING_OFF
+
+
+def test_third_party_url_sends_no_extra_body(helper) -> None:
+    """OpenAI/Anthropic/Groq/… 400 on unknown body fields — send nothing.
+    True regardless of which model is named."""
+    for url in (
+        "https://api.openai.com/v1",
+        "https://api.anthropic.com/v1",
+        "https://api.groq.com/openai/v1",
+    ):
+        assert helper(_skill(url=url))["extra_body"] is None, url
+
+
+def test_provider_vllm_suppresses_thinking_on_any_url(helper) -> None:
+    """A self-hosted vLLM speaks the Qwen dialect at an arbitrary URL —
+    `provider` is the escape hatch."""
+    cfg = helper(_skill(url="http://192.168.1.50:8000/v1", provider="vllm"))
+    assert cfg["extra_body"] == _THINKING_OFF
 
 
 def test_extra_body_user_override_wins(helper) -> None:
-    """Even with a default URL, persona-set extra_body overrides."""
-    cfg = helper(_skill(extra_body={"reasoning_effort": "high"}))
+    """An explicit persona-set extra_body beats endpoint detection."""
+    cfg = helper(_skill(url=_GATEWAY, extra_body={"reasoning_effort": "high"}))
     assert cfg["extra_body"] == {"reasoning_effort": "high"}
 
 
-def test_extra_body_user_override_wins_with_custom_url(helper) -> None:
-    """User can opt back into thinking-disable on a custom URL."""
-    cfg = helper(_skill(
-        url="https://custom.example/v1",
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-    ))
-    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
-    assert cfg["using_custom_url"] is True
+def test_extra_body_user_override_wins_on_third_party(helper) -> None:
+    """User can opt back into thinking-disable on an unrecognized URL."""
+    cfg = helper(_skill(url="https://custom.example/v1", extra_body=_THINKING_OFF))
+    assert cfg["extra_body"] == _THINKING_OFF
 
 
 def test_extra_body_explicit_none_clears(helper) -> None:
-    """Setting extra_body to None / falsy explicitly disables it."""
-    cfg = helper(_skill(extra_body=None))
+    """Setting extra_body to None / falsy explicitly disables it, even on
+    an endpoint that would otherwise get it."""
+    cfg = helper(_skill(url=_GATEWAY, extra_body=None))
     assert cfg["extra_body"] is None
-
-
-def test_default_endpoint_injects_thinking_false(helper) -> None:
-    """No URL override + no extra_body override → safe to send the
-    bundled-vLLM convention."""
-    cfg = helper(_skill())
-    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 # --- mixed config ---------------------------------------------------------
@@ -141,7 +185,6 @@ def test_custom_url_with_default_model_and_key(helper) -> None:
     assert cfg["url"] == "https://gateway.example/v1"
     assert cfg["model"] == "env-default-model"
     assert cfg["api_key"] == "env-default-key"
-    assert cfg["using_custom_url"] is True
     assert cfg["extra_body"] is None
 
 
@@ -156,19 +199,14 @@ def test_full_persona_override(helper) -> None:
     assert cfg["model"] == "claude-opus-4-7"
     assert cfg["api_key"] == "sk-anthropic"
     assert cfg["extra_body"] == {"max_tokens_to_sample": 4096}
-    assert cfg["using_custom_url"] is True
 
 
 # --- empty / falsy edge cases ---------------------------------------------
 
 
-def test_empty_string_url_does_not_count_as_custom(helper) -> None:
-    """An explicit empty string in config shouldn't flip on the kill-switch."""
+def test_empty_string_url_falls_through_to_env(helper) -> None:
     cfg = helper(_skill(url=""))
-    # Falsy URL → falls through to env default
     assert cfg["url"] == "http://env-default:8100/v1"
-    assert cfg["using_custom_url"] is False
-    assert cfg["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
 
 
 # --- micro-task model (orbis-3au) -----------------------------------------
