@@ -185,6 +185,30 @@ def _get_pipe(lang: str = KOKORO_LANG):
     return _pipe
 
 
+def _coerce_voice(voice: str | None) -> str:
+    """Return a valid Kokoro voice id, falling back to the default when the
+    configured one isn't in the catalogue.
+
+    Guards the boot-from-config path: nothing stops orbis.yaml from pairing
+    ``tts_backend: kokoro`` with a voice from a different backend (e.g.
+    ``protolabs/fish``). Config validation checks each field's type but not
+    backend↔voice coherence, so an incompatible pair persists cleanly — and
+    Kokoro would then try to fetch ``voices/protolabs/fish.pt`` from HF and
+    hard-break TTS on the first utterance. Coerce to the default instead so
+    the orb still speaks, and WARN so the mismatch is visible. The live
+    ``set_voice`` path already validates; this brings __init__ in line."""
+    if voice and voice in KOKORO_VOICES:
+        return voice
+    if voice and voice != KOKORO_VOICE:
+        logger.warning(
+            "[kokoro] configured voice %r is not a Kokoro voice — falling back "
+            "to %r. Check that tts_backend and voice match in orbis.yaml "
+            "(a %r voice-id belongs to a different TTS backend).",
+            voice, KOKORO_VOICE, voice,
+        )
+    return KOKORO_VOICE
+
+
 class LocalKokoroTTS(TTSService):
     def __init__(
         self,
@@ -194,6 +218,7 @@ class LocalKokoroTTS(TTSService):
         speed: float = 1.0,
         **kwargs,
     ):
+        voice = _coerce_voice(voice)
         kwargs.setdefault(
             "settings",
             TTSSettings(model="kokoro-82m", voice=voice, language=None),
