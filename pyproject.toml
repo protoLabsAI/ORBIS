@@ -5,7 +5,7 @@ description = "ORBIS — voice-first AI companion. Pipecat voice pipeline + orb 
 requires-python = ">=3.11"
 dependencies = [
     # Pipecat + transports
-    "pipecat-ai[silero,openai]>=1.0",
+    "pipecat-ai[silero,openai]>=1.5,<2",
     # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
     # but baseline; users who only want cloud STT/TTS can skip by
     # installing a slim variant (future work).
