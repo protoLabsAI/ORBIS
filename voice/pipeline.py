@@ -21,6 +21,7 @@ from agent.backchannel import BackchannelController
 from agent.bargein import BargeInGate
 from agent.delivery import DeliveryController
 from agent.echo_guard import EchoGuardObserver, EchoGuardSuppressor
+from agent.latency import LatencyObserver
 from agent.filler import Latency, Verbosity
 from agent.llm_error_announcer import LLMErrorAnnouncer
 from agent.micro_ack import MicroAckInjector, opening_ack_line
@@ -762,6 +763,16 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # when the user interrupts the bot.
     _native_observers = [NativeBargeInObserver(transport)]
 
+    # Latency instrumentation (pipecat >=1.5) — logs per-stage TTFB/TTFA under
+    # a [latency] tag so the STT/LLM/TTS split of the first-audio wait is
+    # visible in sidecar.log. On by default (cheap — a few lines per turn);
+    # set LOG_LATENCY=0 to silence.
+    _latency_observers = (
+        [LatencyObserver()]
+        if os.environ.get("LOG_LATENCY", "1").lower() in ("1", "true", "on")
+        else []
+    )
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(enable_metrics=True),
@@ -788,6 +799,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             SseBusObserver(rtvi),
             llm_error_announcer,
             *_native_observers,
+            *_latency_observers,
         ],
     )
 
