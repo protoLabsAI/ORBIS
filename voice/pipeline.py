@@ -17,7 +17,7 @@ import time
 
 from agent import presence, tracing as _tracing
 from agent.audio_tags import make_audio_tags_tap
-from agent.backchannel import BackchannelController
+from agent.backchannel import BackchannelController, resolve_backchannel_enabled
 from agent.bargein import BargeInGate
 from agent.delivery import DeliveryController
 from agent.echo_guard import EchoGuardObserver, EchoGuardSuppressor
@@ -251,26 +251,47 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
-    # Backchannel + micro-ack ("mm-hmm" / "mm" listener-acks) false-trigger on
-    # the bot's own speaker bleed when the mic has no echo cancellation — the
-    # reason they shipped off. The native engine now REPORTS whether hardware
-    # AEC (Apple VPIO) is active (CTRL_AUDIO_MODE → transport.is_aec_active), so
-    # we default them ON but gate emission on live AEC: on the production VPIO
-    # path they work; on a CPAL fallback (USB output / VPIO dead) they stay
-    # quiet, and if VPIO drops mid-session the gate closes with it. Explicit
-    # config still wins and BYPASSES the gate — the persona behavior block, or
-    # the BACKCHANNEL / MICRO_ACK env flags (the runtime .env override for e.g.
-    # headphone users on a CPAL path, where there's no acoustic echo anyway).
+    # Micro-ack ("mm" listener-ack) false-triggers on the bot's own speaker
+    # bleed when the mic has no echo cancellation — the reason it shipped off.
+    # The native engine now REPORTS whether hardware AEC (Apple VPIO) is active
+    # (CTRL_AUDIO_MODE → transport.is_aec_active), so it defaults ON but gates
+    # emission on live AEC: on the production VPIO path it works; on a CPAL
+    # fallback (USB output / VPIO dead) it stays quiet, and if VPIO drops
+    # mid-session the gate closes with it. Explicit config bypasses the gate —
+    # the persona behavior block or the MICRO_ACK env (headphone / CPAL users).
+    #
+    # Backchannel ("mm-hmm") carries a second, harder constraint: it only sounds
+    # right on the Fish backend — Kokoro's short-clip synthesis makes the acks
+    # wrong — so resolve_backchannel_enabled caps it to Fish no matter how it was
+    # requested (persona behavior / voice.backchannel UI toggle / BACKCHANNEL
+    # env / default). On Fish it keeps the same AEC-gate semantics as micro-ack.
     _aec_gate = transport.is_aec_active
-    bc_gate = None
     ma_gate = None
-    if behavior.get("backchannel") is None:
-        _bc_env = os.environ.get("BACKCHANNEL")
-        if _bc_env is not None:
-            bc_cfg["enabled"] = _bc_env.lower() in ("1", "true", "on")
-        else:
-            bc_cfg["enabled"] = True
-            bc_gate = _aec_gate
+    _bc_behavior = (
+        bool(bc_cfg.get("enabled", True))
+        if behavior.get("backchannel") is not None
+        else None
+    )
+    bc_enabled, _bc_aec = resolve_backchannel_enabled(
+        tts_backend=tts_backend,
+        behavior_enabled=_bc_behavior,
+        config_toggle=skill.backchannel,
+        env_flag=os.environ.get("BACKCHANNEL"),
+    )
+    # Diagnostic: someone asked for backchannels but the backend can't do them.
+    _bc_wanted_on = (
+        (behavior.get("backchannel") is not None and bool(bc_cfg.get("enabled", True)))
+        or skill.backchannel is True
+        or (os.environ.get("BACKCHANNEL") or "").strip().lower()
+        in ("1", "true", "on", "yes")
+    )
+    if _bc_wanted_on and tts_backend != "fish":
+        logger.info(
+            "[backchannel] disabled on the %s backend — listener-acks are "
+            "Fish-only (Kokoro's short clips sound wrong)", tts_backend,
+        )
+    bc_cfg["enabled"] = bc_enabled
+    bc_gate = _aec_gate if _bc_aec else None
     if behavior.get("micro_ack") is None:
         _ma_env = os.environ.get("MICRO_ACK")
         if _ma_env is not None:

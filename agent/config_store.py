@@ -69,6 +69,11 @@ _ALLOWED_VOICE_KEYS = {
     # Kokoro) | "byo" (skip; user configures their own backend). Gates the
     # eager prewarm in app.py:prewarm_all.
     "local_models",
+    # Listener-ack ("mm-hmm") on/off, surfaced in the Voice settings panel.
+    # Only viable on the Fish backend — Kokoro's short-clip synthesis makes the
+    # acks sound wrong — so the UI shows the toggle only when Fish is active and
+    # the pipeline caps the feature to Fish regardless. See voice/pipeline.py.
+    "backchannel",
 }
 _ALLOWED_ORB_KEYS = {"variant", "palette", "params", "state_overrides", "mood_overrides"}
 # Must round-trip everything the persona loader (agent/persona.py)
@@ -192,6 +197,14 @@ def _validate_voice(block: Any) -> dict:
             if val not in ("on_device", "byo"):
                 raise ValueError("voice.local_models must be 'on_device' or 'byo'")
             out[k] = val
+        elif k == "backchannel":
+            # Store a clean bool. Accept the on/1/true (and off/0/false) string
+            # forms too so a hand-edited YAML value works the same as the UI's
+            # JSON boolean.
+            if isinstance(v, bool):
+                out[k] = v
+            else:
+                out[k] = str(v).strip().lower() in ("1", "true", "on", "yes")
     return out
 
 

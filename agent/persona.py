@@ -175,6 +175,10 @@ class Persona:
     tts_url: str | None = None
     tts_model: str | None = None
     tts_api_key: str | None = None
+    # Listener-ack ("mm-hmm" while you talk) on/off. None = unset → the
+    # pipeline picks the default (on for the Fish backend, off elsewhere).
+    # Fish-only; capped in voice/pipeline.py regardless of this value.
+    backchannel: bool | None = None
     # Starter orb visual state — (variant, palette, params).
     orb_variant: str | None = None
     orb_palette: str | None = None
@@ -305,6 +309,11 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         else None
     )
     voice = voice_block.get("voice") or os.environ.get("KOKORO_VOICE")
+    # Listener-ack toggle (Voice settings panel). Only a real bool counts;
+    # anything else (absent, string, null) leaves it unset so the pipeline
+    # applies its Fish-aware default. PyYAML parses on/off/yes/no as bools.
+    _bc = voice_block.get("backchannel")
+    backchannel = _bc if isinstance(_bc, bool) else None
 
     def _str_or_none(v: object) -> str | None:
         if not isinstance(v, str):
@@ -390,6 +399,7 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
         tts_url=tts_url,
         tts_model=tts_model,
         tts_api_key=tts_api_key,
+        backchannel=backchannel,
         orb_variant=orb_variant,
         orb_palette=orb_palette,
         orb_params=orb_params,

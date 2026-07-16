@@ -703,3 +703,20 @@ def test_merge_patch_fallback_survives_unrelated_save(tmp_path: Path):
         "url": "http://127.0.0.1:11434/v1",
         "model": "backup",
     }
+
+
+def test_validate_accepts_voice_backchannel_bool():
+    out = validate_and_normalize({"voice": {"backchannel": True}})
+    assert out["voice"]["backchannel"] is True
+    out = validate_and_normalize({"voice": {"backchannel": False}})
+    assert out["voice"]["backchannel"] is False
+
+
+def test_validate_voice_backchannel_string_forms():
+    # Hand-edited YAML string values normalize to a clean bool.
+    assert validate_and_normalize(
+        {"voice": {"backchannel": "on"}}
+    )["voice"]["backchannel"] is True
+    assert validate_and_normalize(
+        {"voice": {"backchannel": "off"}}
+    )["voice"]["backchannel"] is False
