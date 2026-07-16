@@ -203,6 +203,40 @@ def _active_skill(user_id: str = "default"):
     return get_active_persona()
 
 
+def _resolve_api_key(block: dict, *, what: str) -> str:
+    """Resolve an api_key from an llm config block: a direct ``api_key`` →
+    ``api_key_env`` indirection → the ``LLM_API_KEY`` placeholder default.
+
+    Shared by the primary (``_resolve_skill_llm``) and fallback
+    (``_resolve_fallback_llm``) paths so credential resolution has one
+    source of truth.
+
+    ``api_key_env`` is a footgun on the desktop app: a Finder/Dock launch
+    gives the sidecar launchd's minimal env, so a shell export like
+    ``OPENAI_API_KEY`` is NOT visible (this is why the Tauri shell
+    hand-augments PATH). The var then silently resolves to the
+    ``"not-needed"`` placeholder and the request 401s with no hint why.
+    When ``api_key_env`` names a var that's unset, WARN loudly instead of
+    swallowing it. Prefer a direct ``api_key`` in orbis.yaml — what the
+    setup wizard writes.
+    """
+    if block.get("api_key"):
+        return str(block["api_key"])
+    env_var = block.get("api_key_env")
+    if env_var:
+        resolved = os.environ.get(str(env_var))
+        if resolved:
+            return resolved
+        logger.warning(
+            "[%s] api_key_env=%r but that env var is unset in the sidecar's "
+            "environment (a Finder/Dock launch does not inherit shell "
+            "exports). Falling back to a placeholder key — expect a 401. Set "
+            "api_key directly in orbis.yaml instead.",
+            what, str(env_var),
+        )
+    return LLM_API_KEY
+
+
 def _wants_thinking_suppression(url: str, provider: str | None) -> bool:
     """Should this endpoint be sent
     ``chat_template_kwargs={"enable_thinking": False}``?
@@ -247,12 +281,7 @@ def _resolve_skill_llm(skill) -> dict:
     skill_llm = (skill.llm if skill else None) or {}
     url = str(skill_llm.get("url") or LLM_URL)
     model = str(skill_llm.get("model") or LLM_SERVED_NAME)
-    if skill_llm.get("api_key"):
-        api_key = str(skill_llm["api_key"])
-    elif skill_llm.get("api_key_env"):
-        api_key = os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
-    else:
-        api_key = LLM_API_KEY
+    api_key = _resolve_api_key(skill_llm, what="llm")
     provider = skill_llm.get("provider")
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
@@ -343,12 +372,7 @@ def _resolve_fallback_llm(skill) -> dict | None:
     if not url:
         return None
     model = str(fb.get("model") or LLM_SERVED_NAME)
-    if fb.get("api_key"):
-        api_key = str(fb["api_key"])
-    elif fb.get("api_key_env"):
-        api_key = os.environ.get(str(fb["api_key_env"]), LLM_API_KEY)
-    else:
-        api_key = LLM_API_KEY
+    api_key = _resolve_api_key(fb, what="llm.fallback")
     # Same endpoint-capability rule as the primary: explicit override
     # wins, else derive from the resolved URL. (A fallback is typically
     # a local Ollama/MLX, which routes to an adapter that handles

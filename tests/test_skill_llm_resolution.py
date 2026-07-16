@@ -84,10 +84,20 @@ def test_api_key_env_resolves_through_environ(helper, monkeypatch) -> None:
     assert cfg["api_key"] == "sk-from-env-var"
 
 
-def test_api_key_env_missing_falls_back_to_default(helper, monkeypatch) -> None:
+def test_api_key_env_missing_falls_back_to_default_LOUDLY(
+    helper, monkeypatch, caplog,
+) -> None:
+    # Behavior unchanged (still falls back to the placeholder), but the fall
+    # back must now WARN — silently resolving api_key_env to "not-needed" on a
+    # Finder launch was a 401-with-no-hint footgun.
+    import logging
     monkeypatch.delenv("MISSING_KEY", raising=False)
-    cfg = helper(_skill(api_key_env="MISSING_KEY"))
+    with caplog.at_level(logging.WARNING):
+        cfg = helper(_skill(api_key_env="MISSING_KEY"))
     assert cfg["api_key"] == "env-default-key"
+    assert any(
+        "MISSING_KEY" in r.message and "unset" in r.message for r in caplog.records
+    ), "a missing api_key_env var must be warned about, not swallowed"
 
 
 def test_api_key_direct_beats_env_var(helper, monkeypatch) -> None:

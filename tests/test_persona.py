@@ -77,24 +77,52 @@ def test_checked_in_example_loads_bundled_persona_prompt():
     assert "Everything you say is spoken aloud through TTS" in p.system_prompt
 
 
-def test_env_override_for_system_prompt_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+# yaml-wins (DECISIONS 2026-07-15): saved config is authoritative; the
+# SYSTEM_PROMPT / TTS_BACKEND / KOKORO_VOICE env vars are fallbacks that
+# apply only when the config omits the field. This is what stops a stale
+# runtime .env (override=True) from silently shadowing a UI save.
+
+
+def test_yaml_system_prompt_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yaml_path = _write(tmp_path / "orbis.yaml", """
         persona:
           system_prompt: "YAML says this."
     """)
     monkeypatch.setenv("SYSTEM_PROMPT", "ENV says this.")
     p = load_persona(yaml_path)
+    assert p.system_prompt == "YAML says this."
+
+
+def test_env_system_prompt_is_fallback_when_yaml_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        persona:
+          name: ORBIS
+    """)
+    monkeypatch.setenv("SYSTEM_PROMPT", "ENV says this.")
+    p = load_persona(yaml_path)
     assert p.system_prompt == "ENV says this."
 
 
-def test_env_override_for_tts_backend_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_yaml_tts_backend_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yaml_path = _write(tmp_path / "orbis.yaml", """
         voice:
           tts_backend: kokoro
     """)
     monkeypatch.setenv("TTS_BACKEND", "elevenlabs")
     p = load_persona(yaml_path)
-    assert p.tts_backend == "elevenlabs"
+    assert p.tts_backend == "kokoro"
+
+
+def test_yaml_voice_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          voice: af_heart
+    """)
+    monkeypatch.setenv("KOKORO_VOICE", "am_onyx")
+    p = load_persona(yaml_path)
+    assert p.voice == "af_heart"
 
 
 def test_tts_backend_case_normalized_from_yaml(tmp_path: Path):
@@ -106,12 +134,13 @@ def test_tts_backend_case_normalized_from_yaml(tmp_path: Path):
     assert p.tts_backend == "openai"
 
 
-def test_tts_backend_case_normalized_from_env(
+def test_env_tts_backend_is_fallback_and_normalized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
+    # yaml omits tts_backend → env fallback applies, normalized to lowercase.
     yaml_path = _write(tmp_path / "orbis.yaml", """
-        voice:
-          tts_backend: kokoro
+        persona:
+          name: ORBIS
     """)
     monkeypatch.setenv("TTS_BACKEND", "Fish")
     p = load_persona(yaml_path)
