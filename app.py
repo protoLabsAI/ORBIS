@@ -135,7 +135,7 @@ from agent.user_state import all_user_states, user_state_for
 
 _emit_boot("import", "Loading speech + voice engines…")
 
-from voice.stt import STT_BACKEND, prewarm as prewarm_stt
+from voice.stt import STT_BACKEND, prewarm as prewarm_stt, stt_emits_audio_tags
 from voice.tts import TTS_BACKEND, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -761,14 +761,25 @@ def _effective_prompt(
         + "\n\n"
         + repair_block()
         # Audio-context block teaches the LLM what the [audio] line
-        # AudioTagsTap will inject means. Static — no runtime data, no
-        # branch — so it sits in every persona's prompt regardless of
-        # whether STT_BACKEND=sensevoice is enabled. When the tap isn't
-        # running the [audio] line just won't appear; the block tells
-        # the LLM to ignore the annotation when missing, so this is
-        # safe-by-default.
-        + "\n\n"
-        + audio_context_block()
+        # AudioTagsTap injects means — but ONLY when the active STT
+        # backend can actually emit one. Only SenseVoice carries
+        # EmotionFrame; on local/parakeet/openai the annotation never
+        # arrives.
+        #
+        # This used to be unconditional, on the theory that "the block
+        # tells the LLM to ignore the annotation when missing, so this
+        # is safe-by-default". It isn't: a small model handed a literal
+        # worked example doesn't ignore it, it COPIES it. The orb read
+        # `[live] audio=emotion=neutral lang=en speaker=owner ...` aloud
+        # to the user on 2026-07-15 — a format it had only ever seen in
+        # this block, on a backend that emits no tags at all.
+        # `skill` is duck-typed (see this function's docstring) — callers
+        # pass Persona or a bare namespace, so read `stt` defensively.
+        + (
+            ("\n\n" + audio_context_block())
+            if stt_emits_audio_tags((getattr(skill, "stt", None) or {}).get("backend"))
+            else ""
+        )
         + (("\n\n" + user_block) if user_block else "")
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")

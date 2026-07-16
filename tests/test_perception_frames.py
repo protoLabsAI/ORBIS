@@ -112,6 +112,48 @@ def test_audio_context_block_has_required_sections() -> None:
     assert "missing" in text.lower() or "ignore" in text.lower()
 
 
+def test_audio_context_block_only_describes_fields_that_exist() -> None:
+    """REGRESSION: the block must not advertise a field that
+    `_audio_annotation` can't emit.
+
+    It documented `snr=` / `env=` / `rate=` — with behavioral rules for
+    each — that no STT backend has ever produced. Three of five rules
+    were dead, and the invented fields leaked into the model's speech:
+    the orb said "[live] audio=emotion=neutral lang=en speaker=owner
+    snr=high env=indoor rate=normal" out loud, having only ever seen
+    that shape here.
+    """
+    import re
+    from agent.audio_tags import _audio_annotation
+    from agent.frames import EmotionFrame
+
+    emitted = set(
+        re.findall(
+            r"(\w+)=",
+            _audio_annotation(
+                EmotionFrame(emotion="happy", lang="en", speaker_verified=True),
+                ["Laughter"],
+            ),
+        )
+    )
+    described = set(re.findall(r"(\w+)=", audio_context_block()))
+    assert described <= emitted, (
+        f"AUDIO CONTEXT describes fields no backend emits: "
+        f"{sorted(described - emitted)}. Keep it in sync with "
+        f"agent.audio_tags._audio_annotation."
+    )
+
+
+def test_audio_context_block_marks_the_line_as_input_not_output() -> None:
+    """A small model handed a literal worked example copies it. The
+    block must say the line is input and must never be reproduced —
+    the prohibition alone wasn't enough (hence the caller-side gate in
+    `_effective_prompt`), but it's still the first line of defense."""
+    text = audio_context_block().lower()
+    assert "input" in text
+    assert "never reproduce" in text or "never part of your reply" in text
+
+
 def test_audio_context_block_is_static_no_args() -> None:
     """Doesn't take verbosity / tts_backend — same advice regardless
     of persona configuration. Pinned so future evolution stays
