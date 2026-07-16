@@ -47,9 +47,17 @@ try:
     # guard, SMART_TURN, micro-ack — with a 5-second app restart instead
     # of an 80-second sidecar rebuild. override=True so it wins over the
     # values the Tauri shell injects when it spawns the sidecar.
+    #
+    # ORBIS_SKIP_RUNTIME_ENV disables this. The test suite sets it (see
+    # conftest.py): override=True beats anything a test set up, so this
+    # file would otherwise import a developer's personal tuning config
+    # into every test process and make the local suite disagree with CI.
+    # It did — a stray A2A_AUTH_TOKEN silently 401'd an a2a test that
+    # passes in CI, and tests/test_skill_llm_resolution.py carries a
+    # fixture that hand-clears LLM_MICRO_MODEL for the same reason.
     from pathlib import Path as _RTPath
     _rt_env = _RTPath.home() / "Library/Application Support/studio.protolabs.orbis/.env"
-    if _rt_env.is_file():
+    if _rt_env.is_file() and not os.environ.get("ORBIS_SKIP_RUNTIME_ENV"):
         load_dotenv(_rt_env, override=True)
 except ImportError:
     # Missing dotenv shouldn't crash boot — secrets just have to come

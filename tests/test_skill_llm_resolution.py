@@ -27,9 +27,10 @@ def helper(monkeypatch):
     monkeypatch.setattr(_app, "LLM_URL", "http://env-default:8100/v1")
     monkeypatch.setattr(_app, "LLM_SERVED_NAME", "env-default-model")
     monkeypatch.setattr(_app, "LLM_API_KEY", "env-default-key")
-    # The resolver also reads these at call time — clear them so a
-    # developer's runtime env (e.g. LLM_MICRO_MODEL=protolabs/nano)
-    # can't leak in and flip the micro/router defaults under the tests.
+    # The resolver reads these at call time. conftest.py keeps the user's
+    # runtime .env out of the suite entirely, so they can't leak in from a
+    # developer's machine — but a *shell* env still can, and these tests
+    # pin defaults, so clear them explicitly.
     for var in (
         "LLM_ROUTER_MODEL", "LLM_CONTENT_MODEL",
         "LLM_MICRO_URL", "LLM_MICRO_MODEL", "LLM_MICRO_API_KEY",
