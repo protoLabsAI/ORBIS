@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import {
   Select,
   SelectContent,
@@ -118,6 +119,10 @@ export function TTSSettings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [backend, setBackend] = useState<TTSBackend>('kokoro');
   const [voice, setVoice] = useState('');
+  // Listener-ack ("mm-hmm") toggle — only surfaced for the Fish backend
+  // (the pipeline caps backchannels to Fish). Defaults on, matching the
+  // pipeline's Fish default.
+  const [backchannel, setBackchannel] = useState(true);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
@@ -149,6 +154,7 @@ export function TTSSettings() {
         // we haven't listed yet, fall back to kokoro rather than lying
         // to the user via a coerced cast.
         if (isValidBackend(v.tts_backend)) setBackend(v.tts_backend);
+        if (typeof v.backchannel === 'boolean') setBackchannel(v.backchannel);
         if (v.voice) setVoice(v.voice);
         if (v.tts_url) { setTtsUrl(v.tts_url); setTtsPreset(matchTtsPreset(v.tts_url)); }
         if (v.tts_model) setTtsModel(v.tts_model);
@@ -213,6 +219,9 @@ export function TTSSettings() {
         // key is already saved.
         if (ttsApiKey.trim()) v.tts_api_key = ttsApiKey.trim();
       }
+      // Backchannel is Fish-only — only persist the toggle when Fish is the
+      // active backend so we don't stamp a value the user never saw.
+      if (backend === 'fish') v.backchannel = backchannel;
       await api.putConfig({ voice: v });
       setSave({ kind: 'saved' });
       if (ttsApiKey.trim()) {
@@ -379,6 +388,27 @@ export function TTSSettings() {
             </div>
           )}
         </div>
+
+        {/* Listener acks — Fish-only. Kokoro's short-clip synthesis makes
+            "mm-hmm" backchannels sound wrong, so the pipeline caps the
+            feature to Fish and we only surface the toggle here for Fish. */}
+        {backend === 'fish' && (
+          <label className="flex items-start justify-between gap-4 pt-1">
+            <span>
+              <span className="block text-sm text-fg-body">Listener acks</span>
+              <span className="block text-helper text-fg-subtle">
+                Brief “mm-hmm” backchannels while you speak. Fish only —
+                Kokoro’s short clips make them sound off.
+              </span>
+            </span>
+            <Switch
+              checked={backchannel}
+              onCheckedChange={setBackchannel}
+              aria-label="Listener acks"
+              className="mt-0.5 shrink-0"
+            />
+          </label>
+        )}
 
         {/* OpenAI-compat endpoint overrides — surface URL/Model/Key
             inline so a user with a custom gateway (the protoLabs gateway,

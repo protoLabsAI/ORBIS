@@ -147,6 +147,10 @@ export type OrbisConfig = {
     // ('on_device') or bring-your-own backend ('byo'). Gates the eager
     // prewarm in app.py.
     local_models?: 'on_device' | 'byo';
+    // Listener-ack ("mm-hmm") on/off. Only effective on the Fish backend —
+    // the pipeline caps it to Fish, so the Voice panel surfaces the toggle
+    // only when Fish is selected. Undefined = pipeline default (on for Fish).
+    backchannel?: boolean;
   };
   llm?: {
     url?: string;

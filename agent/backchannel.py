@@ -67,6 +67,46 @@ FrameEmitter = Callable[[Frame], Awaitable[None]]
 # identify + drop them if they re-enter us after state changed.
 _BACKCHANNEL_TAG = "_pv_is_backchannel"
 
+# The only TTS backend whose short-clip synthesis produces acceptable
+# listener-acks. Kokoro's "mm-hmm" clips sound wrong (clipped / mistimed),
+# so backchannels are capped to Fish no matter how they're requested.
+_BACKCHANNEL_BACKEND = "fish"
+
+
+def resolve_backchannel_enabled(
+    *,
+    tts_backend: str,
+    behavior_enabled: bool | None,
+    config_toggle: bool | None,
+    env_flag: str | None,
+) -> tuple[bool, bool]:
+    """Decide whether listener-acks run, and whether the live-AEC gate applies.
+
+    Returns ``(enabled, aec_gated)``.
+
+    Precedence when the backend supports backchannels (Fish):
+      1. ``behavior_enabled`` — the persona's ``behavior.backchannel`` block
+         (``None`` when the persona doesn't set it).
+      2. ``config_toggle`` — the global ``voice.backchannel`` UI switch
+         (``None`` when unset).
+      3. ``env_flag`` — the ``BACKCHANNEL`` runtime-.env override string.
+      4. Default: on, and AEC-gated (stays silent on a CPAL/no-AEC path so the
+         ack doesn't false-trigger on the bot's own speaker bleed).
+
+    Explicit choices (1–3) bypass the AEC gate, matching the pre-existing
+    behaviour. On any non-Fish backend the result is forced ``(False, False)``
+    — the acks sound wrong on Kokoro, so no persona/toggle/env can turn them on.
+    """
+    if tts_backend != _BACKCHANNEL_BACKEND:
+        return False, False
+    if behavior_enabled is not None:
+        return behavior_enabled, False
+    if config_toggle is not None:
+        return config_toggle, False
+    if env_flag is not None:
+        return env_flag.strip().lower() in ("1", "true", "on", "yes"), False
+    return True, True
+
 
 class BackchannelController(FrameProcessor):
     def __init__(

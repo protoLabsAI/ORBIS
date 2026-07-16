@@ -452,3 +452,23 @@ def test_llm_provider_router_micro_keys_survive_load(tmp_path: Path):
         "micro_api_key": "not-needed",
     }.items():
         assert p.llm[key] == want, key
+
+
+def test_yaml_backchannel_bool_loads(tmp_path: Path):
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: fish
+          backchannel: false
+    """)
+    p = load_persona(yaml_path)
+    assert p.backchannel is False
+
+
+def test_backchannel_unset_is_none(tmp_path: Path):
+    # No voice.backchannel key → None, so the pipeline applies its default.
+    yaml_path = _write(tmp_path / "orbis.yaml", """
+        voice:
+          tts_backend: fish
+    """)
+    p = load_persona(yaml_path)
+    assert p.backchannel is None
