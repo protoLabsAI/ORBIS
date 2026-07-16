@@ -45,6 +45,10 @@ CTRL_BARGE_IN: int = 0x0001
 CTRL_TTS_END: int = 0x0002
 # Python → Rust: user said a cancel/dismiss phrase — close the listening window.
 CTRL_STOP_LISTENING: int = 0x0003
+# Rust → Python: live audio mode. body[2] is a flags bitfield; bit 0 =
+# hardware (VPIO) AEC active. Drives whether listener-acks default on.
+CTRL_AUDIO_MODE: int = 0x0004
+AUDIO_MODE_AEC: int = 0x01
 
 HEADER_FMT = "<4H"   # 4 × u16 LE = 8 bytes
 HEADER_LEN = struct.calcsize(HEADER_FMT)  # 8
@@ -186,6 +190,10 @@ class LocalAudioTransport(BaseTransport):
         self._connected = False
         self._mic_frames_received = 0
         self._speaker_frames_sent = 0
+        # Live AEC/duplex mode reported by the Rust engine via CTRL_AUDIO_MODE.
+        # Default False (safe): listener-acks stay off until the engine confirms
+        # real (VPIO) AEC, so they can't false-trigger on the bot's own tail.
+        self._aec_active = False
         logger.info(
             "[local_transport] audio_input_mode=%s mic_gain=%.2f",
             _AUDIO_INPUT_MODE,
@@ -213,6 +221,16 @@ class LocalAudioTransport(BaseTransport):
     def mic_frames_received(self) -> int:
         """Mic frames received from Rust during this transport session."""
         return self._mic_frames_received
+
+    def is_aec_active(self) -> bool:
+        """Whether the Rust engine reports hardware (VPIO) AEC is active.
+
+        Live — updated by CTRL_AUDIO_MODE frames, including a VPIO→CPAL
+        watchdog fallback mid-session. Passed as a gate to the backchannel /
+        micro-ack controllers so they default on only when real AEC protects
+        the mic from the bot's own speaker bleed.
+        """
+        return self._aec_active
 
     @property
     def speaker_frames_sent(self) -> int:
@@ -295,8 +313,16 @@ class LocalAudioTransport(BaseTransport):
                     await self._input_proc.push_frame(frame)
                 elif direction == DIR_CONTROL:
                     code = struct.unpack_from("<H", body)[0] if len(body) >= 2 else 0
-                    logger.debug(f"[local_transport] control frame code=0x{code:04x}")
-                    # Control frames from Rust are informational here.
+                    if code == CTRL_AUDIO_MODE:
+                        aec = bool(body[2] & AUDIO_MODE_AEC) if len(body) >= 3 else False
+                        if aec != self._aec_active:
+                            self._aec_active = aec
+                            logger.info(
+                                "[local_transport] audio mode: AEC %s",
+                                "active" if aec else "inactive",
+                            )
+                    else:
+                        logger.debug(f"[local_transport] control frame code=0x{code:04x}")
                 else:
                     logger.warning(
                         f"[local_transport] unexpected direction 0x{direction:04x} — skipping"

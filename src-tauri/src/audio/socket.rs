@@ -48,6 +48,13 @@ pub const CTRL_TTS_END: u16 = 0x0002;
 /// "stop listening") — close the listening window. Mutes the mic; in wake mode
 /// the detector re-arms back to waiting for the phrase.
 pub const CTRL_STOP_LISTENING: u16 = 0x0003;
+/// Rust → Python: live audio mode. The first reserved body byte carries a
+/// flags bitfield; bit 0 = real (VPIO) AEC active. Sent on connect (first mic
+/// frame) and whenever the mode changes (VPIO→CPAL watchdog fallback). Lets the
+/// sidecar default listener-acks on only when the mic won't hear the bot's tail.
+pub const CTRL_AUDIO_MODE: u16 = 0x0004;
+/// Audio-mode flag bit: hardware AEC (VPIO) is active.
+pub const AUDIO_MODE_AEC: u8 = 0x01;
 
 const HEADER_LEN: usize = 8;
 
@@ -81,6 +88,13 @@ pub fn encode_control(control_code: u16) -> Vec<u8> {
     buf[6..8].copy_from_slice(&3u16.to_le_bytes()); // num_samples = body words
     buf[8..10].copy_from_slice(&control_code.to_le_bytes());
     // [10..14] reserved = 0
+    buf
+}
+
+/// Encode a control frame carrying a single u8 flag in the first reserved byte.
+pub fn encode_control_flag(control_code: u16, flag: u8) -> Vec<u8> {
+    let mut buf = encode_control(control_code);
+    buf[10] = flag;
     buf
 }
 
@@ -161,9 +175,25 @@ impl SocketServer {
 
         // Writer task: take mic frames from the channel and send to Python.
         let write_task = tokio::spawn(async move {
+            // Last AEC/duplex mode reported to Python. `None` until the first
+            // frame, so the initial state is always sent; thereafter we only
+            // re-send on a transition (e.g. the VPIO→CPAL watchdog fallback).
+            let mut last_aec: Option<bool> = None;
             while let Some(msg) = mic_rx.recv().await {
                 match msg {
                     AudioMsg::MicFrame(samples) => {
+                        // Tell the sidecar the live AEC mode whenever it changes
+                        // — independent of mute/listening, so it always knows
+                        // whether listener-acks are safe to default on.
+                        let aec = eng.aec_active();
+                        if last_aec != Some(aec) {
+                            let flag = if aec { AUDIO_MODE_AEC } else { 0 };
+                            let ctrl = encode_control_flag(CTRL_AUDIO_MODE, flag);
+                            if writer.write_all(&ctrl).await.is_err() {
+                                break;
+                            }
+                            last_aec = Some(aec);
+                        }
                         // Hard mute (the mic button) is the top-level gate: when
                         // muted, drop the frame entirely — no STT and no wake
                         // detector, so it's truly silent (no "Hey Orbis", no

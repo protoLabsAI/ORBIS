@@ -250,19 +250,33 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
     bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
     sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
-    # Backchannel + micro-ack were originally tuned against the WebRTC
-    # mic path's AGC + browser echo cancellation. On the native CPAL
-    # path the speaker-bleed-into-mic crosses VAD threshold (especially
-    # with software mic gain), so the listener-acks fire on the bot's
-    # own tail. Default both off unless explicitly opted in — either the
-    # persona behavior block, or the BACKCHANNEL / MICRO_ACK env flags
-    # (the runtime .env tuning loop). Speaker-mode users stay off; a
-    # headphone / real-AEC setup can opt in until Phase 2 (AEC via
-    # AVAudioEngine) lets us flip the default back to on.
+    # Backchannel + micro-ack ("mm-hmm" / "mm" listener-acks) false-trigger on
+    # the bot's own speaker bleed when the mic has no echo cancellation — the
+    # reason they shipped off. The native engine now REPORTS whether hardware
+    # AEC (Apple VPIO) is active (CTRL_AUDIO_MODE → transport.is_aec_active), so
+    # we default them ON but gate emission on live AEC: on the production VPIO
+    # path they work; on a CPAL fallback (USB output / VPIO dead) they stay
+    # quiet, and if VPIO drops mid-session the gate closes with it. Explicit
+    # config still wins and BYPASSES the gate — the persona behavior block, or
+    # the BACKCHANNEL / MICRO_ACK env flags (the runtime .env override for e.g.
+    # headphone users on a CPAL path, where there's no acoustic echo anyway).
+    _aec_gate = transport.is_aec_active
+    bc_gate = None
+    ma_gate = None
     if behavior.get("backchannel") is None:
-        bc_cfg["enabled"] = os.environ.get("BACKCHANNEL", "0").lower() in ("1", "true", "on")
+        _bc_env = os.environ.get("BACKCHANNEL")
+        if _bc_env is not None:
+            bc_cfg["enabled"] = _bc_env.lower() in ("1", "true", "on")
+        else:
+            bc_cfg["enabled"] = True
+            bc_gate = _aec_gate
     if behavior.get("micro_ack") is None:
-        ma_cfg["enabled"] = os.environ.get("MICRO_ACK", "0").lower() in ("1", "true", "on")
+        _ma_env = os.environ.get("MICRO_ACK")
+        if _ma_env is not None:
+            ma_cfg["enabled"] = _ma_env.lower() in ("1", "true", "on")
+        else:
+            ma_cfg["enabled"] = True
+            ma_gate = _aec_gate
 
     # Backchannel controller — emits brief listener-acks ("mm-hmm") during
     # long user utterances. Uses the per-user FillerGenerator.
@@ -270,6 +284,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         "generator": _filler_gen_for(user_id),
         "tts_backend": tts_backend,
         "enabled": bc_cfg["enabled"],
+        "aec_gate": bc_gate,
     }
     if "first_ms" in bc_cfg:
         bc_kwargs["first_after_secs"] = bc_cfg["first_ms"] / 1000.0
@@ -704,6 +719,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             # Occasional LLM-generated acks for variety (orbis-29e) — same
             # micro generator the fillers + announcer use.
             generator=_filler_gen_for(user_id),
+            # Same live AEC gate as the backchannel: default-on only when
+            # hardware AEC protects the mic from the bot's own tail.
+            aec_gate=ma_gate,
             **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
         # Stall watchdog (E2) — if the agent produces no sign of work within

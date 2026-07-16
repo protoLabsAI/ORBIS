@@ -191,6 +191,11 @@ class MicroAckInjector(FrameProcessor):
         # instead of drawn from the canned pool (orbis-29e). Tight timeout +
         # fallback to the pool, so it never delays the ack.
         generator: object | None = None,
+        # Live gate: returns whether hardware AEC is active. When provided, the
+        # ack fires only while it returns True — the default path on the native
+        # engine, so a "mm" never fires on the bot's own speaker bleed when
+        # there's no AEC. None = always allowed (explicit MICRO_ACK=1 / tests).
+        aec_gate: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__()
         self._tts_backend = tts_backend
@@ -202,6 +207,7 @@ class MicroAckInjector(FrameProcessor):
         self._min_interval = min_interval_secs
         self._enabled = enabled
         self._verbosity_getter = verbosity_getter
+        self._aec_gate = aec_gate
         self._bot_speaking = False
         self._last_ack_at = 0.0
         # Suppress arming until this monotonic clock value — extended
@@ -278,6 +284,10 @@ class MicroAckInjector(FrameProcessor):
     def _arm_timer(self) -> None:
         if not self._enabled:
             return
+        # No AEC → the mic hears the bot's tail; an ack would fire on her own
+        # bleed. Skip until the engine confirms hardware AEC.
+        if self._aec_gate is not None and not self._aec_gate():
+            return
         now = time.monotonic()
         if self._bot_speaking:
             return
@@ -300,6 +310,9 @@ class MicroAckInjector(FrameProcessor):
             if self._bot_speaking or self._llm_responding:
                 # Lost the race after sleep but before fire — the LLM
                 # or transport announced output during our wait.
+                return
+            # AEC could have dropped (VPIO→CPAL fallback) during the wait.
+            if self._aec_gate is not None and not self._aec_gate():
                 return
             # Live verbosity check: a silent persona shouldn't emit
             # acoustic acks. Checked here rather than at _arm_timer so

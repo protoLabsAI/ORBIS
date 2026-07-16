@@ -14,6 +14,8 @@ import tempfile
 import pytest
 
 from voice.local_transport import (
+    AUDIO_MODE_AEC,
+    CTRL_AUDIO_MODE,
     CTRL_BARGE_IN,
     CTRL_TTS_END,
     DIR_CONTROL,
@@ -30,6 +32,16 @@ from voice.local_transport import (
     _resolve_mic_gain,
     audio_runtime_info,
 )
+
+
+def _make_audio_mode_frame(aec: bool) -> bytes:
+    """Build a CTRL_AUDIO_MODE control frame exactly as the Rust engine's
+    encode_control_flag() emits it: 8-byte header + 6-byte body (u16 code,
+    flag byte, 3 pad)."""
+    header = struct.pack(HEADER_FMT, DIR_CONTROL, 0, 0, 3)  # 3 body words = 6 bytes
+    flag = AUDIO_MODE_AEC if aec else 0
+    body = struct.pack("<H", CTRL_AUDIO_MODE) + bytes([flag, 0, 0, 0])
+    return header + body
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +109,47 @@ def test_audio_runtime_info_exposes_input_mode_and_gain():
 def test_transport_connected_property_defaults_false():
     transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
     assert transport.connected is False
+
+
+def test_is_aec_active_defaults_false():
+    """Safe default: listener-acks stay off until the engine confirms AEC."""
+    transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
+    assert transport.is_aec_active() is False
+
+
+@pytest.mark.asyncio
+async def test_audio_mode_frame_activates_aec():
+    """A CTRL_AUDIO_MODE frame with the AEC bit set flips is_aec_active()."""
+    import asyncio
+
+    transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
+    reader = asyncio.StreamReader()
+    reader.feed_data(_make_audio_mode_frame(aec=True))
+    reader.feed_eof()
+    transport._reader = reader
+    transport._connected = True
+
+    await transport._reader_loop()
+
+    assert transport.is_aec_active() is True
+
+
+@pytest.mark.asyncio
+async def test_audio_mode_frame_without_bit_stays_inactive():
+    """A CTRL_AUDIO_MODE frame with the AEC bit clear keeps AEC inactive
+    (the VPIO→CPAL fallback case)."""
+    import asyncio
+
+    transport = LocalAudioTransport(sock_path="/tmp/orbis-audio-test.sock")
+    reader = asyncio.StreamReader()
+    reader.feed_data(_make_audio_mode_frame(aec=False))
+    reader.feed_eof()
+    transport._reader = reader
+    transport._connected = True
+
+    await transport._reader_loop()
+
+    assert transport.is_aec_active() is False
 
 
 @pytest.mark.asyncio
