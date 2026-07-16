@@ -517,3 +517,46 @@ def test_make_audio_tags_tap_enabled_via_env(monkeypatch, flag) -> None:
     monkeypatch.setenv("AUDIO_TAGS", flag)
     tap = make_audio_tags_tap(mem=_FakeMem())
     assert tap._enabled is True
+
+
+# --- capability gate (voice.stt.stt_emits_audio_tags) ---------------------
+#
+# The tap already no-ops without an EmotionFrame source. The PROMPT block
+# didn't — it shipped unconditionally on the theory that a model told to
+# "ignore the annotation when missing" would do so. A small model instead
+# copied the worked example into its own speech, so the orb read
+# `[live] audio=emotion=neutral lang=en speaker=owner ...` aloud on a
+# backend that emits no tags at all. The gate is the real fix.
+
+
+def test_only_sensevoice_emits_audio_tags(monkeypatch) -> None:
+    from voice.stt import stt_emits_audio_tags
+    assert stt_emits_audio_tags("sensevoice") is True
+    for backend in ("local", "parakeet", "openai"):
+        assert stt_emits_audio_tags(backend) is False, backend
+
+
+def test_audio_tag_capability_is_case_and_space_insensitive() -> None:
+    """Persona config is hand-edited yaml — don't let ' SenseVoice '
+    silently resolve to a transcript-only backend."""
+    from voice.stt import stt_emits_audio_tags
+    assert stt_emits_audio_tags("  SenseVoice  ") is True
+
+
+def test_persona_backend_overrides_env(monkeypatch) -> None:
+    """make_stt resolves persona-first; the capability check must use the
+    SAME rule or the prompt gate disagrees with the running pipeline.
+    (Josh's orbis.yaml says parakeet while STT_BACKEND=local.)"""
+    import voice.stt as _stt
+    monkeypatch.setattr(_stt, "STT_BACKEND", "sensevoice")
+    # Persona override wins → transcript-only → no tags.
+    assert _stt.stt_emits_audio_tags("parakeet") is False
+    # No persona override → env wins.
+    assert _stt.stt_emits_audio_tags(None) is True
+
+
+def test_env_default_falls_back_to_local(monkeypatch) -> None:
+    import voice.stt as _stt
+    monkeypatch.setattr(_stt, "STT_BACKEND", "")
+    assert _stt.resolve_stt_backend(None) == "local"
+    assert _stt.stt_emits_audio_tags(None) is False
