@@ -538,10 +538,14 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
   };
 
-  const onTest = async () => {
+  // Real round-trip against the CURRENT url/model/key. Returns whether it
+  // passed so onContinue can gate on it. Handles every provider — hosted,
+  // Ollama, and the on-device `mlx://` path (ping_endpoint validates the HF
+  // repo for that one), so requiring it never blocks the local options.
+  const runTest = async (): Promise<boolean> => {
     if (!url.trim() || !model.trim()) {
       setError('URL and model required to test.');
-      return;
+      return false;
     }
     setError(null);
     setTest({ kind: 'checking' });
@@ -553,13 +557,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       });
       if (r.ok) {
         setTest({ kind: 'ok', latency: r.latency_ms ?? 0 });
-      } else {
-        setTest({ kind: 'error', message: r.error ?? 'unknown error' });
+        return true;
       }
+      setTest({ kind: 'error', message: r.error ?? 'unknown error' });
+      return false;
     } catch (e) {
       setTest({ kind: 'error', message: String((e as Error).message ?? e) });
+      return false;
     }
   };
+
+  const onTest = () => { void runTest(); };
 
   const onContinue = async () => {
     setError(null);
@@ -569,6 +577,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
     if (current.needsKey && !apiKey.trim() && provider !== 'custom') {
       setError(`${current.label} needs an API key.`);
+      return;
+    }
+    // Gate on a live connectivity check so a fresh user can't click past a
+    // dead endpoint onto a silently-broken orb (the wizard's default is
+    // Ollama on localhost, which most first-run machines aren't running).
+    // Always re-verify against the current values rather than trusting a
+    // prior green badge — otherwise "test, then edit the URL, then Continue"
+    // would smuggle an unverified endpoint through.
+    const ok = await runTest();
+    if (!ok) {
+      setError("Couldn't reach that endpoint — fix the connection above, then Continue.");
       return;
     }
     setSaving(true);
@@ -696,7 +715,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">URL</label>
           <input
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => { setUrl(e.target.value); setTest({ kind: 'idle' }); }}
             placeholder="https://api.openai.com/v1"
             className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
@@ -717,7 +736,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           <input
             list={`llm-models-${provider}`}
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => { setModel(e.target.value); setTest({ kind: 'idle' }); }}
             placeholder="gpt-4o-mini"
             className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
@@ -740,7 +759,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => { setApiKey(e.target.value); setTest({ kind: 'idle' }); }}
               placeholder={current.keyPlaceholder}
               className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
               autoComplete="off"
@@ -774,8 +793,8 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onContinue} disabled={saving}>
-          {saving ? 'Saving…' : 'Continue'}
+        <Button onClick={onContinue} disabled={saving || test.kind === 'checking'}>
+          {saving ? 'Saving…' : test.kind === 'checking' ? 'Checking…' : 'Continue'}
         </Button>
       </div>
     </div>
