@@ -213,6 +213,9 @@ def test_sessions_dir_darwin_default_is_durable_not_tmp(
     p = _reload()
     got = p.get_sessions_dir()
     assert got == tmp_path / "Library" / "Application Support" / "orbis" / "sessions"
-    assert "/tmp/" not in str(got)
+    # NOT the old hardcoded /tmp/orbis_sessions default. (Can't assert
+    # "/tmp/" not in the path — CI's HOME is itself under /tmp/pytest-...;
+    # the real invariant is that it's the data dir, not the tmp default.)
+    assert "orbis_sessions" not in str(got)
     # Shares the data dir with the durable memory DB (same parent).
     assert got.parent == p.get_db_path().parent
