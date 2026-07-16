@@ -4,10 +4,13 @@
 # boot and on POST /api/config reload. Missing file is fine — the
 # app falls back to a baked-in default persona.
 #
-# Env vars win over values here when set:
-#   SYSTEM_PROMPT     overrides persona.system_prompt
-#   TTS_BACKEND       overrides voice.tts_backend
-#   KOKORO_VOICE      overrides voice.voice (when tts_backend=kokoro)
+# The values saved here WIN — this file is the source of truth (yaml-wins,
+# DECISIONS 2026-07-15). These env vars are fallbacks that apply only when
+# the matching field is absent here, so a stale value in the runtime tuning
+# .env can never silently override what you saved in Settings:
+#   SYSTEM_PROMPT     fallback for persona.system_prompt
+#   TTS_BACKEND       fallback for voice.tts_backend
+#   KOKORO_VOICE      fallback for voice.voice (when tts_backend=kokoro)
 
 persona:
   slug: orbis

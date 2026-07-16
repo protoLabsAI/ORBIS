@@ -537,6 +537,43 @@ desktop target where torch-MPS is unavailable and ONNX-CPU is the floor.
 
 ---
 
+## Amendment — 2026-07-15: Config resolution is yaml-wins (saved config is the source of truth)
+
+**Context:** an audit of the config/env system found that precedence
+*direction* was inconsistent per-subsystem. LLM and STT resolved
+yaml-wins (saved config beat env), but TTS backend, TTS voice, and the
+system prompt resolved env-wins (env beat saved config). Because the
+optional runtime tuning `.env`
+(`~/Library/Application Support/studio.protolabs.orbis/.env`) loads with
+`override=True`, a stale `TTS_BACKEND=` / `KOKORO_VOICE=` / `SYSTEM_PROMPT=`
+line there would silently override what the user had just saved in
+Settings — the write to `orbis.yaml` succeeded, `GET /api/config`
+reflected it, and the orb kept using the env value with no signal. The
+same file's LLM/STT lines, conversely, silently did nothing. "Does the
+`.env` override saved config?" had opposite answers for different fields.
+
+**Decision: yaml-wins everywhere.** The persona config (`orbis.yaml`,
+which the setup wizard and Settings UI write) is authoritative for every
+field. Env vars — including everything in the runtime tuning `.env` —
+are **fallbacks that apply only when the config omits the field**. TTS
+backend/voice and the system prompt were flipped to match LLM/STT
+(`agent/persona.py`). This makes the UI a reliable source of truth: a
+saved setting always takes effect, and no leftover env line can shadow it
+without a trace.
+
+**Implication for the tuning `.env`:** it remains useful for genuinely
+env-only knobs the config doesn't carry (VAD/echo windows, `SMART_TURN`,
+`BACKCHANNEL`/`MICRO_ACK` when `persona.behavior` is unset, router/micro/
+fallback LLM fields the yaml block omits). It is no longer a way to
+override a field the UI owns — by design. Related hardening in the same
+pass: `api_key_env` indirection now WARNs loudly when the referenced env
+var is unset instead of silently resolving to the `"not-needed"`
+placeholder (a Finder/Dock launch gives the sidecar launchd's minimal
+env, so shell exports aren't visible — the silent version 401'd with no
+hint).
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:

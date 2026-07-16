@@ -224,11 +224,15 @@ _DEFAULT_SYSTEM_PROMPT = (
 def _resolve_prompt(
     persona_block: dict, config_dir: Path,
 ) -> str:
-    """Resolve persona.system_prompt, preferring env override → file → inline."""
-    env_override = os.environ.get("SYSTEM_PROMPT")
-    if env_override:
-        return env_override.strip()
+    """Resolve persona.system_prompt: file → inline → SYSTEM_PROMPT env → default.
 
+    yaml-wins (DECISIONS 2026-07-15): the durable persona config is the
+    source of truth; the ``SYSTEM_PROMPT`` env var is a *fallback* that
+    applies only when the config specifies no prompt. It used to win over
+    the config, which meant a stale value in the runtime tuning ``.env``
+    (loaded with ``override=True``) silently shadowed whatever the user
+    saved in the UI — with no signal that the save had no effect.
+    """
     file_ref = persona_block.get("system_prompt_file")
     if file_ref:
         path = Path(file_ref)
@@ -243,6 +247,10 @@ def _resolve_prompt(
     inline = persona_block.get("system_prompt")
     if inline:
         return str(inline).strip()
+
+    env_override = os.environ.get("SYSTEM_PROMPT")
+    if env_override and env_override.strip():
+        return env_override.strip()
 
     logger.info("[persona] no system_prompt configured; using baked-in default")
     return _DEFAULT_SYSTEM_PROMPT
@@ -284,16 +292,19 @@ def load_persona(config_path: str | Path = "config/orbis.yaml") -> Persona:
     user_name = (persona_block.get("user_name") or "").strip()
     system_prompt = _resolve_prompt(persona_block, config_dir)
 
-    # Env-win over config for TTS selection so the same YAML file works
-    # across deployments with different TTS setups. Normalize hand-edited
+    # yaml-wins (DECISIONS 2026-07-15): the saved config is authoritative;
+    # TTS_BACKEND / KOKORO_VOICE env vars are fallbacks that apply only when
+    # the config omits the field. Previously env won, so a stale line in the
+    # runtime tuning .env (override=True) silently overrode a TTS backend or
+    # voice the user had just picked in Settings. Normalize hand-edited
     # YAML/env values because downstream code string-matches on lowercase.
-    _raw_tts = os.environ.get("TTS_BACKEND") or voice_block.get("tts_backend")
+    _raw_tts = voice_block.get("tts_backend") or os.environ.get("TTS_BACKEND")
     tts_backend = (
         _raw_tts.strip().lower()
         if isinstance(_raw_tts, str) and _raw_tts.strip()
         else None
     )
-    voice = os.environ.get("KOKORO_VOICE") or voice_block.get("voice")
+    voice = voice_block.get("voice") or os.environ.get("KOKORO_VOICE")
 
     def _str_or_none(v: object) -> str | None:
         if not isinstance(v, str):
