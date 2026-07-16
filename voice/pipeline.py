@@ -469,9 +469,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     _turn_strategies = _build_user_turn_strategies()
     # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
-    # the runtime .env). stop_secs is the dominant fixed per-turn delay;
-    # Smart Turn (SMART_TURN=local) lets it drop without clipping pauses.
-    _vad_stop = float(os.environ.get("VAD_STOP_SECS", "0.4"))
+    # the runtime .env). stop_secs is the dominant fixed per-turn delay.
+    # Smart Turn is default-on (SMART_TURN=local), so 0.2 is safe: VAD fires
+    # the fast "maybe done" trigger and Smart Turn arbitrates real turn-ends
+    # from mid-thought pauses instead of us waiting out a long silence. With
+    # SMART_TURN=off, bump this back toward 0.4 to avoid clipping pauses.
+    _vad_stop = float(os.environ.get("VAD_STOP_SECS", "0.2"))
     logger.info(
         "[tuning] vad stop_secs=%s start_secs=%s min_volume=%s | echo_guard=%sms | smart_turn=%s",
         _vad_stop, os.environ.get("VAD_START_SECS", "0.2"),
@@ -482,7 +485,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         params=VADParams(
             confidence=float(os.environ.get("VAD_CONFIDENCE", "0.7")),
             start_secs=float(os.environ.get("VAD_START_SECS", "0.2")),
-            stop_secs=_vad_stop,  # default 0.4 — longer pause before cutting
+            stop_secs=_vad_stop,  # default 0.2 — Smart Turn arbitrates pauses
             min_volume=float(os.environ.get("VAD_MIN_VOLUME", "0.2")),  # native desktop audio
                                # The legacy CPAL input path applies MIC_GAIN in
                                # voice/local_transport.py; the macOS voice-processing
