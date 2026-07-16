@@ -112,3 +112,31 @@ def test_next_chunk_returns_sentinel_at_exhaustion():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- voice coercion (backend↔voice coherence) --------------------------------
+
+
+def test_coerce_voice_passes_valid_kokoro_voice():
+    assert k._coerce_voice("af_heart") == "af_heart"
+    assert k._coerce_voice("am_onyx") == "am_onyx"
+
+
+def test_coerce_voice_falls_back_on_wrong_backend_voice(caplog):
+    import logging
+    # A fish-style provider-prefixed id can't be a Kokoro voice → coerce to
+    # the default and WARN, rather than hard-breaking TTS on an HF fetch for
+    # voices/protolabs/fish.pt.
+    with caplog.at_level(logging.WARNING):
+        got = k._coerce_voice("protolabs/fish")
+    assert got == k.KOKORO_VOICE
+    assert any("not a Kokoro voice" in r.message for r in caplog.records)
+
+
+def test_coerce_voice_handles_empty(caplog):
+    import logging
+    # Empty/None → default, and NO warning (nothing was misconfigured).
+    with caplog.at_level(logging.WARNING):
+        assert k._coerce_voice("") == k.KOKORO_VOICE
+        assert k._coerce_voice(None) == k.KOKORO_VOICE
+    assert not any("not a Kokoro voice" in r.message for r in caplog.records)
