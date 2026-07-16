@@ -81,16 +81,21 @@ export function SetupWizard() {
         if (cancelled) return;
         // The explicit flag wins — including a Re-run that set it false, which
         // must override the legacy signal below (local_models stays set). Only
-        // when the flag was never written do we fall back to back-compat:
-        // voice.local_models is set, and the wizard's models step is its only
-        // writer, so its presence means setup was done on this box.
+        // when the flag was never written do we fall back to back-compat for
+        // boxes that predate the setup.complete flag: require BOTH the models
+        // step (voice.local_models — its only writer) AND a written llm block.
+        // Requiring the llm block too closes the quit-mid-wizard hole: a box
+        // that ran the models step then quit before the LLM step has
+        // local_models set but no llm — treating that as "done" boots the orb
+        // with no language model (the dead localhost:8100 default). Re-run
+        // setup instead; the wizard resumes and writes the llm block.
         const setup = config?.setup;
         const done =
           setup?.complete === true
             ? true
             : setup?.complete === false
               ? false
-              : config?.voice?.local_models != null;
+              : config?.voice?.local_models != null && !!config?.llm?.url;
         if (done) {
           try {
             localStorage.setItem(STORAGE_COMPLETE, 'true');

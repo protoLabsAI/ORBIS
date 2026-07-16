@@ -158,7 +158,12 @@ _warnings.filterwarnings("ignore", category=FutureWarning)  # torch weight_norm 
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
 PORT = int(os.environ.get("PORT", "7866"))
-LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1")
+# The built-in fallback when no llm.url is configured and LLM_URL isn't set:
+# a local vLLM that the shipped desktop app never runs (START_VLLM=0, no CUDA
+# on macOS). Named so _resolve_skill_llm can detect "the orb has no LLM
+# configured" and say so, instead of silently dialing a dead port.
+_LLM_URL_DEFAULT = f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1"
+LLM_URL = os.environ.get("LLM_URL", _LLM_URL_DEFAULT)
 LLM_SERVED_NAME = os.environ.get("LLM_SERVED_NAME", "local")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "not-needed")
 LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "150"))
@@ -280,6 +285,18 @@ def _resolve_skill_llm(skill) -> dict:
     """
     skill_llm = (skill.llm if skill else None) or {}
     url = str(skill_llm.get("url") or LLM_URL)
+    if not skill_llm.get("url") and url == _LLM_URL_DEFAULT:
+        # No llm block in orbis.yaml and no LLM_URL env → we fell back to the
+        # built-in local-vLLM placeholder, which nothing serves on the desktop
+        # app. The orb boots but has no brain; the LLM error announcer (#576)
+        # will speak on the first failed turn, but say why here too so the log
+        # isn't a mystery. Reachable if setup was marked done with no llm block.
+        logger.warning(
+            "[llm] no LLM configured — url resolved to the built-in local-vLLM "
+            "placeholder %s, which nothing is serving. Open Settings to pick a "
+            "language model (or set LLM_URL if you run a local vLLM there).",
+            url,
+        )
     model = str(skill_llm.get("model") or LLM_SERVED_NAME)
     api_key = _resolve_api_key(skill_llm, what="llm")
     provider = skill_llm.get("provider")
