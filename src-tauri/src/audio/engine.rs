@@ -366,6 +366,18 @@ impl AudioEngine {
         !self.vpio_active.load(Ordering::Relaxed) && !self.full_duplex.load(Ordering::Relaxed)
     }
 
+    /// Whether real (hardware VPIO) acoustic echo cancellation is active.
+    ///
+    /// True only when the AVAudioEngine voice-processing unit actually
+    /// captured audio — i.e. the bot's speaker output is cancelled from the
+    /// mic in hardware. The sidecar uses this to decide whether "listener"
+    /// acks (backchannel / micro-ack) are safe to emit by default: without
+    /// AEC, the bot's own tail bleeds into the mic and false-triggers them.
+    /// Reported to Python over the socket as `CTRL_AUDIO_MODE`.
+    pub fn aec_active(&self) -> bool {
+        self.vpio_active.load(Ordering::Relaxed)
+    }
+
     /// Toggle the full-duplex override live (Settings → Activation). When on,
     /// the socket writer stops muting the mic during playback so the user can
     /// barge in. The writer reads `half_duplex()` per frame, so this is instant.

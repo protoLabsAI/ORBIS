@@ -35,6 +35,7 @@ def injector_factory():
         tts_backend: str = "kokoro",
         verbosity_getter=None,
         enabled: bool = True,
+        aec_gate=None,
     ):
         inj = MicroAckInjector(
             tts_backend=tts_backend,
@@ -42,6 +43,7 @@ def injector_factory():
             min_interval_secs=0.0,
             enabled=enabled,
             verbosity_getter=verbosity_getter,
+            aec_gate=aec_gate,
         )
         inj._pushed_frames: list[Any] = []
 
@@ -88,6 +90,23 @@ async def test_suppressed_when_verbosity_silent(injector_factory) -> None:
     inj = injector_factory(verbosity_getter=lambda: Verbosity.SILENT)
     await inj._fire_after_delay()
     assert inj._pushed_frames == []
+
+
+@pytest.mark.asyncio
+async def test_suppressed_without_aec(injector_factory) -> None:
+    """L3: no hardware AEC → the ack would fire on the bot's own speaker
+    bleed, so it must be suppressed even when otherwise enabled."""
+    inj = injector_factory(aec_gate=lambda: False)
+    await inj._fire_after_delay()
+    assert inj._pushed_frames == []
+
+
+@pytest.mark.asyncio
+async def test_emits_when_aec_active(injector_factory) -> None:
+    """L3: with AEC confirmed active, the gate is open and the ack fires."""
+    inj = injector_factory(aec_gate=lambda: True)
+    await inj._fire_after_delay()
+    assert len(inj._pushed_frames) == 1
 
 
 @pytest.mark.asyncio

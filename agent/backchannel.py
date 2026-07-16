@@ -77,11 +77,18 @@ class BackchannelController(FrameProcessor):
         enabled: bool = True,
         first_after_secs: float | None = None,
         interval_secs: float | None = None,
+        # Live gate: returns whether hardware AEC is active. When provided,
+        # backchannels emit only while it returns True — the default path on
+        # the native audio engine, so "mm-hmm" never fires on the bot's own
+        # speaker bleed when there's no AEC. None = always allowed (explicit
+        # BACKCHANNEL=1 override / tests).
+        aec_gate: Callable[[], bool] | None = None,
     ):
         super().__init__()
         self._gen = generator
         self._backend = tts_backend
         self._enabled = enabled
+        self._aec_gate = aec_gate
         self._first_after_secs = (
             first_after_secs if first_after_secs is not None else FIRST_AFTER_SECS
         )
@@ -135,10 +142,19 @@ class BackchannelController(FrameProcessor):
 
     def _should_drop(self) -> bool:
         """Any of these means a backchannel is no longer appropriate."""
-        return self._bot_thinking or self._bot_speaking or not self._user_speaking
+        return (
+            self._bot_thinking
+            or self._bot_speaking
+            or not self._user_speaking
+            or (self._aec_gate is not None and not self._aec_gate())
+        )
 
     def _start_loop(self) -> None:
         if not self._enabled:
+            return
+        # No AEC → the mic hears the bot's tail; a backchannel would fire on
+        # her own bleed. Skip until the engine confirms hardware AEC.
+        if self._aec_gate is not None and not self._aec_gate():
             return
         if self._gen.settings.verbosity is Verbosity.SILENT:
             return
