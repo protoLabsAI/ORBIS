@@ -60,6 +60,28 @@ def test_skill_none_uses_env_defaults(helper) -> None:
     assert cfg["url"] == "http://env-default:8100/v1"
 
 
+def test_no_llm_configured_warns_loudly(helper, monkeypatch, caplog) -> None:
+    # No llm block + LLM_URL is the built-in placeholder → the orb has no
+    # brain. Must WARN so the log isn't a mystery (reachable if setup was
+    # marked done with no llm block).
+    import logging
+    import app as _app
+    monkeypatch.setattr(_app, "LLM_URL", _app._LLM_URL_DEFAULT)
+    with caplog.at_level(logging.WARNING):
+        cfg = helper(_skill())
+    assert cfg["url"] == _app._LLM_URL_DEFAULT
+    assert any("no LLM configured" in r.message for r in caplog.records)
+
+
+def test_configured_llm_does_not_warn(helper, monkeypatch, caplog) -> None:
+    import logging
+    import app as _app
+    monkeypatch.setattr(_app, "LLM_URL", _app._LLM_URL_DEFAULT)
+    with caplog.at_level(logging.WARNING):
+        helper(_skill(url="https://gateway.example/v1"))
+    assert not any("no LLM configured" in r.message for r in caplog.records)
+
+
 # --- per-field overrides ---------------------------------------------------
 
 
