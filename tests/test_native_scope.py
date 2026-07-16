@@ -204,8 +204,15 @@ def test_split_deployment_pairing_backend_stays_absent():
 
 
 def test_native_backend_sse_event_bridge_stays_wired():
-    """Native voice state is published over /api/events instead of WebRTC."""
+    """Native voice state is published over /api/events instead of WebRTC.
+
+    The pipeline publishers were extracted with run_bot to voice/pipeline.py;
+    the /api/events route to server/routers/system.py — scan all three so the
+    guard survives the app.py decomposition.
+    """
     app_source = (ROOT / "app.py").read_text(encoding="utf-8")
+    app_source += (ROOT / "server" / "routers" / "system.py").read_text(encoding="utf-8")
+    app_source += (ROOT / "voice" / "pipeline.py").read_text(encoding="utf-8")
 
     required = (
         "from voice.sse_bus import sse_bus",
@@ -221,7 +228,7 @@ def test_native_backend_sse_event_bridge_stays_wired():
         "await sse_bus.publish(\"tool-call\", {\"event\": \"end\", \"outcome\": \"error\"})",
         "await sse_bus.publish(\"session\", {\"event\": \"start\", \"session_id\": sid})",
         "await sse_bus.publish(\"session\", {\"event\": \"end\"})",
-        '@app.get("/api/events")',
+        '@router.get("/api/events")',
         "sse_bus.subscribe()",
         'media_type="text/event-stream"',
     )

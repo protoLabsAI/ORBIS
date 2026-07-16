@@ -118,6 +118,104 @@ def test_sessions_search_finds_by_content(mem: Memory):
     assert any(h["session_id"] == "s-coffee" for h in hits)
 
 
+def test_sessions_search_reflects_update_incrementally(mem: Memory):
+    """Re-persisting a session_id UPDATEs in place; the FTS trigger swaps the
+    indexed content — old terms de-indexed, new terms found — and keeps exactly
+    one row. This is the #482 incremental-sync fix (no full rebuild)."""
+    mem.sessions.add(
+        session_id="s-1",
+        started_at="2026-04-20T10:00:00+00:00",
+        ended_at="2026-04-20T10:05:00+00:00",
+        messages=[{"role": "user", "content": "let's talk about coffee"}],
+        final_output="espresso",
+    )
+    assert any(h["session_id"] == "s-1" for h in mem.sessions.search("coffee"))
+
+    # Same id, different content — mirrors connect-touch → disconnect re-persist.
+    mem.sessions.add(
+        session_id="s-1",
+        started_at="2026-04-20T10:00:00+00:00",
+        ended_at="2026-04-20T10:30:00+00:00",
+        messages=[{"role": "user", "content": "actually let's talk about tea"}],
+        final_output="oolong",
+    )
+    assert mem.sessions.count() == 1                       # UPSERT updated in place
+    assert mem.sessions.search("coffee") == []             # old content de-indexed
+    assert any(h["session_id"] == "s-1" for h in mem.sessions.search("tea"))
+    assert any(h["session_id"] == "s-1" for h in mem.sessions.search("oolong"))
+
+
+def test_sessions_prune_deletes_old_and_deindexes(mem: Memory):
+    """Retention sweep deletes transcripts older than max_age_days (keeping the
+    most recent keep_last), and the AFTER DELETE trigger drops them from FTS
+    too (#482)."""
+    from datetime import datetime, timedelta, timezone
+
+    old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+    recent = datetime.now(timezone.utc).isoformat()
+    mem.sessions.add(session_id="old", started_at=old, ended_at=old,
+                     messages=[{"role": "user", "content": "ancient armadillo"}])
+    mem.sessions.add(session_id="new", started_at=recent, ended_at=recent,
+                     messages=[{"role": "user", "content": "fresh falcon"}])
+
+    assert mem.sessions.prune(keep_last=1, max_age_days=90) == 1
+    assert mem.sessions.get("old") is None
+    assert mem.sessions.get("new") is not None
+    assert mem.sessions.search("armadillo") == []          # de-indexed on delete
+    assert any(h["session_id"] == "new" for h in mem.sessions.search("falcon"))
+
+
+def test_sessions_prune_keeps_last_n_even_if_all_old(mem: Memory):
+    """keep_last wins over age — a returning user never loses their most recent
+    sessions even when every session is older than max_age_days."""
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime.now(timezone.utc) - timedelta(days=300)
+    for i in range(5):
+        ts = (base + timedelta(days=i)).isoformat()
+        mem.sessions.add(session_id=f"s-{i}", started_at=ts, ended_at=ts, messages=[])
+
+    assert mem.sessions.prune(keep_last=2, max_age_days=90) == 3
+    assert mem.sessions.count() == 2
+    assert {r["session_id"] for r in mem.sessions.prior_n(5)} == {"s-3", "s-4"}
+
+
+def test_v3_to_v4_migration_baselines_fts(tmp_path: Path):
+    """Upgrading a pre-trigger DB (v3) recreates the sync triggers and runs one
+    baseline rebuild, so sessions written before the upgrade stay searchable
+    and every write after is incremental (#482)."""
+    import json as _json
+
+    path = tmp_path / "orbis.sqlite"
+    # Simulate a v3 DB: drop the new triggers, insert a session WITHOUT them so
+    # FTS is deliberately stale (as it would be just before the upgrade), and
+    # roll the recorded version back to 3.
+    m = Memory(path)
+    for trig in ("sessions_fts_ai", "sessions_fts_ad", "sessions_fts_au"):
+        m.conn.execute(f"DROP TRIGGER IF EXISTS {trig}")
+    m.conn.execute(
+        "INSERT INTO sessions(session_id, started_at, ended_at, messages, "
+        "tool_calls, final_output) VALUES ('s-legacy', 't', 't', ?, '[]', 'zebra')",
+        (_json.dumps([{"role": "user", "content": "pangolin"}]),),
+    )
+    m.conn.execute("UPDATE _meta SET value = '3' WHERE key = 'schema_version'")
+    m.conn.commit()
+    m.conn.close()
+
+    # Reopen → migration to v4 runs the one-time baseline rebuild.
+    m2 = Memory(path)
+    row = m2.conn.execute(
+        "SELECT value FROM _meta WHERE key = 'schema_version'"
+    ).fetchone()
+    assert int(row["value"]) == 4
+    # The legacy row, absent from FTS before the upgrade, is now indexed…
+    assert any(h["session_id"] == "s-legacy" for h in m2.sessions.search("pangolin"))
+    # …and a post-upgrade write stays in sync incrementally (trigger path).
+    m2.sessions.add(session_id="s-new", started_at="t", ended_at="t",
+                    messages=[{"role": "user", "content": "quokka"}])
+    assert any(h["session_id"] == "s-new" for h in m2.sessions.search("quokka"))
+
+
 # --- facts ------------------------------------------------------------------
 
 

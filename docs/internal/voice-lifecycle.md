@@ -253,7 +253,8 @@ Precedence: `mlx://` URL → explicit `provider=` → `_detect_provider` heurist
 
 - **`OllamaLLMService`** subclasses `BaseOpenAILLMService`, overrides `get_chat_completions` to hit `/api/chat` (NOT `/v1/chat/completions`) with `think: False`. Reasoning models (Qwen3, DeepSeek-R1, gemma3) on `/v1/...` emit a separate `reasoning` delta stream that pipecat's sentence aggregator never chunks → TTS waits 6-8s for a sentence break that never comes during reasoning. `/api/chat` honors `think` → first-token latency drops to 100-300ms (`ollama.py:1-44`).
 - **`MLXLLMService`** drives `mlx_lm.stream_generate` through a producer thread + `asyncio.Queue`; process-wide model cache `_MODELS` keyed by HF id; applies `enable_thinking=False` via `tokenizer.apply_chat_template`.
-- **OpenAI fallback** flips `svc.supports_developer_role = False` only when `using_custom_url=False` — bundled vLLM rejects `role: developer`; real gateways behind a custom URL get the modern field.
+- **OpenAI fallback** always flips `svc.supports_developer_role = False` — `role: system` is accepted by every OpenAI-compat endpoint including OpenAI itself, while `developer` is rejected by vLLM and by the protoLabs gateway. There's no upside to `developer`, so it's never sent.
+- **`chat_template_kwargs.enable_thinking=False`** is a property of the *endpoint*, resolved by `app.py::_wants_thinking_suppression(url, provider)` off the **resolved URL value** — never off where the URL came from. True for the vLLM/Qwen dialect (protoLabs gateway, `provider: vllm`); False for OpenAI/Anthropic/Groq/… which 400 on unknown body fields. An explicit `persona.llm.extra_body` always wins.
 
 ### Provider quirks (`app.py:601-624`)
 

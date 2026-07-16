@@ -44,6 +44,9 @@ References:
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import functools
 import logging
 from dataclasses import dataclass
 from enum import Enum
@@ -60,6 +63,15 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 logger = logging.getLogger(__name__)
+
+# Single dedicated thread for ECAPA speaker-embedding torch work (model load +
+# encode), so it runs off the asyncio event loop (#481). The gate's encode()
+# was synchronous torch inference on the loop after every utterance, stalling
+# the mic reader / VAD / barge-in for its duration (and multi-second on the
+# first-use model load). Mirrors voice/stt_parakeet.py's executor.
+_embed_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="ecapa-embed"
+)
 
 
 # --- Frame types ----------------------------------------------------------
@@ -304,7 +316,15 @@ class SpeakerGate(FrameProcessor):
             return
 
         try:
-            emb = self._embedder.encode(wav, sample_rate=sample_rate)
+            # Off the event loop — encode() is synchronous torch inference; on
+            # the loop it stalled the mic reader / VAD / barge-in for its whole
+            # duration (#481). functools.partial carries the sample_rate kwarg
+            # that run_in_executor can't pass positionally.
+            loop = asyncio.get_running_loop()
+            emb = await loop.run_in_executor(
+                _embed_executor,
+                functools.partial(self._embedder.encode, wav, sample_rate=sample_rate),
+            )
         except Exception as e:
             logger.warning(f"[speaker_gate] embed failed: {e} — owner-trust")
             await self.push_frame(

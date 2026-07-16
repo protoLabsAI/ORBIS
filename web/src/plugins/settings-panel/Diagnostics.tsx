@@ -2,15 +2,20 @@ import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
+import { api, type DiagnosticsReport } from '@/lib/api';
 
 /**
  * Diagnostic actions surfaced to the user when something feels off.
  *
+ * - "Copy diagnostics" — fetches GET /api/diagnostics (versions, runtime
+ *   shape, metrics, and the config with provider secrets already redacted
+ *   server-side) and copies it to the clipboard as a markdown block ready to
+ *   paste into a GitHub issue (#488). The raw log is not inlined (it can
+ *   carry transcripts) — its path is included so the user attaches it via the
+ *   reveal button below.
  * - "Reveal logs in Finder" — invokes the `reveal_logs` Tauri IPC, which
  *   opens the app log dir (sidecar.log + the Rust/tauri-plugin-log output)
- *   so a user can attach logs to a bug report. First slice of in-app
- *   diagnostics (#488); a bundled export-zip + crash reporting are the
- *   remaining work there.
+ *   so a user can attach logs to a bug report.
  * - "Clear browsing data" — invokes `clear_browsing_data`, which calls
  *   `Webview::clear_all_browsing_data()` to wipe cookies, IndexedDB,
  *   localStorage, service-worker registrations, and the fetch cache. Use
@@ -19,9 +24,60 @@ import { Button } from '@/components/ui/button';
  *   `scripts/nuke-and-rebuild.sh`; this in-app button is the lighter-touch
  *   runtime fix that doesn't require closing the app.
  */
+
+/** Render the diagnostics bundle as a GitHub-issue-ready markdown block. */
+function formatDiagnostics(d: DiagnosticsReport): string {
+  const app = d.app ?? ({} as DiagnosticsReport['app']);
+  const lines = [
+    '### ORBIS diagnostics',
+    '',
+    `- **App** ${app.version ?? '?'} · Python ${app.python ?? '?'} · ${app.platform ?? '?'} (${app.machine ?? '?'})`,
+  ];
+  if (d.generated_at) lines.push(`- **Captured** ${d.generated_at}`);
+  lines.push(
+    '',
+    '**Runtime**',
+    '```json',
+    JSON.stringify(d.runtime ?? {}, null, 2),
+    '```',
+    '',
+    '**Metrics**',
+    '```json',
+    JSON.stringify(d.metrics ?? {}, null, 2),
+    '```',
+    '',
+    '**Config** (secrets redacted)',
+    '```json',
+    JSON.stringify(d.config ?? {}, null, 2),
+    '```',
+    '',
+    `**Logs** \`${d.logs?.path ?? ''}\``,
+  );
+  if (d.logs?.note) lines.push(`_${d.logs.note}_`);
+  return lines.join('\n');
+}
+
 export function Diagnostics() {
   const [status, setStatus] = useState<'idle' | 'clearing' | 'cleared' | 'error'>('idle');
+  const [copy, setCopy] = useState<'idle' | 'copying' | 'copied'>('idle');
   const [error, setError] = useState<string | null>(null);
+
+  // Fetch the redacted bundle and drop it on the clipboard as markdown so the
+  // user can paste it straight into a bug report (#488).
+  const copyDiagnostics = async () => {
+    setCopy('copying');
+    setError(null);
+    try {
+      const report = await api.diagnostics();
+      await navigator.clipboard.writeText(formatDiagnostics(report));
+      setCopy('copied');
+      setTimeout(() => setCopy('idle'), 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setCopy('idle');
+      setStatus('error');
+    }
+  };
 
   const clear = async () => {
     setStatus('clearing');
@@ -52,6 +108,20 @@ export function Diagnostics() {
   return (
     <Panel title="Diagnostics">
       <div className="space-y-4">
+        <div className="space-y-2">
+          <p className="text-sm text-fg-muted leading-relaxed">
+            Copy your setup — app/OS versions, runtime state, metrics, and config with
+            secrets redacted — as a markdown block to paste into a bug report. Then use
+            "Reveal logs in Finder" below to attach the log file.
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => void copyDiagnostics()}
+            disabled={copy === 'copying'}
+          >
+            {copy === 'copying' ? 'Copying…' : copy === 'copied' ? 'Copied ✓' : 'Copy diagnostics'}
+          </Button>
+        </div>
         <div className="space-y-2">
           <p className="text-sm text-fg-muted leading-relaxed">
             Open the log folder in Finder (the Python sidecar log plus the Tauri shell

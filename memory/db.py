@@ -59,7 +59,7 @@ def __getattr__(name: str) -> str:
     if name == "DEFAULT_DB_PATH":
         return _default_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +94,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
     content='sessions',
     content_rowid='rowid'
 );
+
+-- Keep sessions_fts in sync incrementally (the canonical external-content
+-- FTS5 trigger pattern). Replaces the O(total-content) `('rebuild')` that
+-- sessions.add() ran on EVERY write (#482). add() upserts via ON CONFLICT DO
+-- UPDATE, so a re-persist UPDATEs in place (rowid stable) and fires _au —
+-- deliberately NOT INSERT OR REPLACE, whose REPLACE delete wouldn't fire the
+-- delete trigger without PRAGMA recursive_triggers, orphaning the old index row.
+CREATE TRIGGER IF NOT EXISTS sessions_fts_ai AFTER INSERT ON sessions BEGIN
+    INSERT INTO sessions_fts(rowid, messages, final_output)
+    VALUES (new.rowid, new.messages, new.final_output);
+END;
+CREATE TRIGGER IF NOT EXISTS sessions_fts_ad AFTER DELETE ON sessions BEGIN
+    INSERT INTO sessions_fts(sessions_fts, rowid, messages, final_output)
+    VALUES ('delete', old.rowid, old.messages, old.final_output);
+END;
+CREATE TRIGGER IF NOT EXISTS sessions_fts_au AFTER UPDATE ON sessions BEGIN
+    INSERT INTO sessions_fts(sessions_fts, rowid, messages, final_output)
+    VALUES ('delete', old.rowid, old.messages, old.final_output);
+    INSERT INTO sessions_fts(rowid, messages, final_output)
+    VALUES (new.rowid, new.messages, new.final_output);
+END;
 
 -- Facts: structured episodic/semantic memories extracted from conversations.
 -- Bi-temporal: valid_at/invalid_at = event time, created_at/expired_at =
@@ -293,6 +314,15 @@ def _migrate(conn: sqlite3.Connection, *, from_version: int, to_version: int) ->
         cols = {row["name"] for row in cur.fetchall()}
         if cols and "repeat_secs" not in cols:
             conn.execute("ALTER TABLE reminders ADD COLUMN repeat_secs INTEGER")
+
+    if from_version < 4:
+        # v4 switches sessions_fts to incremental trigger sync (#482). The
+        # triggers themselves are created by IF NOT EXISTS in _SCHEMA above;
+        # they only maintain FUTURE writes, so do ONE final full rebuild here
+        # to baseline the existing index against the content table. This is the
+        # last O(table) rebuild the DB will ever run — every write after this is
+        # incremental. No-op on a fresh/empty install.
+        conn.execute("INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')")
 
 
 # ---------------------------------------------------------------------------

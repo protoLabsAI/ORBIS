@@ -241,7 +241,7 @@ def test_speaker_gate_is_in_run_bot_pipeline_construction() -> None:
     """Smoke check: the gate is referenced in run_bot's pipeline list.
     Cheaper than wiring the full pipeline, catches accidental removal."""
     import app
-    src = open(app.__file__).read()
+    src = open(app.run_bot.__code__.co_filename).read()
     # The gate construction line + its placement in the pipeline list
     # both need to appear in run_bot.
     assert "_build_speaker_gate(sg_cfg)" in src

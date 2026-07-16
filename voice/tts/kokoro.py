@@ -1,5 +1,7 @@
 """Kokoro 82M TTS — in-process, low-latency, 54 preset voices, no cloning."""
 
+import asyncio
+import concurrent.futures
 import logging
 import os
 import time
@@ -139,6 +141,29 @@ def _detect_kokoro_device() -> str | None:
 KOKORO_DEVICE = _detect_kokoro_device()
 
 
+# Single dedicated thread for ALL Kokoro torch work — model load + synthesis —
+# so they share one thread (model affinity) and, crucially, never run on the
+# asyncio event loop. Kokoro is synchronous torch; iterating pipe() inline
+# stalled the mic reader, VAD, SSE, and barge-in for the whole utterance and
+# froze the first turn on model load (#481). Mirrors voice/stt_parakeet.py.
+_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="kokoro-tts"
+)
+_GEN_DONE = object()
+
+
+def _start_synth(pipe, text: str, voice: str, speed):
+    """Construct KPipeline's synthesis generator on the dedicated thread."""
+    return pipe(text, voice=voice, speed=speed)
+
+
+def _next_chunk(gen):
+    """Pull one chunk (a torch synthesis step) off the event loop; returns the
+    sentinel at exhaustion so the caller can stop without catching
+    StopIteration across the executor boundary."""
+    return next(gen, _GEN_DONE)
+
+
 def _get_pipe(lang: str = KOKORO_LANG):
     global _pipe
     if _pipe is None:
@@ -160,6 +185,30 @@ def _get_pipe(lang: str = KOKORO_LANG):
     return _pipe
 
 
+def _coerce_voice(voice: str | None) -> str:
+    """Return a valid Kokoro voice id, falling back to the default when the
+    configured one isn't in the catalogue.
+
+    Guards the boot-from-config path: nothing stops orbis.yaml from pairing
+    ``tts_backend: kokoro`` with a voice from a different backend (e.g.
+    ``protolabs/fish``). Config validation checks each field's type but not
+    backend↔voice coherence, so an incompatible pair persists cleanly — and
+    Kokoro would then try to fetch ``voices/protolabs/fish.pt`` from HF and
+    hard-break TTS on the first utterance. Coerce to the default instead so
+    the orb still speaks, and WARN so the mismatch is visible. The live
+    ``set_voice`` path already validates; this brings __init__ in line."""
+    if voice and voice in KOKORO_VOICES:
+        return voice
+    if voice and voice != KOKORO_VOICE:
+        logger.warning(
+            "[kokoro] configured voice %r is not a Kokoro voice — falling back "
+            "to %r. Check that tts_backend and voice match in orbis.yaml "
+            "(a %r voice-id belongs to a different TTS backend).",
+            voice, KOKORO_VOICE, voice,
+        )
+    return KOKORO_VOICE
+
+
 class LocalKokoroTTS(TTSService):
     def __init__(
         self,
@@ -169,6 +218,7 @@ class LocalKokoroTTS(TTSService):
         speed: float = 1.0,
         **kwargs,
     ):
+        voice = _coerce_voice(voice)
         kwargs.setdefault(
             "settings",
             TTSSettings(model="kokoro-82m", voice=voice, language=None),
@@ -235,9 +285,20 @@ class LocalKokoroTTS(TTSService):
         )
         try:
             await self.start_tts_usage_metrics(text)
-            pipe = _get_pipe(self._lang)
+            loop = asyncio.get_running_loop()
+            # Load (once) + synthesize on the dedicated thread. Each chunk is
+            # pulled via run_in_executor so the synthesis runs off the event
+            # loop while streaming is preserved (frames still yield as they're
+            # produced) — #481.
+            pipe = await loop.run_in_executor(_executor, _get_pipe, self._lang)
+            gen = await loop.run_in_executor(
+                _executor, _start_synth, pipe, text, voice, self._speed
+            )
             got_first = False
-            for chunk in pipe(text, voice=voice, speed=self._speed):
+            while True:
+                chunk = await loop.run_in_executor(_executor, _next_chunk, gen)
+                if chunk is _GEN_DONE:
+                    break
                 # KPipeline yields tuples; audio is at index 2 as a float32 ndarray.
                 audio_f32 = chunk[2] if len(chunk) >= 3 else chunk
                 if audio_f32 is None:

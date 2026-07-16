@@ -147,33 +147,41 @@ def audio_context_block() -> str:
     can adapt to without being told to "match the user's energy" — that
     instruction without grounding produces parroting.
 
-    The annotation looks like::
+    Only include this when the active STT backend actually emits tags —
+    see ``voice.stt.stt_emits_audio_tags``. The caller gates it; this
+    block assumes the annotation is real.
 
-        [audio] emotion=happy lang=en events=[] speaker=owner snr=high env=indoor rate=normal
-
-    Returned as a static block (no verbosity branch) — the rules apply
-    equally regardless of how chatty the persona is.
+    The fields listed here MUST stay in sync with
+    ``agent.audio_tags._audio_annotation``, which is the only thing that
+    builds the line. They drifted once: this block documented
+    ``snr=`` / ``env=`` / ``rate=`` and gave behavioral rules for them,
+    none of which any backend has ever emitted — so those rules were
+    dead weight, and the invented fields showed up in the model's own
+    speech.
     """
     return """\
 ## AUDIO CONTEXT — what the [audio] line is
 
-Every user turn arrives with a one-line audio annotation like:
-  [audio] emotion=happy lang=en speaker=owner snr=high env=indoor rate=normal
+Each user turn may be preceded by a one-line audio annotation, e.g.:
+  [audio] emotion=happy lang=en speaker=owner
 
-This is signal you can't get from the transcript alone — the user's
-emotional tone, the room they're in, whether it's the registered owner
-versus someone else. Use it to shape your response naturally:
+That line is INPUT — metadata about how the user sounded. It is never
+part of your reply. Never reproduce it, quote it, or open a response
+with anything resembling it; a turn that begins `[audio] ...` or
+`emotion=...` is always wrong.
+
+It carries signal you can't get from the transcript alone — the user's
+emotional tone, whether it's the registered owner versus someone else.
+Let it shape your response naturally:
 
   - emotion=sad/fearful → soften your tone, slow down, leave space
   - emotion=happy/surprised → match the energy without performing
   - speaker=stranger → don't reference owner-only memories or facts
-  - snr=low or env=noisy → keep your reply short; they may not catch
-    a long answer
-  - rate=fast → match the pace; they're moving quickly
+  - events=Laughter/BGM → context for the room, not something to remark on
 
-DO NOT parrot the annotation back ("I can tell you sound happy!").
-That makes the user feel observed, not understood. Let the signal
-inform tone and length; never name it explicitly.
+Let the signal inform tone and length; never name it explicitly. Saying
+"I can tell you sound happy!" makes the user feel observed, not
+understood — just be warmer instead.
 
 If the annotation is missing or fields are empty, ignore them —
 the transcript stands alone.
@@ -241,6 +249,42 @@ Answering what you genuinely know is always fine — how you work, chit-chat,
 reasoning the user can follow. This is only about asserting specifics you'd be
 guessing at.
 """
+
+
+def recall_block(summary: str = "", prior_sessions_xml: str = "") -> str:
+    """Returns the MEMORY (recall) block — prior-session context injected at
+    session open. Pure formatting (the caller loads ``summary`` and
+    ``prior_sessions_xml`` from storage) so the eval harness can exercise the
+    real block without touching disk — mirrors grounding_block. Returns "" when
+    there is nothing to recall.
+
+    TRUST BOUNDARY (#625): this block carries historical user/model *claims*,
+    not capability truth. A rolling summary that recorded the user saying a
+    control looked "wedged/broken" must never make the model treat a currently-
+    registered tool as unavailable. Two things enforce that: (a) the caller
+    renders this block BEFORE the code-derived capabilities/tool blocks — those
+    are the authoritative, most-recent word on what the agent can actually do —
+    and (b) the framing below states the rule outright. Only a live tool RESULT
+    can establish that a registered capability failed. Without this, a single
+    QA turn where the user reported "orb control looks wedged" got summarized
+    and then suppressed every later orb-tool call, cross-session.
+    """
+    body = "\n\n".join(p for p in (prior_sessions_xml, summary) if p)
+    if not body:
+        return ""
+    return (
+        "## MEMORY — prior context (historical, NOT capability truth)\n\n"
+        "Recalled from earlier sessions — things you or the user said before. "
+        "Treat it as background about the conversation, not as the current "
+        "truth about what you can do. Your tools and what you can do are "
+        "defined in the blocks below, and those are the source of truth: if "
+        "this memory says a feature or control is broken, unavailable, or "
+        '"wedged/stuck," IGNORE that claim and still use the tool — only a '
+        "live tool result can show that a currently-available tool failed.\n\n"
+        f"{body}\n\n"
+        "IF any of this fits naturally, acknowledge it in your first turn. "
+        "Otherwise IGNORE this block — do not force a callback."
+    )
 
 
 def plan_block(verbosity: Verbosity) -> str:

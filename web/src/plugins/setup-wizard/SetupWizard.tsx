@@ -81,16 +81,21 @@ export function SetupWizard() {
         if (cancelled) return;
         // The explicit flag wins — including a Re-run that set it false, which
         // must override the legacy signal below (local_models stays set). Only
-        // when the flag was never written do we fall back to back-compat:
-        // voice.local_models is set, and the wizard's models step is its only
-        // writer, so its presence means setup was done on this box.
+        // when the flag was never written do we fall back to back-compat for
+        // boxes that predate the setup.complete flag: require BOTH the models
+        // step (voice.local_models — its only writer) AND a written llm block.
+        // Requiring the llm block too closes the quit-mid-wizard hole: a box
+        // that ran the models step then quit before the LLM step has
+        // local_models set but no llm — treating that as "done" boots the orb
+        // with no language model (the dead localhost:8100 default). Re-run
+        // setup instead; the wizard resumes and writes the llm block.
         const setup = config?.setup;
         const done =
           setup?.complete === true
             ? true
             : setup?.complete === false
               ? false
-              : config?.voice?.local_models != null;
+              : config?.voice?.local_models != null && !!config?.llm?.url;
         if (done) {
           try {
             localStorage.setItem(STORAGE_COMPLETE, 'true');
@@ -538,10 +543,14 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
   };
 
-  const onTest = async () => {
+  // Real round-trip against the CURRENT url/model/key. Returns whether it
+  // passed so onContinue can gate on it. Handles every provider — hosted,
+  // Ollama, and the on-device `mlx://` path (ping_endpoint validates the HF
+  // repo for that one), so requiring it never blocks the local options.
+  const runTest = async (): Promise<boolean> => {
     if (!url.trim() || !model.trim()) {
       setError('URL and model required to test.');
-      return;
+      return false;
     }
     setError(null);
     setTest({ kind: 'checking' });
@@ -553,13 +562,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       });
       if (r.ok) {
         setTest({ kind: 'ok', latency: r.latency_ms ?? 0 });
-      } else {
-        setTest({ kind: 'error', message: r.error ?? 'unknown error' });
+        return true;
       }
+      setTest({ kind: 'error', message: r.error ?? 'unknown error' });
+      return false;
     } catch (e) {
       setTest({ kind: 'error', message: String((e as Error).message ?? e) });
+      return false;
     }
   };
+
+  const onTest = () => { void runTest(); };
 
   const onContinue = async () => {
     setError(null);
@@ -569,6 +582,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
     if (current.needsKey && !apiKey.trim() && provider !== 'custom') {
       setError(`${current.label} needs an API key.`);
+      return;
+    }
+    // Gate on a live connectivity check so a fresh user can't click past a
+    // dead endpoint onto a silently-broken orb (the wizard's default is
+    // Ollama on localhost, which most first-run machines aren't running).
+    // Always re-verify against the current values rather than trusting a
+    // prior green badge — otherwise "test, then edit the URL, then Continue"
+    // would smuggle an unverified endpoint through.
+    const ok = await runTest();
+    if (!ok) {
+      setError("Couldn't reach that endpoint — fix the connection above, then Continue.");
       return;
     }
     setSaving(true);
@@ -696,7 +720,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">URL</label>
           <input
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => { setUrl(e.target.value); setTest({ kind: 'idle' }); }}
             placeholder="https://api.openai.com/v1"
             className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
@@ -717,7 +741,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
           <input
             list={`llm-models-${provider}`}
             value={model}
-            onChange={(e) => setModel(e.target.value)}
+            onChange={(e) => { setModel(e.target.value); setTest({ kind: 'idle' }); }}
             placeholder="gpt-4o-mini"
             className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
             spellCheck={false}
@@ -740,7 +764,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => { setApiKey(e.target.value); setTest({ kind: 'idle' }); }}
               placeholder={current.keyPlaceholder}
               className="w-full h-10 rounded-md border border-edge bg-raised/60 px-3 text-sm text-fg-body placeholder-fg-muted font-mono"
               autoComplete="off"
@@ -774,8 +798,8 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
       <div className="flex items-center justify-between">
         <Button variant="ghost" onClick={onBack}>Back</Button>
-        <Button onClick={onContinue} disabled={saving}>
-          {saving ? 'Saving…' : 'Continue'}
+        <Button onClick={onContinue} disabled={saving || test.kind === 'checking'}>
+          {saving ? 'Saving…' : test.kind === 'checking' ? 'Checking…' : 'Continue'}
         </Button>
       </div>
     </div>

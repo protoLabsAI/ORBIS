@@ -279,6 +279,33 @@ class LocalWhisperSTT(SegmentedSTTService):
 # Public factory + helpers
 # ---------------------------------------------------------------------------
 
+# Backends that emit EmotionFrame / AudioEventFrame, i.e. the ones that
+# can actually produce the `[audio]` annotation AudioTagsTap injects.
+# Only SenseVoice carries non-textual signal; local/parakeet/openai are
+# transcript-only. Kept next to make_stt so the resolution rule below
+# and this capability check can't drift apart.
+_AUDIO_TAG_BACKENDS = frozenset({"sensevoice"})
+
+
+def resolve_stt_backend(backend: str | None = None) -> str:
+    """The backend `make_stt` would actually build for this config —
+    persona override first, then env, then the `local` default."""
+    return (backend or STT_BACKEND or "local").strip().lower()
+
+
+def stt_emits_audio_tags(backend: str | None = None) -> bool:
+    """Can the active STT backend produce the `[audio]` annotation?
+
+    False for every transcript-only backend (local/parakeet/openai), so
+    callers can skip prompt text that describes a line which will never
+    arrive. Teaching a small model to recognize a format it never sees
+    doesn't degrade gracefully — it hands the model a template to copy
+    into its own output (the orb spoke `[live] audio=emotion=neutral
+    lang=en ...` aloud on 2026-07-15).
+    """
+    return resolve_stt_backend(backend) in _AUDIO_TAG_BACKENDS
+
+
 def make_stt(
     *,
     backend: str | None = None,
@@ -289,11 +316,13 @@ def make_stt(
     **_unused,
 ) -> SegmentedSTTService:
     """Return the configured STT service for the pipeline."""
-    chosen_backend = (backend or STT_BACKEND or "local").strip().lower()
+    chosen_backend = resolve_stt_backend(backend)
     if chosen_backend == "openai":
         chosen_url = url or STT_URL
         chosen_model = model or STT_MODEL
         chosen_api_key = api_key or STT_API_KEY
+        from voice.keycheck import warn_if_placeholder_key
+        warn_if_placeholder_key("stt", chosen_url, chosen_api_key)
         logger.info(f"STT backend: openai @ {chosen_url} model={chosen_model}")
         return OpenAISTTService(
             api_key=chosen_api_key,

@@ -11,7 +11,8 @@ import asyncio
 
 import pytest
 
-import app as app_module
+import app as app_module  # noqa: F401 — patched via app_module.* (handler reads app.<name>)
+from server.routers.system import health
 
 
 class _DummyTransport:
@@ -36,7 +37,7 @@ async def test_healthz_reports_native_audio_runtime(monkeypatch: pytest.MonkeyPa
     task = asyncio.create_task(_pipeline())
     monkeypatch.setattr(app_module, "_native_pipeline_task", task)
     try:
-        payload = await app_module.health()
+        payload = await health()
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -64,7 +65,7 @@ async def test_healthz_reports_native_audio_idle_state(monkeypatch: pytest.Monke
     monkeypatch.setattr(app_module, "_native_transport", None)
     monkeypatch.setattr(app_module, "_native_pipeline_task", None)
 
-    payload = await app_module.health()
+    payload = await health()
 
     audio = payload["audio"]
     assert audio["transport"] == "native"

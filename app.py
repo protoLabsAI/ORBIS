@@ -25,15 +25,14 @@ Duplex behavior:
 
 import argparse
 import asyncio
-import hmac
 import logging
 import os
-import random
 import signal
 import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Load .env BEFORE any other module reads os.environ. python-dotenv leaves
 # already-set env vars alone (shell env wins over .env — standard).
@@ -48,9 +47,17 @@ try:
     # guard, SMART_TURN, micro-ack — with a 5-second app restart instead
     # of an 80-second sidecar rebuild. override=True so it wins over the
     # values the Tauri shell injects when it spawns the sidecar.
+    #
+    # ORBIS_SKIP_RUNTIME_ENV disables this. The test suite sets it (see
+    # conftest.py): override=True beats anything a test set up, so this
+    # file would otherwise import a developer's personal tuning config
+    # into every test process and make the local suite disagree with CI.
+    # It did — a stray A2A_AUTH_TOKEN silently 401'd an a2a test that
+    # passes in CI, and tests/test_skill_llm_resolution.py carries a
+    # fixture that hand-clears LLM_MICRO_MODEL for the same reason.
     from pathlib import Path as _RTPath
     _rt_env = _RTPath.home() / "Library/Application Support/studio.protolabs.orbis/.env"
-    if _rt_env.is_file():
+    if _rt_env.is_file() and not os.environ.get("ORBIS_SKIP_RUNTIME_ENV"):
         load_dotenv(_rt_env, override=True)
 except ImportError:
     # Missing dotenv shouldn't crash boot — secrets just have to come
@@ -87,106 +94,57 @@ def _emit_boot(stage: str, detail: str) -> None:
 _emit_boot("import", "Loading the voice pipeline…")
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.llm_switcher import LLMSwitcher
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMAssistantAggregatorParams,
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-    UserTurnCompletionConfig,
-)
 from pipecat.processors.frameworks.rtvi import (
     RTVIObserver,
     RTVIObserverParams,
-    RTVIProcessor,
 )
-from pipecat.utils.context.llm_context_summarization import (
-    LLMAutoContextSummarizationConfig,
-    LLMContextSummaryConfig,
-)
-from pipecat.services.openai.llm import OpenAILLMService
 
 _emit_boot("import", "Loading the agent…")
 
-from voice.ask_gate import AskGate
-from voice.cancel_gate import CancelGate
-from voice.llm import make_llm
-from voice.local_transport import LocalAudioTransport, audio_runtime_info
-from voice.native_bargein import NativeBargeInObserver
+from voice.local_transport import LocalAudioTransport, audio_runtime_info  # noqa: F401 — audio_runtime_info re-exported for server.routers.system (app.audio_runtime_info, monkeypatched in tests)
 from voice.sse_bus import sse_bus
-from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
 
 from a2a_server import register_a2a_routes
-from agent.backchannel import BackchannelController
-from agent.bargein import BargeInGate
 from agent.delegates import DelegateRegistry
-from agent.micro_ack import MicroAckInjector, opening_ack_line
-from agent.stall_watchdog import StallWatchdog
-from agent.llm_error_announcer import LLMErrorAnnouncer
 from agent.echo_guard import (
-    ECHO_GUARD_MS,
-    HALF_DUPLEX,
-    EchoGuardObserver,
     EchoGuardState,
-    EchoGuardSuppressor,
 )
-from agent.audio_tags import make_audio_tags_tap
-from agent.delivery import DeliveryController, Priority
 from agent.paths import get_voiceprint_path
 from agent.speaker_gate import (
     SpeakerGate,
     StrangerAction,
     VoiceprintCorrupted,
     load_voiceprint,
-    save_voiceprint,
 )
-from agent.prosody import ProsodyTagStripper
 from agent.filler import (
     FillerGenerator,
-    Latency,
-    Verbosity,
     audio_context_block,
     grounding_block,
     plan_block,
+    recall_block,
     repair_block,
     tool_response_block,
     tool_use_block,
 )
-from agent import presence
-from agent import tracing as _tracing
 from agent.session_store import (
-    drain_stashed_deliveries,
     load_last_summary,
-    save_summary,
-    stash_delivery,
 )
-from agent.orchestrate import run_orchestration
 from agent.tools import (
-    ASYNC_TOOL_NAMES,
     build_text_tool_schemas,
     capabilities_block,
-    latency_for,
-    register_tools,
     run_text_tool,
 )
-from auth import load_users, require_user, user_registry
-from auth.users import User
-from auth.context import current_session_id, current_user_id
-from agent.user_state import active_user_states, all_user_states, user_state_for
+from auth import load_users, user_registry  # noqa: F401 — user_registry re-exported for routers + tests (app.user_registry)
+from auth.context import current_user_id
+from agent.user_state import all_user_states, user_state_for
 
 _emit_boot("import", "Loading speech + voice engines…")
 
-from voice.stt import STT_BACKEND, make_stt, prewarm as prewarm_stt
-from voice.tts import TTS_BACKEND, make_tts, prewarm as prewarm_tts
+from voice.stt import STT_BACKEND, prewarm as prewarm_stt, stt_emits_audio_tags
+from voice.tts import TTS_BACKEND, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("orbis")
@@ -200,7 +158,12 @@ _warnings.filterwarnings("ignore", category=FutureWarning)  # torch weight_norm 
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 
 PORT = int(os.environ.get("PORT", "7866"))
-LLM_URL = os.environ.get("LLM_URL", f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1")
+# The built-in fallback when no llm.url is configured and LLM_URL isn't set:
+# a local vLLM that the shipped desktop app never runs (START_VLLM=0, no CUDA
+# on macOS). Named so _resolve_skill_llm can detect "the orb has no LLM
+# configured" and say so, instead of silently dialing a dead port.
+_LLM_URL_DEFAULT = f"http://localhost:{os.environ.get('VLLM_PORT', '8100')}/v1"
+LLM_URL = os.environ.get("LLM_URL", _LLM_URL_DEFAULT)
 LLM_SERVED_NAME = os.environ.get("LLM_SERVED_NAME", "local")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "not-needed")
 LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "150"))
@@ -220,7 +183,7 @@ _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
 # Single ORBIS persona loaded from config/orbis.yaml (see agent/persona.py).
 # Module-level cache refreshes via reload_persona().
-from agent.persona import get_active_persona, load_persona, reload_persona  # noqa: E402
+from agent.persona import get_active_persona  # noqa: E402
 
 # Memory backend — SQLite-embedded sessions + facts + personality + mood.
 from memory import Memory  # noqa: E402
@@ -245,6 +208,66 @@ def _active_skill(user_id: str = "default"):
     return get_active_persona()
 
 
+def _resolve_api_key(block: dict, *, what: str) -> str:
+    """Resolve an api_key from an llm config block: a direct ``api_key`` →
+    ``api_key_env`` indirection → the ``LLM_API_KEY`` placeholder default.
+
+    Shared by the primary (``_resolve_skill_llm``) and fallback
+    (``_resolve_fallback_llm``) paths so credential resolution has one
+    source of truth.
+
+    ``api_key_env`` is a footgun on the desktop app: a Finder/Dock launch
+    gives the sidecar launchd's minimal env, so a shell export like
+    ``OPENAI_API_KEY`` is NOT visible (this is why the Tauri shell
+    hand-augments PATH). The var then silently resolves to the
+    ``"not-needed"`` placeholder and the request 401s with no hint why.
+    When ``api_key_env`` names a var that's unset, WARN loudly instead of
+    swallowing it. Prefer a direct ``api_key`` in orbis.yaml — what the
+    setup wizard writes.
+    """
+    if block.get("api_key"):
+        return str(block["api_key"])
+    env_var = block.get("api_key_env")
+    if env_var:
+        resolved = os.environ.get(str(env_var))
+        if resolved:
+            return resolved
+        logger.warning(
+            "[%s] api_key_env=%r but that env var is unset in the sidecar's "
+            "environment (a Finder/Dock launch does not inherit shell "
+            "exports). Falling back to a placeholder key — expect a 401. Set "
+            "api_key directly in orbis.yaml instead.",
+            what, str(env_var),
+        )
+    return LLM_API_KEY
+
+
+def _wants_thinking_suppression(url: str, provider: str | None) -> bool:
+    """Should this endpoint be sent
+    ``chat_template_kwargs={"enable_thinking": False}``?
+
+    That field is a **property of the endpoint** (of its chat template),
+    so it is keyed off the resolved URL — never off *where* the URL came
+    from. It used to be `bool(persona.llm.get("url"))`, i.e. "did the
+    config name a URL", which meant the very same gateway URL behaved
+    differently depending on whether it sat in `orbis.yaml` or in the
+    `LLM_URL` env. From yaml, `enable_thinking=False` was never sent, so
+    the Qwen-family models behind `protolabs/*` streamed raw
+    chain-of-thought into `content` — and ORBIS speaks `content`, so the
+    orb narrated its own tool-call planning out loud. Since the shipped
+    `config/orbis.yaml` names the gateway URL, that was the out-of-box
+    behavior.
+
+    True for the vLLM/Qwen dialect (the protoLabs gateway; a self-hosted
+    vLLM via `provider: vllm`). False everywhere else — OpenAI,
+    Anthropic, Groq, Mistral et al. reject unknown body fields with a
+    400. An explicit `persona.llm.extra_body` always wins over this.
+    """
+    if provider:
+        return provider.lower() in ("vllm", "protolabs")
+    return (urlparse(url).hostname or "").lower() == "api.proto-labs.ai"
+
+
 def _resolve_skill_llm(skill) -> dict:
     """Resolve LLM routing for a skill. Single source of truth shared by
     the voice path (run_bot) and the inbound A2A path (text_agent).
@@ -252,32 +275,37 @@ def _resolve_skill_llm(skill) -> dict:
     Precedence per-field: persona.llm.{url,model,api_key,api_key_env}
     overrides; env var fallback; finally module-level defaults.
 
-    `extra_body` follows the same kill-switch logic as the voice path:
-    user override always wins; custom URL forces None (avoids LiteLLM
-    400s on `chat_template_kwargs`); default endpoint sends
-    `enable_thinking=False`.
+    `extra_body`: an explicit user override always wins; otherwise it's
+    derived from the resolved endpoint via `_wants_thinking_suppression`.
 
-    Returns a dict with keys: url, model, api_key, extra_body,
-    using_custom_url, provider. Callers compose request kwargs from
-    this. ``provider`` rides through to ``make_llm()`` so the adapter
-    factory can route Ollama-native vs OpenAI-compat correctly.
+    Returns a dict with keys: url, model, api_key, extra_body, provider.
+    Callers compose request kwargs from this. ``provider`` rides through
+    to ``make_llm()`` so the adapter factory can route Ollama-native vs
+    OpenAI-compat correctly.
     """
     skill_llm = (skill.llm if skill else None) or {}
-    using_custom_url = bool(skill_llm.get("url"))
     url = str(skill_llm.get("url") or LLM_URL)
+    if not skill_llm.get("url") and url == _LLM_URL_DEFAULT:
+        # No llm block in orbis.yaml and no LLM_URL env → we fell back to the
+        # built-in local-vLLM placeholder, which nothing serves on the desktop
+        # app. The orb boots but has no brain; the LLM error announcer (#576)
+        # will speak on the first failed turn, but say why here too so the log
+        # isn't a mystery. Reachable if setup was marked done with no llm block.
+        logger.warning(
+            "[llm] no LLM configured — url resolved to the built-in local-vLLM "
+            "placeholder %s, which nothing is serving. Open Settings to pick a "
+            "language model (or set LLM_URL if you run a local vLLM there).",
+            url,
+        )
     model = str(skill_llm.get("model") or LLM_SERVED_NAME)
-    if skill_llm.get("api_key"):
-        api_key = str(skill_llm["api_key"])
-    elif skill_llm.get("api_key_env"):
-        api_key = os.environ.get(str(skill_llm["api_key_env"]), LLM_API_KEY)
-    else:
-        api_key = LLM_API_KEY
+    api_key = _resolve_api_key(skill_llm, what="llm")
+    provider = skill_llm.get("provider")
     if "extra_body" in skill_llm:
         extra_body = skill_llm["extra_body"] or None
-    elif using_custom_url:
-        extra_body = None
-    else:
+    elif _wants_thinking_suppression(url, provider):
         extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
+    else:
+        extra_body = None
     # Two-model routing (orbis-3it): optional smart/fast split. When set,
     # make_llm builds a TwoModelOpenAILLMService that runs the
     # tool-decision turn on router_model and the post-tool narration turn
@@ -311,8 +339,7 @@ def _resolve_skill_llm(skill) -> dict:
         "model": model,
         "api_key": api_key,
         "extra_body": extra_body,
-        "using_custom_url": using_custom_url,
-        "provider": skill_llm.get("provider"),
+        "provider": provider,
         "router_model": router_model,
         "content_model": content_model,
         "micro_model": micro_model,
@@ -361,25 +388,25 @@ def _resolve_fallback_llm(skill) -> dict | None:
     url = fb.get("url")
     if not url:
         return None
-    using_custom_url = True  # a fallback is always an explicit, user-chosen URL
     model = str(fb.get("model") or LLM_SERVED_NAME)
-    if fb.get("api_key"):
-        api_key = str(fb["api_key"])
-    elif fb.get("api_key_env"):
-        api_key = os.environ.get(str(fb["api_key_env"]), LLM_API_KEY)
+    api_key = _resolve_api_key(fb, what="llm.fallback")
+    # Same endpoint-capability rule as the primary: explicit override
+    # wins, else derive from the resolved URL. (A fallback is typically
+    # a local Ollama/MLX, which routes to an adapter that handles
+    # `think` itself — see _resolve_ollama_think.)
+    fb_provider = fb.get("provider")
+    if "extra_body" in fb:
+        extra_body = fb["extra_body"] or None
+    elif _wants_thinking_suppression(str(url), fb_provider):
+        extra_body = {"chat_template_kwargs": {"enable_thinking": False}}
     else:
-        api_key = LLM_API_KEY
-    # Mirror the custom-URL extra_body kill-switch: a user-supplied
-    # fallback endpoint may be a LiteLLM/vLLM that 400s on
-    # chat_template_kwargs, so default it off unless explicitly set.
-    extra_body = fb["extra_body"] or None if "extra_body" in fb else None
+        extra_body = None
     return {
         "url": str(url),
         "model": model,
         "api_key": api_key,
         "extra_body": extra_body,
-        "using_custom_url": using_custom_url,
-        "provider": fb.get("provider"),
+        "provider": fb_provider,
     }
 
 
@@ -531,9 +558,10 @@ def _recall_block(user_id: str) -> str:
       - the last 3 SQLite session summaries (structured), and
       - the rolling text summary produced by pipecat's summarizer
         (fallback when SQLite is empty — first-boot / fresh install).
-    """
-    parts: list[str] = []
 
+    Formatting (incl. the #625 trust-boundary framing) lives in the shared
+    ``agent.filler.recall_block``; this only loads the pieces from storage.
+    """
     # Prior-N block from SQLite. Newest first, ~3 sessions keeps the
     # prompt affordable while still giving cross-session continuity.
     try:
@@ -543,6 +571,7 @@ def _recall_block(user_id: str) -> str:
         logger.warning(f"[memory] prior_n read failed: {e}")
         prior = []
 
+    prior_sessions_xml = ""
     if prior:
         sessions_xml: list[str] = ["<prior_sessions>"]
         for row in prior:
@@ -554,24 +583,13 @@ def _recall_block(user_id: str) -> str:
                 sessions_xml.append(f"    <final_output>{final}</final_output>")
             sessions_xml.append("  </session>")
         sessions_xml.append("</prior_sessions>")
-        parts.append("\n".join(sessions_xml))
+        prior_sessions_xml = "\n".join(sessions_xml)
 
-    # Fallback / complement: the text summary file.
-    summary = load_last_summary(user_id)
-    if summary:
-        parts.append(
-            "## MEMORY — rolling summary\n\n"
-            f"{summary}"
-        )
-
-    if not parts:
-        return ""
-
-    return (
-        "\n\n".join(parts)
-        + "\n\nIF any of this fits naturally, acknowledge it in your first "
-        "turn. Otherwise IGNORE this block — do not force a callback."
-    )
+    # Fallback / complement: the rolling text summary file. Both pieces are
+    # passed to the shared formatter, which wraps them in the trust-boundary
+    # framing (#625) and is also imported by the eval harness.
+    summary = load_last_summary(user_id) or ""
+    return recall_block(summary=summary, prior_sessions_xml=prior_sessions_xml)
 
 
 def _filler_gen_for(user_id: str) -> FillerGenerator:
@@ -606,6 +624,9 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
 
 NOISE_FILTER = os.environ.get("NOISE_FILTER", "off").lower()  # off | rnnoise
 SMART_TURN = os.environ.get("SMART_TURN", "off").lower()      # off | local
+# Shared secret for the unauth /api/inbox ingest path; read by
+# server/routers/comms.py as app.INBOX_INGEST_TOKEN (monkeypatched in tests).
+INBOX_INGEST_TOKEN = os.environ.get("INBOX_INGEST_TOKEN", "")
 
 
 def _build_audio_in_filter():
@@ -763,6 +784,13 @@ def _effective_prompt(
 
     return (
         base
+        # MEMORY (recall) renders BEFORE the capability/tool blocks, not after:
+        # it carries historical user/model claims, and the code-derived
+        # capabilities below must be the authoritative, most-recent word on what
+        # the agent can do. Injected last, a summary like "orb control is
+        # wedged" read as capability truth and suppressed the tool for the rest
+        # of the session (#625). The block's own framing states the rule too.
+        + (("\n\n" + recall) if recall else "")
         + "\n\n"
         + tool_use_block(verbosity, tts_backend)
         + "\n\n"
@@ -782,19 +810,29 @@ def _effective_prompt(
         + "\n\n"
         + repair_block()
         # Audio-context block teaches the LLM what the [audio] line
-        # AudioTagsTap will inject means. Static — no runtime data, no
-        # branch — so it sits in every persona's prompt regardless of
-        # whether STT_BACKEND=sensevoice is enabled. When the tap isn't
-        # running the [audio] line just won't appear; the block tells
-        # the LLM to ignore the annotation when missing, so this is
-        # safe-by-default.
-        + "\n\n"
-        + audio_context_block()
+        # AudioTagsTap injects means — but ONLY when the active STT
+        # backend can actually emit one. Only SenseVoice carries
+        # EmotionFrame; on local/parakeet/openai the annotation never
+        # arrives.
+        #
+        # This used to be unconditional, on the theory that "the block
+        # tells the LLM to ignore the annotation when missing, so this
+        # is safe-by-default". It isn't: a small model handed a literal
+        # worked example doesn't ignore it, it COPIES it. The orb read
+        # `[live] audio=emotion=neutral lang=en speaker=owner ...` aloud
+        # to the user on 2026-07-15 — a format it had only ever seen in
+        # this block, on a backend that emits no tags at all.
+        # `skill` is duck-typed (see this function's docstring) — callers
+        # pass Persona or a bare namespace, so read `stt` defensively.
+        + (
+            ("\n\n" + audio_context_block())
+            if stt_emits_audio_tags((getattr(skill, "stt", None) or {}).get("backend"))
+            else ""
+        )
         + (("\n\n" + user_block) if user_block else "")
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
         + (("\n\n" + inbox_block) if inbox_block else "")
-        + (("\n\n" + recall) if recall else "")
     )
 
 
@@ -1171,1081 +1209,6 @@ class SseBusObserver(RTVIObserver):
                 self._bot_text_buf.append(data.text)
 
 
-async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | None = None) -> None:
-    """Run the persistent native voice pipeline.
-
-    Called once from lifespan with a pre-built LocalAudioTransport that
-    bridges to the Rust native audio engine over a Unix socket. The pipeline
-    runs for the lifetime of the app — `cancel_on_idle_timeout=False`
-    on the PipelineTask keeps it alive across UI idle periods.
-    """
-    # Set context vars so deep-stack code (tracing spans, session_store
-    # lookups, filler generators) can pick up the right user/session
-    # without needing the id threaded through.
-    current_user_id.set(user_id)
-    user_state = user_state_for(user_id)
-
-    # Snapshot the active skill at connect time; the session keeps it even
-    # if the operator flips the dropdown mid-call. Matches UX expectation.
-    skill = _active_skill(user_id)
-    tts_backend = skill.tts_backend or TTS_BACKEND
-
-    # Skills may override per-user filler verbosity.
-    if skill.filler_verbosity:
-        try:
-            user_state.filler_settings.verbosity = Verbosity(skill.filler_verbosity)
-        except ValueError:
-            pass
-
-    logger.info(
-        f"[session] user={user_id!r} skill={skill.slug!r} tts_backend={tts_backend} "
-        f"voice={skill.voice!r} verbosity={user_state.filler_settings.verbosity.value}"
-    )
-
-    # Caller (lifespan) builds the transport. Direct invocations (tests
-    # or alternate entry points) can also pass a pre-built one.
-    if transport is None:
-        sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
-        if not sock_path:
-            raise RuntimeError(
-                "run_bot() requires either a transport= kwarg or "
-                "ORBIS_AUDIO_SOCK env var pointing at the Rust native "
-                "audio engine's unix socket."
-            )
-        transport = LocalAudioTransport(sock_path=sock_path)
-
-    # The Rust-side AEC (src-tauri/src/audio/aec.rs) is currently a thin
-    # delay-line subtractor — not strong enough on its own once we apply
-    # the software mic gain in voice/local_transport.py. Keep the Python
-    # echo guard active with a longer window so amplified speaker bleed
-    # doesn't false-trigger VAD/MicroAck on the bot's own tail. Phase 2
-    # (AVAudioEngine voice-processing IO) supersedes this entirely.
-    # Override via NATIVE_ECHO_GUARD_MS env var.
-    _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
-
-    stt = make_stt(**(skill.stt or {}))
-
-    # LLM routing — resolved by _resolve_skill_llm so the voice path and
-    # the A2A inbound text path share a single source of truth. Per-field
-    # precedence: persona.llm.{url,model,api_key,api_key_env,extra_body}
-    # → env vars (LLM_URL / LLM_SERVED_NAME / LLM_API_KEY) → defaults.
-    # The extra_body kill-switch protects custom URLs from LiteLLM 400s
-    # on chat_template_kwargs; see _resolve_skill_llm for the full
-    # rationale.
-    llm_cfg = _resolve_skill_llm(skill)
-    llm_url = llm_cfg["url"]
-    llm_model = llm_cfg["model"]
-    llm_api_key = llm_cfg["api_key"]
-    extra_body = llm_cfg["extra_body"]
-    using_custom_llm = llm_cfg["using_custom_url"]
-
-    settings_kwargs: dict = {
-        "model": llm_model,
-        "temperature": skill.temperature if skill else LLM_TEMPERATURE,
-        "max_tokens": skill.max_tokens if skill else LLM_MAX_TOKENS,
-    }
-    if extra_body is not None:
-        settings_kwargs["extra"] = {"extra_body": extra_body}
-
-    # voice/llm/__init__.py picks the right adapter — Ollama instances
-    # get the native /api/chat path (which honors `think: false`),
-    # everything else routes through pipecat's OpenAI-compat service.
-    # The factory also handles the supports_developer_role swap for
-    # the project's default endpoint.
-    llm = make_llm(
-        base_url=llm_url,
-        model=llm_model,
-        api_key=llm_api_key,
-        settings=OpenAILLMService.Settings(**settings_kwargs),
-        provider=llm_cfg["provider"],
-        using_custom_url=using_custom_llm,
-        router_model=llm_cfg["router_model"],
-        content_model=llm_cfg["content_model"],
-    )
-
-    # Optional failover backup (orbis-1dd). When a fallback LLM is
-    # configured (persona.llm.fallback or LLM_FALLBACK_URL), wrap primary
-    # + backup in a pipecat LLMSwitcher with the failover strategy: a
-    # non-fatal ErrorFrame from the active LLM (e.g. the cloud gateway is
-    # down) automatically switches to the next member for the rest of the
-    # session. When unconfigured, `_llm_members == [llm]` and the pipeline
-    # uses the bare `llm` — byte-for-byte the single-LLM path as before.
-    # LLM error announcer (#576): a dead/401'd LLM otherwise leaves the orb
-    # in "thinking" forever — the ErrorFrame flows upstream where the (long
-    # since disarmed) StallWatchdog never looks. Must be an observer, not a
-    # processor: LLMSwitcher re-propagates the ErrorFrame upstream even on a
-    # successful failover, so anything positional would announce recovered
-    # outages. Constructed here (before the switcher) so the failover event
-    # handler below can reclassify a pending announcement; registered in the
-    # task's observers list; emitter (task.queue_frame) wired after task
-    # creation.
-    llm_error_announcer = LLMErrorAnnouncer(
-        debounce_secs=float(os.environ.get("LLM_ERROR_DEBOUNCE_SECS", "2.5")),
-        throttle_secs=float(os.environ.get("LLM_ERROR_THROTTLE_SECS", "20")),
-        enabled=os.environ.get("LLM_ERROR_ANNOUNCER", "1") == "1",
-        tts_backend=tts_backend,
-    )
-
-    _fallback_cfg = _resolve_fallback_llm(skill)
-    _llm_members = [llm]
-    if _fallback_cfg is not None:
-        _fb_settings = dict(settings_kwargs)
-        _fb_settings["model"] = _fallback_cfg["model"]
-        if _fallback_cfg["extra_body"] is not None:
-            _fb_settings["extra"] = {"extra_body": _fallback_cfg["extra_body"]}
-        else:
-            _fb_settings.pop("extra", None)
-        llm_fallback = make_llm(
-            base_url=_fallback_cfg["url"],
-            model=_fallback_cfg["model"],
-            api_key=_fallback_cfg["api_key"],
-            settings=OpenAILLMService.Settings(**_fb_settings),
-            provider=_fallback_cfg["provider"],
-            using_custom_url=_fallback_cfg["using_custom_url"],
-        )
-        _llm_members.append(llm_fallback)
-        logger.info(
-            "[llm] failover enabled: primary=%s (%s) → backup=%s (%s)",
-            llm_url, llm_model, _fallback_cfg["url"], _fallback_cfg["model"],
-        )
-
-    # Per-skill delegate filter. Empty list / None = all delegates exposed.
-    session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
-    tts_kwargs: dict = {"backend": tts_backend}
-    if skill.voice:
-        if tts_backend == "kokoro":
-            tts_kwargs["voice"] = skill.voice
-            # Persona has no lang field today — KOKORO_LANG env handles
-            # language overrides. getattr keeps this branch forward-
-            # compatible if a lang field is added later.
-            lang = getattr(skill, "lang", None)
-            if lang:
-                tts_kwargs["lang"] = lang
-        elif tts_backend == "fish":
-            tts_kwargs["reference_id"] = skill.voice
-        elif tts_backend == "openai":
-            tts_kwargs["voice"] = skill.voice
-    if tts_backend == "openai":
-        if skill.tts_url:
-            tts_kwargs["url"] = skill.tts_url
-        if skill.tts_model:
-            tts_kwargs["model"] = skill.tts_model
-        if skill.tts_api_key:
-            tts_kwargs["api_key"] = skill.tts_api_key
-    tts = make_tts(**tts_kwargs)
-
-    # Delivery controller — observes VAD + transcripts, drains push deliveries.
-    delivery = DeliveryController()
-
-    # Per-skill behavior overrides. Each key can be:
-    #   false                — disable the controller for this skill
-    #   true (or omitted)    — enabled with env/module defaults
-    #   dict                 — enabled, with specific timing overrides
-    behavior = skill.behavior or {}
-    bc_cfg = _resolve_behavior_block(behavior.get("backchannel"))
-    ma_cfg = _resolve_behavior_block(behavior.get("micro_ack"))
-    bg_cfg = _resolve_behavior_block(behavior.get("bargein"))
-    sg_cfg = _resolve_behavior_block(behavior.get("speaker_gate"))
-    # Backchannel + micro-ack were originally tuned against the WebRTC
-    # mic path's AGC + browser echo cancellation. On the native CPAL
-    # path the speaker-bleed-into-mic crosses VAD threshold (especially
-    # with software mic gain), so the listener-acks fire on the bot's
-    # own tail. Default both off unless the persona explicitly enabled
-    # them. Phase 2 (real AEC via AVAudioEngine) lets us flip the
-    # default back to on.
-    if behavior.get("backchannel") is None:
-        bc_cfg["enabled"] = False
-    if behavior.get("micro_ack") is None:
-        ma_cfg["enabled"] = False
-
-    # Backchannel controller — emits brief listener-acks ("mm-hmm") during
-    # long user utterances. Uses the per-user FillerGenerator.
-    bc_kwargs: dict = {
-        "generator": _filler_gen_for(user_id),
-        "tts_backend": tts_backend,
-        "enabled": bc_cfg["enabled"],
-    }
-    if "first_ms" in bc_cfg:
-        bc_kwargs["first_after_secs"] = bc_cfg["first_ms"] / 1000.0
-    if "interval_ms" in bc_cfg:
-        bc_kwargs["interval_secs"] = bc_cfg["interval_ms"] / 1000.0
-    backchannel = BackchannelController(**bc_kwargs)
-
-    # `_cancel_progress` is defined below; register_tools captures it via
-    # closure so each SYNC tool handler auto-stops the progress loop on return.
-    def _cancel_progress(*, publish_end: bool = True):
-        while progress_tasks:
-            t = progress_tasks.pop()
-            t.cancel()
-        if publish_end:
-            asyncio.create_task(
-                sse_bus.publish("tool-call", {"event": "end", "outcome": "success"})
-            )
-
-    # D17: attach pushNotificationConfig on outbound A2A so remote agents
-    # can call us back via /a2a/push even if the SSE stream dropped.
-    # Env-driven — if A2A_PUSH_URL isn't set (typical local dev), the
-    # config is omitted and outbound A2A is stream-only.
-    _push_url = os.environ.get("A2A_PUSH_URL") or None
-    _push_token = os.environ.get("A2A_PUSH_TOKEN") or None
-    # Register handlers on every failover member — whichever LLM is
-    # active must be able to invoke the tools. The returned schema is
-    # identical per member (derived from the same registry), so we keep
-    # the primary's for the LLMContext below.
-    # D1 orchestrate runner — the bounded multi-step delegation loop, closed
-    # over the session's text LLM client. Built once and shared across failover
-    # members. Only when delegates + a DeliveryController exist (the synthesis
-    # has to be speakable). See agent/orchestrate.py.
-    # Built whenever a DeliveryController exists (not gated on the boot-time
-    # delegate count) so orchestrate is available after a hot-swap adds the
-    # first delegate. Resolves the registry LIVE per run so it sees current
-    # delegates even when the session booted with none.
-    _orch_runner = None
-    if delivery is not None:
-        _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
-
-        async def _orch_runner(goal: str, *, progress=None, ask_user=None) -> str:
-            return await run_orchestration(
-                goal,
-                delegates=_DELEGATES.filtered(skill.delegates if skill else None),
-                client=_orch_client,
-                model=llm_cfg["model"],
-                extra_body=llm_cfg["extra_body"],
-                max_tokens=skill.max_tokens,
-                temperature=skill.temperature,
-                progress=progress,
-                ask_user=ask_user,
-            )
-
-    tools_schema = None
-    for _member in _llm_members:
-        _schema = register_tools(
-            _member,
-            on_finish=_cancel_progress,
-            delivery=delivery,
-            delegates=session_delegates,
-            push_notification_url=_push_url,
-            push_notification_token=_push_token,
-            orchestrate_runner=_orch_runner,
-        )
-        if tools_schema is None:
-            tools_schema = _schema
-
-    # Per-skill tool restriction. If skill.tools is non-empty, scope the
-    # ToolsSchema down to that allow-list — the LLM only SEES (and so
-    # only calls) the listed names. Handlers stay registered on the LLM
-    # service either way; if the schema doesn't expose them, they can't
-    # be reached.
-    if skill.tools:
-        from pipecat.adapters.schemas.tools_schema import ToolsSchema
-        allowed = set(skill.tools)
-        kept = [s for s in tools_schema.standard_tools if s.name in allowed]
-        unknown = allowed - {s.name for s in tools_schema.standard_tools}
-        if unknown:
-            logger.warning(
-                f"[skill] {skill.slug!r}: tools={list(unknown)} not in registry; "
-                "ignored"
-            )
-        if kept:
-            logger.info(
-                f"[skill] {skill.slug!r} restricted to tools: "
-                f"{[s.name for s in kept]}"
-            )
-            tools_schema = ToolsSchema(standard_tools=kept)
-        else:
-            logger.warning(
-                f"[skill] {skill.slug!r}: tools list matched zero registered tools; "
-                "exposing all (refuse to leave the agent toolless)"
-            )
-
-    context = LLMContext(
-        [{
-            "role": "system",
-            "content": _effective_prompt(
-                skill,
-                tts_backend,
-                verbosity=user_state.filler_settings.verbosity,
-                user_id=user_id,
-                delegates=session_delegates,
-                tools_schema=tools_schema,
-            ),
-        }],
-        tools=tools_schema,
-    )
-
-    # Hot-swap: re-render the delegate roster into THIS live session when the
-    # registry changes (a delegate added/removed in Settings), so it takes
-    # effect on the next turn without a restart. register_function overwrites by
-    # name (idempotent), so re-running register_tools just refreshes the handler
-    # + schema; we then push the new schema + fleet-block prompt onto the
-    # running context. Stored on user_state; called by the /api/delegates
-    # endpoints. Mutating context.tools / messages[0] is picked up next turn.
-    def _refresh_delegates() -> None:
-        fresh = _DELEGATES.filtered(skill.delegates if skill else None)
-        new_schema = None
-        for m in _llm_members:
-            try:
-                s = register_tools(
-                    m,
-                    on_finish=_cancel_progress,
-                    delivery=delivery,
-                    delegates=fresh,
-                    push_notification_url=_push_url,
-                    push_notification_token=_push_token,
-                    orchestrate_runner=_orch_runner,
-                )
-                if new_schema is None:
-                    new_schema = s
-            except Exception as e:  # noqa: BLE001 — never break the live session
-                logger.warning(f"[delegates/hot] re-register failed: {e}")
-                return
-        if new_schema is not None:
-            context.set_tools(new_schema)
-            context.messages[0]["content"] = _effective_prompt(
-                skill, tts_backend,
-                verbosity=user_state.filler_settings.verbosity,
-                user_id=user_id, delegates=fresh, tools_schema=new_schema,
-            )
-            logger.info("[delegates/hot] live session refreshed: %s", fresh.names())
-
-    user_state.refresh_delegates = _refresh_delegates
-
-    # Hot-swap: apply a persona switch (epic #611 P2) to THIS live session.
-    # Rebinds the closure `skill` — every later read (prompt re-render via
-    # _refresh_delegates, tool handlers, watchers) sees the new persona —
-    # then retargets the live LLM + TTS voice and drops the cached filler
-    # generator so the micro tier follows the persona (known tripwire).
-    # Called by /api/personas endpoints via _hot_refresh_persona_sessions.
-    def _refresh_persona() -> dict:
-        nonlocal skill
-        old = skill
-        new = _active_skill(user_id)
-        skill = new
-        notes: list[str] = []
-        if new.filler_verbosity:
-            try:
-                user_state.filler_settings.verbosity = Verbosity(new.filler_verbosity)
-            except ValueError:
-                pass
-        # Prompt + tool schema re-render (reads the rebound `skill`).
-        _refresh_delegates()
-        # LLM endpoint/model — resolve first so api_key_env and env
-        # defaults land the same way they do at pipeline build.
-        try:
-            res = _reconfigure_live_llm(_resolve_skill_llm(new), user_id=user_id)
-            if res.get("needs_restart"):
-                notes.append(str(res.get("error")))
-        except Exception as e:  # noqa: BLE001 — never break the live session
-            logger.warning(f"[personas/hot] llm reconfigure failed: {e}")
-        # Voice — live swap within the running TTS backend; an engine
-        # change is a pipeline-topology change (binds-once audio socket,
-        # #486) and honestly needs a restart.
-        new_backend = (new.tts_backend or TTS_BACKEND).lower()
-        if new_backend != tts_backend:
-            notes.append(
-                f"voice engine {tts_backend} → {new_backend} applies on restart"
-            )
-        elif new.voice and new.voice != old.voice:
-            res = _switch_live_voice(new.voice, user_id=user_id)
-            if not res.get("ok"):
-                notes.append(str(res.get("error") or "voice switch failed"))
-        if (new.temperature, new.max_tokens) != (old.temperature, old.max_tokens):
-            notes.append("temperature / max tokens apply on restart")
-        # Filler micro tier — rebuilt lazily against the new persona.
-        user_state.filler_generator = None
-        logger.info(
-            f"[personas/hot] live session → {new.slug!r} "
-            f"voice={new.voice!r} notes={notes}"
-        )
-        return {"ok": True, "notes": notes}
-
-    user_state.refresh_persona = _refresh_persona
-
-    _turn_strategies = _build_user_turn_strategies()
-    # Env-tunable so turn-end latency can be A/B'd without a rebuild (via
-    # the runtime .env). stop_secs is the dominant fixed per-turn delay;
-    # Smart Turn (SMART_TURN=local) lets it drop without clipping pauses.
-    _vad_stop = float(os.environ.get("VAD_STOP_SECS", "0.4"))
-    logger.info(
-        "[tuning] vad stop_secs=%s start_secs=%s min_volume=%s | echo_guard=%sms | smart_turn=%s",
-        _vad_stop, os.environ.get("VAD_START_SECS", "0.2"),
-        os.environ.get("VAD_MIN_VOLUME", "0.2"),
-        os.environ.get("NATIVE_ECHO_GUARD_MS", "800"), SMART_TURN,
-    )
-    _user_agg_kwargs: dict = {"vad_analyzer": SileroVADAnalyzer(
-        params=VADParams(
-            confidence=float(os.environ.get("VAD_CONFIDENCE", "0.7")),
-            start_secs=float(os.environ.get("VAD_START_SECS", "0.2")),
-            stop_secs=_vad_stop,  # default 0.4 — longer pause before cutting
-            min_volume=float(os.environ.get("VAD_MIN_VOLUME", "0.2")),  # native desktop audio
-                               # The legacy CPAL input path applies MIC_GAIN in
-                               # voice/local_transport.py; the macOS voice-processing
-                               # path defaults to unity gain because Apple AGC is
-                               # already active. STT_MIN_RMS (in voice/stt.py) is
-                               # the second gate against Whisper silence-hallucinations.
-        )
-    )}
-    if _turn_strategies is not None:
-        # Only pass user_turn_strategies when we actually built one — passing
-        # None keeps the default (naive VAD endpointing).
-        _user_agg_kwargs["user_turn_strategies"] = _turn_strategies
-
-    # Incomplete-turn filtering (pipecat-native — fixes orbis-ioz queued-intent
-    # staggering): the LLM emits a turn-completion marker (✓/○/◐) and the
-    # aggregator SUPPRESSES the response to an incomplete fragment ("hey, so I
-    # uh…") instead of firing a premature reply, re-prompting on timeout. Off by
-    # default (changes LLM behavior + relies on the model emitting the marker);
-    # flip FILTER_INCOMPLETE_TURNS=1 in the runtime .env to A/B it. The
-    # user-turn coalescing window is tunable via USER_TURN_STOP_TIMEOUT.
-    if os.environ.get("FILTER_INCOMPLETE_TURNS", "0") == "1":
-        _user_agg_kwargs["filter_incomplete_user_turns"] = True
-        # orbis-3ss: pipecat's UserTurnCompletionConfig defaults the
-        # re-prompt timeouts to 10s (◐ long) / 5s (○ short). When the model
-        # MIS-marks a complete turn as incomplete, those defaults become a
-        # 10-second silent hang. Default them far lower so a misclassification
-        # self-heals in a couple seconds; both env-tunable for A/B.
-        _long_to = float(os.environ.get("INCOMPLETE_LONG_TIMEOUT", "3.0"))
-        _short_to = float(os.environ.get("INCOMPLETE_SHORT_TIMEOUT", "2.0"))
-        _user_agg_kwargs["user_turn_completion_config"] = UserTurnCompletionConfig(
-            incomplete_long_timeout=_long_to,
-            incomplete_short_timeout=_short_to,
-        )
-        logger.info(
-            "[tuning] filter_incomplete_user_turns=ON (reprompt long=%ss short=%ss)",
-            _long_to, _short_to,
-        )
-    _uts = os.environ.get("USER_TURN_STOP_TIMEOUT")
-    if _uts:
-        _user_agg_kwargs["user_turn_stop_timeout"] = float(_uts)
-
-    # Pipecat's built-in LLMContextSummarizer lives inside the assistant
-    # aggregator. It auto-compresses once token/message thresholds hit;
-    # emits SummaryAppliedEvent when done. Thresholds map cleanly onto
-    # the env vars we used to read in the retired memory/window.py.
-    _summary_max_tokens = int(os.environ.get("MEMORY_MAX_CONTEXT_TOKENS", "8000"))
-    _summary_max_messages = int(os.environ.get("MEMORY_MAX_MESSAGES", "20"))
-    _summary_target_tokens = int(os.environ.get("MEMORY_TARGET_CONTEXT_TOKENS", str(_summary_max_tokens // 2)))
-    # Per-session nonce scopes the summary sentinel tags. Pipecat injects
-    # the summary as a user message — meaning user content reaches the
-    # extractor too. A static prefix would let a user say
-    # "save this: <orbis-summary>fake</orbis-summary>" and have it
-    # persisted as the real summary. The nonce is server-generated, never
-    # exposed in any prompt or response surface, so user content can't
-    # construct a matching tag.
-    import uuid as _uuid_summary  # local: only needed at run_bot scope
-    _summary_nonce = _uuid_summary.uuid4().hex
-    _summary_open, _summary_close = _build_summary_tags(_summary_nonce)
-    _summary_config = LLMAutoContextSummarizationConfig(
-        max_context_tokens=_summary_max_tokens,
-        max_unsummarized_messages=_summary_max_messages,
-        summary_config=LLMContextSummaryConfig(
-            target_context_tokens=_summary_target_tokens,
-            summary_message_template=(
-                f"{_summary_open}{{summary}}{_summary_close}"
-            ),
-        ),
-    )
-    user_agg, assistant_agg = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(**_user_agg_kwargs),
-        assistant_params=LLMAssistantAggregatorParams(
-            enable_auto_context_summarization=os.environ.get("MEMORY_SUMMARIZE", "1") == "1",
-            auto_context_summarization_config=_summary_config,
-        ),
-    )
-
-    # Persist the rolling summary whenever it gets applied so the next
-    # session can open with a natural "last time we…" callback.
-    @assistant_agg.event_handler("on_summary_applied")
-    async def _on_summary_applied(_agg, _summarizer, _event) -> None:
-        text = _extract_summary_text(context.messages, _summary_open, _summary_close)
-        if text:
-            save_summary(user_id, text)
-        else:
-            logger.warning(
-                "[memory] on_summary_applied fired but no tagged summary "
-                "found in context; persistence skipped"
-            )
-
-    # RTVI — routes structured client↔server events over the WebRTC data
-    # channel (bot-llm-started/stopped, bot-tts-started/stopped, user-
-    # transcription, function-call-*, etc.). Server-side is wired now;
-    # the client consumer lands with the React frontend migration.
-    # Reference: https://docs.pipecat.ai/server/frameworks/rtvi
-    rtvi = RTVIProcessor(transport=transport)
-
-    speaker_gate = _build_speaker_gate(sg_cfg)
-
-    # AudioTagsTap (#66 Phase 4) — consumes EmotionFrame /
-    # AudioEventFrame from STT, writes per-turn mood deltas (owner only),
-    # injects [audio] system message before each TranscriptionFrame.
-    # No-op when STT_BACKEND=local|openai (no EmotionFrame source);
-    # safe to leave wired regardless of backend. Disable via
-    # AUDIO_TAGS=off env.
-    audio_tags = make_audio_tags_tap(mem=get_memory())
-
-    # Single transport, single output node — no fanout needed now that
-    # the WebRTC client path is removed (DECISIONS.md amendment 2026-04-28).
-    _output_node = transport.output()
-
-    # Failover wrapper (orbis-1dd). With a single member this stays the
-    # bare LLMService — no LLMSwitcher overhead on the default path. With
-    # a configured backup, the switcher routes frames to the active LLM
-    # and fails over to the next on a non-fatal ErrorFrame.
-    if len(_llm_members) == 1:
-        pipeline_llm = llm
-    else:
-        pipeline_llm = LLMSwitcher(
-            llms=_llm_members,
-            strategy_type=ServiceSwitcherStrategyFailover,
-        )
-
-        # The switcher does NOT retry the failed generation — it only routes
-        # subsequent turns. Budgeted so an all-dead member list can't
-        # ping-pong retries forever: members-1 retries per incident window.
-        _failover_retry = {"used": 0, "window_start": float("-inf")}
-
-        @pipeline_llm.strategy.event_handler("on_service_switched")
-        async def _on_llm_failover(_strategy, service):
-            # Surface failover so a dropped primary is visible, not silent.
-            idx = _llm_members.index(service) if service in _llm_members else -1
-            role = "primary" if idx == 0 else f"backup#{idx}"
-            logger.warning("[llm] failover → now using %s (%s)", role, service.name)
-            _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
-            # Reclassify the announcer's pending line: if the retry below
-            # can't run (budget spent), "ask me again" beats "check
-            # settings"; a second failover in the same window means the
-            # backup died too, and the announcer falls back to the error
-            # class (#576).
-            llm_error_announcer.note_failover()
-            # Retry the failed generation on the new active member so the
-            # user's question is answered without re-asking: LLMRunFrame
-            # re-pushes the aggregated context — which still holds the
-            # unanswered turn — through the switcher to the backup. The
-            # retry's own output cancels the announcer's debounce, so a
-            # successful failover is completely silent (live-soak 07-11).
-            now = time.monotonic()
-            if now - _failover_retry["window_start"] > 15.0:
-                _failover_retry.update(used=0, window_start=now)
-            if _failover_retry["used"] < len(_llm_members) - 1:
-                _failover_retry["used"] += 1
-                logger.warning("[llm] failover retry — re-running the turn on %s", role)
-                await task.queue_frame(LLMRunFrame())
-            await sse_bus.publish("llm", {"event": "failover", "active": role})
-
-    pipeline = Pipeline([
-        transport.input(),
-        # Echo-guard sits IMMEDIATELY after transport.input — drops mic
-        # audio while the bot is speaking (HALF_DUPLEX) and for ECHO_GUARD_MS
-        # after it stops. VAD downstream never sees the suppressed audio.
-        EchoGuardSuppressor(_ECHO_STATE),
-        # Speaker-verification gate (#35 PR 1.2) — observes echo-guarded
-        # audio between UserStartedSpeakingFrame and UserStoppedSpeakingFrame,
-        # cosine-compares the per-utterance embedding to the cached
-        # voiceprint, emits OwnerVerifiedFrame / StrangerDetectedFrame
-        # alongside the audio (originals always pass through). Disabled
-        # by default (no voiceprint → owner-trust); enable by enrolling
-        # via the wizard (PR 1.3) and setting persona.behavior.speaker_gate
-        # in config/orbis.yaml.
-        speaker_gate,
-        # RTVI processor near the top — forwards inbound client messages
-        # (config, custom actions) into the pipeline and exposes the
-        # push-channel for the observer.
-        rtvi,
-        stt,
-        # AudioTagsTap reads EmotionFrame / AudioEventFrame /
-        # TranscriptionFrame from STT, writes per-turn mood deltas
-        # (owner only — gated on speaker_verified from SpeakerGate),
-        # and injects an [audio] system message before each user
-        # transcription so the LLM sees affect context BEFORE the
-        # words. audio_context_block() in the persona prompt teaches
-        # the LLM what to do with the [audio] line and forbids
-        # parroting it.
-        audio_tags,
-        # CancelGate — a bare "cancel" / "never mind" / "stop listening"
-        # swallows the turn and closes the listening window (CTRL_STOP_LISTENING
-        # → Rust mutes; wake mode re-arms). Normal turns pass through.
-        CancelGate(transport),
-        # AskGate — if a background orchestration run is paused on ask_user,
-        # the next user transcript answers it (and is swallowed) instead of
-        # starting a fresh turn. No-op when nothing's waiting.
-        AskGate(),
-        user_agg,
-        # Adaptive barge-in gate — suppresses VAD-triggered interrupts
-        # that resolve within the grace window as coughs / backchannels /
-        # background noise. Real interrupts still fire, just confirmed.
-        BargeInGate(
-            enabled=bg_cfg["enabled"],
-            **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
-        ),
-        # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~2500 ms (default; per-persona override via
-        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
-        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
-        # Cancels when the bot actually starts speaking. Vapi Fill
-        # Injection pattern.
-        MicroAckInjector(
-            tts_backend=tts_backend,
-            enabled=ma_cfg["enabled"],
-            # Live verbosity getter — a /api/verbosity flip to SILENT
-            # silences the acoustic ack on the very next turn without
-            # a session reconnect. Closure captures user_state, which
-            # is the same object the API mutates.
-            verbosity_getter=lambda: user_state.filler_settings.verbosity,
-            # Occasional LLM-generated acks for variety (orbis-29e) — same
-            # micro generator the fillers + announcer use.
-            generator=_filler_gen_for(user_id),
-            **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
-        ),
-        # Stall watchdog (E2) — if the agent produces no sign of work within
-        # STALL_SECS of the user's turn ending (frozen LLM/TTS), speak one
-        # canned recovery line so the user isn't left in dead air. Coarse +
-        # once-per-turn; the micro-ack covers the normal sub-3s gap.
-        # Both placed after the gate — they need TranscriptionFrames and
-        # VAD frames produced by the aggregator. Push downstream into TTS.
-        backchannel,
-        delivery,
-        pipeline_llm,
-        # Stall watchdog (E2) sits AFTER the LLM: it arms on UserStopped
-        # (which flows downstream to here) and cancels the moment the LLM
-        # emits text / a tool call (LLMTextFrame / FunctionCallsStartedFrame
-        # flow downstream from pipeline_llm to here). Placed BEFORE the LLM it
-        # never saw those cancel frames and fired on every turn. Pushes its
-        # recovery line downstream into TTS.
-        StallWatchdog(
-            stall_secs=float(os.environ.get("STALL_SECS", "8")),
-            enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
-            tts_backend=tts_backend,
-        ),
-        # Non-Fish TTS services strip tags at the service level via their
-        # text_filters= kwarg (see voice/tts/{kokoro,openai}.py). Fish
-        # consumes `[softly]` / `[pause:300]` natively, so its adapter
-        # doesn't filter.
-        tts,
-        # Single transport.output() — sends TTS PCM frames over the
-        # unix socket to the Rust CPAL playback ring.
-        _output_node,
-        # Strip Fish-style prosody tags from TextFrames before the
-        # assistant aggregator sees them, so tags don't accumulate in LLM
-        # context for future turns. Applies regardless of backend — safety
-        # net for whatever the LLM emitted.
-        ProsodyTagStripper(),
-        # Context summarization is wired INTO assistant_agg itself via
-        # LLMAssistantAggregatorParams — no separate pipeline processor.
-        assistant_agg,
-    ])
-
-    # Langfuse TurnTracer — owns the per-user-turn trace lifecycle. Noop
-    # observer if LANGFUSE_* isn't configured. Session id is regenerated
-    # per connect (future G9 multi-tenant work will key it on client).
-    import uuid as _uuid
-    turn_tracer = _tracing.make_turn_tracer(
-        session_id=_uuid.uuid4().hex,
-        user_id=user_id,
-        llm_model=llm_model,
-        stt_backend=(skill.stt or {}).get("backend") or STT_BACKEND,
-        tts_backend=tts_backend,
-    )
-
-    # Barge-in observer flushes the Rust CPAL playback ring immediately
-    # when the user interrupts the bot.
-    _native_observers = [NativeBargeInObserver(transport)]
-
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(enable_metrics=True),
-        # The native audio pipeline is persistent for the lifetime of the
-        # app: mic frames flow continuously in production builds, so
-        # Pipecat's default "cancel after 5 min idle" tears it down
-        # mid-wizard / between turns. Disable.
-        cancel_on_idle_timeout=False,
-        # We construct RTVIProcessor explicitly above and SseBusObserver
-        # is itself a subclass of RTVIObserver — Pipecat 1.1 auto-adds
-        # both by default and logs "RTVIProcessor and RTVIObserver found,
-        # skipping default ones" when it finds ours. Disabling the
-        # auto-add silences the warning without changing behavior.
-        enable_rtvi=False,
-        # Observers see every frame at the pipeline level without
-        # being a transformation node.
-        observers=[
-            EchoGuardObserver(_ECHO_STATE),
-            turn_tracer,
-            # SseBusObserver subclasses RTVIObserver — pipecat handles
-            # frame → RTVI-message dispatch, the subclass redirects the
-            # egress to the SSE bus on /api/events. One observer covers
-            # what used to be two.
-            SseBusObserver(rtvi),
-            llm_error_announcer,
-            *_native_observers,
-        ],
-    )
-
-    # Wire the delivery + backchannel controllers' out-of-band emit paths
-    # now that the task exists. queue_frame is the only safe way to inject
-    # frames from a foreign coroutine.
-    delivery.set_emitter(task.queue_frame)
-    # The announcer's canned line goes through TTS only — no LLM round-trip,
-    # since the LLM is exactly what's broken.
-    llm_error_announcer.set_emitter(task.queue_frame)
-    # Per-delivery voice override (kokoro): lets a delivery speak in another
-    # voice for one utterance then revert — e.g. notifications attributed to
-    # different agents in distinct voices. Only kokoro honours the frame.
-    if tts_backend == "kokoro":
-        from voice.tts.kokoro import KokoroVoiceFrame
-        delivery.set_voice_framer(lambda v: KokoroVoiceFrame(voice=v))
-    # Record real proactive deliveries into conversation history (orbis-3ta)
-    # so the orb remembers saying them and can reference them in talk.
-    delivery.set_context(context)
-    # Naturalize proactive deliveries via the micro LLM (orbis-2mh): phrase
-    # reminders/pings/results in-character instead of speaking raw text. Falls
-    # back to the raw line on timeout, so a slow micro-LLM never blocks a
-    # delivery. Default on; NATURALIZE_DELIVERIES=0 speaks them verbatim.
-    if os.environ.get("NATURALIZE_DELIVERIES", "1") == "1":
-        _announce_gen = _filler_gen_for(user_id)
-
-        async def _announce(content, kind, source):
-            return await _announce_gen.announce(
-                content, kind=kind or "update", source=source, tts_backend=tts_backend,
-            )
-
-        delivery.set_announcer(_announce)
-    delivery.set_message_emitter(
-        lambda payload: sse_bus.publish("delegation-progress", payload)
-    )
-    backchannel.set_emitter(task.queue_frame)
-
-    # --- Duplex speak-while-thinking ---
-    # Pre-tool acknowledgement ("hmm, let me check") is now emitted INLINE
-    # by the LLM — see the TOOL USE block in tool_use_block(). Pipecat's
-    # OpenAILLMService streams those tokens to TTS BEFORE running the
-    # function call, so the user hears them naturally.
-    #
-    # This file only handles the channels pipecat's main response stream
-    # cannot cover:
-    #   - SLOW tools: LLM is blocked on the result, can't narrate.
-    #     We synthesize "still working" lines via _FILLER_GEN.progress().
-    #   - Backchannels during the user's turn: see BackchannelController.
-    progress_tasks: set[asyncio.Task] = set()
-    ack_tasks: set[asyncio.Task] = set()
-    # No-repeat state for the instant opening ack (router-first D1 Phase 2).
-    _opening_ack = {"last": None}
-    # Chance the opening ack is freshly generated by the micro LLM (natural,
-    # reacts to what the user actually asked) vs the canned pool. Defaults to
-    # 1.0 — with the micro tier on a FAST LOCAL model (Ollama/MLX, ~250ms),
-    # every non-fast opening ack should be live-generated; the canned pool is
-    # only a timeout/failure fallback. Fast tools always use the instant pool.
-    _opening_llm_chance = float(os.environ.get("OPENING_ACK_LLM_CHANCE", "1.0"))
-
-    def _last_user_text() -> str | None:
-        for m in reversed(context.messages):
-            if m.get("role") == "user" and m.get("content"):
-                c = m["content"]
-                return c if isinstance(c, str) else str(c)
-        return None
-
-    async def _progress_loop(tool_name: str):
-        """Sparse 'still working' cadence for any non-fast tool in flight: first
-        line at ~progress_first_secs, then one every ~progress_interval_secs until
-        the tool finishes — so a slow async delegate never dead-airs past one
-        interval. (A delegate's note_progress is VISUAL-only — the StatusPill —
-        so without a spoken loop it's silent from the opening ack to the answer:
-        the "where'd you go?" gap. See agent/presence.py.) Each line grounds in
-        the delegate's latest streamed status when present. Cancelled on tool
-        completion or barge-in via `_cancel_progress`."""
-        try:
-            _fs = user_state.filler_settings
-            _fg = _filler_gen_for(user_id)
-            await asyncio.sleep(_fs.progress_first_secs)
-            tick = 0
-            while True:
-                # During a HITL ask_user pause (orchestrate parked on the user's
-                # answer) the tool is still "in flight" but the agent is waiting on
-                # the USER, not working — so a "still working" line would be wrong.
-                # Stay quiet this tick and re-check next interval.
-                if user_state.has_pending_ask_on_active():
-                    await asyncio.sleep(_fs.progress_interval_secs)
-                    continue
-                with _tracing.span(
-                    "filler.progress",
-                    input={"tool": tool_name, "tick": tick},
-                ) as sp:
-                    try:
-                        phrase = await _fg.progress(
-                            tool_name=tool_name,
-                            user_utterance=_last_user_text(),
-                            tts_backend=tts_backend,
-                            # Ground the spoken check-in in the delegate's real
-                            # latest streamed status (visual rail) when we have
-                            # one — paraphrased, not narrated verbatim.
-                            status_hint=delivery.last_progress,
-                        )
-                    except Exception as e:
-                        sp.update(level="WARNING", status_message=str(e))
-                        logger.warning(f"[filler:progress] generator raised: {e}")
-                        phrase = None
-                    if phrase:
-                        sp.update(output=phrase)
-                        logger.info(f"[filler:progress] {phrase!r}")
-                        await task.queue_frame(
-                            TTSSpeakFrame(phrase, append_to_context=False)
-                        )
-                tick += 1
-                await asyncio.sleep(_fs.progress_interval_secs)
-        except asyncio.CancelledError:
-            pass
-
-    async def _emit_opening_ack(tier: Latency) -> None:
-        """Speak ONE opening ack for a starting tool call. Usually drawn
-        instantly from the canned pool; occasionally (medium/slow tools only)
-        freshly generated by the micro LLM for a surprise custom line, with a
-        fallback to the pool on miss/timeout. Fire-and-forget so it never
-        delays tool execution."""
-        line: str | None = None
-        if tier is not Latency.FAST and random.random() < _opening_llm_chance:
-            try:
-                line = await _filler_gen_for(user_id).opening(
-                    user_utterance=_last_user_text(),
-                    tts_backend=tts_backend,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"[filler:opening] llm gen failed: {e}")
-                line = None
-        if not line:
-            line = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
-        _opening_ack["last"] = line
-        logger.info(f"[filler:opening] {line!r}")
-        await task.queue_frame(TTSSpeakFrame(line, append_to_context=False))
-
-    # Attach the function-call lifecycle handlers to every failover member
-    # (orbis-1dd): the progress-narration loop + tool-call SSE events must
-    # fire whichever LLM is active. On the default single-LLM path this is
-    # just `llm`.
-    def _wire_llm_callbacks(_member):
-        @_member.event_handler("on_function_calls_started")
-        async def _on_tool_start(_svc, function_calls):
-            names = [fc.function_name for fc in function_calls]
-            tier = max((latency_for(n) for n in names), key=lambda l: ["fast","medium","slow"].index(l.value))
-            any_async = any(n in ASYNC_TOOL_NAMES for n in names)
-            # Fresh status accumulator per tool turn so a delegate's spoken
-            # check-in never grounds in the previous turn's leftover status.
-            delivery.clear_progress()
-            logger.info(
-                f"[tool] {','.join(names)} tier={tier.value} async={any_async}"
-            )
-            _METRICS["tool_calls_total"] += len(names)
-            for n in names:
-                _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
-            first = function_calls[0] if function_calls else None
-            args = getattr(first, "arguments", None) if first is not None else None
-            await sse_bus.publish(
-                "tool-call",
-                {"event": "start", "name": names[0] if names else "", "args": args},
-            )
-
-            # Instant opening acknowledgement (router-first D1 Phase 2).
-            # Phase 1 removed the inline LLM preamble that used to cover this
-            # moment, so a tool turn would otherwise be silent until the
-            # result. Speak ONE short ack the instant the call starts —
-            # decoupled from the LLM (fired here, not narrated, so it can't
-            # re-break tool emission) and AEC-safe because it triggers on a
-            # definite tool-start signal, not VAD. Usually canned+instant;
-            # occasionally micro-LLM-generated for variety (see
-            # _emit_opening_ack). Fire-and-forget so it never delays the tool;
-            # honours verbosity=silent. SKIP fast tools: their result returns
-            # almost immediately, so the opening ack (fire-and-forget, may await
-            # the micro-LLM) loses the race and queues BEHIND the response in
-            # TTS order — the user hears the answer, then a pointless "on it".
-            # A fast tool's own result is the acknowledgement.
-            if (
-                user_state.filler_settings.verbosity is not Verbosity.SILENT
-                and tier is not Latency.FAST
-            ):
-                # Queue the opening ack SYNCHRONOUSLY (canned + instant) so it's
-                # in the TTS queue BEFORE the tool runs — hence before the
-                # result. The old fire-and-forget create_task could await the
-                # micro-LLM (now on the gateway → network latency) and lose the
-                # race, so the user heard the answer, THEN a pointless "on it".
-                # Variety still comes from the canned pool here + the slow-tool
-                # progress loop below. orbis: ack-leads.
-                _ack = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
-                _opening_ack["last"] = _ack
-                logger.info(f"[filler:opening] {_ack!r}")
-                await task.queue_frame(TTSSpeakFrame(_ack, append_to_context=False))
-
-            # Any NON-FAST tool gets the spoken presence loop — crucially
-            # INCLUDING async delegates. A delegate's note_progress is VISUAL-only
-            # (the StatusPill rail; DeliveryController.note_progress does not
-            # speak), so the old `tier is SLOW and not any_async` gate left a slow
-            # delegate silent from the opening ack to the answer — the "where'd
-            # you go?" dead air. The loop grounds each line in that visual status
-            # when present. See agent/presence.py + evals/presence.py.
-            if presence.should_run_presence_loop(tier):
-                # Tell the filler WHO it's waiting on (the delegate target) so
-                # the check-in is "still waiting on Ava", not a generic/
-                # self-action line.
-                waiting_on = names[0]
-                if names[0] == "delegate_to":
-                    _a = args
-                    if isinstance(_a, str):
-                        try:
-                            import json as _json
-                            _a = _json.loads(_a)
-                        except Exception:
-                            _a = {}
-                    if isinstance(_a, dict) and _a.get("target"):
-                        waiting_on = str(_a["target"]).strip() or names[0]
-                progress_tasks.add(asyncio.create_task(_progress_loop(waiting_on)))
-
-        @_member.event_handler("on_function_calls_cancelled")
-        async def _on_tool_cancel(_svc, _calls):
-            logger.info("[filler] tool cancelled (barge-in)")
-            _cancel_progress(publish_end=False)
-            # Invalidate any in-flight async delegate/orchestrate result so an
-            # answer the user just talked over isn't narrated out of context
-            # (delegate_dispatch can't be cancelled, but its result is dropped).
-            delivery.bump_barge()
-            # Cancel any opening ack still being generated so it can't speak
-            # over the user who just barged in (already-queued acks are out
-            # of our hands, but a pending micro-LLM line is killed here).
-            while ack_tasks:
-                ack_tasks.pop().cancel()
-            await sse_bus.publish("tool-call", {"event": "end", "outcome": "error"})
-
-    for _member in _llm_members:
-        _wire_llm_callbacks(_member)
-
-    @transport.event_handler("on_client_connected")
-    async def _on_connect(_t, _c):
-        # Scope delivery + tracer + session to this user.
-        state = user_state_for(user_id)
-        state.active_delivery = delivery
-        state.active_tracer = turn_tracer
-        state.active_tts = tts  # for runtime voice switching via /api/tts/voice
-        state.active_llm = llm  # for runtime model swap via POST /api/config
-        sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
-        state.active_session_id = sid
-        current_session_id.set(sid)
-        # Record session activity NOW, not just on a clean disconnect. The dev
-        # loop hard-kills the app (pkill -9), so the disconnect handler often
-        # never runs and no session gets persisted — which made soft-neglect
-        # read a weeks-old timestamp and wrongly turn the persona guarded/sulky
-        # every session. INSERT OR REPLACE keeps it one row; the disconnect
-        # handler fills in the real transcript later. (orbis neglect-freshness)
-        if sid:
-            try:
-                from datetime import datetime, timezone
-                _now_iso = datetime.now(timezone.utc).isoformat()
-                get_memory().sessions.add(
-                    session_id=sid, started_at=_now_iso, ended_at=_now_iso,
-                    messages=[],
-                )
-            except Exception as e:  # noqa: BLE001 — best-effort presence touch
-                logger.debug(f"[session] connect-touch failed: {e}")
-        _tracing.set_active_tracer(turn_tracer, user_id=user_id)
-        _tracing.start_session(sid)
-        _METRICS["sessions_total"] += 1
-        _METRICS["sessions_active"] += 1
-        # Phase 5: notify SSE subscribers that a session has started.
-        await sse_bus.publish("session", {"event": "start", "session_id": sid})
-        await sse_bus.publish("bot-state", {"state": "idle"})
-        # Reset echo-guard state so stale bot_stopped_at from a previous
-        # session doesn't suppress audio at the start of a new one.
-        _ECHO_STATE.bot_speaking = False
-        _ECHO_STATE.bot_stopped_at = None
-        logger.info(f"client connected (user={user_id!r})")
-        # Replay any deliveries that arrived while we were disconnected
-        # (a2a pushes, slow_research completions, scheduled messages).
-        # The controller's bid-then-drain will ask before flushing if
-        # there are ≥2 queued items.
-        stashed = drain_stashed_deliveries(user_id)
-        if stashed:
-            logger.info(f"[replay] replaying {len(stashed)} stashed delivery(ies)")
-            await delivery.replay_stashed(stashed)
-
-    @transport.event_handler("on_client_disconnected")
-    async def _on_disconnect(_t, _c):
-        logger.info("client disconnected")
-        # Persist anything still pending so the next session can replay.
-        snapshot = delivery.snapshot_pending()
-        for item in snapshot:
-            stash_delivery(user_id, item)
-        state = user_state_for(user_id)
-
-        # Persist the session to SQLite so prior_n() sees it next boot.
-        turns_for_analyzer: list[dict] = []
-        try:
-            mem = get_memory()
-            sid = state.active_session_id or ""
-            if sid:
-                # Extract user+assistant turns + derive final_output from
-                # the live context. Tool calls aren't timing-instrumented
-                # here; leave tool_calls empty for now.
-                final_output: str | None = None
-                for msg in context.messages:
-                    role = msg.get("role")
-                    content = msg.get("content")
-                    if role in ("user", "assistant") and isinstance(content, str) and content:
-                        turns_for_analyzer.append({"role": role, "content": content})
-                        if role == "assistant":
-                            final_output = content
-                mem.sessions.add(
-                    session_id=sid,
-                    started_at=None,  # DAL fills _now() when None
-                    ended_at=None,
-                    messages=turns_for_analyzer,
-                    tool_calls=[],
-                    final_output=final_output,
-                    trace_id=getattr(turn_tracer, "trace_id", None),
-                )
-        except Exception as e:
-            logger.warning(f"[memory] session persist failed: {e}")
-
-        # Kick off post-session personality-drift analysis in the
-        # background. Uses the session-level LLM endpoint; failures
-        # are silent. Doesn't block the disconnect teardown.
-        async def _run_drift_analysis() -> None:
-            try:
-                from agent.personality import analyze_session_drift, apply_drift
-                deltas = await analyze_session_drift(
-                    turns_for_analyzer,
-                    llm_url=llm_url,
-                    model=llm_model,
-                    api_key=llm_api_key,
-                )
-                if deltas:
-                    apply_drift(get_memory(), deltas)
-                    logger.info(f"[personality] applied {len(deltas)} drift delta(s)")
-            except Exception as e:
-                logger.info(f"[personality] drift analysis errored: {e}")
-
-        if turns_for_analyzer:
-            asyncio.create_task(_run_drift_analysis(), name="orbis-drift-analysis")
-
-        if state.active_delivery is delivery:
-            state.active_delivery = None
-        if state.active_tts is tts:
-            state.active_tts = None
-        if state.active_llm is llm:
-            state.active_llm = None
-        if state.active_tracer is turn_tracer:
-            state.active_tracer = None
-            _tracing.set_active_tracer(None, user_id=user_id)
-        state.active_session_id = None
-        _tracing.flush()
-        _METRICS["sessions_active"] = max(0, _METRICS["sessions_active"] - 1)
-        # Phase 5: notify SSE subscribers that the session has ended.
-        await sse_bus.publish("session", {"event": "end"})
-        await sse_bus.publish("bot-state", {"state": "idle"})
-        _cancel_progress(publish_end=False)
-        await task.cancel()
-
-    await PipelineRunner(handle_sigint=False).run(task)
-
-
-# ---------------------------------------------------------------------------
-# Prewarm
-# ---------------------------------------------------------------------------
-
 def prewarm_llm() -> None:
     try:
         httpx.post(
@@ -2335,7 +1298,9 @@ async def lifespan(app: FastAPI):
     asyncio.get_running_loop().run_in_executor(None, prewarm_all)
 
     # Curator task — 90-day half-life decay on facts + prune below 0.2
-    # confidence. Runs once at boot, then weekly. Uses Memory.facts.decay_and_prune().
+    # confidence, plus a session-transcript retention sweep (#482: full
+    # transcripts are JSON blobs that otherwise grow unbounded). Runs once at
+    # boot, then weekly. Uses Memory.facts.decay_and_prune() + sessions.prune().
     async def _curator_loop() -> None:
         while True:
             try:
@@ -2345,6 +1310,7 @@ async def lifespan(app: FastAPI):
                     logger.info(
                         f"[curator] decayed={result['decayed']} pruned={result['pruned']}"
                     )
+                mem.sessions.prune()
             except Exception as e:
                 logger.warning(f"[curator] run failed: {e}")
             # Sleep 7 days. Cancelled cleanly on lifespan shutdown.
@@ -2480,101 +1446,6 @@ def _delegate_health_payload(delegate, *, public: bool = False) -> dict:
     return payload
 
 
-@app.get("/healthz")
-async def health():
-    """Public — no auth. Reports process-wide shape, not per-user state."""
-    return {
-        "status": "ok",
-        "stt_backend": STT_BACKEND,
-        "tts_backend": TTS_BACKEND,
-        "auth_source": user_registry.source,
-        "owner_configured": not user_registry.single_user_mode(),
-        "active_sessions": len(active_user_states()),
-        "delegates": [
-            _delegate_health_payload(d, public=True) for d in _DELEGATES.all()
-        ],
-        "persona": get_active_persona().slug,
-        "audio": {
-            "transport": "native",
-            **audio_runtime_info(),
-            "socket_configured": bool(os.environ.get("ORBIS_AUDIO_SOCK")),
-            "socket_connected": bool(_native_transport and _native_transport.connected),
-            "mic_frames_received": (
-                _native_transport.mic_frames_received if _native_transport else 0
-            ),
-            "speaker_frames_sent": (
-                _native_transport.speaker_frames_sent if _native_transport else 0
-            ),
-            "pipeline_running": bool(
-                _native_pipeline_task and not _native_pipeline_task.done()
-            ),
-            "half_duplex": HALF_DUPLEX,
-            "echo_guard_ms": ECHO_GUARD_MS,
-            "noise_filter": NOISE_FILTER,
-            "smart_turn": SMART_TURN,
-        },
-    }
-
-
-@app.get("/api/events")
-async def events(user: User = Depends(require_user)):
-    """Server-Sent Events stream of real-time bot state.
-
-    The frontend (VoiceStateBridge) subscribes here so it can animate
-    the orb and update the status pill. Drives the native audio path —
-    WebRTC was removed in DECISIONS.md amendment 2026-04-28.
-
-    Events emitted:
-        bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
-        transcript  {"source": "user"|"bot", "text": "...", "final": true|false}
-        session     {"event": "start"|"end", "session_id": "..."}
-    """
-    from fastapi.responses import StreamingResponse
-    return StreamingResponse(
-        sse_bus.subscribe(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.get("/api/metrics")
-async def metrics(user: User = Depends(require_user)):
-    uptime = time.time() - _METRICS["boot_at"]
-    from agent import metrics as metrics_mod
-    snap = metrics_mod.snapshot()
-    return {
-        **_METRICS,
-        "uptime_secs": round(uptime, 1),
-        "counters": snap["counters"],
-        "gauges": snap["gauges"],
-    }
-
-
-@app.get("/api/whoami")
-async def whoami(user: User = Depends(require_user)):
-    """Return the resolved owner. Clients call this at boot to confirm
-    their API key is valid and get the display name for UI chrome."""
-    return {
-        "id": user.id,
-        "display_name": user.display_name,
-        "auth_source": user_registry.source,
-    }
-
-
-@app.get("/api/verbosity")
-async def get_verbosity(user: User = Depends(require_user)):
-    return {"verbosity": user_state_for(user.id).filler_settings.verbosity.value}
-
-
-@app.post("/api/verbosity")
-async def set_verbosity(body: dict, user: User = Depends(require_user)):
-    from agent.filler import Verbosity
-    state = user_state_for(user.id)
-    try:
-        state.filler_settings.verbosity = Verbosity(body.get("level", "").lower())
-    except ValueError:
-        return {"error": "level must be silent|brief|narrated|chatty"}
-    return {"verbosity": state.filler_settings.verbosity.value}
 
 
 # Speaker-verification enrollment (#35 PR 1.3) ----------------------------
@@ -2586,1151 +1457,6 @@ async def set_verbosity(body: dict, user: User = Depends(require_user)):
 # Single-owner deployment: the voiceprint is shared across all auth'd
 # clients of this install. Re-enrolling overwrites; remove the file to
 # revert to owner-trust mode.
-
-_VOICEPRINT_MIN_DURATION_SECS = 3.0
-_VOICEPRINT_MAX_DURATION_SECS = 30.0
-
-
-@app.get("/api/voiceprint/status")
-async def voiceprint_status(_user: User = Depends(require_user)):
-    """Tells the wizard whether enrollment is needed."""
-    p = get_voiceprint_path()
-    return {
-        "enrolled": p.exists(),
-        "path": str(p),
-        # speechbrain may not be installed even when a voiceprint exists,
-        # so the wizard can show a different "install [speaker-id]"
-        # message. Probed cheaply.
-        "embedder_available": _is_speechbrain_available(),
-    }
-
-
-def _is_speechbrain_available() -> bool:
-    import importlib.util
-    return importlib.util.find_spec("speechbrain") is not None
-
-
-@app.post("/api/voiceprint/enroll")
-async def voiceprint_enroll(
-    request: Request,
-    user: User = Depends(require_user),
-):
-    """Encode + save an enrollment recording. Body is raw WAV bytes.
-
-    Returns 200 with metadata on success, 4xx on validation, 501 if
-    speechbrain isn't installed (bundled deployments can opt-in via
-    ``pip install -e ".[speaker-id]"``)."""
-    if not _is_speechbrain_available():
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "speechbrain not installed; cannot enroll. Install via "
-                "`pip install -e \".[speaker-id]\"` or set "
-                "`persona.behavior.speaker_gate: false` to keep owner-trust mode."
-            ),
-        )
-
-    audio = await request.body()
-    if not audio:
-        raise HTTPException(status_code=400, detail="empty audio body")
-
-    import io
-    import soundfile as sf
-    try:
-        wav, sample_rate = sf.read(io.BytesIO(audio), dtype="float32")
-    except Exception as e:
-        raise HTTPException(
-            status_code=400,
-            detail=f"could not decode audio: {e}; expected WAV bytes",
-        )
-
-    # Downmix to mono if needed.
-    import numpy as _np
-    if wav.ndim == 2:
-        wav = wav.mean(axis=1)
-
-    duration = len(wav) / float(sample_rate) if sample_rate else 0.0
-    if duration < _VOICEPRINT_MIN_DURATION_SECS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"recording is {duration:.1f}s; need at least "
-                f"{_VOICEPRINT_MIN_DURATION_SECS}s of audio for a stable embedding"
-            ),
-        )
-    if duration > _VOICEPRINT_MAX_DURATION_SECS:
-        # Truncate rather than reject — better UX than 400-ing on 31s.
-        wav = wav[: int(_VOICEPRINT_MAX_DURATION_SECS * sample_rate)]
-        duration = _VOICEPRINT_MAX_DURATION_SECS
-
-    try:
-        from agent.ecapa_embedder import ECAPAEmbedder
-        embedder = ECAPAEmbedder()
-        emb = embedder.encode(wav.astype(_np.float32, copy=False), sample_rate=sample_rate)
-    except ImportError as e:
-        # Should be unreachable given the precheck, but defend in depth.
-        raise HTTPException(status_code=501, detail=str(e))
-    except Exception as e:
-        logger.exception("[enroll] embedding failed")
-        raise HTTPException(
-            status_code=500,
-            detail=f"failed to encode embedding: {e}",
-        )
-
-    target = get_voiceprint_path()
-    try:
-        save_voiceprint(target, emb)
-    except Exception as e:
-        logger.exception("[enroll] save failed")
-        raise HTTPException(status_code=500, detail=f"could not save voiceprint: {e}")
-
-    logger.info(
-        f"[enroll] saved voiceprint for user={user.id!r} "
-        f"({duration:.1f}s @ {sample_rate} Hz, dim={emb.shape[0]}, path={target})"
-    )
-    return {
-        "enrolled": True,
-        "path": str(target),
-        "duration_secs": round(duration, 2),
-        "sample_rate": int(sample_rate),
-        "embedding_dim": int(emb.shape[0]),
-    }
-
-
-@app.delete("/api/voiceprint")
-async def voiceprint_delete(user: User = Depends(require_user)):
-    """Remove the cached voiceprint — gate falls back to owner-trust on
-    the next session. Use to start a fresh enrollment from the drawer
-    UI or via curl when the audio sample needs to be replaced."""
-    p = get_voiceprint_path()
-    if p.exists():
-        try:
-            p.unlink()
-            logger.info(f"[enroll] deleted voiceprint at {p} for user={user.id!r}")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    return {"deleted": True, "path": str(p)}
-
-
-@app.post("/api/users/reload")
-async def reload_users_endpoint(user: User = Depends(require_user)):
-    """Re-fetch the user roster from Infisical (if configured) or the
-    YAML file. Safe to call mid-session — active clients keep their
-    authenticated state until they reconnect; new connections use the
-    refreshed registry."""
-    names = user_registry.reload()
-    return {"ok": True, "users": names, "source": user_registry.source}
-
-
-@app.post("/api/delegates/reload")
-async def reload_delegates_endpoint(user: User = Depends(require_user)):
-    """Re-read config/delegates.yaml from disk.
-
-    Safe mid-session — delegate lookup happens per `delegate_to()` call,
-    so in-flight sessions see the new registry on their next dispatch.
-    """
-    names = _DELEGATES.reload()
-    _hot_refresh_delegate_sessions()
-    return {"ok": True, "delegates": names}
-
-
-# --- Delegates CRUD ---------------------------------------------------------
-
-
-def _hot_refresh_delegate_sessions() -> None:
-    """Push the updated delegate roster into any live voice session so a
-    Settings change (add/edit/remove a delegate) takes effect on the next turn
-    without a restart — see run_bot's _refresh_delegates."""
-    for st in all_user_states():
-        fn = getattr(st, "refresh_delegates", None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[delegates/hot] session refresh failed: {e}")
-
-
-def _decorate_delegates(entries: list[dict]) -> list[dict]:
-    """Annotate raw delegate entries with ``configured`` (present in the live
-    registry) + cached ``health`` — the shape the Settings UI expects. Used by
-    the list AND the create/update responses so a freshly-saved delegate shows
-    its real status immediately instead of a stale '⚠ unconfigured'."""
-    parsed_names = set(_DELEGATES.names())
-    parsed_by_name = {d.name: d for d in _DELEGATES.all()}
-    out: list[dict] = []
-    for entry in entries:
-        name = entry.get("name")
-        d = parsed_by_name.get(name) if isinstance(name, str) else None
-        h = _DELEGATES.health(name) if isinstance(name, str) else None
-        out.append({
-            **entry,
-            "configured": name in parsed_names,
-            "health": {
-                "ok": h.ok if h else None,
-                "latency_ms": h.latency_ms if h else None,
-                "last_checked": h.last_checked if h else None,
-                "last_error": h.last_error if h else None,
-                "consecutive_failures": h.consecutive_failures if h else 0,
-            } if d else None,
-        })
-    return out
-
-
-@app.get("/api/delegates")
-async def list_delegates_endpoint(user: User = Depends(require_user)):
-    from agent.delegate_config_store import (
-        DelegateValidationError,
-        read_delegates,
-    )
-    try:
-        # Uses the config-store DEFAULT_PATH, now unified to resolve the same
-        # way the live registry does (DELEGATES_YAML) so it reads the file the
-        # registry loaded. The registry fallback below covers any residual
-        # path divergence in the bundle.
-        entries = read_delegates()
-    except DelegateValidationError as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    # Belt-and-suspenders: if the file read produced nothing but the live
-    # registry has delegates, surface those so the UI reflects reality.
-    if not entries and _DELEGATES.all():
-        entries = [
-            {"name": d.name, "type": d.type, "url": d.url,
-             "description": d.description}
-            for d in _DELEGATES.all()
-        ]
-
-    return {"delegates": _decorate_delegates(entries)}
-
-
-@app.post("/api/delegates")
-async def create_delegate_endpoint(
-    body: dict, user: User = Depends(require_user),
-):
-    from agent.delegate_config_store import (
-        DelegateValidationError,
-        read_delegates,
-        upsert_delegate,
-    )
-    try:
-        name = (body or {}).get("name")
-        if isinstance(name, str) and any(e.get("name") == name for e in read_delegates()):
-            return JSONResponse(
-                status_code=409,
-                content={"error": f"delegate {name!r} already exists; use PUT to update"},
-            )
-        entries = upsert_delegate(body)
-    except DelegateValidationError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    _DELEGATES.reload()
-    _hot_refresh_delegate_sessions()
-    return {"ok": True, "delegates": _decorate_delegates(entries)}
-
-
-@app.put("/api/delegates/{name}")
-async def update_delegate_endpoint(
-    name: str, body: dict, user: User = Depends(require_user),
-):
-    from agent.delegate_config_store import (
-        DelegateValidationError,
-        read_delegates,
-        upsert_delegate,
-    )
-    body = body or {}
-    body_name = body.get("name")
-    if body_name and body_name != name:
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": (
-                    f"path name {name!r} does not match body name {body_name!r}; "
-                    "DELETE then POST to rename"
-                ),
-            },
-        )
-    body["name"] = name
-    if not any(e.get("name") == name for e in read_delegates()):
-        return JSONResponse(
-            status_code=404, content={"error": f"delegate {name!r} not found"},
-        )
-    try:
-        entries = upsert_delegate(body)
-    except DelegateValidationError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    _DELEGATES.reload()
-    _hot_refresh_delegate_sessions()
-    return {"ok": True, "delegates": _decorate_delegates(entries)}
-
-
-@app.delete("/api/delegates/{name}")
-async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)):
-    from agent.delegate_config_store import delete_delegate
-    try:
-        entries = delete_delegate(name)
-    except KeyError:
-        return JSONResponse(
-            status_code=404, content={"error": f"delegate {name!r} not found"},
-        )
-    _DELEGATES.reload()
-    _hot_refresh_delegate_sessions()
-    return {"ok": True, "delegates": _decorate_delegates(entries)}
-
-
-@app.get("/api/delegate-types")
-async def delegate_types_endpoint(user: User = Depends(require_user)):
-    """The registered delegate types with their capabilities + field schema.
-
-    Drives the generic Settings New/Edit form and the delegation-monitor
-    widget (a type's ``capabilities`` decide what's renderable). Adding a
-    delegate type = register one adapter; it shows up here automatically."""
-    from agent.delegate_adapters import delegate_type_specs
-    return {"types": delegate_type_specs()}
-
-
-@app.post("/api/delegates/test")
-async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
-    return await _probe_delegate(body or {})
-
-
-@app.get("/api/delegates/discover")
-async def discover_delegates_endpoint(user: User = Depends(require_user)):
-    """A2A agents broadcasting nearby (local port-scan + mDNS `_protoagent._tcp`
-    browse + tailnet probe — protoAgent ADR 0042 §I interop) — candidates to
-    add as a2a delegates. Excludes agents already configured (+ ORBIS itself)."""
-    from urllib.parse import urlparse
-
-    from agent import discovery
-
-    known: set[tuple[str, int]] = set()
-    # ORBIS itself — both its loopback and LAN addresses.
-    bound_port = int(os.environ.get("ORBIS_BOUND_PORT", "0") or 0)
-    if bound_port:
-        known.add(("127.0.0.1", bound_port))
-        try:
-            known.add((discovery._local_ip(), bound_port))
-        except Exception:  # noqa: BLE001
-            pass
-    # Already-configured a2a delegates, by their endpoint's (host, port).
-    for d in _DELEGATES.all():
-        if d.type != "a2a" or not d.url:
-            continue
-        try:
-            parsed = urlparse(d.url)
-            if parsed.hostname and parsed.port:
-                known.add((parsed.hostname, parsed.port))
-        except ValueError:
-            continue
-    return {"discovered": await discovery.discover(known=known)}
-
-
-async def _probe_delegate(entry: dict) -> dict:
-    from agent.delegate_config_store import (
-        DelegateValidationError,
-        validate_entry,
-    )
-    from agent.delegates import _parse_entry, probe
-    try:
-        normalized = validate_entry(entry)
-    except DelegateValidationError as e:
-        return {"ok": False, "error": str(e)}
-    delegate = _parse_entry(normalized)
-    if delegate is None:
-        return {"ok": False, "error": "registry rejected normalized entry"}
-    return await probe(delegate)
-
-
-@app.post("/api/persona/reload")
-async def reload_persona_endpoint(user: User = Depends(require_user)):
-    """Re-read config/orbis.yaml from disk.
-
-    Applied on the next voice session (persona is snapshotted at
-    connect time). Returns the loaded persona's slug + name."""
-    persona = reload_persona()
-    return {"ok": True, "slug": persona.slug, "name": persona.name}
-
-
-def _llm_probe_url_is_safe(url: str) -> bool:
-    """SSRF guard for the unauth ``/api/llm/test`` + ``/api/llm/models``
-    routes.
-
-    Unlike ``_ollama_url_is_safe`` (which constrains to local/private —
-    correct for the ``ollama pull`` route), these routes must reach
-    *public* providers (OpenAI, OpenRouter, …) as well as a local Ollama,
-    so we can't allow-list to private space. Instead we block only the
-    genuinely dangerous targets: the cloud-metadata link-local range
-    (169.254.0.0/16 / fe80::/10), the unspecified address, and multicast.
-    Hostnames are resolved so ``http://meta.attacker.com`` that points at
-    169.254.169.254 is also rejected. Everything else (public + private +
-    loopback) is allowed because those are all legitimate LLM endpoints.
-    """
-    import ipaddress
-    import socket
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return False
-
-    def _ip_is_dangerous(ip: ipaddress._BaseAddress) -> bool:
-        return ip.is_link_local or ip.is_unspecified or ip.is_multicast
-
-    try:
-        return not _ip_is_dangerous(ipaddress.ip_address(host))
-    except ValueError:
-        pass  # hostname — resolve and check every answer
-    try:
-        infos = socket.getaddrinfo(host, parsed.port or 80, proto=socket.IPPROTO_TCP)
-    except OSError:
-        # DNS failure — let the probe itself surface the connection error.
-        return True
-    for info in infos:
-        addr = info[4][0]
-        try:
-            if _ip_is_dangerous(ipaddress.ip_address(addr)):
-                return False
-        except ValueError:
-            continue
-    return True
-
-
-@app.post("/api/llm/test")
-async def llm_test(body: dict):
-    """Real round-trip ping against a configured LLM endpoint.
-
-    Body: ``{url, model, api_key?}``. Returns ``{ok, latency_ms?,
-    error?, status?}``. Unauth on purpose — the setup wizard may run
-    before the owner API key is set, and the user's LLM credentials
-    are what's really being validated here, not their ORBIS auth.
-    """
-    from agent.llm_probe import ping_endpoint
-    url = str(body.get("url") or "")
-    # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
-    if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
-        return {"ok": False, "error": "URL not allowed (blocked target)"}
-    api_key = str(body.get("api_key") or "")
-    # "Leave blank to keep the saved key" must apply to the test too —
-    # otherwise a blank field reports a false 'auth rejected' even when a
-    # valid key is saved. Fall back to the resolved key, but only for the
-    # already-configured URL so we never leak it to a different provider.
-    if not api_key:
-        try:
-            saved = _resolve_skill_llm(get_active_persona())
-            if not url or url == saved.get("url"):
-                api_key = saved.get("api_key") or ""
-        except Exception:
-            pass
-    return await ping_endpoint(
-        url=url,
-        model=str(body.get("model") or ""),
-        api_key=api_key,
-    )
-
-
-@app.post("/api/llm/models")
-async def llm_models(body: dict):
-    """GET /models against a configured URL + API key. Returns
-    ``{ok, models[], error?}``. Populates the wizard's model combobox.
-
-    Unauth, same rationale as /api/llm/test.
-    """
-    from agent.llm_probe import list_models
-    url = str(body.get("url") or "")
-    # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
-    if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
-        return {"ok": False, "models": [], "error": "URL not allowed (blocked target)"}
-    api_key = str(body.get("api_key") or "")
-    # Same "leave blank to keep" fallback as /api/llm/test (see there).
-    if not api_key:
-        try:
-            saved = _resolve_skill_llm(get_active_persona())
-            if not url or url == saved.get("url"):
-                api_key = saved.get("api_key") or ""
-        except Exception:
-            pass
-    return await list_models(url=url, api_key=api_key)
-
-
-# ---------------------------------------------------------------------------
-# Inbox — external systems push messages in for the agent to pull
-# ---------------------------------------------------------------------------
-
-INBOX_INGEST_TOKEN = os.environ.get("INBOX_INGEST_TOKEN", "")
-
-
-def _inbox_writer_ok(request: Request) -> bool:
-    """Owner key OR scoped ingest token."""
-    x_api_key = request.headers.get("X-API-Key", "") or ""
-    bearer = request.headers.get("Authorization", "") or ""
-    if bearer.lower().startswith("bearer "):
-        x_api_key = x_api_key or bearer[7:].strip()
-    if user_registry.single_user_mode():
-        return True
-    if x_api_key and user_registry.resolve(x_api_key):
-        return True
-    if INBOX_INGEST_TOKEN and hmac.compare_digest(x_api_key, INBOX_INGEST_TOKEN):
-        return True
-    return False
-
-
-@app.post("/api/inbox")
-async def post_inbox(body: dict, request: Request):
-    """Ingest a message into the agent inbox."""
-    if not _inbox_writer_ok(request):
-        raise HTTPException(status_code=401, detail="unauthorized")
-    sender = (body.get("sender") or "").strip()
-    subject = (body.get("subject") or "").strip()
-    msg_body = body.get("body") or ""
-    if not sender or not subject:
-        raise HTTPException(
-            status_code=400, detail="sender and subject are required",
-        )
-    channel = body.get("channel")
-    created_at = body.get("created_at")
-    priority = (body.get("priority") or "next").strip().lower()
-    if priority not in ("now", "next", "later"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"priority must be one of now|next|later (got {priority!r})",
-        )
-    try:
-        msg_id = get_memory().inbox.add(
-            sender=sender,
-            subject=subject,
-            body=str(msg_body),
-            channel=str(channel) if channel else None,
-            priority=priority,  # type: ignore[arg-type]
-            created_at=str(created_at) if created_at else None,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, "id": msg_id}
-
-
-_SAY_URGENCY_TO_PRIORITY = {
-    "urgent": Priority.CRITICAL,       # interrupt now, even mid-speech
-    "normal": Priority.TIME_SENSITIVE, # speak at the next natural pause
-    "low": Priority.ACTIVE,            # surface when the topic comes up
-}
-
-
-@app.post("/api/say")
-async def post_say(body: dict, request: Request):
-    """Make the orb speak an externally-supplied message (orbis-wox).
-
-    The external "ping ORBIS to speak / inhabit / message" primitive. Same
-    auth as /api/inbox (owner key or ingest token). Unlike /api/inbox —
-    which is pull-only and never proactively spoken — this routes straight
-    into the DeliveryController so the orb actually voices it: immediately
-    if a session is live (urgency-gated), else stashed and spoken on next
-    connect.
-
-    Body:
-      text     — what to say (required)
-      urgency  — urgent | normal (default) | low
-      source   — optional attribution; if set, spoken as "<source> says — …",
-                 if omitted the orb speaks it in its own voice (inhabit).
-      voice    — optional Kokoro voice id (e.g. "af_bella"); speaks THIS
-                 message in that voice and reverts after — so notifications
-                 from different agents can each have their own voice without
-                 changing the orb's own. Ignored if the voice is unknown.
-    """
-    if not _inbox_writer_ok(request):
-        raise HTTPException(status_code=401, detail="unauthorized")
-    text = (body.get("text") or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
-    voice = (body.get("voice") or "").strip()
-    voice_err = None
-    if voice:
-        from voice.tts.kokoro import KOKORO_VOICES, download_voice
-        if voice not in KOKORO_VOICES:
-            voice_err = f"unknown voice: {voice!r}"
-            logger.warning(f"[say] {voice_err} — speaking in the current voice")
-            voice = ""
-        else:
-            download_voice(voice)  # warm the tensor so the line doesn't stall
-    urgency = (body.get("urgency") or "normal").strip().lower()
-    if urgency not in _SAY_URGENCY_TO_PRIORITY:
-        raise HTTPException(
-            status_code=400,
-            detail=f"urgency must be urgent|normal|low (got {urgency!r})",
-        )
-    priority = _SAY_URGENCY_TO_PRIORITY[urgency]
-    source = (body.get("source") or "").strip() or None
-
-    delivery = user_state_for(_A2A_USER_ID).active_delivery
-    if delivery is None:
-        # No live voice session — stash for replay on next connect (mirrors
-        # the /a2a/push path: pre-attribute since replay passes source=None).
-        from agent.session_store import stash_delivery
-        attributed = f"{source} says — {text}" if source else text
-        stash_delivery(_A2A_USER_ID, {
-            "phrase": attributed,
-            "policy": "now" if priority is Priority.CRITICAL else "next_silence",
-            "priority": priority.value,
-            "keywords": [],
-        })
-        return {"ok": True, "delivered": False, "stashed": True}
-
-    await delivery.deliver(
-        text, priority=priority, source=source, kind="ping",
-        voice=voice or None,
-    )
-    resp = {"ok": True, "delivered": True}
-    if voice:
-        resp["voice"] = voice
-    if voice_err:
-        resp["voice_error"] = voice_err
-    return resp
-
-
-@app.get("/api/inbox")
-async def get_inbox(
-    user: User = Depends(require_user),
-    unread_only: bool = False,
-    priority_floor: str = "later",
-    limit: int = 50,
-):
-    """List inbox messages, newest-first."""
-    n = max(1, min(int(limit), 200))
-    mem = get_memory()
-    if unread_only:
-        if priority_floor not in ("now", "next", "later"):
-            raise HTTPException(
-                status_code=400,
-                detail=f"priority_floor must be now|next|later (got {priority_floor!r})",
-            )
-        msgs = mem.inbox.list_unread(
-            priority_floor=priority_floor,  # type: ignore[arg-type]
-            limit=n,
-        )
-    else:
-        msgs = mem.inbox.list_all(limit=n)
-    return {
-        "messages": msgs,
-        "unread_count": mem.inbox.count_unread(),
-    }
-
-
-@app.post("/api/inbox/deliver")
-async def post_inbox_deliver(body: dict, user: User = Depends(require_user)):
-    """Mark message ids as delivered. Body: ``{"ids": [1, 2, 3]}``."""
-    raw_ids = body.get("ids") or []
-    if not isinstance(raw_ids, list):
-        raise HTTPException(status_code=400, detail="ids must be a list")
-    ids: list[int] = []
-    for v in raw_ids:
-        try:
-            ids.append(int(v))
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400, detail=f"invalid id: {v!r}",
-            )
-    n = get_memory().inbox.mark_delivered(ids)
-    return {"ok": True, "delivered": n}
-
-
-@app.get("/api/reminders")
-async def get_reminders(user: User = Depends(require_user)):
-    """List the user's pending reminders (one-time + recurring), soonest
-    first. Powers the reminders UI and lets scripts inspect what's scheduled."""
-    pend = get_memory().reminders.pending()
-    return {"ok": True, "reminders": [
-        {
-            "id": r["id"],
-            "text": r["text"],
-            "fire_at": r["fire_at"],
-            "recurring": bool(r.get("repeat_secs")),
-            "repeat_secs": r.get("repeat_secs"),
-        }
-        for r in pend
-    ]}
-
-
-@app.post("/api/reminders/cancel")
-async def cancel_reminders(body: dict, user: User = Depends(require_user)):
-    """Cancel reminders. Body: ``{"id": 3}`` | ``{"match": "water"}`` |
-    ``{"all": true}``. Cancelling stops recurring reminders too."""
-    dal = get_memory().reminders
-    if body.get("all"):
-        return {"ok": True, "cancelled": dal.cancel_all()}
-    if body.get("id") is not None:
-        try:
-            rid = int(body["id"])
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="id must be an integer")
-        ok = dal.cancel(rid)
-        return {"ok": ok, "cancelled": 1 if ok else 0}
-    match = (body.get("match") or "").strip()
-    if match:
-        cancelled = dal.cancel_matching(match)
-        return {"ok": True, "cancelled": len(cancelled),
-                "items": [{"id": r["id"], "text": r["text"]} for r in cancelled]}
-    raise HTTPException(status_code=400, detail="pass id, match, or all")
-
-
-def _ollama_url_is_safe(url: str) -> bool:
-    """Reject non-local Ollama URLs to prevent the unauth ``/api/llm/pull``
-    route from being weaponized as an SSRF gadget.
-
-    The route is unauth (the wizard runs before an API key is set up).
-    Without this guard, a malicious page in the WKWebView (or anyone
-    on 127.0.0.1 with the ephemeral port) could pass any URL and have
-    the sidecar POST to it — most concerningly the cloud-metadata
-    endpoint at 169.254.169.254 if the user later runs ORBIS on a
-    cloud host.
-
-    Allowed:
-      - http(s) scheme
-      - loopback by name (``localhost``, ``ip6-localhost``)
-      - loopback or RFC-1918 private IPs (127.0.0.0/8, 10/8, 172.16/12,
-        192.168/16, fc00::/7, ::1)
-      - mDNS/Tailscale-style hostnames (``*.local``, ``*.lan``,
-        ``*.ts.net``) so users with Ollama on another box on their
-        tailnet still work
-
-    Rejected: everything else, including link-local 169.254.x.x
-    (cloud metadata) and any public hostname/IP.
-    """
-    import ipaddress
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False
-    if parsed.scheme not in ("http", "https"):
-        return False
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return False
-    if host in ("localhost", "ip6-localhost", "ip6-loopback"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        # Hostname (not an IP literal). Constrain to local-network suffixes
-        # that aren't routable on the public internet.
-        return host.endswith(".local") or host.endswith(".lan") or host.endswith(".ts.net")
-    # IP literal — accept loopback + private; reject link-local, the
-    # all-zeros unspecified address (which on Linux means "any
-    # interface" and would be a confused-deputy invitation), and
-    # multicast. Python's `is_private` includes 169.254.0.0/16 (and
-    # IPv6 fe80::/10), which is exactly the cloud-metadata range we
-    # need to keep blocked, so check those out explicitly.
-    if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
-        return False
-    return ip.is_loopback or ip.is_private
-
-
-@app.post("/api/llm/pull")
-async def llm_pull(body: dict):
-    """Stream an Ollama pull as Server-Sent Events.
-
-    The wizard calls this when a user picks Ollama and the
-    recommended model isn't installed yet — instead of asking them
-    to drop into a terminal and run ``ollama pull <name>``, we
-    proxy Ollama's native ``/api/pull`` and forward each NDJSON
-    progress chunk as an SSE message. The frontend renders a
-    progress bar from the ``completed`` / ``total`` fields.
-
-    Body::
-
-        {"name": "gemma3n:e2b", "url": "http://127.0.0.1:11434"}
-
-    The ``url`` defaults to the local Ollama instance; we trim any
-    trailing ``/v1`` so the same value used as ``llm.url`` for the
-    OpenAI-compat endpoint also works here.
-
-    Unauth — same rationale as ``/api/llm/detect_local``: this runs
-    before the wizard has set up an API key. URL is constrained by
-    ``_ollama_url_is_safe`` so the route can't be turned into an
-    SSRF gadget.
-    """
-    from fastapi.responses import StreamingResponse
-    import httpx as _httpx
-
-    name = str(body.get("name") or "").strip()
-    if not name:
-        return JSONResponse({"error": "missing model name"}, status_code=400)
-
-    raw_url = str(body.get("url") or "http://127.0.0.1:11434").rstrip("/")
-    if raw_url.endswith("/v1"):
-        raw_url = raw_url[:-3]
-    if not _ollama_url_is_safe(raw_url):
-        # Reject before opening a connection. The error is intentionally
-        # specific — the wizard prompts on the response, and there's
-        # no information leak: the validator only inspects the URL the
-        # caller already supplied.
-        return JSONResponse(
-            {"error": f"refusing to proxy non-local Ollama URL: {raw_url}"},
-            status_code=400,
-        )
-
-    async def _stream():
-        timeout = _httpx.Timeout(connect=5.0, read=None, write=None, pool=None)
-        async with _httpx.AsyncClient(timeout=timeout) as client:
-            try:
-                async with client.stream(
-                    "POST",
-                    f"{raw_url}/api/pull",
-                    json={"model": name, "stream": True},
-                ) as resp:
-                    if resp.status_code != 200:
-                        msg = await resp.aread()
-                        yield f"event: error\ndata: {msg.decode(errors='replace')[:200]}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        if not line.strip():
-                            continue
-                        # Ollama emits NDJSON; pass each line through
-                        # as the data of an SSE message. Frontend just
-                        # JSON.parses each event.data.
-                        yield f"data: {line}\n\n"
-                    yield "event: done\ndata: {}\n\n"
-            except _httpx.HTTPError as e:
-                yield f"event: error\ndata: {str(e)[:200]}\n\n"
-
-    return StreamingResponse(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/api/llm/mlx/pull")
-async def llm_mlx_pull(body: dict):
-    """Stream an MLX model download (via huggingface_hub) as SSE.
-
-    Frontend equivalent of ``/api/llm/pull`` but for the MLX path —
-    when the wizard's user picks the Built-in (MLX) preset, this
-    endpoint downloads the chosen ``mlx-community/...`` repo into
-    the HF cache directly so the first voice session doesn't pay
-    the multi-GB download cost. Emits ``data: {status, completed,
-    total}`` progress events while the download runs, then a final
-    ``event: done``.
-
-    Body: ``{"model": "mlx-community/gemma-3n-E2B-it-4bit"}``
-
-    Unauth — same rationale as ``/api/llm/detect_local``.
-    """
-    from fastapi.responses import StreamingResponse
-    import asyncio as _asyncio
-    from pathlib import Path as _Path
-
-    model_id = str(body.get("model") or "").strip()
-    if not model_id or "/" not in model_id:
-        return JSONResponse(
-            {"error": "model id required (e.g. mlx-community/gemma-3n-E2B-it-4bit)"},
-            status_code=400,
-        )
-
-    async def _stream():
-        try:
-            from huggingface_hub import snapshot_download, HfApi
-        except ImportError as e:
-            yield f"event: error\ndata: huggingface_hub not available: {e}\n\n"
-            return
-
-        loop = _asyncio.get_running_loop()
-        # HF_HOME can be set to override; otherwise the default is the
-        # XDG-ish cache. Read it from the env so we look in the same
-        # place huggingface_hub will write to.
-        hf_home = os.environ.get(
-            "HF_HOME", str(_Path.home() / ".cache/huggingface")
-        )
-        cache_dir = _Path(hf_home) / "hub" / f"models--{model_id.replace('/', '--')}"
-
-        def _dir_size(p: _Path) -> int:
-            if not p.exists():
-                return 0
-            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-
-        # Yield an immediate "starting" so the frontend stops sitting
-        # at zero while the size-probe runs.
-        yield 'data: {"status": "fetching repo metadata", "completed": 0, "total": 0}\n\n'
-
-        # Get total size in an executor — HfApi is sync.
-        total_bytes = 0
-        try:
-            info = await loop.run_in_executor(
-                None, lambda: HfApi().repo_info(model_id, files_metadata=True)
-            )
-            for f in info.siblings or []:
-                if f.size:
-                    total_bytes += f.size
-        except Exception as e:
-            yield (
-                f'data: {{"status": "couldn\\u0027t read total size, '
-                f'progress percent will be missing: {str(e)[:100]}", '
-                f'"completed": 0, "total": 0}}\n\n'
-            )
-
-        yield (
-            f'data: {{"status": "downloading", "completed": 0, '
-            f'"total": {total_bytes}}}\n\n'
-        )
-
-        fut = loop.run_in_executor(None, snapshot_download, model_id)
-
-        last = -1
-        while not fut.done():
-            completed = _dir_size(cache_dir)
-            if completed != last:
-                yield (
-                    f'data: {{"status": "downloading", '
-                    f'"completed": {completed}, "total": {total_bytes}}}\n\n'
-                )
-                last = completed
-            await _asyncio.sleep(0.4)
-
-        try:
-            await fut
-        except Exception as e:
-            yield f"event: error\ndata: {str(e)[:200]}\n\n"
-            return
-
-        completed = _dir_size(cache_dir) or total_bytes
-        yield (
-            f'data: {{"status": "done", '
-            f'"completed": {completed}, "total": {total_bytes or completed}}}\n\n'
-        )
-        yield "event: done\ndata: {}\n\n"
-
-    return StreamingResponse(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/api/voice/download_models")
-async def voice_download_models():
-    """Download + warm the on-device speech models (Parakeet STT + Kokoro TTS),
-    streaming byte progress as SSE.
-
-    The setup wizard's "Install on-device models" choice calls this so the
-    ~900 MB pull happens *then*, with a progress bar — instead of being silently
-    deferred to the next launch (prewarm_all only downloads on-device models when
-    ``voice.local_models == "on_device"`` is already set at boot) and stalling
-    the first voice turn with no feedback. Idempotent: re-running with weights
-    cached + loaded returns fast (the prewarm fns short-circuit on a warm model).
-
-    Emits ``data: {status, completed, total}`` byte-progress events, then a final
-    ``event: done`` (or ``event: error``). Unauth — same rationale as
-    ``/api/llm/mlx/pull``: it only pulls public model weights from HuggingFace.
-    """
-    from fastapi.responses import StreamingResponse
-    import asyncio as _asyncio
-    from pathlib import Path as _Path
-
-    # Only local backends pull weights. Map the configured STT/TTS backend to its
-    # HuggingFace repo (the progress denominator) + its prewarm fn (downloads,
-    # then warms on the right thread). Cloud backends carry no big local download.
-    targets: list = []  # (label, repo_id, prewarm_fn)
-    if STT_BACKEND == "parakeet":
-        from voice.stt_parakeet import _MODEL_ID as _stt_repo
-        targets.append(("speech recognition", _stt_repo, prewarm_stt))
-    elif STT_BACKEND == "local":
-        from voice.stt import WHISPER_MODEL as _stt_repo
-        targets.append(("speech recognition", _stt_repo, prewarm_stt))
-    if TTS_BACKEND == "kokoro":
-        targets.append(("voice", "hexgrad/Kokoro-82M", prewarm_tts))
-
-    async def _stream():
-        try:
-            from huggingface_hub import HfApi
-        except ImportError as e:
-            yield f"event: error\ndata: huggingface_hub not available: {e}\n\n"
-            return
-
-        if not targets:
-            # BYO / cloud backends — nothing to download.
-            yield 'data: {"status": "no on-device models needed", "completed": 0, "total": 0}\n\n'
-            yield "event: done\ndata: {}\n\n"
-            return
-
-        loop = _asyncio.get_running_loop()
-        hf_home = os.environ.get("HF_HOME", str(_Path.home() / ".cache/huggingface"))
-        hub = _Path(hf_home) / "hub"
-
-        def _cache_dir(repo_id: str) -> _Path:
-            return hub / f"models--{repo_id.replace('/', '--')}"
-
-        def _dir_size(p: _Path) -> int:
-            if not p.exists():
-                return 0
-            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-
-        # One combined progress bar across every target repo.
-        yield 'data: {"status": "fetching model details", "completed": 0, "total": 0}\n\n'
-        total_bytes = 0
-        for _label, repo_id, _fn in targets:
-            try:
-                info = await loop.run_in_executor(
-                    None, lambda rid=repo_id: HfApi().repo_info(rid, files_metadata=True)
-                )
-                total_bytes += sum(f.size or 0 for f in (info.siblings or []))
-            except Exception:  # noqa: BLE001
-                pass  # percent may be missing; byte counts still stream
-
-        done_bytes = 0  # bytes credited from already-finished targets
-        for label, repo_id, fn in targets:
-            cache_dir = _cache_dir(repo_id)
-            base = done_bytes
-            yield (
-                f'data: {{"status": "downloading {label}", '
-                f'"completed": {base + _dir_size(cache_dir)}, "total": {total_bytes}}}\n\n'
-            )
-            fut = loop.run_in_executor(None, fn)
-            last = -1
-            while not fut.done():
-                completed = base + _dir_size(cache_dir)
-                if completed != last:
-                    yield (
-                        f'data: {{"status": "downloading {label}", '
-                        f'"completed": {completed}, "total": {total_bytes}}}\n\n'
-                    )
-                    last = completed
-                await _asyncio.sleep(0.4)
-            try:
-                await fut
-            except Exception as e:  # noqa: BLE001
-                yield f"event: error\ndata: {label}: {str(e)[:200]}\n\n"
-                return
-            done_bytes = base + _dir_size(cache_dir)
-
-        yield (
-            f'data: {{"status": "done", "completed": {done_bytes}, '
-            f'"total": {total_bytes or done_bytes}}}\n\n'
-        )
-        yield "event: done\ndata: {}\n\n"
-
-    return StreamingResponse(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.get("/api/llm/detect_local")
-async def llm_detect_local():
-    """Parallel probe Ollama (:11434) + LM Studio (:1234) on localhost.
-    Returns only the providers that responded — voice-first homelab
-    users get a "we noticed your local Ollama" callout in the wizard.
-
-    Unauth — localhost detection before auth is set is the whole point.
-    """
-    from agent.llm_probe import detect_local
-    return await detect_local()
-
-
-@app.get("/api/wakeword/models")
-async def wakeword_models_list(user: User = Depends(require_user)):
-    """Wake-word model catalog with live download status — drives the picker."""
-    from voice.wakeword_models import catalog
-    return {"models": catalog()}
-
-
-@app.post("/api/wakeword/models/{model_id}/download")
-async def wakeword_model_download(model_id: str, user: User = Depends(require_user)):
-    """Download a wake-word model, awaited through the Rust ``api_request``
-    proxy (models are small — 0.2–1.7 MB — so a blocking POST is fine).
-
-    Progress is pushed to the ``/api/events`` SSE bus as ``wakeword-download``
-    ``{id, downloaded, total, pct}`` — the Rust ``bridge_sse`` re-emits the bus
-    as ``orbis-sse`` Tauri events, which is the reliable server→client channel
-    in the bundled Tahoe WKWebView (a streamed POST body is not). A final
-    ``{id, done: true}`` (or ``{id, error}``) marks completion."""
-    import time as _time
-
-    from voice.wakeword_models import get, iter_download
-
-    if get(model_id) is None:
-        return JSONResponse(
-            status_code=404, content={"error": f"unknown model {model_id!r}"}
-        )
-    last = 0.0
-    try:
-        async for p in iter_download(model_id):
-            now = _time.monotonic()
-            if now - last < 0.1 and p["downloaded"] < p["total"]:
-                continue  # throttle to ~10/s, but always emit the final tick
-            last = now
-            pct = (p["downloaded"] / p["total"] * 100) if p["total"] else 0
-            sse_bus.publish_sync(
-                "wakeword-download", {"id": model_id, "pct": pct, **p}
-            )
-    except Exception as e:  # noqa: BLE001
-        sse_bus.publish_sync("wakeword-download", {"id": model_id, "error": str(e)})
-        return JSONResponse(status_code=502, content={"error": str(e)})
-    sse_bus.publish_sync("wakeword-download", {"id": model_id, "done": True})
-    return {"ok": True}
-
-
-@app.delete("/api/wakeword/models/{model_id}")
-async def wakeword_model_delete(model_id: str, user: User = Depends(require_user)):
-    """Remove a downloaded wake-word model."""
-    from voice.wakeword_models import delete
-
-    return {"ok": delete(model_id)}
-
-
-@app.get("/api/tts/voices")
-async def tts_voices(
-    backend: str = "kokoro",
-    user: User = Depends(require_user),
-):
-    """Enumerate voices/references for a TTS backend.
-
-    The native settings panel uses this to render a picker where the
-    backend has a finite catalogue. Each entry is ``{id, label, ...}``;
-    backends that cache voices on disk include ``cached``.
-    """
-    backend = (backend or "kokoro").strip().lower()
-    if backend == "kokoro":
-        from voice.tts.kokoro import list_voices
-        return {"backend": "kokoro", "voices": list_voices()}
-    if backend == "openai":
-        from voice.tts.openai import OPENAI_TTS_VOICES
-        return {
-            "backend": "openai",
-            "voices": [{"id": v, "label": v} for v in OPENAI_TTS_VOICES],
-        }
-    if backend == "fish":
-        from voice.tts.fish import FISH_URL, list_references
-        refs = list_references()
-        return {
-            "backend": "fish",
-            "fish_url": FISH_URL,
-            "voices": [{"id": r, "label": r} for r in refs],
-        }
-    if backend == "elevenlabs":
-        return {"backend": "elevenlabs", "voices": []}
-    return {"backend": backend, "voices": [], "error": f"unknown backend: {backend!r}"}
-
-
-@app.post("/api/tts/voices/download")
-async def tts_download_voice(
-    payload: dict,
-    user: User = Depends(require_user),
-):
-    """Eagerly download a Kokoro voice tensor into the local HF cache."""
-    backend = (payload.get("backend") or "").strip().lower()
-    voice = (payload.get("voice") or "").strip()
-    if not voice:
-        return {"ok": False, "error": "voice is required"}
-    if backend == "kokoro":
-        from voice.tts.kokoro import download_voice
-        return download_voice(voice)
-    return {"ok": False, "error": f"{backend!r} backend has no downloadable voices"}
-
 
 def _switch_live_voice(voice_id: str, *, user_id: str | None = None) -> dict:
     """Switch the voice on the LIVE TTS service so the next spoken line uses
@@ -3751,111 +1477,6 @@ def _switch_live_voice(voice_id: str, *, user_id: str | None = None) -> dict:
             "error": f"{type(tts).__name__} doesn't support live voice switching",
         }
     return setter(voice_id)
-
-
-@app.post("/api/tts/voice")
-async def tts_set_voice(payload: dict, user: User = Depends(require_user)):
-    """Switch the live TTS voice mid-session (no rebuild/reconnect). The next
-    spoken line uses it. Body: ``{voice: "af_bella"}``."""
-    return _switch_live_voice(payload.get("voice") or "")
-
-
-@app.get("/api/starter_orbs")
-async def get_starter_orbs():
-    """Return the curated starter-orb pool. The setup wizard calls this
-    at first boot so the user can pick one; no auth required so the
-    wizard can run before the user has their API key.
-
-    Response shape::
-        {"starters": [{slug, name, description, variant, palette, params}, ...]}
-    """
-    from agent.starter_orbs import load_starters
-    starters = load_starters()
-    return {"starters": [s.to_dict() for s in starters]}
-
-
-@app.get("/api/orbs")
-async def list_orbs(user: User = Depends(require_user)):
-    """User-imported ``.orbis`` orb definitions (app-data orbs dir).
-    The frontend fetches this at boot and registers each definition
-    with the raymarch-v1 engine. See agent/orb_definitions.py +
-    docs/internal/orb-format-and-editor.md.
-
-    Response shape::
-        {"orbs": [<OrbDefinition>, ...]}
-    """
-    from agent.orb_definitions import list_definitions
-    return {"orbs": list_definitions()}
-
-
-@app.post("/api/orbs")
-async def import_orb(body: dict, user: User = Depends(require_user)):
-    """Import (or update — same id replaces) a ``.orbis`` definition.
-
-    Validation mirrors the frontend package's validator; a definition
-    accepted here is one the engine will load."""
-    from agent.orb_definitions import OrbDefinitionError, save_definition
-
-    try:
-        _, replaced = save_definition(body)
-    except OrbDefinitionError as e:
-        return JSONResponse(
-            status_code=400,
-            content={"error": str(e), "errors": e.errors},
-        )
-    return {"ok": True, "id": body["id"], "replaced": replaced}
-
-
-@app.delete("/api/orbs/{orb_id}")
-async def delete_orb(orb_id: str, user: User = Depends(require_user)):
-    """Remove an imported orb definition. The frontend deregisters the
-    variant and falls back to a starter when the deleted orb was active."""
-    from agent.orb_definitions import delete_definition
-    if not delete_definition(orb_id):
-        return JSONResponse(
-            status_code=404, content={"error": f"orb {orb_id!r} not found"},
-        )
-    return {"ok": True}
-
-
-@app.get("/api/personas")
-async def list_personas(user: User = Depends(require_user)):
-    """Persona catalog (epic #611): the yaml default + every persona
-    file across the bundled + user dirs, plus which one is active.
-    ``meta``/``prompt`` are the raw file contents so the manager dialog
-    can populate its editor without a second round-trip (persona files
-    can't hold api_key — the loader refuses it — so nothing to redact).
-    """
-    from agent.personas import load_persona_files
-    default = load_persona(os.environ.get("ORBIS_CONFIG", "config/orbis.yaml"))
-    files = load_persona_files()
-    active = default.active_persona
-    if active and active not in files:
-        active = ""  # broken pointer — surface the fallback the boot uses
-    return {
-        "active": active or "default",
-        "personas": [
-            {
-                "slug": "default",
-                "name": default.name,
-                "description": "The persona configured in orbis.yaml.",
-                "source": "config",
-                "editable": False,
-            },
-            *(
-                {
-                    "slug": pf.slug,
-                    "name": pf.name,
-                    "description": pf.description,
-                    "source": pf.source,
-                    "editable": pf.source == "user",
-                    "meta": pf.meta,
-                    "prompt": pf.body,
-                }
-                for pf in sorted(files.values(), key=lambda p: p.slug)
-            ),
-        ],
-    }
 
 
 def _apply_persona_switch(persona) -> dict:
@@ -3895,215 +1516,6 @@ def _apply_persona_switch(persona) -> dict:
         "applies": "live" if applied_live else "restart",
         "notes": notes,
         "viz": viz,
-    }
-
-
-@app.post("/api/personas/active")
-async def set_active_persona(body: dict, user: User = Depends(require_user)):
-    """Select the active persona. Persists ``persona.active_persona``
-    to orbis.yaml, recomposes, and hot-swaps every live session —
-    prompt/tools next turn, LLM + voice + filler immediately, orb via
-    the ``persona-switched`` SSE event. ``notes`` carries anything that
-    still needs a restart (TTS engine change, temperature)."""
-    from agent.config_store import merge_patch
-    from agent.personas import load_persona_files
-    slug = str(body.get("slug") or "").strip().lower()
-    if not slug:
-        return JSONResponse(status_code=400, content={"error": "slug is required"})
-    if slug in ("default", "orbis"):
-        slug = ""
-    elif slug not in load_persona_files():
-        return JSONResponse(
-            status_code=404, content={"error": f"unknown persona {slug!r}"},
-        )
-    merge_patch({"persona": {"active_persona": slug}})
-    persona = reload_persona()
-    result = _apply_persona_switch(persona)
-    await sse_bus.publish(
-        "persona-switched",
-        {"slug": slug or "default", "name": persona.name, **result},
-    )
-    return {
-        "ok": True,
-        "active": slug or "default",
-        "name": persona.name,
-        **result,
-    }
-
-
-@app.put("/api/personas/{slug}")
-async def put_persona(slug: str, body: dict, user: User = Depends(require_user)):
-    """Create or update a USER persona file. Body: the frontmatter
-    fields (name, description, extends, voice, llm, orb, temperature,
-    max_tokens, filler_verbosity, tools) + ``prompt`` (the markdown
-    body). Writing a bundled starter's slug creates a user *shadow* —
-    that's the edit path for shipped personas; deleting the shadow
-    restores the original."""
-    from agent.personas import load_persona_files, write_persona_file
-    meta = {k: v for k, v in body.items() if k != "prompt"}
-    prompt = str(body.get("prompt") or "")
-    try:
-        path = write_persona_file(slug, meta, prompt)
-    except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
-    slug = slug.strip().lower()
-    # Editing the ACTIVE persona re-applies it live, same as switching
-    # to it (the composed cache + live sessions would otherwise keep
-    # serving the pre-edit text).
-    if load_persona(
-        os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
-    ).active_persona == slug:
-        persona = reload_persona()
-        result = _apply_persona_switch(persona)
-        await sse_bus.publish(
-            "persona-switched",
-            {"slug": slug, "name": persona.name, **result},
-        )
-    return {
-        "ok": True,
-        "slug": slug,
-        "path": str(path),
-        "shadows_bundled": _persona_shadows_bundled(slug),
-    }
-
-
-def _persona_shadows_bundled(slug: str) -> bool:
-    """True when a user persona file sits over a bundled one with the
-    same slug (deleting the user file un-shadows the original)."""
-    from agent.personas import bundled_personas_dir
-    return (bundled_personas_dir() / f"{slug}.md").is_file()
-
-
-@app.delete("/api/personas/{slug}")
-async def delete_persona(slug: str, user: User = Depends(require_user)):
-    """Delete a USER persona file (bundled starters are read-only; a
-    shadow delete un-shadows the bundled original). Clears the active
-    pointer when it referenced the deleted file."""
-    from agent.config_store import merge_patch
-    from agent.personas import delete_persona_file, load_persona_files
-    slug = slug.strip().lower()
-    if not delete_persona_file(slug):
-        files = load_persona_files()
-        detail = (
-            "bundled personas are read-only"
-            if slug in files
-            else f"unknown persona {slug!r}"
-        )
-        return JSONResponse(status_code=404, content={"error": detail})
-    was_active = load_persona(
-        os.environ.get("ORBIS_CONFIG", "config/orbis.yaml")
-    ).active_persona == slug
-    if was_active and slug not in load_persona_files():
-        # No bundled file un-shadowed — the pointer now dangles; clear it.
-        merge_patch({"persona": {"active_persona": ""}})
-    persona = reload_persona()
-    if was_active:
-        # Whatever the delete resolved to (un-shadowed bundled original
-        # or the default) should take over live, same as a switch.
-        result = _apply_persona_switch(persona)
-        await sse_bus.publish(
-            "persona-switched",
-            {"slug": persona.slug, "name": persona.name, **result},
-        )
-    return {"ok": True}
-
-
-@app.get("/api/config")
-async def get_config(user: User = Depends(require_user)):
-    """Return the current config/orbis.yaml as a dict. Drawer UI
-    consumes this to populate the settings form."""
-    from agent.config_store import read_config, redact_secrets
-    cfg = read_config()
-    # Surface the *effective* STT backend so Settings reflects what's
-    # actually running. The native build defaults the backend via the
-    # STT_BACKEND env (parakeet); if the user hasn't explicitly set
-    # stt.backend in config, fill it in so the UI doesn't show a stale
-    # default ("Whisper") while Parakeet is the live backend.
-    stt = cfg.get("stt")
-    if not isinstance(stt, dict):
-        stt = {}
-    if not stt.get("backend"):
-        stt["backend"] = STT_BACKEND
-        cfg["stt"] = stt
-    # Never return stored provider secrets — the UI only needs to know a
-    # key is set (it shows a "saved" indicator). Redaction also closes the
-    # cleartext-key exposure if this route is ever reached unauthenticated
-    # (single-user fallback + a non-loopback bind). See audit H3/M11.
-    return {"config": redact_secrets(cfg)}
-
-
-@app.get("/api/personality")
-async def get_personality(user: User = Depends(require_user)):
-    """Return current personality state: axes + mood + recent drift
-    events + session stats. Drives the drawer's Profile panel so the
-    user can see why the orb feels a certain way."""
-    mem = get_memory()
-    try:
-        axes = [
-            {"axis": a.axis, "value": a.value, "updated_at": a.updated_at}
-            for a in mem.personality.all_axes()
-        ]
-    except Exception:
-        axes = []
-    try:
-        mood = mem.personality.get_mood()
-        mood_dict = {
-            "valence": mood.valence,
-            "arousal": mood.arousal,
-            "guardedness": mood.guardedness,
-            "updated_at": mood.updated_at,
-        }
-    except Exception:
-        mood_dict = None
-    try:
-        events = mem.personality.recent_events(limit=20)
-    except Exception:
-        events = []
-    try:
-        session_count = mem.sessions.count()
-        last_session_ended_at = mem.sessions.last_ended_at()
-    except Exception:
-        session_count = 0
-        last_session_ended_at = None
-    return {
-        "axes": axes,
-        "mood": mood_dict,
-        "recent_events": events,
-        "sessions": {
-            "count": session_count,
-            "last_ended_at": last_session_ended_at,
-        },
-    }
-
-
-@app.post("/api/orb/select_starter")
-async def select_starter(body: dict, user: User = Depends(require_user)):
-    """Commit a starter-orb pick to config/orbis.yaml. Called by the
-    setup wizard after the user picks. Validates the slug against
-    the pool, writes the orb block, reloads persona.
-
-    Body: ``{"slug": "<starter_slug>"}``."""
-    slug = (body.get("slug") or "").strip()
-    if not slug:
-        raise HTTPException(status_code=400, detail="slug is required")
-    from agent.starter_orbs import find_starter
-    from agent.config_store import merge_patch
-    hit = find_starter(slug)
-    if not hit:
-        raise HTTPException(
-            status_code=404, detail=f"unknown starter: {slug!r}",
-        )
-    merge_patch({
-        "orb": {
-            "variant": hit.variant,
-            "palette": hit.palette,
-            "params": dict(hit.params),
-        },
-    })
-    reload_persona()
-    return {
-        "ok": True,
-        "starter": hit.to_dict(),
     }
 
 
@@ -4155,48 +1567,6 @@ def _reconfigure_live_llm(llm_cfg: dict, *, user_id: str | None = None) -> dict:
     return {"ok": True, "model": model, "url": url}
 
 
-@app.post("/api/config")
-async def put_config(patch: dict, user: User = Depends(require_user)):
-    """Apply a shallow-merge patch to config/orbis.yaml. Returns the
-    normalized post-write config. Reloads the in-memory persona so
-    the next voice session uses the new values.
-
-    Body shape is a partial config::
-
-        {"persona": {"name": "Atlas"}}              # rename
-        {"voice": {"tts_backend": "elevenlabs"}}    # swap provider
-        {"orb": {"variant": "nebula", "palette": "Helios"}}   # restyle
-
-    All blocks are freely editable — ORBIS is free + open source, so orb
-    customization is ungated. Starter-orb selection happens via
-    /api/orb/select_starter (restricted to the curated pool).
-
-    Drops unknown keys with a warning. Raises 400 on typed failures
-    (invalid tts_backend, non-numeric temperature, etc.).
-    """
-    from agent.config_store import merge_patch
-
-    try:
-        normalized = merge_patch(patch)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    persona = reload_persona()
-    # Hot-swap the live LLM (no restart) when the llm block changed — mirrors
-    # the runtime TTS-voice swap. MLX (in-process) can't retarget live, so
-    # `llm_applied_live` stays False there and the UI keeps the restart hint.
-    applied_live = False
-    if isinstance(patch, dict) and "llm" in patch:
-        new_llm = normalized.get("llm") if isinstance(normalized, dict) else None
-        res = _reconfigure_live_llm(new_llm or {}, user_id="default")
-        applied_live = bool(res.get("ok"))
-    return {
-        "ok": True,
-        "config": normalized,
-        "persona": persona.slug,
-        "llm_applied_live": applied_live,
-    }
-
-
 def _serve_react() -> bool:
     if FRONTEND == "vanilla":
         return False
@@ -4204,6 +1574,43 @@ def _serve_react() -> bool:
         return True
     # auto — use react when the bundle is present.
     return WEB_DIST.exists() and (WEB_DIST / "index.html").exists()
+
+
+# --- Extracted routers -------------------------------------------------------
+# Registered here — after every name they `from app import` is defined, but
+# BEFORE the SPA "/{path:path}" catch-all below (earlier routes win, so the API
+# must precede it). Routers read app-level mutable/monkeypatched state as
+# ``app.<name>`` at call time; see server/routers/*.py. (#app.py-decomposition)
+from server.routers import (  # noqa: E402
+    comms as _comms_routes,
+    config as _config_routes,
+    delegates as _delegates_routes,
+    llm as _llm_routes,
+    orbs as _orbs_routes,
+    personas as _personas_routes,
+    system as _system_routes,
+    voicemodels as _voicemodels_routes,
+    voiceprint as _voiceprint_routes,
+)
+
+for _r in (
+    _system_routes,
+    _voiceprint_routes,
+    _delegates_routes,
+    _personas_routes,
+    _llm_routes,
+    _comms_routes,
+    _voicemodels_routes,
+    _orbs_routes,
+    _config_routes,
+):
+    app.include_router(_r.router)
+
+# The Pipecat voice pipeline (run_bot) was extracted to voice/pipeline.py in the
+# app.py decomposition (Phase 2). Imported here — after the app-level helpers it
+# pulls via `from app import` are defined — and bound as a module global so
+# lifespan can launch it (asyncio.create_task(run_bot(...))). (#app.py-decomposition)
+from voice.pipeline import run_bot  # noqa: E402, F401
 
 
 @app.get("/")
@@ -4355,6 +1762,20 @@ def main():
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    # Reap the whole worker tree cleanly on quit (#485). Become our own
+    # process-group leader so the Tauri shell can signal the entire group
+    # (kill -TERM/-KILL -<pgid>) instead of SIGKILLing just the direct child
+    # and orphaning the grandchildren that hold port 7866 / the GPU. Only
+    # advertise ORBIS_PGID when setsid actually succeeded — the shell then
+    # reaps a group we own, else falls back to the direct-child kill. A
+    # parent-death watchdog covers the case where the shell panics and never
+    # runs its exit handler at all.
+    from agent.process_guard import establish_own_process_group, start_parent_death_watchdog
+    _pgid = establish_own_process_group()
+    if _pgid is not None:
+        print(f"ORBIS_PGID {_pgid}", flush=True)
+        start_parent_death_watchdog(_pgid)
+
     # Port 0 → OS assigns. Pre-bind a socket so we can print the real
     # port BEFORE uvicorn starts (the Tauri shell reads stdout for the
     # readiness line). uvicorn's Config accepts a pre-bound fd, which
@@ -4377,6 +1798,23 @@ def main():
     # as loopback — WKWebView can't reliably navigate to 0.0.0.0.
     ready_host = "127.0.0.1" if bound_host == "0.0.0.0" else bound_host
     print(f"ORBIS_READY http://{ready_host}:{bound_port}", flush=True)
+
+    # Reclaim stale pyapp sidecar envs left by previous versions (#489). Each is
+    # ~1.8 GB and every in-app update lands a new one while the old lingers
+    # forever. Runs in a daemon thread so the multi-second rmtree never delays
+    # serving; keeps only the env we're executing from and no-ops in dev
+    # (.venv, not under the pyapp base). Opt out with ORBIS_ENV_GC=0.
+    if os.environ.get("ORBIS_ENV_GC", "1") != "0":
+        import threading as _threading
+
+        def _gc_envs():
+            try:
+                from agent.env_gc import gc_stale_envs
+                gc_stale_envs()
+            except Exception as e:  # cleanup must never take down a boot
+                logger.warning(f"[env-gc] skipped: {e}")
+
+        _threading.Thread(target=_gc_envs, name="orbis-env-gc", daemon=True).start()
 
     config = uvicorn.Config(app, fd=sock.fileno())
     server = uvicorn.Server(config)
