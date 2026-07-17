@@ -65,6 +65,8 @@ from mlx_lm import load as mlx_load, stream_generate  # type: ignore[import-not-
 
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
+from agent.tool_loop import apply_tool_loop_guard
+
 from ._qwen_tool_parser import (
     ContentEvent,
     QwenToolParser,
@@ -137,6 +139,11 @@ class MLXLLMService(BaseOpenAILLMService):
             system_instruction=self._settings.system_instruction,
             convert_developer_to_user=not self.supports_developer_role,
         )
+        # We bypass `build_chat_completion_params`, so the tool-loop guard the
+        # OpenAI path gets for free (voice/llm/guarded.py) has to be applied by
+        # hand here. The chat template has no `tool_choice`, so the guard brakes
+        # by withholding `tools` — which means it runs before the read below.
+        params = apply_tool_loop_guard(params, supports_tool_choice=False)
         messages = params.get("messages", [])
         # Forwarded straight through to the chat template; rendering +
         # parsing is the parser's problem from there.

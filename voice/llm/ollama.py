@@ -70,6 +70,8 @@ import httpx
 from pipecat.frames.frames import CancelFrame, EndFrame
 from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
+from agent.tool_loop import apply_tool_loop_guard
+
 logger = logging.getLogger(__name__)
 
 
@@ -156,6 +158,11 @@ class OllamaLLMService(BaseOpenAILLMService):
             system_instruction=self._settings.system_instruction,
             convert_developer_to_user=not self.supports_developer_role,
         )
+        # We bypass `build_chat_completion_params`, so the tool-loop guard the
+        # OpenAI path gets for free (voice/llm/guarded.py) has to be applied by
+        # hand here. `/api/chat` has no `tool_choice`, so the guard brakes by
+        # withholding `tools` — which means it has to run before the read below.
+        params = apply_tool_loop_guard(params, supports_tool_choice=False)
         messages = params.get("messages", [])
         # OpenAI tools schema is wire-compatible with Ollama's /api/chat
         # tools field, so we forward it directly. None / empty → omit

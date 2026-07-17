@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 
 from pipecat.services.openai.llm import OpenAILLMService
 
+from .guarded import GuardedOpenAILLMService
 from .ollama import OllamaLLMService
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ def make_llm(
         return svc
 
     logger.info(f"[llm-factory] using OpenAI-compat adapter for {base_url} model={model}")
-    svc = OpenAILLMService(
+    svc = GuardedOpenAILLMService(
         api_key=api_key,
         base_url=base_url,
         settings=settings,

@@ -14,6 +14,7 @@ import pytest
 
 from pipecat.services.openai.llm import OpenAILLMService
 from voice.llm import make_llm
+from voice.llm.guarded import GuardedOpenAILLMService
 from voice.llm.two_model import TwoModelOpenAILLMService, _has_tool_result
 
 
@@ -46,16 +47,18 @@ def test_has_tool_result_handles_objects_and_empty() -> None:
 
 
 def test_make_llm_single_model_when_no_split() -> None:
+    # GuardedOpenAILLMService is the plain single-model service — it differs
+    # from stock OpenAILLMService only by the tool-loop guard.
     svc = make_llm(base_url="https://gw/v1", model="m", api_key="k",
                    settings=_settings("m"))
-    assert type(svc) is OpenAILLMService
+    assert type(svc) is GuardedOpenAILLMService
 
 
 def test_make_llm_single_model_when_router_equals_content() -> None:
     # Both equal to base → no real split → plain service.
     svc = make_llm(base_url="https://gw/v1", model="m", api_key="k",
                    settings=_settings("m"),                   router_model="m", content_model="m")
-    assert type(svc) is OpenAILLMService
+    assert type(svc) is GuardedOpenAILLMService
 
 
 def test_make_llm_two_model_when_split() -> None:
