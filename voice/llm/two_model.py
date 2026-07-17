@@ -25,7 +25,8 @@ path is unchanged.
 import logging
 
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
-from pipecat.services.openai.llm import OpenAILLMService
+
+from .guarded import GuardedOpenAILLMService
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +43,16 @@ def _has_tool_result(messages) -> bool:
     return False
 
 
-class TwoModelOpenAILLMService(OpenAILLMService):
+class TwoModelOpenAILLMService(GuardedOpenAILLMService):
     """OpenAI-compat LLM service that swaps the model per call: the
     ``router_model`` for tool-decision / plain turns, the
     ``content_model`` for post-tool narration turns.
+
+    Inherits the tool-loop guard via ``GuardedOpenAILLMService`` — the
+    ``super()`` call below is the guarded params build. A stalled turn still
+    carries tool results in context, so it routes to the ``content_model``,
+    which is the right one for the job: the guard's stop step asks for plain
+    narration, not a decision.
 
     Only the ``model`` request param differs between the two — everything
     else (messages, tools, sampling, ``extra_body``) is identical, so the
