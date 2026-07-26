@@ -267,13 +267,27 @@ jobs:
             echo "pushed=failed" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # `actions/checkout` persists GITHUB_TOKEN as an http.extraheader, and
+          # that header OVERRIDES URL-embedded credentials — so setting a PAT in
+          # the remote URL alone still authenticates as the bot and still gets
+          # rejected by branch protection. That exact mistake was PR #519. Drop
+          # the persisted header first, THEN point the remote at the PAT.
+          git config --unset-all 'http.https://github.com/.extraheader' 2>/dev/null || true
           # Keep the token off the push command line — it lands in the remote URL
           # (Actions masks the secret in logs either way).
           git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}.git"
-          if git push origin HEAD:main; then
+          git push origin HEAD:main || true
+          # Trust nothing but the remote: a push can report success and still not
+          # be what main points at (protection, a race, a silent auth fallback).
+          # Ancestry, not equality — main may legitimately have advanced past us.
+          LOCAL_SHA="$(git rev-parse HEAD)"
+          git fetch -q origin main
+          if git merge-base --is-ancestor "${LOCAL_SHA}" origin/main; then
             echo "pushed=ok" >> "$GITHUB_OUTPUT"
+            echo "changelog for ${TAG} is on main (${LOCAL_SHA})."
           else
             echo "pushed=failed" >> "$GITHUB_OUTPUT"
+            echo "${LOCAL_SHA} is not on origin/main — the changelog did NOT land."
           fi
 
       - name: Alert if the changelog sync failed
