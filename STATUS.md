@@ -1,11 +1,142 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-12 late (v0.2.159 RELEASED: personas epic #611
-complete + #601 + options-in-schema #626; set_orb_visual PARKED by
-choice #627). On `main`, all PRs merged.*
+*Last updated 2026-07-26 (v0.2.165 is the shipping release; the download
+page was unfrozen after silently serving v0.2.159 for two weeks — #664.
+On `main`, all PRs merged.)*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-07-26 (getting it out: the download page was lying)
+
+Josh: *"it's time to get this out for user testing and demos."* The build
+turned out to be in good shape; **the distribution path was not.**
+
+### The headline — /download served v0.2.159 for two weeks (#664)
+
+`sites/marketing/src/pages/download.astro` renders `changelog[0]` from
+`sites/marketing/data/changelog.json`, which `release.yml` auto-commits to
+main after each release. Branch protection landed on main (#490) requiring
+a PR + green `pytest`/`ruff`/`build` — and the Actions bot is not an admin,
+so its direct `git push origin HEAD:main` has been **rejected on every
+release since**. The step ended in `|| echo "::warning::…"`, so v0.2.160,
+.164 and .165 all shipped green while the site kept advertising the July 12
+build.
+
+Anyone sent to the site for testing got a DMG predating the entire
+"works for someone who isn't Josh" sweep below — including #641, a hard
+`ModuleNotFoundError`.
+
+**Fixed:** push with `GH_PAT` (`enforce_admins` is false → the admin PAT
+bypasses; same token that already pushes release tags in
+`prepare-release.yml`), backfill the three missed entries, and raise a CI
+**error** + dev-Discord ping if it ever fails again — the repo's existing
+"Alert if the Discord notes post failed" convention. Verified live:
+/download now serves v0.2.165.
+
+*Related gap, NOT fixed:* v0.2.147/149/150 have no changelog entry either,
+for a different reason — their release notes were **prose-only**, and
+`scripts/changelog-entry.mjs` extracts bullet lines, so it cleanly no-ops.
+A prose-formatted release silently produces no changelog entry.
+
+*Not a bug:* v0.2.161/162/163 are skipped version numbers. Bump PRs merge,
+but tagging is a deliberate manual `release.yml` dispatch (fleet policy) —
+those bumps were merged without cutting a release.
+
+### First-run expectations (#666)
+
+The install steps ended at *"the setup wizard walks through the rest"*,
+which leaves a tester unprepared for the two moments that read as a broken
+app: the 15 MB DMG unpacks **~1.8 GB of pyapp runtime + ~900 MB of voice
+models** before the first `ORBIS_BOOT` marker exists (the gate sits on
+"Starting ORBIS…" for minutes — `BootStatus.tsx` handles it, nothing warned
+about it), and **ORBIS ships no LLM** — the wizard's LLM step is a hard stop
+since #649 made it require a live connectivity check. Added a
+"you bring the model" block, the ~3 GB note, and free-disk to requirements.
+
+### Verified on the shipping build
+
+Launched `/Applications/ORBIS.app` (v0.2.165, the exact DMG payload):
+Gatekeeper `accepted` / notarization stapled, and `/healthz` reports
+`transport=native`, `input_mode=voice_processing`, `socket_connected=true`,
+`pipeline_running=true`, `smart_turn=local`, `half_duplex=false`.
+Sidecar process-group reaping armed (#634 working). **Cold start
+spawn→`ORBIS_READY` was ~25s** — well under the ~80s that
+`BootStatus.tsx`'s comment still documents; the lazy-torch work (#483/#580)
+evidently paid off. That comment is now stale.
+
+**Still owed: the spoken QA pass** — everything above is boot-level
+evidence; no live voice turn was driven this session.
+
+---
+
+## Snapshot — 2026-07-15/16 (v0.2.160 → v0.2.165: the fresh-machine sweep)
+
+Roughly 30 PRs across two days, in four blocks. This is the release train
+that makes ORBIS survive a fresh machine.
+
+**Distribution / robustness audit — the backlog got banked.**
+- **#485 → PR #634** reap the sidecar *process tree*, not just the child.
+- **#482 → PR #633** incremental FTS + retention (dropped the O(N) rebuild
+  per session write).
+- **#481 → PR #635** Kokoro TTS + ECAPA speaker-gate inference off the
+  event loop.
+- **#487 → PR #631** `protolabs-a2a` installs from PyPI, not a `git+` ref —
+  no git/CLT needed on a customer's first run.
+- **#489 → PR #637** GC stale pyapp sidecar envs on boot (issue stays open
+  for the 1.7GB re-download half).
+- **#488 → PR #636** in-app "Copy diagnostics" (issue stays open for the
+  full export-zip + crash reporting).
+- **#625 → PR #630** recall can't override live capability authority (the
+  memory-hygiene half of summary poisoning).
+- **PR #632** greened lint + the release-config guardrail.
+
+**`app.py` decomposition (and the packaging bug it exposed).**
+- **PR #638** routes → `server/routers/*` (4497 → 2835 lines); **PR #639**
+  re-pointed the CI healthz guardrail at `server/routers/system.py`.
+- **PR #640** `run_bot` → `voice/pipeline.py`.
+- **PR #641** — *the important one*: the new `server/` package was not
+  shipped in the wheel/sdist, so packaged installs died on
+  `ModuleNotFoundError`. Packaging tests now assert every top-level package
+  is included.
+
+**Config + boot correctness — the fresh-user path.**
+- **PR #648** yaml-wins everywhere, env is fallback-only; fail loud on a
+  missing `api_key_env`.
+- **PR #647** stop the developer's runtime `.env` leaking into the test
+  suite (local ≠ CI).
+- **PR #649** the wizard requires a live connectivity check before leaving
+  the LLM step.
+- **PR #652** don't boot a brainless orb silently (no-LLM-configured hole).
+- **PR #651** warn when an `openai` STT/TTS backend will silently 401.
+- **PR #645** decide endpoint capability from the URL, not from where the
+  config came from.
+- **PR #650** cross-restart session recall moved to the durable data dir
+  (was `/tmp`).
+- **PR #653** coerce an out-of-catalogue Kokoro voice to the default
+  instead of breaking.
+- **PR #646** only teach the `[audio]` annotation when the STT backend
+  actually emits one.
+- **PR #642** make the settings mic meter visible on the M1 internal mic.
+
+**Voice naturalness + latency (the "L" series).**
+- **L1 / PR #654** default-on semantic Smart Turn + tighter VAD hangover.
+- **L3 / PR #656** auto-enable listener-acks only when the engine confirms
+  AEC (no false triggers on speaker bleed).
+- **L5 / PR #658** pipecat 1.3 → 1.5 + per-stage latency instrumentation
+  (`[latency]`; `LOG_LATENCY=0` to silence).
+- **PR #660** backchannel capped to the Fish backend + a UI toggle.
+- **PR #662** bound degenerate tool loops on the voice path
+  (`agent/tool_loop.py`; nudge at 2 repeats, disable tool calling at 3).
+- **PR #644** log every utterance at the TTS boundary — no unlogged speech.
+- **PR #643** opt-in listener-acks + trimmed gush from the base persona.
+
+**Latency finding (see `reference_voice_latency_profile`):** batch Parakeet
+runs ~40× real-time, so STT is *not* the ~1s bottleneck — it's LLM TTFT +
+TTS TTFB. Streaming Parakeet exists on a parked branch and is **not** a
+latency win.
 
 ---
 

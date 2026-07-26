@@ -1,9 +1,14 @@
 # HANDOFF — ORBIS
 
-*Refreshed 2026-07-12 (v0.2.156+). This is the durable handoff doc — the
-QA checklist, open design questions, and ordered next steps. For the
+*Refreshed 2026-07-26 (v0.2.165 shipping). This is the durable handoff doc
+— the QA checklist, open design questions, and ordered next steps. For the
 point-in-time state, read [STATUS.md](./STATUS.md) first; it carries the
 live snapshot and is updated every session.*
+
+**Current posture: shipping to testers.** The app is signed, notarized, and
+downloadable at orbis.protolabs.studio/download — verify that page
+advertises the current version after every release (it silently froze for
+two weeks; see STATUS.md 2026-07-26 and #664).
 
 Read order for someone picking ORBIS up cold:
 
@@ -89,6 +94,28 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 - [ ] In-app updater → "Update & Restart" → changelog renders as a markdown
       modal (#561).
 
+### Voice naturalness + latency (the "L" series, v0.2.161–165)
+- [ ] **Smart Turn (#654):** turn-ends feel semantic, not a fixed silence
+      timer — finishing a sentence hands over faster than trailing off
+      mid-thought does.
+- [ ] **Listener-acks (#656/#660):** on the AEC-confirmed engine they
+      auto-enable and do *not* false-trigger on the bot's own tail.
+      Backchannel is Fish-only; the UI toggle reflects it.
+- [ ] **Latency (#658):** `grep '\[latency\]'` in sidecar.log splits
+      TTFA across STT / LLM / TTS. Expect LLM-TTFT + TTS-TTFB to dominate —
+      batch Parakeet is ~40× real-time and is *not* the bottleneck.
+      `LOG_LATENCY=0` silences it.
+- [ ] **Tool-loop guard (#662):** a request that would spin identical tool
+      calls gets nudged at 2 repeats and speaks by 3 — no dead air.
+
+### Distribution (do this after every release)
+- [ ] orbis.protolabs.studio/download advertises the version you just cut
+      (it silently froze at v0.2.159 for two weeks — #664).
+- [ ] The advertised `.dmg` URL resolves, and the downloaded app passes
+      `spctl -a -vv` + `xcrun stapler validate`.
+- [ ] Fresh-machine path: ~3 GB first-run unpack, then the wizard's LLM
+      step needs a real endpoint (#649 gates on a live check).
+
 ### Regression sanity
 - [ ] Reminders still fire (in-process DeliveryController).
 - [ ] Session recall: a second session opens with the prior-sessions block in
@@ -102,8 +129,8 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 - **LLMErrorAnnouncer — DONE + live-soaked 2026-07-11 (#576 closed, PRs
   #599 + #603).** Dead/401 LLM speaks one classified line; with a fallback
   configured, failover retries the failed turn on the backup (seamless,
-  live-verified sub-second). Caveat: **v0.2.154 shipped with only the basic
-  announcer** — the failover line + retry (#603) ride the next release.
+  live-verified sub-second). The v0.2.154 caveat is cleared — the failover
+  line + retry (#603) have shipped since.
 - **#601 — FIXED 2026-07-12 (PRs #614 + #616).** The whitelist hole was
   wider than filed: `fallback`, `provider`, `router_model`/`content_model`,
   and the `micro_*` keys were all stripped — on the read path (persona
@@ -141,15 +168,22 @@ CLAUDE.md for why a partial rebuild silently misleads you).
   (AEC/AGC/NS) is wired but needs a live Apple Silicon soak before the CPAL
   band-aids come out (MIC_GAIN, STT RMS gates, backchannel/micro-ack off).
   Playbook in STATUS.md § Phase 2b.
-- **Distribution / perf / robustness audit #481–491 — partially banked.**
-  Shipped: **#490** release test gate (PR #578), **#483** lazy torch off the
-  boot path (PR #580), **#488** reveal-logs slice (PR #581). Still open, ranked
-  by churn below. Highest-leverage open ones: **#486** binds-once audio socket →
-  silent dead audio on sidecar restart (also blocks pipeline-rebuild hot-swap)
-  + **#485** bare-SIGKILL orphans sidecar grandchildren (one robustness bundle,
-  high churn → device soak), and **#489** updater re-downloads the 1.7GB
-  sidecar. **#484 dropped** (high churn + the CPAL path it hardens is slated for
-  Phase-2 deletion).
+- **Distribution / perf / robustness audit #481–491 — mostly banked as of
+  2026-07-15.** Closed: **#490** test gate, **#483** lazy torch, **#481**
+  TTS/speaker-gate off the event loop (PR #635), **#482** incremental FTS
+  (PR #633), **#485** process-tree reaping (PR #634), **#487** a2a from PyPI
+  (PR #631). Half-done: **#489** (env GC shipped in PR #637; the 1.7GB
+  per-update sidecar re-download is still open) and **#488** (reveal-logs
+  PR #581 + copy-diagnostics PR #636; full export-zip + crash reporting
+  still open).
+  **Still fully open and now the top demo risk: #486** — the audio socket
+  binds once with a single-shot accept, so a sidecar restart yields *silent*
+  dead audio (also blocks pipeline-rebuild hot-swap and cross-backend persona
+  voice switching). **#602** is live evidence of the same family: mic frames
+  stopped mid-session while the engine reported `listening = true`, and only
+  a relaunch recovered. Treat as one high-churn, device-soaked bundle.
+  **#484 dropped** (high churn + the CPAL path it hardens is slated for
+  Phase-2 deletion). **#491** (no FE/Tauri test coverage) still open.
 - **Two flaky/pre-existing test failures** (not regressions):
   `test_skill_llm_resolution::test_micro_model_defaults_to_model` (fails on
   clean main — env default picks `protolabs/nano`) and
@@ -181,32 +215,47 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ## Recommended next steps (effort × impact × churn — do in this order)
 
-Banked so far: #490 test gate, #483 lazy torch, #488 reveal-logs slice,
-**#576 LLM-failure UX**, **#546 editor-ui extraction**, **#601 llm-key
-round-trip (both paths)**, **personas epic #611 complete (#607–#610)**,
-and **#577 set_orb_visual re-enabled**. Sequence what's left:
+Banked so far: #490 test gate, #483 lazy torch, **#576 LLM-failure UX**,
+**#546 editor-ui extraction**, **#601 llm-key round-trip**, **personas epic
+#611 (#607–#610)**, **#577 set_orb_visual re-enabled**, and the whole
+2026-07-15/16 fresh-machine sweep — **#485** process-tree reaping, **#482**
+incremental FTS, **#481** TTS/speaker-gate off the event loop, **#487**
+a2a-from-PyPI, **#489** env GC (half), **#488** copy-diagnostics (half),
+**#625** recall-vs-capability, plus the config/boot correctness block
+(#641/#645–#653) and the voice "L" series (#654–#662). Sequence what's left:
 
-1. **QA pass on the running build (v0.2.159)** — persona picker /
-   manager dialog / voice switch; checklist above. Anything broken gets
-   fixed before new work.
-2. **Failover in settings UI** — #601 unblocked the yaml backing store;
+1. **Spoken QA pass on v0.2.165** — nothing above the boot layer has been
+   driven live since the sweep. Checklist above; anything broken gets fixed
+   before new work. **This is the gate on wider tester distribution.**
+2. **#485 + #486 sidecar/socket robustness bundle** — now the top
+   *engineering* risk for demos. #486 (binds-once audio socket → silent dead
+   audio on sidecar restart) and **#602** (mic frames stop mid-session while
+   `listening = true`; only a relaunch clears it) are the two failure modes
+   that kill a live demo with no in-app recovery. **High churn** (RT audio +
+   process lifecycle) → deliberate, device-soaked PR, *not* a pre-demo patch.
+   #486 also unblocks pipeline-rebuild hot-swap and cross-backend persona
+   voice switching.
+3. **Tester feedback loop** — #488's copy-diagnostics slice shipped, but
+   there's no defined place for a tester to send it. Cheap, and it decides
+   whether user testing produces usable signal.
+4. **Failover in settings UI** — #601 unblocked the yaml backing store;
    elevate-config-to-UI convention says surface it.
-3. **#625 memory-hygiene half** — capability claims in summaries;
-   design before building.
-4. **#488 full export-zip + crash reporting** — additive, low churn (the
-   reveal-logs slice shipped).
-5. **#485 + #486 sidecar/socket robustness bundle** — highest value, **high
-   churn** (RT audio + process lifecycle) → deliberate, device-soaked PR. #486
-   also unblocks pipeline-rebuild hot-swap (and cross-backend persona voice
-   switching). **#602** (mic-stream wedge seen live 07-11) is extra evidence.
-6. **In-app editor parity (#549)** — P1 (#546) done; next **#547** mount the
+5. **#488 full export-zip + crash reporting** — additive, low churn.
+6. **#489 updater payload** — the GC half shipped; the 1.7GB sidecar
+   re-download per update is still open and is felt by every tester.
+7. **In-app editor parity (#549)** — P1 (#546) done; next **#547** mount the
    full editor in-app, then #548.
-7. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
+8. **Phase 2 audio soak** on Apple Silicon → then the CPAL cleanup commit.
 
 Lower tier (opportunistic): #571 activation affordance, #491 seed FE/Tauri
-tests, #482 FTS incremental, #487 a2a-wheel (needs an external publish),
-#489 pyapp-env GC (careful — deletes dirs on disk). **#484 dropped** (high
-churn + Phase-2-obsoleting).
+tests, #536 `@orbis/orb-mcp`, orb gallery epic #543 (#538–542, not started).
+**#484 dropped** (high churn + Phase-2-obsoleting).
+
+**Release hygiene (learned the hard way, 2026-07-26):** after cutting a
+release, confirm orbis.protolabs.studio/download advertises it. The
+changelog sync now errors loudly on failure (#664), but the class of bug —
+a best-effort step swallowing failure into a green run — has now bitten
+twice (Discord notes at v0.2.113, changelog at v0.2.160–165).
 
 ---
 
