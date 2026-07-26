@@ -220,6 +220,7 @@ jobs:
           fi
 
       - name: Sync the marketing changelog
+        id: changelog
         # Build a user-facing entry from the SAME polished notes and commit it to
         # main, so sites/marketing/data/changelog.json can't drift from the GitHub
         # release body. This step only LANDS the commit — the marketing deploy is
@@ -229,10 +230,21 @@ jobs:
         # a shipped release. (NB: a GITHUB_TOKEN push can't trigger downstream
         # workflows anyway — recursion guard — which is the other reason the deploy
         # is dispatched explicitly rather than relied on firing from this push.)
+        #
+        # MUST push with GH_PAT, not GITHUB_TOKEN: branch protection on main
+        # requires a PR + green pytest/ruff/build, and the Actions bot is not an
+        # admin so its direct push is rejected. `enforce_admins` is false, so the
+        # admin-owned PAT bypasses. This silently froze /download at v0.2.159
+        # while v0.2.160/164/165 shipped — the `|| echo ::warning` below swallowed
+        # three consecutive failures. Hence `pushed` + the loud alert step.
         if: steps.notes.outcome == 'success'
         continue-on-error: true
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
+          # `pushed` stays unset on the no-op paths (no notes / no diff); the
+          # alert below only fires on an explicit `failed`.
           [ -s release-notes.md ] || { echo "No polished notes — skipping changelog."; exit 0; }
           TAG="${{ steps.version.outputs.tag }}"
           VERSION="${TAG#v}"
@@ -250,8 +262,36 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add sites/marketing/data/changelog.json
           git commit -m "chore(changelog): ${TAG}"
-          git push origin HEAD:main \
-            || echo "::warning::changelog push to main failed — release shipped fine; update changelog.json manually."
+          if [ -z "${GH_PAT}" ]; then
+            echo "::error::GH_PAT is unset — cannot push the changelog past branch protection."
+            echo "pushed=failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Keep the token off the push command line — it lands in the remote URL
+          # (Actions masks the secret in logs either way).
+          git remote set-url origin "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}.git"
+          if git push origin HEAD:main; then
+            echo "pushed=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "pushed=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Alert if the changelog sync failed
+        # Without this the download page silently freezes on an old version while
+        # releases keep shipping — the site advertises `changelog[0]`, so a failed
+        # sync means testers download a stale DMG. Surface it loudly; never fail
+        # the shipped release.
+        if: steps.changelog.outputs.pushed == 'failed'
+        env:
+          DISCORD_DEV_WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "::error::Release ${TAG} shipped but the marketing changelog push FAILED — /download still advertises the previous version. Backfill sites/marketing/data/changelog.json manually."
+          if [ -n "${DISCORD_DEV_WEBHOOK}" ]; then
+            MSG="⚠️ ORBIS ${TAG} released, but the marketing changelog sync FAILED — https://orbis.protolabs.studio/download is still serving the OLD version. Run: ${RUN_URL}"
+            curl -sf -H 'Content-Type: application/json' -d "{\"content\": \"${MSG}\"}" "${DISCORD_DEV_WEBHOOK}" || true
+          fi
 
       - name: Alert if the Discord notes post failed
         # The post is best-effort (continue-on-error above), so without this a

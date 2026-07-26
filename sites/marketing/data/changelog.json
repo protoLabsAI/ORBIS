@@ -1,5 +1,52 @@
 [
   {
+    "version": "v0.2.165",
+    "date": "2026-07-17",
+    "changes": [
+      "Bounds degenerate tool loops on the voice path to prevent infinite spinning on identical requests.",
+      "Forces speech synthesis after three repeated tool-call round-trips to eliminate dead air.",
+      "Applies escalating nudge at two repeats before disabling tool calling entirely at three.",
+      "Configures the brake per backend, using `tool_choice: \"none\"` for OpenAI-compatible APIs and schema withholding for Ollama and MLX.",
+      "Introduces `agent/tool_loop.py` as a pure, testable policy module with no Pipecat dependencies.",
+      "Supports environment-tunable thresholds via `VOICE_TOOL_LOOP_NUDGE_AT` and `VOICE_TOOL_LOOP_STOP_AT` to match existing iteration caps.",
+      "Uses greater-than-or-equal comparisons for thresholds because request-only edits do not persist notes in history for the model to reference.",
+      "Pins tests across all four backends to ensure the guard is reached and does not rot in isolation."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.165/ORBIS-0.2.165-aarch64-apple-darwin.dmg"
+  },
+  {
+    "version": "v0.2.164",
+    "date": "2026-07-16",
+    "changes": [
+      "Local Smart Turn now enables by default, replacing fixed silence hangover with semantic turn-end detection to reduce per-turn latency.",
+      "Listener-acks automatically activate when the audio engine confirms active echo cancellation, preventing false triggers during speaker bleed.",
+      "Backchannel responses now respect the active TTS backend, suppressing on non-Fish paths where timing would be incorrect.",
+      "Per-stage latency metrics surface in sidecar logs, splitting time-to-first-audio across STT, LLM, and TTS components.",
+      "A new `LOG_LATENCY=0` flag silences the latency observer when detailed timing data is not required.",
+      "Pipecat upgraded to 1.5.x, ensuring compatibility with the new latency instrumentation and local smart turn analyzer.",
+      "The lockfile refreshes stale dependencies, including parakeet-mlx and zeroconf, to maintain a clean build environment."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.164/ORBIS-0.2.164-aarch64-apple-darwin.dmg"
+  },
+  {
+    "version": "v0.2.160",
+    "date": "2026-07-16",
+    "changes": [
+      "Sidecar process trees now terminate cleanly on quit, preventing orphaned workers and port leaks",
+      "Stale pyapp environment directories are automatically reaped on boot to reclaim disk space",
+      "The setup wizard now validates LLM connectivity before allowing progression, catching unreachable endpoints early",
+      "YAML configuration now takes precedence over environment variables across all subsystems, eliminating silent overrides from stale .env lines",
+      "API key validation now warns loudly when credentials are missing or unresolved, instead of silently failing with 401 errors",
+      "Kokoro TTS gracefully falls back to the default voice when the configured voice is incompatible, preventing silent audio failure",
+      "Session full-text search uses incremental indexing instead of rebuilding the entire index on every write, maintaining consistent latency regardless of session count",
+      "Kokoro TTS synthesis and speaker-gate inference run on dedicated executors, keeping the main event loop responsive during audio processing",
+      "Application routes are decomposed into domain-specific routers under `server/routers/`, reducing app.py complexity",
+      "A new diagnostics endpoint bundles runtime configuration and metrics for bug reports, with secrets automatically redacted",
+      "Packaging tests now verify that all top-level packages are included in distribution builds, preventing runtime import errors"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.160/ORBIS-0.2.160-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.159",
     "date": "2026-07-12",
     "changes": [
