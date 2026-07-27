@@ -1,33 +1,28 @@
-import { useEffect, useState } from 'react';
-import { getVersion } from '@tauri-apps/api/app';
 import { Panel } from '@/components/ui/panel';
 import { ProtoLabsIcon } from '@/components/ProtoLabsIcon';
+import { ProtoLabsLink } from '@/components/BuiltBy';
+import { useAppVersion } from '@/lib/useAppVersion';
 
 /**
- * About — app identity + build version + studio attribution. The version
- * comes from the Tauri bundle (tauri.conf, bumped by the release
- * automation), so it's the real shipped version, not a frontend constant.
+ * About — app identity + build version + studio attribution. Version and
+ * attribution share their source with the drawer footer (`BuiltBy`), so the
+ * wordmark, the link target, and the version can't drift between the two
+ * places they're shown.
  */
 export function AboutPanel() {
-  const [version, setVersion] = useState<string | null>(null);
-
-  useEffect(() => {
-    getVersion()
-      .then(setVersion)
-      .catch(() => setVersion(null));
-  }, []);
+  const version = useAppVersion();
 
   return (
     <Panel title="About">
       <div className="flex items-baseline gap-2">
         <div className="font-mono text-sm tracking-wider text-fg">ORBIS</div>
-        <div className="text-helper text-fg-muted">
+        <div className="text-helper text-fg-muted tabular-nums">
           {version ? `v${version}` : '—'}
         </div>
       </div>
-      <div className="mt-2 flex items-center gap-2 text-helper text-fg-muted">
+      <div className="mt-2 flex items-center gap-2 text-helper">
         <ProtoLabsIcon variant="outline" size={16} />
-        <span>by protoLabs.studio</span>
+        <ProtoLabsLink />
       </div>
     </Panel>
   );
