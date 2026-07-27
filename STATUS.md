@@ -1,7 +1,8 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-26 (v0.2.165 is the shipping release; the download
-page was unfrozen after silently serving v0.2.159 for two weeks — #664.
+*Last updated 2026-07-26 (**v0.2.166 RELEASED** — brand parity with
+protoAgent, and the first release to prove the changelog-sync fix. The
+download page had silently served v0.2.159 for two weeks — #664/#668.
 On `main`, all PRs merged.)*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
@@ -13,6 +14,28 @@ first on any resume before digging into code.
 
 Josh: *"it's time to get this out for user testing and demos."* The build
 turned out to be in good shape; **the distribution path was not.**
+
+### v0.2.166 RELEASED — and the release pipeline is proven again
+
+Shipped at the end of the session: the drawer now carries **version +
+"built by protoLabs.studio"** (PR #669), matching protoAgent's footer so
+the two apps read as one family. The wordmark links to the studio homepage
+through the **`open_url` IPC**, not an `<a target="_blank">` — an anchor
+navigates the WKWebView itself and strands the user with no way back. The
+version comes from the Tauri bundle (`useAppVersion`), so it can't drift
+from what shipped; About shares the same hook and link component.
+
+**The v0.2.166 release validated the changelog fix end-to-end:** tag →
+Release green → `chore(changelog): v0.2.166` landed on main *automatically*
+(sync step `success`, alert step `skipped`) → Desktop Build attached the
+signed DMG → marketing deploy chained on `workflow_run` → `/download`
+served v0.2.166 with a 200 DMG. **Zero manual steps** — the first clean
+automated run since branch protection landed.
+
+*Dev-build gotcha worth remembering:* a bare `cargo tauri build` shows
+**v0.0.0** in the new footer, because `tauri.conf.json` is `0.0.0` in-tree
+and CI stamps it per-tag. `scripts/nuke-and-rebuild.sh` stamps + restores
+it; if you build by hand and want a real version, do the same.
 
 ### The headline — /download served v0.2.159 for two weeks (#664)
 
