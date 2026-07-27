@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.2.166",
+    "date": "2026-07-27",
+    "changes": [
+      "The drawer footer displays the current version and a linked studio wordmark across every tab.",
+      "The studio link routes through the system browser via IPC, keeping the app interface intact.",
+      "The version string reads directly from the Tauri build configuration instead of a hardcoded constant.",
+      "The download page syncs the latest release instead of silently serving a stale version.",
+      "First-run documentation clarifies the multi-minute initial unpack and the required language model setup."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.166/ORBIS-0.2.166-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.165",
     "date": "2026-07-17",
     "changes": [
