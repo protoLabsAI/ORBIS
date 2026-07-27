@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slot } from '@/plugins/PluginHost';
+import { BuiltBy } from '@/components/BuiltBy';
 import { OrbPreview } from '@/plugins/orb/OrbPreview';
 import { useIsMobile } from '@/lib/useMediaQuery';
 import { useDevMode } from '@/shared/devMode';
@@ -134,6 +135,11 @@ export function Drawer() {
             </TabsContent>
           )}
         </Tabs>
+
+        {/* Version + studio attribution, outside <Tabs> so it's present on
+            every tab rather than buried in Settings → About. Same footer
+            treatment as protoAgent's drawer. */}
+        <BuiltBy className="shrink-0 border-t border-edge px-4 pb-4 pt-3" />
       </SheetContent>
     </Sheet>
   );
