@@ -334,6 +334,12 @@ def _resolve_skill_llm(skill) -> dict:
     # `chat_template_kwargs` extra_body — only send it when the micro tier
     # shares the main gateway URL.
     micro_extra_body = extra_body if micro_url == url else None
+    # The provider names the wire protocol AT the resolved URL, so the micro
+    # tier inherits it exactly when it shares that URL (an OAuth main LLM with
+    # no explicit micro endpoint must not aim chat-completions at the
+    # subscription backend). An explicit micro_url (local Ollama) stays
+    # provider-less → plain OpenAI-compat, as before.
+    micro_provider = provider if micro_url == url else None
     return {
         "url": url,
         "model": model,
@@ -346,6 +352,7 @@ def _resolve_skill_llm(skill) -> dict:
         "micro_url": micro_url,
         "micro_api_key": micro_api_key,
         "micro_extra_body": micro_extra_body,
+        "micro_provider": micro_provider,
     }
 
 
@@ -609,6 +616,7 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
             model=llm_cfg["micro_model"],        # dedicated micro-task tier
             api_key=llm_cfg["micro_api_key"],
             extra_body=llm_cfg["micro_extra_body"],
+            provider=llm_cfg["micro_provider"],
             settings=state.filler_settings,
         )
         logger.info(
@@ -887,16 +895,29 @@ from openai import AsyncOpenAI
 
 # Cache by (url, key) so repeated A2A turns don't rebuild the underlying
 # httpx connection pool. Keyed on the resolved tuple — when persona.llm
-# overrides land, we naturally route to a different cached client.
-_text_clients: dict[tuple[str, str], AsyncOpenAI] = {}
+# overrides land, we naturally route to a different cached client. OAuth
+# subscription providers cache under the provider name instead: their token
+# rotates, so keying on it would leak a client per refresh.
+_text_clients: dict[tuple[str, str], object] = {}
 _A2A_CONTEXTS: dict[str, list[dict]] = {}
 _A2A_MAX_TURNS = int(os.environ.get("A2A_MAX_TURNS", "10"))
 
 
-def _get_text_client(url: str, api_key: str) -> AsyncOpenAI:
-    """Return a cached AsyncOpenAI for this (url, key). Honors per-skill
-    LLM overrides — the voice path and A2A path now hit the same
-    configured endpoint."""
+def _get_text_client(url: str, api_key: str, provider: str | None = None):
+    """Return a cached chat-completions client for this endpoint. Honors
+    per-skill LLM overrides — the voice path and A2A path hit the same
+    configured endpoint. For the OAuth subscription providers this is the
+    chat-shaped facade over the native protocol (voice/llm/oauth_text.py),
+    which resolves + refreshes its own credential per call."""
+    normalized = (provider or "").strip().lower()
+    if normalized in ("anthropic-oauth", "openai-codex"):
+        cache_key = (f"oauth:{normalized}", "")
+        client = _text_clients.get(cache_key)
+        if client is None:
+            from voice.llm.oauth_text import OAuthTextClient
+            client = OAuthTextClient(normalized)
+            _text_clients[cache_key] = client
+        return client
     cache_key = (url, api_key)
     client = _text_clients.get(cache_key)
     if client is None:
@@ -990,7 +1011,7 @@ async def text_stream_factory(
     # Resolve persona.llm overrides — voice + A2A share routing via
     # _resolve_skill_llm so a custom config/orbis.yaml LLM applies to both.
     llm_cfg = _resolve_skill_llm(skill)
-    client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
+    client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"], llm_cfg["provider"])
 
     reply = ""
     hit_max = False  # set in the loop's else when the step budget is exhausted

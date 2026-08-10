@@ -345,7 +345,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # delegates even when the session booted with none.
     _orch_runner = None
     if delivery is not None:
-        _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"])
+        _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"], llm_cfg["provider"])
 
         async def _orch_runner(goal: str, *, progress=None, ask_user=None) -> str:
             return await run_orchestration(
@@ -1176,6 +1176,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                     llm_url=llm_url,
                     model=llm_model,
                     api_key=llm_api_key,
+                    provider=llm_cfg["provider"],
                 )
                 if deltas:
                     apply_drift(get_memory(), deltas)

@@ -148,6 +148,7 @@ async def analyze_session_drift(
     llm_url: str,
     model: str,
     api_key: str,
+    provider: str | None = None,
 ) -> list[dict]:
     """Ask a small LLM to propose personality drift deltas based on the
     session transcript. Returns a list of ``{axis, delta, reason}``
@@ -181,7 +182,13 @@ async def analyze_session_drift(
         return []
 
     try:
-        client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
+        if provider and provider.strip().lower() in ("anthropic-oauth", "openai-codex"):
+            # Subscription backends don't serve chat completions — use the
+            # chat-shaped facade over the native protocol.
+            from voice.llm.oauth_text import OAuthTextClient
+            client = OAuthTextClient(provider)
+        else:
+            client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
         resp = await client.chat.completions.create(
             model=model,
             messages=[
