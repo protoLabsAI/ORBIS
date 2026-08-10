@@ -449,9 +449,19 @@ class FillerGenerator:
         model: str,
         api_key: str = "not-needed",
         extra_body: dict | None | object = _UNSET,
+        provider: str | None = None,
         settings: Settings | None = None,
     ):
-        self._client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
+        # OAuth subscription providers don't serve chat completions at their
+        # URL — route through the chat-shaped facade over the native protocol
+        # (voice/llm/oauth_text.py; it resolves its own credential per call).
+        # Note the langfuse AsyncOpenAI swap above doesn't capture this path.
+        if provider and provider.strip().lower() in ("anthropic-oauth", "openai-codex"):
+            from voice.llm.oauth_text import OAuthTextClient
+            self._client = OAuthTextClient(provider)
+            extra_body = None  # gateway dialect — meaningless to these backends
+        else:
+            self._client = AsyncOpenAI(api_key=api_key, base_url=llm_url)
         self._model = model
         # extra_body for the micro endpoint. The gateway wants
         # chat_template_kwargs={enable_thinking:False}; a local Ollama/MLX
