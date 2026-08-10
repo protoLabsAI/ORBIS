@@ -158,6 +158,9 @@ export type OrbisConfig = {
     api_key?: string;
     api_key_env?: string;
     extra_body?: Record<string, unknown> | null;
+    // Backend adapter route (voice/llm factory): 'ollama' | 'mlx' |
+    // 'anthropic-oauth' | 'openai-codex' | … Absent = OpenAI-compat.
+    provider?: string;
   };
   stt?: {
     backend?: 'local' | 'openai' | 'sensevoice' | 'parakeet';
@@ -489,11 +492,11 @@ export const api = {
   // LLM-provider probing for the setup wizard. These routes are
   // unauth — the wizard runs before the owner key is set and what's
   // really being validated is the user's LLM credentials.
-  llmTest: (body: { url: string; model: string; api_key?: string }) =>
+  llmTest: (body: { url: string; model: string; api_key?: string; provider?: string }) =>
     postJSON<{ ok: boolean; latency_ms?: number; error?: string; status?: number }>(
       '/api/llm/test', body,
     ),
-  llmModels: (body: { url: string; api_key?: string }) =>
+  llmModels: (body: { url: string; api_key?: string; provider?: string }) =>
     postJSON<{ ok: boolean; models: string[]; error?: string }>(
       '/api/llm/models', body,
     ),
@@ -501,6 +504,34 @@ export const api = {
     get<Partial<Record<'ollama' | 'lm_studio', { url: string; models: string[] }>>>(
       '/api/llm/detect_local',
     ),
+
+  // OAuth subscription sign-in (Claude / ChatGPT-Codex). Unauth like
+  // /api/llm/test — the wizard drives these before the owner key exists.
+  llmOauth: {
+    status: () =>
+      get<{ ok: boolean; providers: Array<{
+        provider: string; signed_in: boolean; source: string; detail: string; hint: string;
+      }> }>('/api/llm/oauth/status'),
+    start: (provider: string) =>
+      postJSON<{
+        ok: boolean; error?: string; flow_id?: string; mode?: 'device' | 'redirect';
+        user_code?: string; verification_uri?: string; interval?: number; authorize_url?: string;
+      }>('/api/llm/oauth/start', { provider }),
+    poll: (flow_id: string) =>
+      postJSON<{ status: 'pending' | 'complete' | 'error'; error?: string }>(
+        '/api/llm/oauth/poll', { flow_id },
+      ),
+    complete: (flow_id: string, code: string) =>
+      postJSON<{ status: 'complete' | 'error'; error?: string }>(
+        '/api/llm/oauth/complete', { flow_id, code },
+      ),
+    cancel: (flow_id: string) =>
+      postJSON<{ ok: boolean; cancelled: boolean }>('/api/llm/oauth/cancel', { flow_id }),
+    disconnect: (provider: string) =>
+      postJSON<{ ok: boolean; removed?: boolean; revoked?: boolean; note?: string; error?: string }>(
+        '/api/llm/oauth/disconnect', { provider },
+      ),
+  },
   ttsVoices: (backend: string) =>
     get<{
       backend: string;

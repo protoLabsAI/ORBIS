@@ -18,6 +18,14 @@ export interface LLMPreset {
    * the local options or one of the two big cloud labels, not the
    * full 15-tile grid. */
   featured?: boolean;
+  /** How the provider authenticates. Default 'api_key' (the classic key
+   * field, gated by needsKey). 'oauth' renders a Sign-in flow instead —
+   * the backend holds the credential, the config carries no api_key. */
+  auth?: 'api_key' | 'oauth';
+  /** Value written to `llm.provider` in orbis.yaml. Routes the backend's
+   * adapter factory (voice/llm) — required for presets whose wire
+   * protocol isn't plain OpenAI-compat. */
+  provider?: string;
 }
 
 // Local-first + hosted + gateway presets. All OpenAI-protocol unless
@@ -52,6 +60,21 @@ export const LLM_PRESETS: LLMPreset[] = [
     url: 'http://127.0.0.1:8100/v1', model: 'Qwen/Qwen3.5-4B',
     needsKey: false,
     blurb: 'Your own vLLM server.',
+  },
+  // --- Subscription sign-in (no API key — run on a plan you already pay for) ---
+  {
+    id: 'claude_sub', label: 'Claude (subscription)',
+    url: 'https://api.anthropic.com', model: 'claude-sonnet-4-5',
+    needsKey: false, featured: true,
+    auth: 'oauth', provider: 'anthropic-oauth',
+    blurb: 'Use your Claude Pro/Max plan — sign in with your Anthropic account, no API key or per-token billing.',
+  },
+  {
+    id: 'codex_sub', label: 'ChatGPT / Codex',
+    url: 'https://chatgpt.com/backend-api/codex', model: '',
+    needsKey: false,
+    auth: 'oauth', provider: 'openai-codex',
+    blurb: 'Use your ChatGPT plan via the Codex backend. Unofficial: these tokens are meant for the Codex CLI — use at your own discretion.',
   },
   // --- Hosted cloud ---
   {
@@ -145,11 +168,20 @@ export const LLM_PRESETS: LLMPreset[] = [
  *      appended to a preset base URL
  *   3. model-name equality — last-ditch signal when URL tells us nothing
  */
-export function matchPreset(url: string, model: string): string {
+export function matchPreset(url: string, model: string, provider?: string): string {
   const normalized = (s: string) => s.trim().replace(/\/$/, '').toLowerCase();
   const nu = normalized(url);
   const nm = normalized(model);
 
+  // 0 — provider match. `llm.provider` names the backend adapter, so when a
+  // preset claims it (the OAuth presets do) it beats any URL heuristic —
+  // the Claude-subscription preset shares its host with the API-key one.
+  if (provider) {
+    const np = normalized(provider);
+    for (const p of LLM_PRESETS) {
+      if (p.provider && normalized(p.provider) === np) return p.id;
+    }
+  }
   // 1 — exact URL match.
   for (const p of LLM_PRESETS) {
     if (p.url && normalized(p.url) === nu) return p.id;

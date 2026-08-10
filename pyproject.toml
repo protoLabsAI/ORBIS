@@ -4,8 +4,9 @@ version = "0.2.166"
 description = "ORBIS — voice-first AI companion. Pipecat voice pipeline + orb visualization + delegate-to-your-agents routing."
 requires-python = ">=3.11"
 dependencies = [
-    # Pipecat + transports
-    "pipecat-ai[silero,openai]>=1.5,<2",
+    # Pipecat + transports. The `anthropic` extra backs the anthropic-oauth
+    # provider (Claude subscription via OAuth — voice/llm/anthropic_oauth.py).
+    "pipecat-ai[silero,openai,anthropic]>=1.5,<2",
     # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
     # but baseline; users who only want cloud STT/TTS can skip by
     # installing a slim variant (future work).

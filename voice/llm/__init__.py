@@ -106,6 +106,17 @@ def make_llm(
 
     resolved = (provider or _detect_provider(base_url) or "openai").lower()
 
+    # OAuth-subscription providers (protoAgent ADR 0097 port) — explicit
+    # `provider:` values only, never URL-detected. Imported lazily so the
+    # default gateway path never imports the anthropic SDK or touches a
+    # credential file.
+    if resolved == "anthropic-oauth":
+        from .anthropic_oauth import build_anthropic_oauth_llm
+        return build_anthropic_oauth_llm(model=model, settings=settings)
+    if resolved == "openai-codex":
+        from .openai_codex import build_codex_llm
+        return build_codex_llm(model=model, settings=settings)
+
     # MLX is opt-in only — picked explicitly via the wizard's "Built-in
     # (MLX)" preset (which sets a `mlx://...` URL) or via
     # `provider="mlx"` in the persona config. We deliberately don't
