@@ -609,6 +609,49 @@ def test_codex_adapter_applies_the_guard(codex_llm):
     assert params["tool_choice"] == "none"
 
 
+def test_signed_out_boot_does_not_kill_the_session():
+    """A missing/disconnected credential must not raise at pipeline build
+    (mirrors protoAgent #2475) — the per-turn resolve raises instead, which
+    the service maps to an ErrorFrame the announcer speaks."""
+    a = make_llm(
+        base_url="https://api.anthropic.com", model="claude-sonnet-4-5", api_key="",
+        settings=OpenAILLMService.Settings(model="claude-sonnet-4-5"),
+        provider="anthropic-oauth",
+    )
+    assert a._client.auth_token == "signed-out"
+    c = make_llm(
+        base_url="", model="gpt-5-codex", api_key="",
+        settings=OpenAILLMService.Settings(model="gpt-5-codex"),
+        provider="openai-codex",
+    )
+    assert c._client.api_key == "signed-out"
+    assert "ChatGPT-Account-Id" not in c._client.default_headers
+
+
+def test_codex_mid_session_sign_in_installs_account_header(codex_llm, monkeypatch):
+    """After a sign-in, the next turn must carry the fresh token AND the
+    account header a signed-out boot omitted."""
+    import asyncio
+
+    import voice.llm.openai_codex as mod
+
+    codex_llm._client._custom_headers.pop("ChatGPT-Account-Id", None)
+    monkeypatch.setattr(
+        mod, "resolve_codex_oauth", lambda: _codex_creds(token="tok-new", account="acct-new")
+    )
+
+    async def _no_call(context):
+        pass
+
+    monkeypatch.setattr(
+        "pipecat.services.openai.responses.llm.OpenAIResponsesHttpLLMService._process_context",
+        lambda self, context: _no_call(context),
+    )
+    asyncio.run(codex_llm._process_context(SimpleNamespace()))
+    assert codex_llm._client.api_key == "tok-new"
+    assert codex_llm._client._custom_headers["ChatGPT-Account-Id"] == "acct-new"
+
+
 def test_default_gateway_path_is_untouched():
     from voice.llm.guarded import GuardedOpenAILLMService
 

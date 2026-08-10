@@ -27,7 +27,7 @@ import subprocess
 from typing import Any
 
 from agent.tool_loop import apply_tool_loop_guard
-from voice.llm.oauth import resolve_anthropic_oauth
+from voice.llm.oauth import OAuthCredentialError, resolve_anthropic_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -150,10 +150,19 @@ if AnthropicLLMService is not None:
         adapter_class = _OAuthAnthropicAdapter
 
         def __init__(self, *, settings) -> None:
-            creds = resolve_anthropic_oauth()  # raises OAuthCredentialError when signed out
+            # Signed-out boot is deliberate (mirrors protoAgent #2475): a
+            # missing/disconnected credential must not kill voice-session
+            # setup. The per-request _refresh_auth raises instead, which the
+            # service maps to an ErrorFrame the LLM error announcer speaks —
+            # the orb stays alive and tells the user to sign in.
+            try:
+                token = resolve_anthropic_oauth().access_token
+            except OAuthCredentialError as e:
+                logger.warning(f"[anthropic-oauth] booting signed-out: {e}")
+                token = "signed-out"
             client = AsyncAnthropic(
                 api_key=None,  # x-api-key must never be sent — Bearer only
-                auth_token=creds.access_token,
+                auth_token=token,
                 default_headers=oauth_default_headers(),
             )
             # `betas=` on a request REPLACES the anthropic-beta default header.
@@ -190,7 +199,7 @@ def build_anthropic_oauth_llm(*, model: str, settings) -> Any:
 
     ``settings`` is the ``OpenAILLMService.Settings`` the pipeline already
     assembled — translated here so the factory call-site stays uniform.
-    Raises ``OAuthCredentialError`` when no Claude token is available, and a
+    Boots signed-out (the first turn announces the sign-in hint); raises a
     clear ``RuntimeError`` when the model id is a gateway alias or the
     ``anthropic`` extra isn't installed.
     """

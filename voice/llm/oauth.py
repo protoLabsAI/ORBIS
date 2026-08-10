@@ -319,6 +319,11 @@ def _codex_store_path() -> Path:
     return get_oauth_dir() / "codex-oauth.json"
 
 
+def codex_base_url() -> str:
+    """The Codex Responses backend base URL (env-overridable for testing)."""
+    return os.environ.get("ORBIS_CODEX_BASE_URL", "").strip().rstrip("/") or _CODEX_DEFAULT_BASE_URL
+
+
 def _b64url_json(segment: str) -> dict[str, Any]:
     """Decode one base64url JWT segment to a JSON object (no signature check —
     we only read the account-id claim, never trust it for auth)."""
@@ -482,8 +487,7 @@ def resolve_codex_oauth() -> CodexOAuthCreds:
     store = _codex_store_path()
 
     def _creds(tokens: dict[str, Any], access: str, source: str) -> CodexOAuthCreds:
-        base_url = os.environ.get("ORBIS_CODEX_BASE_URL", "").strip().rstrip("/") or _CODEX_DEFAULT_BASE_URL
-        return CodexOAuthCreds(access_token=access, account_id=_codex_account_id(tokens), base_url=base_url, source=source)
+        return CodexOAuthCreds(access_token=access, account_id=_codex_account_id(tokens), base_url=codex_base_url(), source=source)
 
     # Fast path: a warm, unexpired store read needs neither the lock nor a write.
     tokens = _read_codex_tokens(store)

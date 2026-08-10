@@ -32,7 +32,7 @@ from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEven
 from pipecat.services.openai.responses.llm import OpenAIResponsesHttpLLMService
 
 from agent.tool_loop import apply_tool_loop_guard
-from voice.llm.oauth import resolve_codex_oauth
+from voice.llm.oauth import OAuthCredentialError, codex_base_url, resolve_codex_oauth
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +45,31 @@ class CodexLLMService(OpenAIResponsesHttpLLMService):
     """Responses-API service pointed at the ChatGPT/Codex subscription backend."""
 
     def __init__(self, *, settings) -> None:
-        creds = resolve_codex_oauth()  # raises OAuthCredentialError when signed out
+        # Signed-out boot is deliberate (mirrors protoAgent #2475): a missing/
+        # disconnected credential must not kill voice-session setup. The
+        # per-turn resolve in _process_context raises instead, which the
+        # service maps to an ErrorFrame the LLM error announcer speaks.
+        try:
+            creds = resolve_codex_oauth()
+        except OAuthCredentialError as e:
+            logger.warning(f"[openai-codex] booting signed-out: {e}")
+            creds = None
         headers = {
             "OpenAI-Beta": "responses=experimental",
             "originator": _CODEX_ORIGINATOR,
             "User-Agent": _CODEX_USER_AGENT,
         }
-        if creds.account_id:
-            headers["ChatGPT-Account-Id"] = creds.account_id
-        else:
-            logger.warning(
-                "[openai-codex] no ChatGPT account id resolved from the token — the "
-                "backend may reject requests; sign in again to refresh credentials."
-            )
+        if creds is not None:
+            if creds.account_id:
+                headers["ChatGPT-Account-Id"] = creds.account_id
+            else:
+                logger.warning(
+                    "[openai-codex] no ChatGPT account id resolved from the token — the "
+                    "backend may reject requests; sign in again to refresh credentials."
+                )
         super().__init__(
-            api_key=creds.access_token,
-            base_url=creds.base_url,
+            api_key=creds.access_token if creds else "signed-out",
+            base_url=creds.base_url if creds else codex_base_url(),
             default_headers=headers,
             settings=settings,
         )
@@ -75,6 +84,10 @@ class CodexLLMService(OpenAIResponsesHttpLLMService):
         # spend the single-use refresh token.
         creds = await asyncio.to_thread(resolve_codex_oauth)
         self._client.api_key = creds.access_token
+        if creds.account_id:
+            # A signed-out boot has no account header baked in; a mid-session
+            # sign-in must install it (the backend rejects requests without it).
+            self._client._custom_headers["ChatGPT-Account-Id"] = creds.account_id
         self._guard_context = context
         try:
             await super()._process_context(context)
