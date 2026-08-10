@@ -1547,6 +1547,29 @@ def _reconfigure_live_llm(llm_cfg: dict, *, user_id: str | None = None) -> dict:
             "needs_restart": True,
             "error": "MLX runs in-process; restart to switch models",
         }
+    # OAuth subscription providers (anthropic-oauth / openai-codex) run on a
+    # different pipecat service class than the OpenAI-compat path, so crossing
+    # that boundary needs a pipeline rebuild — same contract as MLX. Within the
+    # same provider, a model change applies in place (both services read
+    # settings.model per request; auth is re-resolved per turn by the adapter).
+    _oauth_live = {
+        "anthropic-oauth": "AnthropicOAuthLLMService",
+        "openai-codex": "CodexLLMService",
+    }
+    provider = str(llm_cfg.get("provider") or "").strip().lower()
+    if provider in _oauth_live or name in _oauth_live.values():
+        if _oauth_live.get(provider) != name:
+            return {
+                "ok": False,
+                "needs_restart": True,
+                "error": "switching to or from a subscription provider needs a restart",
+            }
+        model = str(llm_cfg.get("model") or "").strip()
+        settings = getattr(svc, "_settings", None)
+        if model and settings is not None and hasattr(settings, "model"):
+            settings.model = model
+        logger.info(f"[llm] live reconfigure → {name} model={model} (oauth)")
+        return {"ok": True, "model": model, "url": llm_cfg.get("url")}
     model = str(llm_cfg.get("model") or "").strip()
     url = llm_cfg.get("url")
     api_key = llm_cfg.get("api_key") or ""

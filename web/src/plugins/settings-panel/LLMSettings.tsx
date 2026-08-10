@@ -7,6 +7,7 @@ import {
   matchPreset,
   type LLMPreset,
 } from '@/shared/llm/presets';
+import { OAuthSignIn, type OAuthProviderStatus } from '@/shared/llm/OAuthSignIn';
 
 type LLMPayload = NonNullable<OrbisConfig['llm']>;
 
@@ -46,6 +47,7 @@ export function LLMSettings() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showAllProviders, setShowAllProviders] = useState(false);
+  const [oauthStatus, setOauthStatus] = useState<OAuthProviderStatus | null>(null);
 
   // Tracks the "saved" → "idle" timer so we can cancel it on unmount and
   // avoid setState-after-unmount if the drawer closes mid-toast.
@@ -72,7 +74,7 @@ export function LLMSettings() {
         // Don't prefill the key field — show a placeholder instead so the
         // user can tell a key is saved without us rendering it in the DOM.
         setApiKey('');
-        setProvider(matchPreset(rawUrl, rawModel));
+        setProvider(matchPreset(rawUrl, rawModel, llm.provider));
       })
       .catch((e) => setError(String((e as Error).message ?? e)))
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -81,6 +83,9 @@ export function LLMSettings() {
 
   const current: LLMPreset =
     LLM_PRESETS.find((p) => p.id === provider) ?? LLM_PRESETS[LLM_PRESETS.length - 1];
+  // OAuth presets authenticate through the sign-in flow — fixed backend URL,
+  // no key field; model list + test resolve through the stored credential.
+  const isOauth = current.auth === 'oauth';
 
   const visiblePresets = (showAllProviders || !current.featured)
     ? LLM_PRESETS
@@ -106,10 +111,13 @@ export function LLMSettings() {
     setTest({ kind: 'idle' });
     setSave({ kind: 'idle' });
     setAvailableModels([]);
+    setOauthStatus(null);
   }, []);
 
   const onFetchModels = async () => {
-    if (!url.trim()) {
+    const preset = LLM_PRESETS.find((p) => p.id === provider);
+    const oauth = preset?.auth === 'oauth';
+    if (!oauth && !url.trim()) {
       setError('Need a URL to fetch models.');
       return;
     }
@@ -118,6 +126,7 @@ export function LLMSettings() {
       const r = await api.llmModels({
         url: url.trim(),
         api_key: apiKey.trim() || undefined,
+        provider: oauth ? preset?.provider : undefined,
       });
       if (r.ok) {
         setAvailableModels(r.models);
@@ -131,8 +140,8 @@ export function LLMSettings() {
   };
 
   const onTest = async () => {
-    if (!url.trim() || !model.trim()) {
-      setError('URL and model required to test.');
+    if (!model.trim() || (!isOauth && !url.trim())) {
+      setError(isOauth ? 'Pick a model to test.' : 'URL and model required to test.');
       return;
     }
     setError(null);
@@ -142,6 +151,7 @@ export function LLMSettings() {
         url: url.trim(),
         model: model.trim(),
         api_key: apiKey.trim() || undefined,
+        provider: isOauth ? current.provider : undefined,
       });
       if (r.ok) {
         setTest({ kind: 'ok', latency: r.latency_ms ?? 0 });
@@ -155,8 +165,12 @@ export function LLMSettings() {
 
   const onSave = async () => {
     setError(null);
-    if (!url.trim() || !model.trim()) {
-      setError('URL and model are both required.');
+    if (!model.trim() || (!isOauth && !url.trim())) {
+      setError(isOauth ? 'Pick a model first.' : 'URL and model are both required.');
+      return;
+    }
+    if (isOauth && !oauthStatus?.signed_in) {
+      setError(`Sign in to ${current.label} first.`);
       return;
     }
     setSave({ kind: 'saving' });
@@ -165,7 +179,11 @@ export function LLMSettings() {
       // would clear it, which they probably don't want when a key was
       // already set.
       const llm: LLMPayload = { url: url.trim(), model: model.trim() };
-      if (apiKey.trim()) llm.api_key = apiKey.trim();
+      if (!isOauth && apiKey.trim()) llm.api_key = apiKey.trim();
+      // `provider` routes the backend adapter for OAuth presets; explicitly
+      // null it otherwise so switching away from a subscription preset can't
+      // leave a stale `provider:` in orbis.yaml (merge keeps, null deletes).
+      (llm as Record<string, unknown>).provider = isOauth ? (current.provider ?? null) : null;
       const res = await api.putConfig({ llm });
       setSave({ kind: 'saved', live: res.llm_applied_live === true });
       if (apiKey.trim()) {
@@ -239,6 +257,16 @@ export function LLMSettings() {
         )}
 
         <div className="space-y-3">
+          {isOauth && current.provider && (
+            <OAuthSignIn
+              provider={current.provider}
+              onStatusChange={(s) => {
+                setOauthStatus(s);
+                setTest({ kind: 'idle' });
+              }}
+            />
+          )}
+          {!isOauth && (
           <div>
             <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1 block">
               URL
@@ -251,6 +279,7 @@ export function LLMSettings() {
               spellCheck={false}
             />
           </div>
+          )}
 
           <div>
             <div className="flex items-center justify-between mb-1">

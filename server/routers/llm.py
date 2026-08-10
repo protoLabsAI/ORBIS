@@ -19,6 +19,11 @@ from app import _resolve_skill_llm
 
 router = APIRouter()
 
+# Kept as a local literal (not imported from voice.llm.oauth) so this module —
+# imported at app startup — never pulls the OAuth/provider stack until a route
+# actually needs it.
+_NATIVE_OAUTH_PROVIDERS = frozenset({"anthropic-oauth", "openai-codex"})
+
 
 def _llm_probe_url_is_safe(url: str) -> bool:
     """SSRF guard for the unauth ``/api/llm/test`` + ``/api/llm/models``
@@ -80,6 +85,15 @@ async def llm_test(body: dict):
     are what's really being validated here, not their ORBIS auth.
     """
     from agent.llm_probe import ping_endpoint
+    provider = str(body.get("provider") or "").strip().lower()
+    if provider in _NATIVE_OAUTH_PROVIDERS:
+        # Subscription providers authenticate from the OAuth credential store
+        # and speak their own wire protocol — url/api_key don't apply.
+        from voice.llm.oauth_discovery import validate_oauth_connection
+        ok, error = await asyncio.to_thread(
+            validate_oauth_connection, provider, str(body.get("model") or "")
+        )
+        return {"ok": ok} if ok else {"ok": False, "error": error}
     url = str(body.get("url") or "")
     # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
     if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
@@ -111,6 +125,13 @@ async def llm_models(body: dict):
     Unauth, same rationale as /api/llm/test.
     """
     from agent.llm_probe import list_models
+    provider = str(body.get("provider") or "").strip().lower()
+    if provider in _NATIVE_OAUTH_PROVIDERS:
+        from voice.llm.oauth_discovery import list_provider_models
+        models, error = await asyncio.to_thread(list_provider_models, provider)
+        if models:
+            return {"ok": True, "models": models}
+        return {"ok": False, "models": [], "error": error or "not signed in"}
     url = str(body.get("url") or "")
     # Off-loop: the safety check resolves DNS (blocking getaddrinfo).
     if url and not await asyncio.to_thread(_llm_probe_url_is_safe, url):
@@ -372,3 +393,78 @@ async def llm_detect_local():
     """
     from agent.llm_probe import detect_local
     return await detect_local()
+
+
+# ── OAuth subscription providers (Claude / ChatGPT-Codex sign-in) ─────────────
+#
+# All unauth for the same reason as /api/llm/test: the setup wizard runs before
+# the owner API key exists, and what's being established here is the user's
+# *provider* credential. The flows only ever write ORBIS's own credential store
+# (never the vendor CLI's auth files) and the server binds loopback.
+
+
+@router.get("/api/llm/oauth/status")
+async def llm_oauth_status():
+    """Sign-in status for every OAuth subscription provider. Read-only."""
+    from voice.llm.oauth_discovery import all_oauth_status
+    return {"ok": True, "providers": await asyncio.to_thread(all_oauth_status)}
+
+
+@router.post("/api/llm/oauth/start")
+async def llm_oauth_start(body: dict):
+    """Begin a sign-in. Body: ``{provider}``. Codex returns a device
+    ``user_code`` + ``verification_uri`` to poll on; Claude returns an
+    ``authorize_url`` whose displayed code is pasted back to /complete."""
+    from voice.llm.oauth_login import OAuthLoginError, login_start
+    try:
+        flow = await asyncio.to_thread(login_start, str(body.get("provider") or ""))
+        return {"ok": True, **flow}
+    except OAuthLoginError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/api/llm/oauth/poll")
+async def llm_oauth_poll(body: dict):
+    """One device-flow poll tick (openai-codex). Body: ``{flow_id}``.
+    Returns ``{status: pending|complete|error}``; on complete the tokens
+    are already stored."""
+    from voice.llm.oauth_login import OAuthLoginError, codex_login_poll
+    try:
+        return await asyncio.to_thread(codex_login_poll, str(body.get("flow_id") or ""))
+    except OAuthLoginError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/api/llm/oauth/complete")
+async def llm_oauth_complete(body: dict):
+    """Finish the Claude PKCE flow with the pasted ``code#state``.
+    Body: ``{flow_id, code}``."""
+    from voice.llm.oauth_login import OAuthLoginError, anthropic_login_complete
+    try:
+        return await asyncio.to_thread(
+            anthropic_login_complete,
+            str(body.get("flow_id") or ""),
+            str(body.get("code") or ""),
+        )
+    except OAuthLoginError as e:
+        return {"status": "error", "error": str(e)}
+
+
+@router.post("/api/llm/oauth/cancel")
+async def llm_oauth_cancel(body: dict):
+    """Abandon an in-progress sign-in. Body: ``{flow_id}``. Idempotent."""
+    from voice.llm.oauth_login import cancel_login
+    return cancel_login(str(body.get("flow_id") or ""))
+
+
+@router.post("/api/llm/oauth/disconnect")
+async def llm_oauth_disconnect(body: dict):
+    """Disconnect a provider: best-effort revoke of ORBIS-minted tokens, delete
+    ORBIS's credential copy, and suppress auto-resolve until the next sign-in.
+    Never touches the vendor CLI's own auth files. Body: ``{provider}``."""
+    from voice.llm.oauth import OAuthCredentialError, disconnect
+    try:
+        res = await asyncio.to_thread(disconnect, str(body.get("provider") or ""))
+        return {"ok": True, **res.as_dict()}
+    except OAuthCredentialError as e:
+        return {"ok": False, "error": str(e)}

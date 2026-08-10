@@ -11,6 +11,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
 import { api, type StarterOrb } from '@/lib/api';
 import { LLM_PRESETS } from '@/shared/llm/presets';
+import { OAuthSignIn, type OAuthProviderStatus } from '@/shared/llm/OAuthSignIn';
 import { pullMlxModel, pullOllamaModel, pullVoiceModels } from '@/shared/llm/ollamaPull';
 import { applyPreset, setVariant } from '@/plugins/orb/broadcast';
 import {
@@ -487,8 +488,12 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [local, setLocal] = useState<LocalDetected>({});
   const [showAllProviders, setShowAllProviders] = useState(false);
+  const [oauthStatus, setOauthStatus] = useState<OAuthProviderStatus | null>(null);
 
   const current = LLM_PRESETS.find((p) => p.id === provider) ?? DEFAULT_LLM_PRESET;
+  // OAuth presets authenticate through the sign-in flow — the URL is fixed
+  // (it names the subscription backend) and there is no key field.
+  const isOauth = current.auth === 'oauth';
   // Show featured presets up front; reveal the long-tail OpenAI-compat
   // providers (Groq / DeepSeek / OpenRouter / etc.) only if the user
   // expands the accordion or has selected one of them already.
@@ -512,6 +517,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     setModel(preset.model);
     setTest({ kind: 'idle' });
     setAvailableModels([]);
+    setOauthStatus(null);
   };
 
   const applyDetected = (name: 'ollama' | 'lm_studio') => {
@@ -525,13 +531,17 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   };
 
   const onFetchModels = async () => {
-    if (!url.trim()) {
+    if (!isOauth && !url.trim()) {
       setError('Need a URL to fetch models.');
       return;
     }
     setError(null);
     try {
-      const r = await api.llmModels({ url: url.trim(), api_key: apiKey.trim() || undefined });
+      const r = await api.llmModels({
+        url: url.trim(),
+        api_key: apiKey.trim() || undefined,
+        provider: isOauth ? current.provider : undefined,
+      });
       if (r.ok) {
         setAvailableModels(r.models);
         if (!model && r.models[0]) setModel(r.models[0]);
@@ -548,8 +558,8 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
   // Ollama, and the on-device `mlx://` path (ping_endpoint validates the HF
   // repo for that one), so requiring it never blocks the local options.
   const runTest = async (): Promise<boolean> => {
-    if (!url.trim() || !model.trim()) {
-      setError('URL and model required to test.');
+    if (!model.trim() || (!isOauth && !url.trim())) {
+      setError(isOauth ? 'Pick a model to test.' : 'URL and model required to test.');
       return false;
     }
     setError(null);
@@ -559,6 +569,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
         url: url.trim(),
         model: model.trim(),
         api_key: apiKey.trim() || undefined,
+        provider: isOauth ? current.provider : undefined,
       });
       if (r.ok) {
         setTest({ kind: 'ok', latency: r.latency_ms ?? 0 });
@@ -576,11 +587,15 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
 
   const onContinue = async () => {
     setError(null);
-    if (!url.trim() || !model.trim()) {
-      setError('URL and model are both required.');
+    if (!model.trim() || (!isOauth && !url.trim())) {
+      setError(isOauth ? 'Pick a model first.' : 'URL and model are both required.');
       return;
     }
-    if (current.needsKey && !apiKey.trim() && provider !== 'custom') {
+    if (isOauth && !oauthStatus?.signed_in) {
+      setError(`Sign in to ${current.label} first.`);
+      return;
+    }
+    if (!isOauth && current.needsKey && !apiKey.trim() && provider !== 'custom') {
       setError(`${current.label} needs an API key.`);
       return;
     }
@@ -597,8 +612,12 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
     }
     setSaving(true);
     try {
-      const llm: Record<string, string> = { url: url.trim(), model: model.trim() };
-      if (apiKey.trim()) llm.api_key = apiKey.trim();
+      const llm: Record<string, string | null> = { url: url.trim(), model: model.trim() };
+      if (!isOauth && apiKey.trim()) llm.api_key = apiKey.trim();
+      // `provider` routes the backend adapter for OAuth presets; explicitly
+      // null it otherwise so switching away from a subscription preset can't
+      // leave a stale `provider:` in orbis.yaml (merge keeps, null deletes).
+      llm.provider = isOauth ? (current.provider ?? null) : null;
       await api.putConfig({ llm: llm as never });
       onNext();
     } catch (e) {
@@ -716,6 +735,16 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
       )}
 
       <div className="space-y-3">
+        {isOauth && current.provider && (
+          <OAuthSignIn
+            provider={current.provider}
+            onStatusChange={(s) => {
+              setOauthStatus(s);
+              setTest({ kind: 'idle' });
+            }}
+          />
+        )}
+        {!isOauth && (
         <div>
           <label className="text-xs uppercase tracking-wider text-fg-subtle mb-1.5 block">URL</label>
           <input
@@ -726,6 +755,7 @@ function LLMStep({ onNext, onBack }: { onNext: () => void; onBack: () => void })
             spellCheck={false}
           />
         </div>
+        )}
 
         <div>
           <div className="flex items-center justify-between mb-1.5">

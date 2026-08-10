@@ -113,6 +113,20 @@ def get_voiceprint_path() -> Path:
     return Path(override) if override else _default_data_dir() / "voiceprint.npy"
 
 
+def get_oauth_dir() -> Path:
+    """Absolute path to the OAuth credential-store directory — ORBIS's
+    own instance-scoped copies of subscription tokens (Claude / Codex,
+    see voice/llm/oauth.py) plus the explicit-disconnect marker. Pure
+    resolution — writers create the dir on demand with 0o600 files.
+
+    Resolution:
+      1. ``ORBIS_OAUTH_DIR`` if set (tests / explicit override)
+      2. ``<data_dir>/oauth``
+    """
+    override = os.environ.get("ORBIS_OAUTH_DIR")
+    return Path(override) if override else _default_data_dir() / "oauth"
+
+
 def get_cache_dir() -> Path:
     """Absolute path to the model-cache directory. Pure resolution —
     does not touch the filesystem. ``configure_hf_home`` creates the
