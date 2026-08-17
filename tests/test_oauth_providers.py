@@ -506,6 +506,48 @@ def test_oauth_status_reads_keychain(monkeypatch):
     st = discovery.oauth_status("anthropic-oauth")
     assert st.signed_in and st.source == "keychain"
     assert "max" in st.detail
+    # a CLI login is borrowed: alive only while THAT sign-in keeps being used
+    assert st.durability == "borrowed" and st.refreshable is False
+
+
+def test_oauth_status_publishes_credential_health(monkeypatch):
+    """expires_at / refreshable / durability (protoAgent #2564) — one green
+    boolean was covering three situations with very different lifetimes."""
+    # static: an env token — never refreshed, expiry not inspectable
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok")
+    st = discovery.oauth_status("anthropic-oauth")
+    assert (st.durability, st.refreshable, st.expires_at) == ("static", False, None)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN")
+
+    # managed: our own store — renews itself on use
+    oauth._write_anthropic_store(
+        {"access_token": "mine", "refresh_token": "rt", "expires_in": 3600}
+    )
+    st = discovery.oauth_status("anthropic-oauth")
+    assert st.durability == "managed" and st.refreshable is True
+    assert st.expires_at == pytest.approx(time.time() + 3600, abs=5)
+    oauth._anthropic_store_path().unlink()
+
+    # borrowed: Claude Code's credentials file, expiry carried through (ms → s)
+    oauth._CLAUDE_CREDS_FILE.write_text(json.dumps(
+        {"claudeAiOauth": {"accessToken": "cli", "expiresAt": (time.time() + 600) * 1000}}
+    ))
+    st = discovery.oauth_status("anthropic-oauth")
+    assert st.durability == "borrowed" and st.refreshable is False
+    assert st.expires_at == pytest.approx(time.time() + 600, abs=5)
+
+
+def test_codex_status_publishes_credential_health():
+    # borrowed: the CLI's own file, pre-bootstrap — expiry read from the JWT
+    _write_cli_codex(_codex_tokens(exp_in=1800))
+    st = discovery.oauth_status("openai-codex")
+    assert st.durability == "borrowed" and st.refreshable is True
+    assert st.expires_at == pytest.approx(time.time() + 1800, abs=5)
+    # managed: after bootstrap ORBIS owns (and refreshes) its own copy
+    oauth.resolve_codex_oauth()
+    st = discovery.oauth_status("openai-codex")
+    assert st.source == "instance_store"
+    assert st.durability == "managed" and st.refreshable is True
 
 
 # --- adapters --------------------------------------------------------------

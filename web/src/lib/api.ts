@@ -511,6 +511,7 @@ export const api = {
     status: () =>
       get<{ ok: boolean; providers: Array<{
         provider: string; signed_in: boolean; source: string; detail: string; hint: string;
+        expires_at: number | null; refreshable: boolean | null; durability: string;
       }> }>('/api/llm/oauth/status'),
     start: (provider: string) =>
       postJSON<{

@@ -22,6 +22,27 @@ export interface OAuthProviderStatus {
   source: string;
   detail: string;
   hint: string;
+  /** Credential health — null means genuinely unknown, not fine. */
+  expires_at: number | null;
+  refreshable: boolean | null;
+  /** "managed" (renews itself on use) | "borrowed" (a CLI's login) | "static" (env token). */
+  durability: string;
+}
+
+/** One muted line answering "will this sign-in fix itself?" — the green check
+ * alone read identically for a self-renewing store, a borrowed CLI login that
+ * dies when that sign-in goes stale, and a static env token. */
+function durabilityNote(status: OAuthProviderStatus): string | null {
+  switch (status.durability) {
+    case 'managed':
+      return 'Renews automatically.';
+    case 'borrowed':
+      return 'Borrowed from the CLI sign-in — stays alive only while that login is in use.';
+    case 'static':
+      return 'Static token — never refreshed; replace it when it expires.';
+    default:
+      return null;
+  }
 }
 
 type FlowState =
@@ -191,6 +212,9 @@ export function OAuthSignIn({
           <span className="text-success">✓ Signed in</span>
           {status.detail ? <span className="text-fg-muted"> — {status.detail}</span> : null}
         </div>
+        {durabilityNote(status) ? (
+          <div className="text-xs text-fg-muted">{durabilityNote(status)}</div>
+        ) : null}
         <Button variant="secondary" size="sm" onClick={onDisconnect} disabled={busy}>
           {busy ? 'Disconnecting…' : 'Disconnect'}
         </Button>
