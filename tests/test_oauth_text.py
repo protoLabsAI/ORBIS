@@ -33,6 +33,10 @@ def _isolated_stores(monkeypatch, tmp_path):
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setattr(oauth, "_CLAUDE_CREDS_FILE", tmp_path / "claude-creds.json")
     monkeypatch.setattr(oauth, "_CODEX_CLI_AUTH_FILE", tmp_path / "codex-auth.json")
+    monkeypatch.setattr(oauth, "_read_claude_keychain", lambda: None)
+    oauth._reset_resolve_cache()
+    yield
+    oauth._reset_resolve_cache()
 
 
 # A ReAct-shaped history: system, user, an assistant tool call, and two tool
@@ -120,7 +124,7 @@ def test_codex_payload_shapes():
 
 def test_anthropic_roundtrip(monkeypatch):
     monkeypatch.setattr(
-        oauth_text, "resolve_anthropic_oauth",
+        oauth_text, "resolve_anthropic_oauth_cached",
         lambda: oauth.AnthropicOAuthCreds(access_token="tok-live", source="env"),
     )
     client = OAuthTextClient("anthropic-oauth")

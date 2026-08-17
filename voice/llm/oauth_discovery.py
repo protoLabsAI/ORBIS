@@ -57,6 +57,14 @@ def _anthropic_status() -> OAuthStatus:
         plan = str(oauth.get("subscriptionType", "") or "").strip()
         detail = f"{plan} plan" if plan else "Claude Code credentials"
         return OAuthStatus("anthropic-oauth", True, "credentials_file", detail, "")
+    # macOS: the CLI's login lives in the Keychain, not the credentials file —
+    # status must see the same sources resolution does or they disagree.
+    doc = _oauth._read_claude_keychain()
+    oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
+    if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
+        plan = str(oauth.get("subscriptionType", "") or "").strip()
+        detail = f"{plan} plan" if plan else "Claude Code login"
+        return OAuthStatus("anthropic-oauth", True, "keychain", detail, "")
     return OAuthStatus("anthropic-oauth", False, "", "", _SIGN_IN_HINTS["anthropic-oauth"])
 
 

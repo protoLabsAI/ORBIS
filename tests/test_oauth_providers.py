@@ -30,15 +30,24 @@ import voice.llm.oauth_login as oauth_login
 from voice.llm import make_llm
 
 
+# The real Keychain reader, for the tests that exercise its parsing — the
+# autouse fixture below stubs the module attribute (the dev machine's REAL
+# Keychain holds a Claude Code login).
+_real_read_keychain = oauth._read_claude_keychain
+
+
 @pytest.fixture(autouse=True)
 def _isolated_stores(monkeypatch, tmp_path):
     """Every test gets its own oauth dir + fake vendor-CLI files, and never
-    sees the developer's real credentials."""
+    sees the developer's real credentials (incl. the macOS Keychain)."""
     monkeypatch.setenv("ORBIS_OAUTH_DIR", str(tmp_path / "oauth"))
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
     monkeypatch.setattr(oauth, "_CLAUDE_CREDS_FILE", tmp_path / "claude-creds.json")
     monkeypatch.setattr(oauth, "_CODEX_CLI_AUTH_FILE", tmp_path / "codex-auth.json")
+    monkeypatch.setattr(oauth, "_read_claude_keychain", lambda: None)
+    oauth._reset_resolve_cache()
     yield
+    oauth._reset_resolve_cache()
 
 
 def _jwt(claims: dict) -> str:
@@ -87,6 +96,60 @@ def test_anthropic_own_store_beats_credentials_file():
     oauth._CLAUDE_CREDS_FILE.write_text(json.dumps({"claudeAiOauth": {"accessToken": "cli"}}))
     oauth._write_anthropic_store({"access_token": "mine", "expires_in": 3600})
     assert oauth.resolve_anthropic_oauth().access_token == "mine"
+
+
+def test_anthropic_reads_keychain_when_file_absent(monkeypatch):
+    monkeypatch.setattr(
+        oauth, "_read_claude_keychain",
+        lambda: {"claudeAiOauth": {"accessToken": "tok-kc", "expiresAt": (time.time() + 600) * 1000}},
+    )
+    creds = oauth.resolve_anthropic_oauth()
+    assert creds.access_token == "tok-kc"
+    assert creds.source == "keychain"
+
+
+def test_anthropic_credentials_file_beats_keychain(monkeypatch):
+    oauth._CLAUDE_CREDS_FILE.write_text(json.dumps({"claudeAiOauth": {"accessToken": "tok-file"}}))
+    monkeypatch.setattr(
+        oauth, "_read_claude_keychain", lambda: {"claudeAiOauth": {"accessToken": "tok-kc"}}
+    )
+    assert oauth.resolve_anthropic_oauth().source == "credentials_file"
+
+
+def test_keychain_reader_parses_and_never_raises(monkeypatch):
+    monkeypatch.setattr(oauth.sys, "platform", "darwin")
+    doc = {"claudeAiOauth": {"accessToken": "kc"}}
+
+    def _run(cmd, **kw):
+        assert cmd[:2] == ["security", "find-generic-password"]
+        assert kw.get("timeout") == 5  # bounded — a locked keychain must not hang a turn
+        return SimpleNamespace(returncode=0, stdout=json.dumps(doc) + "\n")
+
+    monkeypatch.setattr(oauth.subprocess, "run", _run)
+    assert _real_read_keychain() == doc
+    # absent item (exit 44), broken output, and a raising subprocess → None, never a raise
+    monkeypatch.setattr(
+        oauth.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=44, stdout="")
+    )
+    assert _real_read_keychain() is None
+    monkeypatch.setattr(
+        oauth.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="not-json")
+    )
+    assert _real_read_keychain() is None
+
+    def _boom(*a, **k):
+        raise OSError("no security binary")
+
+    monkeypatch.setattr(oauth.subprocess, "run", _boom)
+    assert _real_read_keychain() is None
+
+
+def test_keychain_reader_is_darwin_only(monkeypatch):
+    monkeypatch.setattr(oauth.sys, "platform", "linux")
+    monkeypatch.setattr(
+        oauth.subprocess, "run", lambda *a, **k: pytest.fail("no subprocess off-macOS")
+    )
+    assert _real_read_keychain() is None
 
 
 def test_anthropic_store_refreshes_when_expiring(monkeypatch):
@@ -273,10 +336,60 @@ def test_disconnect_anthropic_suppresses_credentials_file():
         oauth.resolve_anthropic_oauth()
 
 
+def test_disconnect_anthropic_suppresses_keychain(monkeypatch):
+    monkeypatch.setattr(
+        oauth, "_read_claude_keychain", lambda: {"claudeAiOauth": {"accessToken": "tok-kc"}}
+    )
+    oauth.disconnect("anthropic-oauth")
+    with pytest.raises(oauth.OAuthCredentialError):
+        oauth.resolve_anthropic_oauth()
+
+
 def test_env_token_wins_over_disconnect(monkeypatch):
     oauth.disconnect("anthropic-oauth")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "explicit")
     assert oauth.resolve_anthropic_oauth().access_token == "explicit"
+
+
+# --- TTL-cached resolution --------------------------------------------------
+
+
+def test_cached_resolve_rereads_at_most_every_ttl(monkeypatch):
+    oauth._write_anthropic_store({"access_token": "mine", "expires_in": 3600})
+    calls = []
+    real = oauth.resolve_anthropic_oauth
+
+    def _counted():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(oauth, "resolve_anthropic_oauth", _counted)
+    assert oauth.resolve_anthropic_oauth_cached().access_token == "mine"
+    assert oauth.resolve_anthropic_oauth_cached().access_token == "mine"
+    assert len(calls) == 1  # second call within the TTL — no re-read
+    # force bypasses the cache — for when the cached token is the one that failed
+    oauth.resolve_anthropic_oauth_cached(force=True)
+    assert len(calls) == 2
+
+
+def test_signin_and_disconnect_reset_the_resolve_cache():
+    oauth._write_anthropic_store({"access_token": "first", "expires_in": 3600})
+    assert oauth.resolve_anthropic_oauth_cached().access_token == "first"
+    # a fresh sign-in (store write) is visible immediately, not after the TTL
+    oauth._write_anthropic_store({"access_token": "second", "expires_in": 3600})
+    assert oauth.resolve_anthropic_oauth_cached().access_token == "second"
+    # disconnect stops resolution immediately too
+    oauth.disconnect("anthropic-oauth")
+    with pytest.raises(oauth.OAuthCredentialError):
+        oauth.resolve_anthropic_oauth_cached()
+
+
+def test_cached_resolve_never_caches_a_failure():
+    with pytest.raises(oauth.OAuthCredentialError):
+        oauth.resolve_anthropic_oauth_cached()
+    # a sign-in right after must be picked up on the very next call
+    oauth._write_anthropic_store({"access_token": "late", "expires_in": 3600})
+    assert oauth.resolve_anthropic_oauth_cached().access_token == "late"
 
 
 # --- sign-in flows ---------------------------------------------------------
@@ -383,6 +496,18 @@ def test_oauth_status_reports_cli_codex_credentials():
     assert "…ct-123" in st.detail
 
 
+def test_oauth_status_reads_keychain(monkeypatch):
+    """Status must see the same sources resolution does — a Keychain-only login
+    (the normal macOS case) reads signed-in, not 'sign in below'."""
+    monkeypatch.setattr(
+        oauth, "_read_claude_keychain",
+        lambda: {"claudeAiOauth": {"accessToken": "tok-kc", "subscriptionType": "max"}},
+    )
+    st = discovery.oauth_status("anthropic-oauth")
+    assert st.signed_in and st.source == "keychain"
+    assert "max" in st.detail
+
+
 # --- adapters --------------------------------------------------------------
 
 from voice.llm.anthropic_oauth import (  # noqa: E402
@@ -411,7 +536,7 @@ def _codex_creds(**kw):
 def anthropic_llm(monkeypatch):
     import voice.llm.anthropic_oauth as mod
 
-    monkeypatch.setattr(mod, "resolve_anthropic_oauth", lambda: _anthropic_creds())
+    monkeypatch.setattr(mod, "resolve_anthropic_oauth_cached", lambda: _anthropic_creds())
     return make_llm(
         base_url="https://api.anthropic.com", model="claude-sonnet-4-5", api_key="",
         settings=OpenAILLMService.Settings(model="claude-sonnet-4-5", max_tokens=1024),
@@ -459,6 +584,25 @@ def test_anthropic_stream_path_merges_oauth_betas(anthropic_llm):
     assert out == "stream"
     assert set(OAUTH_BETAS) <= set(seen["betas"])
     assert "interleaved-thinking-2025-05-14" in seen["betas"]
+
+
+def test_refresh_auth_keeps_the_token_in_hand_on_transient_failure(anthropic_llm, monkeypatch):
+    import asyncio
+
+    import voice.llm.anthropic_oauth as mod
+
+    def _raise():
+        raise oauth.OAuthCredentialError("store hiccup", provider="anthropic-oauth")
+
+    monkeypatch.setattr(mod, "resolve_anthropic_oauth_cached", _raise)
+    # with a live token, a transient resolve failure must not kill the turn
+    anthropic_llm._client.auth_token = "tok-live"
+    asyncio.run(anthropic_llm._refresh_auth())
+    assert anthropic_llm._client.auth_token == "tok-live"
+    # signed-out there is nothing to keep — the raise IS the sign-in UX
+    anthropic_llm._client.auth_token = mod._SIGNED_OUT_SENTINEL
+    with pytest.raises(oauth.OAuthCredentialError):
+        asyncio.run(anthropic_llm._refresh_auth())
 
 
 def test_make_llm_dispatches_codex_responses(codex_llm):
@@ -519,7 +663,7 @@ def test_oauth_adapters_reject_gateway_aliases(monkeypatch):
     import voice.llm.anthropic_oauth as amod
     import voice.llm.openai_codex as cmod
 
-    monkeypatch.setattr(amod, "resolve_anthropic_oauth", lambda: _anthropic_creds())
+    monkeypatch.setattr(amod, "resolve_anthropic_oauth_cached", lambda: _anthropic_creds())
     monkeypatch.setattr(cmod, "resolve_codex_oauth", lambda: _codex_creds())
     for provider in ("anthropic-oauth", "openai-codex"):
         with pytest.raises(RuntimeError, match="not a"):
