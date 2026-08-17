@@ -6,9 +6,10 @@ protoAgent ADR 0097, including the #2440/#2441/#2461 lifecycle fixes). Their
 credential stories differ deliberately:
 
 - ``anthropic-oauth`` — READ Claude Code's own credentials live
-  (``$CLAUDE_CODE_OAUTH_TOKEN`` env, or ``~/.claude/.credentials.json``), or use
-  the token ORBIS's own in-app sign-in minted. Claude Code owns login *and*
-  refresh for its file; ORBIS refreshes only its own store. Anthropic's Agent
+  (``$CLAUDE_CODE_OAUTH_TOKEN`` env, ``~/.claude/.credentials.json``, or the
+  macOS Keychain item the CLI actually writes on darwin), or use the token
+  ORBIS's own in-app sign-in minted. Claude Code owns login *and* refresh for
+  its stores; ORBIS refreshes only its own. Anthropic's Agent
   SDK (2026-06) explicitly licenses a third-party app authenticating with a
   user's Claude subscription.
 
@@ -37,6 +38,8 @@ import binascii
 import json
 import logging
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -112,11 +115,13 @@ def _write_disconnected(providers: set[str]) -> None:
 
 def _mark_disconnected(provider: str) -> None:
     _write_disconnected(_disconnected_providers() | {provider})
+    _reset_resolve_cache()
 
 
 def clear_disconnected(provider: str) -> None:
     """An explicit in-app sign-in clears the disconnect intent for ``provider``."""
     _write_disconnected(_disconnected_providers() - {provider})
+    _reset_resolve_cache()
 
 
 class OAuthCredentialError(RuntimeError):
@@ -150,7 +155,7 @@ _ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 @dataclass(frozen=True)
 class AnthropicOAuthCreds:
     access_token: str
-    source: str  # "env" | "credentials_file" | "instance_store"
+    source: str  # "env" | "credentials_file" | "keychain" | "instance_store"
     expires_at: float | None = None  # epoch seconds, when known
 
 
@@ -165,6 +170,59 @@ def _read_claude_credentials_file() -> dict[str, Any] | None:
         log.debug("~/.claude/.credentials.json is not valid JSON")
         return None
     return doc if isinstance(doc, dict) else None
+
+
+def _read_claude_keychain() -> dict[str, Any] | None:
+    """Claude Code's macOS credential store (ported from protoAgent #2508).
+
+    On macOS the CLI writes its login to the Keychain (a "Claude Code-credentials"
+    generic password), NOT ``~/.claude/.credentials.json`` — so a file-only read
+    makes the borrow-the-CLI-login story silently dead on the one platform ORBIS
+    ships on. Same JSON document shape as the credentials file. Returns None
+    off-macOS, when the item is absent, or on any error — never raises, bounded
+    wait.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:  # absent item exits 44; a locked keychain errors similarly
+        return None
+    try:
+        doc = json.loads(proc.stdout.strip())
+    except json.JSONDecodeError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _creds_from_claude_doc(doc: dict[str, Any], source: str) -> AnthropicOAuthCreds | None:
+    """The ``claudeAiOauth`` document (credentials file / Keychain item) → creds.
+
+    None when the shape/token is missing. Expiry is advisory only — Claude Code
+    owns refresh for its own login; a dead token surfaces as a clean 401 the
+    caller maps to a relogin hint.
+    """
+    oauth = doc.get("claudeAiOauth")
+    if not isinstance(oauth, dict):
+        return None
+    token = str(oauth.get("accessToken", "") or "").strip()
+    if not token:
+        return None
+    exp_ms = oauth.get("expiresAt")
+    expires_at = float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None
+    if expires_at is not None and expires_at <= time.time() - _ANTHROPIC_REFRESH_SKEW_S:
+        log.info(
+            "[anthropic-oauth] Claude Code token looks expired (run any `claude` "
+            "command to refresh); trying it anyway",
+        )
+    return AnthropicOAuthCreds(access_token=token, source=source, expires_at=expires_at)
 
 
 def _anthropic_store_path() -> Path:
@@ -194,6 +252,7 @@ def _write_anthropic_store(tokens: dict[str, Any]) -> None:
         "expires_at": expires_at,
     }
     _atomic_write(_anthropic_store_path(), json.dumps(doc))
+    _reset_resolve_cache()  # a fresh sign-in/refresh must be picked up immediately
 
 
 def _now() -> float:
@@ -226,8 +285,9 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
 
     Order (explicit intent first): ``$CLAUDE_CODE_OAUTH_TOKEN`` env → ORBIS's own
     store from in-app sign-in (refreshed when expiring, under the store lock) →
-    ``~/.claude/.credentials.json``. Only our own store is refreshed here; Claude
-    Code owns refresh for its file, and a truly-dead CLI token surfaces as a
+    ``~/.claude/.credentials.json`` → the macOS Keychain item Claude Code writes
+    on darwin (same document shape). Only our own store is refreshed here; Claude
+    Code owns refresh for its stores, and a truly-dead CLI token surfaces as a
     clean 401 the caller maps to a relogin hint.
     """
     env_token = os.environ.get(_CLAUDE_ENV_VAR, "").strip()
@@ -273,20 +333,16 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
 
     doc = _read_claude_credentials_file()
     if doc:
-        oauth = doc.get("claudeAiOauth")
-        if isinstance(oauth, dict):
-            token = str(oauth.get("accessToken", "") or "").strip()
-            if token:
-                exp_ms = oauth.get("expiresAt")
-                expires_at = float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None
-                if expires_at is not None and expires_at <= time.time() - _ANTHROPIC_REFRESH_SKEW_S:
-                    log.info(
-                        "[anthropic-oauth] Claude Code token looks expired (run any `claude` "
-                        "command to refresh); trying it anyway",
-                    )
-                return AnthropicOAuthCreds(
-                    access_token=token, source="credentials_file", expires_at=expires_at
-                )
+        creds = _creds_from_claude_doc(doc, "credentials_file")
+        if creds:
+            return creds
+
+    # macOS: Claude Code's login lives in the Keychain, not the credentials file.
+    doc = _read_claude_keychain()
+    if doc:
+        creds = _creds_from_claude_doc(doc, "keychain")
+        if creds:
+            return creds
 
     raise OAuthCredentialError(
         "No Claude OAuth credential found. Sign in from the ORBIS settings, the Claude "
@@ -294,6 +350,39 @@ def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
         "(`claude setup-token`).",
         provider="anthropic-oauth",
     )
+
+
+# How long a resolved Claude credential is reused before the stores are re-read.
+# Resolution can shell out to the macOS Keychain (`security find-generic-password`),
+# and the voice pipeline + filler tier resolve before every request — a turn makes
+# several. A short TTL keeps the subprocess off the hot path while bounding
+# staleness to seconds (protoAgent #2604); sign-in, refresh, and disconnect reset
+# the cache so they apply immediately.
+_RESOLVE_TTL_S = 30.0
+_resolve_cache: tuple[AnthropicOAuthCreds, float] | None = None
+
+
+def resolve_anthropic_oauth_cached(*, force: bool = False) -> AnthropicOAuthCreds:
+    """:func:`resolve_anthropic_oauth`, re-run at most every :data:`_RESOLVE_TTL_S`.
+
+    ``force=True`` bypasses the cache — for when the credential in hand is
+    precisely the one that just failed. Failures are never cached: a signed-out
+    resolve raises every time until a sign-in lands.
+    """
+    global _resolve_cache
+    if not force and _resolve_cache is not None:
+        creds, at = _resolve_cache
+        if time.monotonic() - at < _RESOLVE_TTL_S:
+            return creds
+    creds = resolve_anthropic_oauth()
+    _resolve_cache = (creds, time.monotonic())
+    return creds
+
+
+def _reset_resolve_cache() -> None:
+    """Drop the cached credential (sign-in, refresh, disconnect, tests)."""
+    global _resolve_cache
+    _resolve_cache = None
 
 
 # ── OpenAI Codex — bootstrap-then-own, with refresh ───────────────────────────

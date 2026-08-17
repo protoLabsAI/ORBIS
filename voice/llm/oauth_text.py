@@ -32,8 +32,9 @@ from typing import Any
 
 from voice.llm.oauth import (
     NATIVE_OAUTH_PROVIDERS,
+    OAuthCredentialError,
     codex_base_url,
-    resolve_anthropic_oauth,
+    resolve_anthropic_oauth_cached,
     resolve_codex_oauth,
 )
 
@@ -261,13 +262,25 @@ class OAuthTextClient:
 
         from voice.llm.anthropic_oauth import OAUTH_BETAS, oauth_default_headers
 
-        creds = await asyncio.to_thread(resolve_anthropic_oauth)
+        # TTL-cached (resolution can shell out to the macOS Keychain); with a
+        # token already installed, a transient resolve failure keeps it rather
+        # than failing the call — same grace as the pipeline adapter.
+        try:
+            creds = await asyncio.to_thread(resolve_anthropic_oauth_cached)
+        except OAuthCredentialError:
+            if self._sdk_client is None or not getattr(self._sdk_client, "auth_token", None):
+                raise
+            logger.warning(
+                "[oauth-text] could not re-resolve the Claude token — keeping the one in hand"
+            )
+            creds = None
         if self._sdk_client is None:
             self._sdk_client = AsyncAnthropic(
                 api_key=None, auth_token=creds.access_token,
                 default_headers=oauth_default_headers(),
             )
-        self._sdk_client.auth_token = creds.access_token
+        if creds is not None:
+            self._sdk_client.auth_token = creds.access_token
 
         payload = anthropic_payload(messages, tools, tool_choice)
         resp = await self._sdk_client.beta.messages.create(

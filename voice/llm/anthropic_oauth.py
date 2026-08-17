@@ -16,7 +16,8 @@ Bearer auth is just ``auth_token=`` on the client. The identity line is injected
 in the adapter (the one seam both ``_process_context`` and ``run_inference``
 share), the beta list is merged on both request paths, and the access token is
 re-resolved before every request so a mid-session expiry refreshes transparently
-(the warm-path resolve is a lock-free file read).
+(TTL-cached in voice/llm/oauth.py — resolution can shell out to the macOS
+Keychain, so the warm path must stay off the hot path).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ import subprocess
 from typing import Any
 
 from agent.tool_loop import apply_tool_loop_guard
-from voice.llm.oauth import OAuthCredentialError, resolve_anthropic_oauth
+from voice.llm.oauth import OAuthCredentialError, resolve_anthropic_oauth_cached
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ OAUTH_BETAS = ["claude-code-20250219", "oauth-2025-04-20"]
 _CLAUDE_CODE_VERSION_FALLBACK = "2.1.74"
 # The first system block OAuth traffic must carry.
 CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+# The token a signed-out boot presents; _refresh_auth treats it as "no token in
+# hand" so a genuinely-signed-out resolve failure still raises into the
+# ErrorFrame path (the announcer tells the user to sign in).
+_SIGNED_OUT_SENTINEL = "signed-out"
 
 _version_cache: str | None = None
 
@@ -156,10 +161,10 @@ if AnthropicLLMService is not None:
             # service maps to an ErrorFrame the LLM error announcer speaks —
             # the orb stays alive and tells the user to sign in.
             try:
-                token = resolve_anthropic_oauth().access_token
+                token = resolve_anthropic_oauth_cached().access_token
             except OAuthCredentialError as e:
                 logger.warning(f"[anthropic-oauth] booting signed-out: {e}")
-                token = "signed-out"
+                token = _SIGNED_OUT_SENTINEL
             client = AsyncAnthropic(
                 api_key=None,  # x-api-key must never be sent — Bearer only
                 auth_token=token,
@@ -177,10 +182,23 @@ if AnthropicLLMService is not None:
             self._client.api_key = None  # the positional sentinel must not become x-api-key
 
         async def _refresh_auth(self) -> None:
-            """Re-resolve the access token before each request. Warm path is a
-            lock-free file read; an expiring token refreshes over HTTP in a
-            worker thread so the event loop never blocks."""
-            creds = await asyncio.to_thread(resolve_anthropic_oauth)
+            """Re-resolve the access token before each request (TTL-cached; an
+            expiring token refreshes over HTTP in a worker thread so the event
+            loop never blocks). With a real token already in hand, a resolve
+            failure keeps it rather than killing a live turn — this runs before
+            every request, so a transient store/Keychain hiccup must not take
+            the orb down (protoAgent #2604). Signed-out, the raise IS the UX:
+            ErrorFrame → the announcer says to sign in."""
+            try:
+                creds = await asyncio.to_thread(resolve_anthropic_oauth_cached)
+            except OAuthCredentialError:
+                if self._client.auth_token not in (None, "", _SIGNED_OUT_SENTINEL):
+                    logger.warning(
+                        "[anthropic-oauth] could not re-resolve the access token — "
+                        "keeping the one in hand"
+                    )
+                    return
+                raise
             self._client.auth_token = creds.access_token
 
         async def _create_message_stream(self, api_call, params):
