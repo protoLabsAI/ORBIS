@@ -530,19 +530,33 @@ def test_oauth_adapters_reject_gateway_aliases(monkeypatch):
             )
 
 
+IDENTITY_BLOCK = {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+
+
 def test_identity_prefix_shapes():
-    assert _with_identity_prefix("be an orb").startswith(CLAUDE_CODE_SYSTEM_PREFIX)
+    # a string system ALWAYS becomes a block list — exact identity block first
+    out = _with_identity_prefix("be an orb")
+    assert out == [IDENTITY_BLOCK, {"type": "text", "text": "be an orb"}]
     # idempotent
-    once = _with_identity_prefix("be an orb")
-    assert _with_identity_prefix(once) == once
-    # block-list shape (cache_control blocks survive, prefix leads)
+    assert _with_identity_prefix(out) == out
+    # the old merged-string shape is REPAIRED into exact blocks, not skipped
+    merged = f"{CLAUDE_CODE_SYSTEM_PREFIX}\n\npersona"
+    assert _with_identity_prefix(merged) == [IDENTITY_BLOCK, {"type": "text", "text": "persona"}]
+    # block-list shape (cache_control blocks survive, exact prefix block leads)
     blocks = [{"type": "text", "text": "persona", "cache_control": {"type": "ephemeral"}}]
     out = _with_identity_prefix(blocks)
-    assert out[0]["text"] == CLAUDE_CODE_SYSTEM_PREFIX
+    assert out[0] == IDENTITY_BLOCK
     assert out[1] is blocks[0]
-    assert _with_identity_prefix(_with_identity_prefix(blocks)) == out
-    # no system at all → identity IS the system
-    assert _with_identity_prefix(None) == CLAUDE_CODE_SYSTEM_PREFIX
+    assert _with_identity_prefix(out) == out
+    # a first block that STARTS with the line but carries more is split —
+    # cache_control moves to the remainder, never onto the one-line anchor
+    fat = [{"type": "text", "text": merged, "cache_control": {"type": "ephemeral"}}]
+    assert _with_identity_prefix(fat) == [
+        IDENTITY_BLOCK,
+        {"type": "text", "text": "persona", "cache_control": {"type": "ephemeral"}},
+    ]
+    # no system at all → the identity block IS the system
+    assert _with_identity_prefix(None) == [IDENTITY_BLOCK]
 
 
 # --- tool-loop guard wiring (mirrors test_tool_loop's backend section) ------
@@ -584,10 +598,8 @@ def test_anthropic_adapter_applies_the_guard(anthropic_llm):
     params = anthropic_llm.get_llm_adapter().get_llm_invocation_params(
         _stalled_context(), enable_prompt_caching=False, system_instruction=None
     )
-    # identity still leads the system prompt
-    system = params["system"]
-    text = system if isinstance(system, str) else system[0]["text"]
-    assert text.startswith(CLAUDE_CODE_SYSTEM_PREFIX)
+    # identity is the exact first system block
+    assert params["system"][0] == IDENTITY_BLOCK
     # 3 identical round-trips = STOP: note appended + tools off, natively
     last = params["messages"][-1]
     assert last["role"] == "user"

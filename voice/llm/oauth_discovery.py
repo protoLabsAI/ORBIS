@@ -205,8 +205,8 @@ def _validate_anthropic(model: str) -> tuple[bool, str]:
     import anthropic
 
     from voice.llm.anthropic_oauth import (
-        CLAUDE_CODE_SYSTEM_PREFIX,
         OAUTH_BETAS,
+        _with_identity_prefix,
         oauth_default_headers,
     )
 
@@ -217,7 +217,9 @@ def _validate_anthropic(model: str) -> tuple[bool, str]:
     resp = client.beta.messages.create(
         model=model,
         max_tokens=8,
-        system=CLAUDE_CODE_SYSTEM_PREFIX,
+        # The enforcement wants the identity line as an exact first BLOCK —
+        # no string shape is valid (protoAgent #2764).
+        system=_with_identity_prefix(None),
         messages=[{"role": "user", "content": "Reply with: ok"}],
         betas=list(OAUTH_BETAS),
     )
