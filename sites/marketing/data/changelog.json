@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.2.167",
+    "date": "2026-08-17",
+    "changes": [
+      "Anthropic OAuth and OpenAI Codex providers integrate into the LLM pipeline, supporting in-app sign-in, automatic token refresh, and credential lifecycle management.",
+      "Voice sessions boot signed-out rather than crashing if credentials are missing, allowing the system to prompt for sign-in instead of failing session setup.",
+      "Out-of-pipeline text agents, filler generation, and drift analysis now route through OAuth providers, preventing failures on subscription-only accounts.",
+      "The LLM test endpoint and model fetching respect the active OAuth provider, ensuring accurate diagnostics without manual API key entry.",
+      "OAuth status displays precise expiration timestamps, refresh capability, and credential durability, distinguishing between managed stores, borrowed CLI logins, and static environment tokens.",
+      "macOS Keychain acts as a fallback credential source for Claude Code, with a 30-second cache preventing subprocess overhead on high-frequency model calls.",
+      "Identity system prompts are strictly formatted to match Anthropic’s byte-exact requirements, resolving false rate-limit errors caused by malformed prefix blocks."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.167/ORBIS-0.2.167-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.166",
     "date": "2026-07-27",
     "changes": [
