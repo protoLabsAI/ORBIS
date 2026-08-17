@@ -68,9 +68,9 @@ HISTORY = [
 
 def test_anthropic_payload_shapes():
     p = anthropic_payload(HISTORY, TOOLS, "auto")
-    # system folds out of messages, identity line leads
-    assert p["system"].startswith(CLAUDE_CODE_SYSTEM_PREFIX)
-    assert "you are orb" in p["system"]
+    # system folds out of messages — exact identity block first, persona after
+    assert p["system"][0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
+    assert "you are orb" in p["system"][1]["text"]
     roles = [m["role"] for m in p["messages"]]
     assert roles == ["user", "assistant", "user"]
     # assistant turn carries text + both tool_use blocks with PARSED input
@@ -89,7 +89,7 @@ def test_anthropic_payload_shapes():
 
 def test_anthropic_payload_without_system_is_identity_only():
     p = anthropic_payload([{"role": "user", "content": "hi"}], None, None)
-    assert p["system"] == CLAUDE_CODE_SYSTEM_PREFIX
+    assert p["system"] == [{"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}]
     assert "tools" not in p
 
 
@@ -145,10 +145,10 @@ def test_anthropic_roundtrip(monkeypatch):
         temperature=0.7, tools=TOOLS, tool_choice="auto",
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
     ))
-    # request: fresh token installed, OAuth betas, identity-led system, no sampling knobs
+    # request: fresh token installed, OAuth betas, exact identity first block, no sampling knobs
     assert client._sdk_client.auth_token == "tok-live"
     assert seen["betas"] == list(OAUTH_BETAS)
-    assert seen["system"].startswith(CLAUDE_CODE_SYSTEM_PREFIX)
+    assert seen["system"][0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
     assert seen["max_tokens"] == 64
     assert "temperature" not in seen and "extra_body" not in seen
     # response: OpenAI-shaped duck the consumers can read

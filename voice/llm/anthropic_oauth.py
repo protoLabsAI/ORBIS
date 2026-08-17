@@ -8,8 +8,11 @@ like Claude Code's own traffic:
 - ``Authorization: Bearer <token>`` (not ``x-api-key``)
 - ``anthropic-beta: claude-code-20250219,oauth-2025-04-20``
 - ``User-Agent: claude-code/<version> (external, cli)``
-- a system prompt whose FIRST block is the Claude Code identity line — without
-  it, OAuth requests intermittently 500 / are refused
+- a system prompt whose FIRST block is EXACTLY the Claude Code identity line —
+  its own block, byte-equal, nothing appended. A merged "{line}\n\n{persona}"
+  string or a first block that merely starts with the line is refused with a
+  generic 429 ``rate_limit_error`` carrying no rate-limit headers, quota
+  untouched (protoAgent #2764, live-verified 2026-08-16)
 
 pipecat's ``AnthropicLLMService`` accepts a custom ``AsyncAnthropic`` client, so
 Bearer auth is just ``auth_token=`` on the client. The identity line is injected
@@ -76,25 +79,49 @@ def oauth_default_headers() -> dict[str, str]:
     }
 
 
-def _with_identity_prefix(system: Any) -> Any:
-    """Prepend the Claude Code identity line as the first system block.
+def _split_leading_prefix(text: str) -> str | None:
+    """The remainder of ``text`` after a leading identity line, or None if absent.
 
-    ``system`` is whatever the Anthropic adapter produced: a string, a list of
-    text blocks (possibly carrying ``cache_control``), or a not-given sentinel.
-    Idempotent — re-running never stacks the prefix.
+    Handles the merged shape the string branch used to emit
+    (``"{prefix}\\n\\n{rest}"``) so an already-"prefixed" prompt is REPAIRED into
+    the exact-block shape rather than skipped as done — a startswith idempotency
+    check is exactly what kept the old merged shape failing forever.
     """
+    stripped = text.lstrip()
+    if not stripped.startswith(CLAUDE_CODE_SYSTEM_PREFIX):
+        return None
+    return stripped[len(CLAUDE_CODE_SYSTEM_PREFIX) :].lstrip("\n")
+
+
+def _with_identity_prefix(system: Any) -> list[dict]:
+    """Make the identity line the system prompt's EXACT first block.
+
+    ``system`` is whatever the caller produced: a string, a list of text blocks
+    (possibly carrying ``cache_control``), or a not-given sentinel. The OAuth
+    enforcement matches the first block byte-exactly, so there is no valid
+    single-string or merged shape — the result is ALWAYS a block list whose
+    first block is the bare identity line. Idempotent.
+    """
+    prefix_block = {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
     if isinstance(system, str):
-        if system.lstrip().startswith(CLAUDE_CODE_SYSTEM_PREFIX):
-            return system
-        return f"{CLAUDE_CODE_SYSTEM_PREFIX}\n\n{system}" if system else CLAUDE_CODE_SYSTEM_PREFIX
-    if isinstance(system, list):
-        first = system[0] if system else None
+        rest = _split_leading_prefix(system)
+        body = system if rest is None else rest
+        return [prefix_block] + ([{"type": "text", "text": body}] if body else [])
+    if isinstance(system, list) and system:
+        first = system[0]
         first_text = first.get("text", "") if isinstance(first, dict) else ""
-        if first_text.lstrip().startswith(CLAUDE_CODE_SYSTEM_PREFIX):
-            return system
-        return [{"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}, *system]
-    # NOT_GIVEN / None — no system prompt at all: the identity line IS the system.
-    return CLAUDE_CODE_SYSTEM_PREFIX
+        if first_text == CLAUDE_CODE_SYSTEM_PREFIX:
+            return system  # already the exact shape
+        rest = _split_leading_prefix(first_text) if isinstance(first, dict) else None
+        if rest is not None:
+            # First block starts with the line but carries more — split it,
+            # keeping the block's other keys (e.g. cache_control) on the
+            # REMAINDER: a stable one-line block is a pointless cache anchor.
+            rest_block = {**first, "text": rest}
+            return [prefix_block, rest_block, *system[1:]] if rest else [prefix_block, *system[1:]]
+        return [prefix_block, *system]
+    # NOT_GIVEN / None / [] — no system prompt at all: the identity block IS the system.
+    return [prefix_block]
 
 
 try:

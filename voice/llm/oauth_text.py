@@ -61,8 +61,9 @@ def anthropic_payload(
 ) -> dict:
     """Translate OpenAI-shaped chat kwargs to Anthropic Messages kwargs.
 
-    system/developer messages fold into ``system`` (the identity line leads —
-    the OAuth routing requirement); assistant ``tool_calls`` become
+    system/developer messages fold into ``system`` as a block list whose exact
+    first block is the identity line (the OAuth routing requirement — a merged
+    string 429s); assistant ``tool_calls`` become
     ``tool_use`` blocks; ``tool`` results become ``tool_result`` blocks on a
     user turn, with consecutive results merged into one turn so the strict
     assistant/user alternation holds.
