@@ -447,12 +447,16 @@ def _codex_account_id(tokens: dict[str, Any]) -> str | None:
 
 def _jwt_is_expiring(access_token: str, skew_s: int) -> bool:
     """True if the access-token JWT's ``exp`` is within ``skew_s`` (or unreadable)."""
+    exp = _jwt_expiry(access_token)
+    return True if exp is None else exp <= time.time() + skew_s
+
+
+def _jwt_expiry(access_token: str) -> float | None:
+    """The access-token JWT's ``exp`` (epoch seconds), or None when unreadable."""
     if not isinstance(access_token, str) or access_token.count(".") != 2:
-        return True
+        return None
     exp = _b64url_json(access_token.split(".")[1]).get("exp")
-    if not isinstance(exp, (int, float)):
-        return True
-    return float(exp) <= time.time() + skew_s
+    return float(exp) if isinstance(exp, (int, float)) else None
 
 
 def _read_codex_tokens(path: Path) -> dict[str, Any] | None:

@@ -28,6 +28,16 @@ class OAuthStatus:
     source: str  # where the credential came from ("" when not signed in)
     detail: str  # human context: plan, account, expiry — "" when unknown
     hint: str  # the exact sign-in step when not signed in ("" when signed in)
+    # Credential health (ported from protoAgent #2564) — the "how long until
+    # this stops working, and will it fix itself?" fields the prose above
+    # can't answer. None means genuinely unknown, not fine.
+    expires_at: float | None = None  # epoch seconds
+    refreshable: bool | None = None  # will it renew on use, from here?
+    # One boolean was covering three situations with very different lifetimes:
+    #   managed   — our store, our refresh token: renews itself on use
+    #   borrowed  — a vendor CLI's login: alive only while THAT sign-in is used
+    #   static    — an env token: never refreshed, never inspectable
+    durability: str = ""  # "" when signed out
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -43,28 +53,41 @@ _SIGN_IN_HINTS = {
 
 def _anthropic_status() -> OAuthStatus:
     if os.environ.get(_oauth._CLAUDE_ENV_VAR, "").strip():
-        return OAuthStatus("anthropic-oauth", True, "env", "CLAUDE_CODE_OAUTH_TOKEN", "")
+        return OAuthStatus(
+            "anthropic-oauth", True, "env", "CLAUDE_CODE_OAUTH_TOKEN", "",
+            refreshable=False, durability="static",
+        )
     store = _oauth._read_anthropic_store()
     if store:
         exp = store.get("expires_at")
         detail = "Claude subscription (signed in here)"
         if isinstance(exp, (int, float)) and exp <= _oauth._now():
             detail += " (token will refresh on use)"
-        return OAuthStatus("anthropic-oauth", True, "instance_store", detail, "")
-    doc = _oauth._read_claude_credentials_file()
-    oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
-    if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
-        plan = str(oauth.get("subscriptionType", "") or "").strip()
-        detail = f"{plan} plan" if plan else "Claude Code credentials"
-        return OAuthStatus("anthropic-oauth", True, "credentials_file", detail, "")
+        return OAuthStatus(
+            "anthropic-oauth", True, "instance_store", detail, "",
+            expires_at=float(exp) if isinstance(exp, (int, float)) else None,
+            refreshable=bool(str(store.get("refresh_token", "") or "")),
+            durability="managed",
+        )
     # macOS: the CLI's login lives in the Keychain, not the credentials file —
     # status must see the same sources resolution does or they disagree.
-    doc = _oauth._read_claude_keychain()
-    oauth = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
-    if isinstance(oauth, dict) and str(oauth.get("accessToken", "") or "").strip():
-        plan = str(oauth.get("subscriptionType", "") or "").strip()
-        detail = f"{plan} plan" if plan else "Claude Code login"
-        return OAuthStatus("anthropic-oauth", True, "keychain", detail, "")
+    for reader, source, fallback in (
+        (_oauth._read_claude_credentials_file, "credentials_file", "Claude Code credentials"),
+        (_oauth._read_claude_keychain, "keychain", "Claude Code login"),
+    ):
+        doc = reader()
+        claude = (doc or {}).get("claudeAiOauth") if isinstance(doc, dict) else None
+        if isinstance(claude, dict) and str(claude.get("accessToken", "") or "").strip():
+            plan = str(claude.get("subscriptionType", "") or "").strip()
+            exp_ms = claude.get("expiresAt")
+            return OAuthStatus(
+                "anthropic-oauth", True, source, f"{plan} plan" if plan else fallback, "",
+                expires_at=float(exp_ms) / 1000.0 if isinstance(exp_ms, (int, float)) else None,
+                # Claude Code owns refresh for its login — from here it only
+                # stays alive while that sign-in keeps being used.
+                refreshable=False,
+                durability="borrowed",
+            )
     return OAuthStatus("anthropic-oauth", False, "", "", _SIGN_IN_HINTS["anthropic-oauth"])
 
 
@@ -79,13 +102,20 @@ def _codex_status() -> OAuthStatus:
     if not tokens or not str(tokens.get("access_token", "") or "").strip():
         return OAuthStatus("openai-codex", False, "", "", _SIGN_IN_HINTS["openai-codex"])
     acct = _oauth._codex_account_id(tokens)
-    expiring = _oauth._jwt_is_expiring(str(tokens["access_token"]), 0)
+    access = str(tokens["access_token"])
     detail = "ChatGPT account" + (f" …{acct[-6:]}" if acct else "")
-    if expiring:
+    if _oauth._jwt_is_expiring(access, 0):
         # Token itself is stale but the refresh token is likely still good —
         # we'll refresh transparently on first use, so still "signed in".
         detail += " (token will refresh on use)"
-    return OAuthStatus("openai-codex", True, source, detail, "")
+    return OAuthStatus(
+        "openai-codex", True, source, detail, "",
+        expires_at=_oauth._jwt_expiry(access),
+        refreshable=bool(str(tokens.get("refresh_token", "") or "")),
+        # Our copy renews itself on use; the CLI's file is only read for the
+        # one-time bootstrap — until then it's the CLI's login, not ours.
+        durability="managed" if source == "instance_store" else "borrowed",
+    )
 
 
 def oauth_status(provider: str) -> OAuthStatus:
