@@ -142,6 +142,22 @@ def register_a2a_routes(
         text = _extract_text_from_any(body)
         caller = body.get("from") or body.get("agent") or "unknown"
         logger.info("[a2a/callback] from=%s text_len=%d", caller, len(text))
+        # Correlate with the durable outbound-task registry (#678 Phase B):
+        # a push-back carrying a task id marks that handle terminal, so the
+        # reconnect requery won't re-deliver what this callback delivers now.
+        task_id, task_state = _extract_task_meta(body)
+        if task_id:
+            try:
+                from agent.delegate_adapters import _outbound_dal
+                dal = _outbound_dal()
+                if dal is not None and dal.update(
+                    task_id, status=task_state or "completed", result=text or None
+                ):
+                    logger.info(
+                        "[a2a/callback] task %s → %s", task_id, task_state or "completed"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[a2a/callback] outbound correlate failed: %s", e)
         if not text:
             return {"ok": True, "delivered": False, "reason": "no text"}
         delivery = delivery_provider() if delivery_provider else None
@@ -164,6 +180,27 @@ def register_a2a_routes(
         "[a2a] a2a-sdk 1.0 routes mounted (JSON-RPC /a2a, card "
         "/.well-known/agent-card.json, 4 extensions declared, push-back receiver)"
     )
+
+
+def _extract_task_meta(body: dict) -> tuple[str | None, str | None]:
+    """Best-effort (task_id, state) from a push-back body. Handles the A2A
+    task envelope ({result: {id, status: {state}}}), a bare task, and flat
+    {taskId} shapes — permissive like _extract_text_from_any below."""
+    result = body.get("result") if isinstance(body.get("result"), dict) else body
+    task_id = None
+    state = None
+    if isinstance(result, dict):
+        tid = result.get("id") or result.get("taskId")
+        if isinstance(tid, str) and tid:
+            task_id = tid
+        status = result.get("status")
+        if isinstance(status, dict) and isinstance(status.get("state"), str):
+            state = status["state"].removeprefix("TASK_STATE_").lower().replace("_", "-")
+    if task_id is None:
+        tid = body.get("taskId")
+        if isinstance(tid, str) and tid:
+            task_id = tid
+    return task_id, state
 
 
 def _extract_text_from_any(body: dict) -> str:
