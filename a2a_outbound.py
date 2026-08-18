@@ -142,6 +142,24 @@ def _status_text(task: Task) -> str:
     return _status_message_text(task.status)
 
 
+async def _stamp_trace_headers(request: httpx.Request) -> None:
+    """httpx request hook: attach the live Langfuse trace headers to every
+    outbound A2A request, so a delegate that joins caller traces (protoAgent
+    does) nests its work under ORBIS's turn.
+
+    Per-request rather than baked into the client because the client is
+    cached across turns while the trace changes every turn. Reading the
+    active trace here is task-local (ContextVar-backed), so concurrent
+    dispatches can't cross-stamp each other. No-ops (empty dict) when
+    tracing is off or no trace is live — never fails a request."""
+    try:
+        from agent import tracing
+        for k, v in tracing.propagation_headers(trace=tracing.active_trace()).items():
+            request.headers[k] = v
+    except Exception:  # noqa: BLE001 — observability must never break dispatch
+        pass
+
+
 class A2AClient:
     """Sticky-context outbound client for one delegate (wraps an SDK ``Client``)."""
 
@@ -183,7 +201,11 @@ class A2AClient:
         if self._client is not None:
             return self._client
         if self._httpx is None:
-            self._httpx = httpx.AsyncClient(headers=self.headers, timeout=60.0)
+            self._httpx = httpx.AsyncClient(
+                headers=self.headers,
+                timeout=60.0,
+                event_hooks={"request": [_stamp_trace_headers]},
+            )
         factory = ClientFactory(ClientConfig(httpx_client=self._httpx, streaming=True))
         # The card lives at the origin's /.well-known/agent-card.json, not under
         # the /a2a JSON-RPC path — discover from card_origin (delegate.origin()),
