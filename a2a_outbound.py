@@ -377,6 +377,39 @@ class A2AClient:
             input_required=input_required,
         )
 
+    async def get_task(self, task_id: str, *, timeout: float = 15.0) -> A2AResult:
+        """Requery a previously dispatched task by id (A2A ``tasks/get``).
+
+        The reconnect/restart requery of the durable outbound-task registry
+        (#678 Phase B) uses this to recover results that completed while no
+        session was live. Raises ``A2ADispatchError`` on any failure — the
+        caller decides whether that means retry-later or expire."""
+        from a2a.types import GetTaskRequest
+
+        try:
+            client = await self._ensure_client()
+        except Exception as exc:  # noqa: BLE001
+            raise A2ADispatchError(f"{self.name}: client init failed: {exc}") from exc
+        try:
+            task = await asyncio.wait_for(
+                _maybe_await(client.get_task(GetTaskRequest(id=task_id))),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise A2ADispatchError(
+                f"{self.name}: tasks/get timed out after {timeout:.0f}s"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise A2ADispatchError(f"{self.name}: tasks/get failed: {exc}") from exc
+        state = task.status.state
+        return A2AResult(
+            text=_task_answer_text(task),
+            state=_STATE_NAMES.get(state),
+            task_id=task.id or task_id,
+            context_id=task.context_id or None,
+            input_required=state == TaskState.TASK_STATE_INPUT_REQUIRED,
+        )
+
     async def close(self) -> None:
         if self._httpx is not None and self._owns_httpx:
             await self._httpx.aclose()

@@ -1161,6 +1161,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         if stashed:
             logger.info(f"[replay] replaying {len(stashed)} stashed delivery(ies)")
             await delivery.replay_stashed(stashed)
+        # Requery live outbound task handles (#678 Phase B): work delegated
+        # to A2A agents that finished (or hit input-required) while no
+        # session was live gets delivered now instead of being lost.
+        # Fire-and-forget — must never delay the connect path.
+        from agent.outbound_requery import requery_outbound
+        asyncio.create_task(requery_outbound(_DELEGATES, delivery))
 
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnect(_t, _c):
