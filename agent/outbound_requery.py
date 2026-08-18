@@ -75,6 +75,23 @@ async def requery_outbound(registry: Any, delivery: Any | None = None) -> int:
         if res.is_terminal or res.input_required:
             resolved += 1
             logger.info(f"[outbound] {task_id}: {name} → {state}")
+            if res.input_required:
+                # Re-arm answer routing so the next transcript feeds the
+                # task (#681) — the question is (re)spoken just below.
+                try:
+                    import time as _time
+                    from agent.user_state import (
+                        DelegateAsk,
+                        register_delegate_ask_on_active,
+                    )
+                    register_delegate_ask_on_active(DelegateAsk(
+                        task_id=task_id, delegate=name,
+                        question=res.text or "",
+                        context_id=res.context_id,
+                        created_at=_time.time(),
+                    ))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[outbound] {task_id}: ask re-arm failed: {e}")
             if delivery is not None and res.text:
                 lead = (
                     f"{name} needs input on the task from earlier — "

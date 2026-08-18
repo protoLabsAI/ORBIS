@@ -41,6 +41,33 @@ class PendingAsk:
     future: asyncio.Future
 
 
+# How long a delegate's input-required question stays armed for answer
+# routing. After this the ask expires and transcripts flow normally — the
+# task itself stays input-required in the outbound registry, so the requery
+# re-surfaces the question (and re-arms routing) on the next connect.
+DELEGATE_ASK_TTL_SECS = 180.0
+
+
+@dataclass
+class DelegateAsk:
+    """A delegated A2A task parked on ``input-required`` — the remote agent
+    asked a question and the user's next transcript should answer THE TASK,
+    not start a fresh LLM turn (#681, protoAgent-brain epic #678).
+
+    Unlike the single-slot orchestrate ``PendingAsk``, these are keyed by
+    task id — concurrent delegations can each park a question without
+    clobbering; answers resolve oldest-first."""
+    task_id: str
+    delegate: str
+    question: str
+    context_id: str | None
+    created_at: float  # time.time() — for the TTL
+
+    def expired(self, *, now: float | None = None) -> bool:
+        return ((now if now is not None else time.time()) - self.created_at
+                > DELEGATE_ASK_TTL_SECS)
+
+
 @dataclass
 class UserState:
     """Everything that used to be a module-level singleton, per user."""
@@ -58,6 +85,10 @@ class UserState:
 
     # HITL: a background orchestration run waiting on the user's spoken answer.
     pending_ask: PendingAsk | None = None
+
+    # HITL: delegated A2A tasks parked on input-required, keyed by task id
+    # (insertion-ordered → answers resolve oldest-first). See DelegateAsk.
+    pending_delegate_asks: dict[str, DelegateAsk] = field(default_factory=dict)
 
     # Hot-swap: re-render the live session's delegate roster (fleet-block prompt
     # + delegate_to/orchestrate tool schema) from the current registry, so a
@@ -157,3 +188,44 @@ def clear_pending_ask() -> None:
     """Drop any pending ask (e.g. on timeout / run teardown)."""
     for st in _REGISTRY.all():
         st.pending_ask = None
+
+
+# --- delegate input-required asks (keyed by task id, oldest-first) ----------
+
+
+def register_delegate_ask_on_active(ask: DelegateAsk) -> bool:
+    """Arm answer routing for a delegate's input-required question on the
+    active session. Re-registering the same task id refreshes the question +
+    TTL. Returns False when no session is live (the question still lives in
+    the outbound-task registry; the reconnect requery re-arms it)."""
+    for st in _REGISTRY.active_sessions():
+        st.pending_delegate_asks.pop(ask.task_id, None)  # re-insert at the end
+        st.pending_delegate_asks[ask.task_id] = ask
+        logger.info(
+            f"[delegate-ask] armed task={ask.task_id} delegate={ask.delegate} "
+            f"question={ask.question[:80]!r}"
+        )
+        return True
+    return False
+
+
+def take_oldest_delegate_ask() -> DelegateAsk | None:
+    """Pop the oldest non-expired delegate ask (None if none). Expired asks
+    are pruned as they're encountered — after the TTL a transcript must flow
+    to the LLM normally, not answer a question from minutes ago."""
+    now = time.time()
+    for st in _REGISTRY.all():
+        while st.pending_delegate_asks:
+            task_id = next(iter(st.pending_delegate_asks))
+            ask = st.pending_delegate_asks.pop(task_id)
+            if ask.expired(now=now):
+                logger.info(f"[delegate-ask] expired task={task_id}; dropping")
+                continue
+            return ask
+    return None
+
+
+def clear_delegate_ask(task_id: str) -> None:
+    """Drop the ask for ``task_id`` everywhere (e.g. the task was cancelled)."""
+    for st in _REGISTRY.all():
+        st.pending_delegate_asks.pop(task_id, None)
