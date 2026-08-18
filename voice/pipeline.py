@@ -27,6 +27,7 @@ from agent.llm_error_announcer import LLMErrorAnnouncer
 from agent.micro_ack import MicroAckInjector, opening_ack_line
 from agent.orchestrate import run_orchestration
 from agent.prosody import ProsodyTagStripper
+from agent.reasoning_gate import ReasoningTagGate
 from agent.spoken_logger import SpokenTextLogger
 from agent.session_store import drain_stashed_deliveries, save_summary, stash_delivery
 from agent.stall_watchdog import StallWatchdog
@@ -766,6 +767,13 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
             tts_backend=tts_backend,
         ),
+        # Last-line defense against speaking leaked chain-of-thought: strips
+        # <think>/<scratch_pad>-style blocks from streamed LLM text, even
+        # split across chunks. Backends disable reasoning at the source
+        # (#645), but a new model/gateway combo can leak it into the content
+        # channel — spoken aloud that's our worst failure mode. Must sit
+        # BEFORE SpokenTextLogger so [speak] records what was actually said.
+        ReasoningTagGate(),
         # Observability chokepoint — logs every utterance headed into TTS
         # (streamed LLM narration + out-of-band fillers / opening acks /
         # DeliveryController / stall recovery) so no speech path is unlogged.
