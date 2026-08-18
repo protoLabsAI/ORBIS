@@ -346,14 +346,33 @@ class A2AAdapter(DelegateAdapter):
                 logger.warning(f"[delegates] outbound record failed: {e}")
 
         def _finalize(res) -> None:
-            dal = _outbound_dal()
-            if dal is None or not getattr(res, "task_id", None):
+            if not getattr(res, "task_id", None):
                 return
-            try:
-                dal.update(res.task_id, status=res.state or "completed",
-                           result=res.text or None)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"[delegates] outbound finalize failed: {e}")
+            dal = _outbound_dal()
+            if dal is not None:
+                try:
+                    dal.update(res.task_id, status=res.state or "completed",
+                               result=res.text or None)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[delegates] outbound finalize failed: {e}")
+            # input-required: the delegate asked a question. The LLM narrates
+            # it (it's the returned text); arm answer routing so the user's
+            # NEXT transcript feeds the task, not a fresh LLM turn (#681).
+            if getattr(res, "input_required", False):
+                try:
+                    from agent.user_state import (
+                        DelegateAsk,
+                        register_delegate_ask_on_active,
+                    )
+                    register_delegate_ask_on_active(DelegateAsk(
+                        task_id=res.task_id,
+                        delegate=delegate.name,
+                        question=res.text or "",
+                        context_id=res.context_id,
+                        created_at=time.time(),
+                    ))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[delegates] ask registration failed: {e}")
 
         env_stream = os.environ.get("A2A_STREAM", "0") == "1"
         want_status = progress_callback is not None and await client.supports_streaming()

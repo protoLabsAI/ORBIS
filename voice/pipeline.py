@@ -713,10 +713,11 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # swallows the turn and closes the listening window (CTRL_STOP_LISTENING
         # → Rust mutes; wake mode re-arms). Normal turns pass through.
         CancelGate(transport),
-        # AskGate — if a background orchestration run is paused on ask_user,
+        # AskGate — if something is waiting on the user's answer (a paused
+        # orchestration run, or an A2A task parked on input-required — #681),
         # the next user transcript answers it (and is swallowed) instead of
         # starting a fresh turn. No-op when nothing's waiting.
-        AskGate(),
+        AskGate(registry=_DELEGATES),
         user_agg,
         # Adaptive barge-in gate — suppresses VAD-triggered interrupts
         # that resolve within the grace window as coughs / backchannels /
