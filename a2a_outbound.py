@@ -224,6 +224,8 @@ class A2AClient:
         timeout: float = 120.0,
         progress_callback: ProgressCallback | None = None,
         on_task: Callable[[str, str | None], None] | None = None,
+        push_notification_url: str | None = None,
+        push_notification_token: str | None = None,
         **_ignored,
     ) -> A2AResult:
         ctx = context_id or self._context_id
@@ -242,6 +244,17 @@ class A2AClient:
         if task_id:
             msg.task_id = task_id
         request = SendMessageRequest(message=msg)
+        # Push-back registration (#695). These params were accepted-and-
+        # ignored since the a2a-sdk migration (**_ignored swallowed them);
+        # now they attach a TaskPushNotificationConfig so the remote POSTs
+        # terminal updates to our /a2a/callback — which is how a result
+        # survives a dispatch timeout: the task keeps running server-side,
+        # completes later, and the push correlates by task id (#689).
+        if push_notification_url:
+            pc = request.configuration.task_push_notification_config
+            pc.url = push_notification_url
+            if push_notification_token:
+                pc.token = push_notification_token
 
         # We may get either shape, negotiated per-card by the SDK:
         #  - streaming: task(submitted) → status_update(working)* →
