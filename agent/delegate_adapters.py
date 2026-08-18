@@ -69,6 +69,32 @@ def _outbound_dal():
     except Exception:  # noqa: BLE001
         return None
 
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _default_push_url(delegate: Delegate) -> str | None:
+    """Default push-back URL for a LOOPBACK A2A delegate (#695): ORBIS's own
+    ``/a2a/callback`` on the port the server actually bound
+    (``ORBIS_BOUND_PORT``, stamped before uvicorn starts). A local hub can
+    always reach 127.0.0.1 — the old "cloud can't reach loopback" deferral
+    doesn't apply — so its long-running tasks push their terminal update
+    back and the result survives a dispatch timeout. Non-loopback delegates
+    get None: our callback binds loopback, so advertising it to a tailnet
+    peer would just make their push sender fail (tailnet push returns with
+    the tailnet bind work)."""
+    from urllib.parse import urlparse
+
+    try:
+        if urlparse(delegate.url).hostname not in _LOOPBACK_HOSTS:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    port = os.environ.get("ORBIS_BOUND_PORT", "")
+    if not port or port == "0":
+        return None
+    return f"http://127.0.0.1:{port}/a2a/callback"
+
 logger = logging.getLogger(__name__)
 
 
@@ -374,6 +400,11 @@ class A2AAdapter(DelegateAdapter):
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"[delegates] ask registration failed: {e}")
 
+        # Explicit push URL (env A2A_PUSH_URL via the pipeline) wins;
+        # otherwise loopback delegates default to our own callback (#695).
+        if push_notification_url is None:
+            push_notification_url = _default_push_url(delegate)
+
         env_stream = os.environ.get("A2A_STREAM", "0") == "1"
         want_status = progress_callback is not None and await client.supports_streaming()
         if env_stream or want_status:
@@ -405,6 +436,8 @@ class A2AAdapter(DelegateAdapter):
         res = await client.send(
             query, context_id=ctx, prefer_stream=False, timeout=timeout,
             on_task=_record_task,
+            push_notification_url=push_notification_url,
+            push_notification_token=push_notification_token,
         )
         _finalize(res)
         return res.text
