@@ -5,11 +5,8 @@ recovery line instead of a silent turn."""
 from __future__ import annotations
 
 import pytest
-from pipecat.frames.frames import (
-    FunctionCallInProgressFrame,
-    LLMTextFrame,
-    TTSSpeakFrame,
-)
+from pipecat.frames.frames import LLMTextFrame, TTSSpeakFrame
+from pipecat.services.llm_service import LLMService
 from pipecat.services.openai.llm import OpenAILLMService
 
 from voice.llm.guarded import _RECOVERY_LINE, GuardedOpenAILLMService
@@ -55,17 +52,41 @@ async def test_text_output_suppresses_recovery(service, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_function_call_suppresses_recovery(service, monkeypatch):
+    # The REAL tool-call shape (live-QA 2026-08-18 false-fire): a tool-only
+    # completion pushes no text frames — the base service awaits
+    # run_function_calls at the end of the stream, and the actual InProgress
+    # frames are broadcast from a created task AFTER _process_context
+    # returns. Detection must ride run_function_calls, not frames.
+    ran: list = []
+
+    async def _base_run(self, function_calls):
+        ran.append(function_calls)  # don't execute — no registry in tests
+
+    monkeypatch.setattr(LLMService, "run_function_calls", _base_run)
+
     async def _calls(self, context):
-        await service.push_frame(
-            FunctionCallInProgressFrame(
-                function_name="delegate_to", tool_call_id="t1",
-                arguments="{}", cancel_on_interruption=False,
-            )
-        )
+        await service.run_function_calls([object()])  # one parsed tool call
 
     monkeypatch.setattr(OpenAILLMService, "_process_context", _calls)
     await service._process_context(object())
+    assert ran, "super().run_function_calls must still execute"
     assert not [f for f in service._pushed if isinstance(f, TTSSpeakFrame)]
+
+
+@pytest.mark.asyncio
+async def test_empty_function_call_list_does_not_count(service, monkeypatch):
+    async def _base_run(self, function_calls):
+        pass
+
+    monkeypatch.setattr(LLMService, "run_function_calls", _base_run)
+
+    async def _calls(self, context):
+        await service.run_function_calls([])  # base no-ops on empty too
+
+    monkeypatch.setattr(OpenAILLMService, "_process_context", _calls)
+    await service._process_context(object())
+    speaks = [f for f in service._pushed if isinstance(f, TTSSpeakFrame)]
+    assert len(speaks) == 1  # still a dead turn
 
 
 @pytest.mark.asyncio
