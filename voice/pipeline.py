@@ -981,6 +981,19 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         logger.info(f"[filler:opening] {line!r}")
         await task.queue_frame(TTSSpeakFrame(line, append_to_context=False))
 
+    # Session tool log — what the agent actually DID, persisted into the
+    # sessions.tool_calls column at disconnect (the column existed since
+    # schema v1 but was always written empty, so no trajectory record
+    # existed anywhere). Appended by the function-call lifecycle handlers
+    # below; bounded so a days-long session can't grow it unbounded.
+    tool_log: list[dict] = []
+    _TOOL_LOG_MAX = 500
+
+    def _tool_log_append(entry: dict) -> None:
+        tool_log.append(entry)
+        if len(tool_log) > _TOOL_LOG_MAX:
+            del tool_log[: len(tool_log) - _TOOL_LOG_MAX]
+
     # Attach the function-call lifecycle handlers to every failover member
     # (orbis-1dd): the progress-narration loop + tool-call SSE events must
     # fire whichever LLM is active. On the default single-LLM path this is
@@ -1000,6 +1013,19 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             _METRICS["tool_calls_total"] += len(names)
             for n in names:
                 _METRICS["tool_calls_by_name"][n] = _METRICS["tool_calls_by_name"].get(n, 0) + 1
+            for fc in function_calls:
+                _args = getattr(fc, "arguments", None)
+                if not isinstance(_args, str):
+                    try:
+                        import json as _json
+                        _args = _json.dumps(_args, ensure_ascii=False)
+                    except Exception:  # noqa: BLE001
+                        _args = str(_args)
+                _tool_log_append({
+                    "t": time.time(),
+                    "name": fc.function_name,
+                    "args": (_args or "")[:300],
+                })
             first = function_calls[0] if function_calls else None
             args = getattr(first, "arguments", None) if first is not None else None
             await sse_bus.publish(
@@ -1064,6 +1090,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         @_member.event_handler("on_function_calls_cancelled")
         async def _on_tool_cancel(_svc, _calls):
             logger.info("[filler] tool cancelled (barge-in)")
+            _tool_log_append({"t": time.time(), "event": "cancelled"})
             _cancel_progress(publish_end=False)
             # Invalidate any in-flight async delegate/orchestrate result so an
             # answer the user just talked over isn't narrated out of context
@@ -1143,8 +1170,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             sid = state.active_session_id or ""
             if sid:
                 # Extract user+assistant turns + derive final_output from
-                # the live context. Tool calls aren't timing-instrumented
-                # here; leave tool_calls empty for now.
+                # the live context.
                 final_output: str | None = None
                 for msg in context.messages:
                     role = msg.get("role")
@@ -1158,7 +1184,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                     started_at=None,  # DAL fills _now() when None
                     ended_at=None,
                     messages=turns_for_analyzer,
-                    tool_calls=[],
+                    tool_calls=tool_log,
                     final_output=final_output,
                     trace_id=getattr(turn_tracer, "trace_id", None),
                 )
