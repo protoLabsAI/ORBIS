@@ -930,6 +930,8 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         completion or barge-in via `_cancel_progress`."""
         try:
             _fs = user_state.filler_settings
+            if _fs.verbosity is Verbosity.SILENT:
+                return  # silent persona: no check-ins, no yield line
             _fg = _filler_gen_for(user_id)
             await asyncio.sleep(_fs.progress_first_secs)
             tick = 0
@@ -947,26 +949,43 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                     input={"tool": tool_name, "tick": tick},
                 ) as sp:
                     try:
-                        phrase = await _fg.progress(
-                            tool_name=tool_name,
-                            user_utterance=_last_user_text(),
-                            tts_backend=tts_backend,
-                            # Ground the spoken check-in in the delegate's real
-                            # latest streamed status (visual rail) when we have
-                            # one — paraphrased, not narrated verbatim.
-                            status_hint=delivery.last_progress,
+                        phrase = await asyncio.wait_for(
+                            _fg.progress(
+                                tool_name=tool_name,
+                                user_utterance=_last_user_text(),
+                                tts_backend=tts_backend,
+                                # Ground the spoken check-in in the delegate's
+                                # real latest streamed status (visual rail) when
+                                # we have one — paraphrased, not narrated
+                                # verbatim.
+                                status_hint=delivery.last_progress,
+                            ),
+                            timeout=presence.PROGRESS_GEN_TIMEOUT_SECS,
                         )
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         sp.update(level="WARNING", status_message=str(e))
-                        logger.warning(f"[filler:progress] generator raised: {e}")
+                        logger.warning(f"[filler:progress] generator failed: {e}")
                         phrase = None
-                    if phrase:
-                        sp.update(output=phrase)
-                        logger.info(f"[filler:progress] {phrase!r}")
-                        await task.queue_frame(
-                            TTSSpeakFrame(phrase, append_to_context=False)
+                    if not phrase:
+                        # The presence SLA is a hard promise: a micro-LLM
+                        # outage/hang must not reintroduce dead air (live-QA
+                        # 2026-08-18: a flaky gateway silenced every check-in
+                        # AND the yield behind them). Canned fallback speaks
+                        # instead.
+                        phrase = presence.progress_fallback_line(
+                            tool_name,
+                            pick=random.randrange(
+                                len(presence.PROGRESS_FALLBACK_LINES)
+                            ),
                         )
-                        spoken += 1
+                    sp.update(output=phrase)
+                    logger.info(f"[filler:progress] {phrase!r}")
+                    await task.queue_frame(
+                        TTSSpeakFrame(phrase, append_to_context=False)
+                    )
+                    spoken += 1
                 tick += 1
                 # Yield after N spoken check-ins (#678 Phase B, push-only
                 # doctrine): tell the user ONCE that the work is long and

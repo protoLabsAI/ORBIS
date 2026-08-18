@@ -148,3 +148,14 @@ def test_orchestrate_is_classified_slow():
     # tool there is). It is the multi-step loop — it must be SLOW.
     assert latency_for("orchestrate") is Latency.SLOW
     assert "orchestrate" in ASYNC_TOOL_NAMES
+
+
+def test_progress_fallback_lines_cover_generator_failure():
+    # Live-QA 2026-08-18: a flaky gateway made every micro-LLM progress line
+    # return None, silencing the whole loop AND the yield gated behind it.
+    # The canned fallback pool is the hard floor — every entry must name who
+    # we're waiting on and be non-empty.
+    from agent.presence import PROGRESS_FALLBACK_LINES, progress_fallback_line
+    for i in range(len(PROGRESS_FALLBACK_LINES)):
+        line = progress_fallback_line("hub", pick=i)
+        assert line and "hub" in line
