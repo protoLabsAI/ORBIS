@@ -201,6 +201,7 @@ class A2AClient:
         prefer_stream: bool = False,
         timeout: float = 120.0,
         progress_callback: ProgressCallback | None = None,
+        on_task: Callable[[str, str | None], None] | None = None,
         **_ignored,
     ) -> A2AResult:
         ctx = context_id or self._context_id
@@ -235,6 +236,20 @@ class A2AClient:
         resolved_ctx = ctx
         last_progress_at = 0.0
         last_progress = ""
+        task_seen = False
+
+        def _notify_task() -> None:
+            # Fire on_task ONCE, at the first event carrying a task id —
+            # that's ~tens of ms in, so the caller's durable handle exists
+            # long before a timeout, barge-in, or crash could lose the work.
+            nonlocal task_seen
+            if task_seen or on_task is None or not resolved_task_id:
+                return
+            task_seen = True
+            try:
+                on_task(resolved_task_id, resolved_ctx)
+            except Exception:  # noqa: BLE001 — recording must never break a turn
+                logger.warning(f"[a2a/{self.name}] on_task hook failed", exc_info=True)
 
         async def _consume() -> None:
             nonlocal final_task, artifact_text, status_text, message_text
@@ -254,6 +269,7 @@ class A2AClient:
                         resolved_task_id = resp.task.id
                     if resp.task.context_id:
                         resolved_ctx = resp.task.context_id
+                    _notify_task()
                 elif which == "status_update":
                     su = resp.status_update
                     final_state = su.status.state
@@ -261,6 +277,7 @@ class A2AClient:
                         resolved_task_id = su.task_id
                     if su.context_id:
                         resolved_ctx = su.context_id
+                    _notify_task()
                     msg_text = _status_message_text(su.status)
                     logger.info(
                         f"[a2a/{self.name}] ←#{ev_count} status_update "
