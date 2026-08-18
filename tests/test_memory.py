@@ -207,7 +207,8 @@ def test_v3_to_v4_migration_baselines_fts(tmp_path: Path):
     row = m2.conn.execute(
         "SELECT value FROM _meta WHERE key = 'schema_version'"
     ).fetchone()
-    assert int(row["value"]) == 4
+    from memory.db import SCHEMA_VERSION
+    assert int(row["value"]) == SCHEMA_VERSION
     # The legacy row, absent from FTS before the upgrade, is now indexed…
     assert any(h["session_id"] == "s-legacy" for h in m2.sessions.search("pangolin"))
     # …and a post-upgrade write stays in sync incrementally (trigger path).

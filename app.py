@@ -202,6 +202,14 @@ def get_memory() -> Memory:
     return _memory
 
 
+# Let the delegate adapters record durable outbound task handles (#678
+# Phase B) without importing app (cycle). Provider-injection keeps
+# adapter tests app-free.
+from agent.delegate_adapters import set_memory_provider  # noqa: E402
+
+set_memory_provider(get_memory)
+
+
 def _active_skill(user_id: str = "default"):
     """Return the single ORBIS persona. Name kept (Skill-shaped signature)
     until all call sites are renamed to `get_active_persona()` directly."""

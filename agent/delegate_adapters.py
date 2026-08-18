@@ -42,6 +42,33 @@ from acp import AcpClient, AcpError
 from agent.delegates import Delegate, DelegateError, _expand_env
 from agent.tracing import active_trace, propagation_headers
 
+# --- durable outbound-task registry seam (#678 Phase B) ---------------------
+# app.py injects its get_memory at boot; adapters record dispatched A2A task
+# handles through it. A provider-callable (not a direct app import) keeps this
+# module import-cycle-free and lets tests run without the app. When unset
+# (tests, standalone use) recording silently no-ops — durability is
+# best-effort and must never break a dispatch.
+_MEMORY_PROVIDER: Any = None
+
+
+def set_memory_provider(provider: Any) -> None:
+    """Install the ``get_memory``-style callable used to record outbound
+    task handles. Called once from app boot."""
+    global _MEMORY_PROVIDER
+    _MEMORY_PROVIDER = provider
+
+
+def _outbound_dal():
+    """The OutboundTasksDAL, or None when no provider is wired / memory
+    is unavailable. Never raises."""
+    if _MEMORY_PROVIDER is None:
+        return None
+    try:
+        mem = _MEMORY_PROVIDER()
+        return getattr(mem, "outbound", None)
+    except Exception:  # noqa: BLE001
+        return None
+
 logger = logging.getLogger(__name__)
 
 
@@ -297,6 +324,37 @@ class A2AAdapter(DelegateAdapter):
         ``_dispatch_a2a``; see that history for the hang-guard rationale.)"""
         client = self.client_for(delegate)
         ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
+
+        # Durable handle (#678 Phase B): record at FIRST task sighting
+        # (~tens of ms in, via on_task) so a timeout / barge-in / crash
+        # after dispatch never loses the work; finalize to the terminal
+        # state when the round-trip completes. Both no-op without a wired
+        # memory provider.
+        def _record_task(tid: str, tctx: str | None) -> None:
+            dal = _outbound_dal()
+            if dal is None:
+                return
+            try:
+                from auth.context import current_session_id
+                sid = current_session_id.get() or None
+            except Exception:  # noqa: BLE001
+                sid = None
+            try:
+                dal.record(task_id=tid, delegate=delegate.name, query=query,
+                           origin_session=sid, context_id=tctx)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[delegates] outbound record failed: {e}")
+
+        def _finalize(res) -> None:
+            dal = _outbound_dal()
+            if dal is None or not getattr(res, "task_id", None):
+                return
+            try:
+                dal.update(res.task_id, status=res.state or "completed",
+                           result=res.text or None)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[delegates] outbound finalize failed: {e}")
+
         env_stream = os.environ.get("A2A_STREAM", "0") == "1"
         want_status = progress_callback is not None and await client.supports_streaming()
         if env_stream or want_status:
@@ -314,9 +372,11 @@ class A2AAdapter(DelegateAdapter):
                         timeout=timeout,
                         push_notification_url=push_notification_url,
                         push_notification_token=push_notification_token,
+                        on_task=_record_task,
                     ),
                     timeout=bound,
                 )
+                _finalize(res)
                 return res.text
             except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
                 logger.warning(
@@ -324,8 +384,10 @@ class A2AAdapter(DelegateAdapter):
                     "falling back to message/send"
                 )
         res = await client.send(
-            query, context_id=ctx, prefer_stream=False, timeout=timeout
+            query, context_id=ctx, prefer_stream=False, timeout=timeout,
+            on_task=_record_task,
         )
+        _finalize(res)
         return res.text
 
     async def probe(self, delegate: Delegate, *, timeout: float = 8.0) -> dict:

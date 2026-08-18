@@ -59,7 +59,7 @@ def __getattr__(name: str) -> str:
     if name == "DEFAULT_DB_PATH":
         return _default_db_path()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +213,29 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_pending
     ON reminders(fire_at) WHERE fired_at IS NULL;
+
+-- Outbound tasks — durable handles for work delegated to A2A agents
+-- (protoAgent hub + fleet). Recorded the moment the remote agent's first
+-- task event arrives (so a timeout / barge-in / restart never loses the
+-- handle), updated to the terminal state when the round-trip completes.
+-- Non-terminal rows are requeried via A2A tasks/get on reconnect. Part
+-- of the protoAgent-brain epic (#678 Phase B): before this table an
+-- in-flight delegation was an anonymous coroutine and disconnect or
+-- barge-in destroyed the work with no record.
+CREATE TABLE IF NOT EXISTS outbound_tasks (
+    task_id        TEXT PRIMARY KEY,     -- remote agent's task id
+    delegate       TEXT NOT NULL,        -- delegate name (registry key)
+    context_id     TEXT,                 -- A2A context for follow-ups
+    origin_session TEXT,                 -- ORBIS session that dispatched
+    query          TEXT NOT NULL,        -- goal preview (truncated)
+    status         TEXT NOT NULL DEFAULT 'submitted',
+    result         TEXT,                 -- answer preview once terminal
+    created_at     TEXT NOT NULL,        -- UTC ISO8601
+    updated_at     TEXT NOT NULL         -- UTC ISO8601
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_pending
+    ON outbound_tasks(status)
+    WHERE status IN ('submitted', 'working', 'input-required');
 """
 
 
@@ -324,6 +347,10 @@ def _migrate(conn: sqlite3.Connection, *, from_version: int, to_version: int) ->
         # incremental. No-op on a fresh/empty install.
         conn.execute("INSERT INTO sessions_fts(sessions_fts) VALUES('rebuild')")
 
+    # v5 adds the outbound_tasks table (#678 Phase B). Created by the
+    # IF NOT EXISTS in _SCHEMA above — no ALTER needed; the branch exists
+    # so the version history stays explicit.
+
 
 # ---------------------------------------------------------------------------
 # Memory façade — groups the per-table DALs. Importers hold one Memory
@@ -343,12 +370,14 @@ class Memory:
         from .personality import PersonalityDAL
         from .inbox import InboxDAL
         from .reminders import RemindersDAL
+        from .outbound import OutboundTasksDAL
 
         self.sessions = SessionsDAL(self.conn)
         self.facts = FactsDAL(self.conn)
         self.personality = PersonalityDAL(self.conn)
         self.inbox = InboxDAL(self.conn)
         self.reminders = RemindersDAL(self.conn)
+        self.outbound = OutboundTasksDAL(self.conn)
 
     def close(self) -> None:
         self.conn.close()
