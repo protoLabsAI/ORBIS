@@ -324,19 +324,58 @@ async def dispatch(
 ) -> str:
     """Dispatch ``query`` to ``delegate``, routing to the registered adapter.
     The per-type dispatch bodies (a2a streaming/sync, openai chat-completion,
-    acp stdio) live in ``agent/delegate_adapters.py``."""
+    acp stdio) live in ``agent/delegate_adapters.py``.
+
+    This is the single observability chokepoint for outbound delegation:
+    every dispatch gets a ``delegate.<type>`` span, success/failure
+    counters, and a greppable ``[delegate]`` latency line — the audited
+    gap was that a 90s hand-off returning junk was only diagnosable by
+    vibes."""
+    from agent import metrics, tracing
     from agent.delegate_adapters import get_adapter
     try:
         adapter = get_adapter(delegate.type)
     except KeyError:
         raise DelegateError(f"unknown delegate type {delegate.type!r}")
-    return await adapter.dispatch(
-        delegate, query,
-        timeout=timeout,
-        progress_callback=progress_callback,
-        push_notification_url=push_notification_url,
-        push_notification_token=push_notification_token,
-    )
+    t0 = time.monotonic()
+    with tracing.span(
+        f"delegate.{delegate.type}",
+        as_type="tool",
+        input={"delegate": delegate.name, "query": query[:400]},
+    ) as sp:
+        try:
+            result = await adapter.dispatch(
+                delegate, query,
+                timeout=timeout,
+                progress_callback=progress_callback,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )
+        except Exception as e:
+            secs = time.monotonic() - t0
+            metrics.inc("delegate_dispatch_errors")
+            metrics.inc(f"delegate_dispatch_errors:{delegate.name}")
+            logger.warning(
+                f"[delegate] dispatch name={delegate.name} type={delegate.type} "
+                f"ok=false secs={secs:.2f} error={type(e).__name__}: {e}"
+            )
+            try:
+                sp.update(level="ERROR", status_message=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        secs = time.monotonic() - t0
+        metrics.inc("delegate_dispatch_total")
+        metrics.inc(f"delegate_dispatch_total:{delegate.name}")
+        logger.info(
+            f"[delegate] dispatch name={delegate.name} type={delegate.type} "
+            f"ok=true secs={secs:.2f} chars={len(result)}"
+        )
+        try:
+            sp.update(output=result[:400])
+        except Exception:  # noqa: BLE001
+            pass
+        return result
 
 
 def _client_for(delegate: Delegate) -> A2AClient:
