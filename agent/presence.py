@@ -42,17 +42,42 @@ OPENING_ACK_AT = 0.6
 # every ~10 s) keeps the worst gap to ~one interval, comfortably under this.
 PRESENCE_FLOOR_SECS = 12.0
 
+# After this many spoken check-ins the loop YIELDS: it speaks one explicit
+# "this is taking a while — I'll let you know when it's done" line and goes
+# quiet. Post-yield silence is contractual (the user was told), so it doesn't
+# count as dead air; the durable outbound-task handle + DeliveryController
+# guarantee the come-back. This is the voice adaptation of protoAgent's
+# push-only doctrine (#678 Phase B): acknowledge, yield the turn, come back
+# once with the answer — a long delegation used to produce an unbounded
+# stream of "still working" lines (a 5-minute hub task = ~30 of them).
+YIELD_AFTER_CHECKINS = 2
+
+# Canned yield lines — {who} is the delegate target when known, else the tool.
+# Spoken ONCE, then the loop stops. Kept canned (not micro-LLM) so the yield
+# is instant and can't fail into more dead air.
+YIELD_LINES = (
+    "{who} is going to take a while on this — I'll let you know the moment it's done.",
+    "Still with {who} — this one's slow, so I'll stop narrating and speak up when it lands.",
+    "This is taking {who} a bit. I'll quiet down and ping you when it's finished.",
+)
+
 # Kinds of event the user actually HEARS — the only ones that count against the
 # dead-air SLA. "visual" (a delegate's streamed note_progress on the StatusPill)
 # is a real sign of life but a silent one, so it does not.
-AUDIO_KINDS = frozenset({"ack", "progress", "result"})
+AUDIO_KINDS = frozenset({"ack", "progress", "yield", "result"})
 
 
 @dataclass(frozen=True)
 class PresenceEvent:
     at: float  # seconds after the tool call started
-    kind: str  # "ack" | "progress" | "result" (audio) | "visual" (StatusPill only)
+    kind: str  # "ack" | "progress" | "yield" | "result" (audio) | "visual" (StatusPill only)
     label: str
+
+
+def yield_line(who: str, *, pick: int = 0) -> str:
+    """The spoken yield line. ``pick`` selects from the canned pool (callers
+    pass a random index); ``who`` is the delegate target when known."""
+    return YIELD_LINES[pick % len(YIELD_LINES)].format(who=who)
 
 
 def should_run_presence_loop(tier: Latency) -> bool:
@@ -76,13 +101,18 @@ def plan_presence(
     delegate_progress_at: tuple[float, ...] = (),
     settings: Settings | None = None,
     ack_at: float = OPENING_ACK_AT,
+    yield_after_checkins: int | None = YIELD_AFTER_CHECKINS,
 ) -> list[PresenceEvent]:
     """Ordered timeline of presence events for one tool call, per the policy
     (which ``app.py:on_function_calls_started`` implements):
 
     - non-FAST tool → an opening ack at ``ack_at``, then a "still working" line
       at ``progress_first_secs`` and every ``progress_interval_secs`` thereafter
-      until ``completion_at`` (FAST tools get neither)
+      (FAST tools get neither) — but after ``yield_after_checkins`` spoken
+      check-ins the loop speaks ONE yield line and stops: the user has been
+      told the work is long and that they'll be pinged, so further narration
+      is spam and further silence is excused (``yield_after_checkins=None``
+      restores the old unbounded loop)
     - ``delegate_progress_at`` are the delegate's streamed note_progress updates —
       rendered as ``"visual"`` events (StatusPill) that do NOT count against the
       audio dead-air SLA; in the live loop they ground the spoken line's wording
@@ -94,8 +124,13 @@ def plan_presence(
     if should_run_presence_loop(tier):
         events.append(PresenceEvent(ack_at, "ack", f"opening ack ({tool_name})"))
         t = s.progress_first_secs
+        spoken = 0
         while t < completion_at:
+            if yield_after_checkins is not None and spoken >= yield_after_checkins:
+                events.append(PresenceEvent(t, "yield", f"yield @ {t:g}s"))
+                break
             events.append(PresenceEvent(t, "progress", f"still-working @ {t:g}s"))
+            spoken += 1
             t += s.progress_interval_secs
 
     for vt in delegate_progress_at:
@@ -111,9 +146,19 @@ def max_dead_air(
 ) -> tuple[float, float, float]:
     """Largest gap between consecutive AUDIBLE events (``AUDIO_KINDS``), from
     ``start`` through the final audible event. Visual-only updates are ignored —
-    a voice user looking away hears nothing from them. Returns
-    ``(gap, gap_start, gap_end)``."""
-    times = [start, *[e.at for e in events if e.kind in AUDIO_KINDS]]
+    a voice user looking away hears nothing from them. Silence AFTER a yield
+    event is contractual (the user was explicitly told they'll be pinged), so
+    the measurement stops at the yield. Returns ``(gap, gap_start, gap_end)``."""
+    audible = sorted(
+        (e for e in events if e.kind in AUDIO_KINDS), key=lambda e: e.at
+    )
+    times = [start]
+    for e in audible:
+        times.append(e.at)
+        if e.kind == "yield":
+            break
+    if len(times) < 2:
+        return (0.0, start, start)
     gaps = [(b - a, a, b) for a, b in zip(times, times[1:])]
     return max(gaps, key=lambda g: g[0])
 

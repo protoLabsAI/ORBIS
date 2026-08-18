@@ -15,10 +15,13 @@ from __future__ import annotations
 from agent.filler import Latency, Settings
 from agent.presence import (
     PRESENCE_FLOOR_SECS,
+    YIELD_AFTER_CHECKINS,
+    YIELD_LINES,
     max_dead_air,
     passes_sla,
     plan_presence,
     should_run_presence_loop,
+    yield_line,
 )
 from agent.tools import ASYNC_TOOL_NAMES, latency_for
 
@@ -58,12 +61,49 @@ def test_slow_async_delegate_not_dead_air():
     assert kinds.count("progress") >= 1
 
 
-def test_long_call_keeps_talking_no_silent_tail():
-    # 40s delegate: the old two-line loop went silent after ~12s. The continuing
-    # cadence must keep every gap within the floor right up to the result.
+def test_long_call_never_goes_silent_without_telling_the_user():
+    # 40s delegate. The invariant is NOT "keep talking forever" — it's "never
+    # go silent without telling the user". After YIELD_AFTER_CHECKINS spoken
+    # lines the loop speaks ONE explicit yield ("I'll let you know when it's
+    # done") and stops; the audible sequence up to and including that yield
+    # must stay within the floor, and post-yield silence is contractual.
     events = _plan("delegate_to", Latency.SLOW, is_async=True, completion=40.0)
     assert passes_sla(events)
-    assert [e.kind for e in events].count("progress") >= 3
+    kinds = [e.kind for e in events]
+    assert kinds.count("progress") == YIELD_AFTER_CHECKINS
+    assert kinds.count("yield") == 1
+
+
+def test_yield_caps_narration_on_very_long_delegation():
+    # A 5-minute hub delegation used to produce ~30 "still working" lines.
+    # Now: ack + 2 check-ins + 1 yield = 4 spoken lines total, SLA green.
+    events = _plan("delegate_to", Latency.SLOW, is_async=True, completion=300.0)
+    assert passes_sla(events)
+    audible = [e for e in events if e.kind in ("ack", "progress", "yield")]
+    assert len(audible) == 2 + YIELD_AFTER_CHECKINS
+
+
+def test_short_call_finishes_before_yield():
+    # A 20s delegate resolves before the yield slot — no yield line, no spam.
+    events = _plan("delegate_to", Latency.SLOW, is_async=True, completion=20.0)
+    assert passes_sla(events)
+    assert not any(e.kind == "yield" for e in events)
+
+
+def test_yield_disabled_restores_unbounded_loop():
+    events = plan_presence(
+        tool_name="delegate_to", tier=Latency.SLOW, is_async=True,
+        completion_at=60.0, settings=_S, yield_after_checkins=None,
+    )
+    assert [e.kind for e in events].count("progress") >= 5
+    assert not any(e.kind == "yield" for e in events)
+
+
+def test_yield_line_formats_delegate_name():
+    assert "hub" in yield_line("hub", pick=0)
+    # every pool entry mentions who we're waiting on
+    for i in range(len(YIELD_LINES)):
+        assert "hub" in yield_line("hub", pick=i)
 
 
 def test_medium_overrun_gets_presence():
