@@ -61,6 +61,30 @@ YIELD_LINES = (
     "This is taking {who} a bit. I'll quiet down and ping you when it's finished.",
 )
 
+# Canned fallback check-ins for when the micro-LLM can't produce a progress
+# line (gateway down/slow). Live-QA finding 2026-08-18: a flaky gateway made
+# every generated line silently return None, so the loop spoke NOTHING for a
+# whole 35s delegation and the (canned!) yield never fired because it was
+# gated on spoken lines. The presence SLA is a hard promise — when the
+# generator fails, a canned line speaks instead, so a filler outage can
+# never reintroduce dead air.
+PROGRESS_FALLBACK_LINES = (
+    "Still working with {who}.",
+    "{who} is still on it.",
+    "Hang on — {who} is still going.",
+)
+
+# Cap on one progress-line generation. The micro-LLM call must resolve well
+# inside the cadence interval; past this we speak the canned fallback. Also
+# defends against a HANGING gateway call silently eating the whole loop.
+PROGRESS_GEN_TIMEOUT_SECS = 4.0
+
+
+def progress_fallback_line(who: str, *, pick: int = 0) -> str:
+    """A canned check-in line — used when the micro-LLM generator fails or
+    times out. ``pick`` selects from the pool (callers pass a random index)."""
+    return PROGRESS_FALLBACK_LINES[pick % len(PROGRESS_FALLBACK_LINES)].format(who=who)
+
 # Kinds of event the user actually HEARS — the only ones that count against the
 # dead-air SLA. "visual" (a delegate's streamed note_progress on the StatusPill)
 # is a real sign of life but a silent one, so it does not.
