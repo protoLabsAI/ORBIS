@@ -30,7 +30,6 @@ import logging
 from pipecat.adapters.services.open_ai_adapter import OpenAILLMInvocationParams
 from pipecat.frames.frames import (
     Frame,
-    FunctionCallInProgressFrame,
     LLMTextFrame,
     TTSSpeakFrame,
 )
@@ -61,11 +60,22 @@ class GuardedOpenAILLMService(OpenAILLMService):
         return apply_tool_loop_guard(super().build_chat_completion_params(params_from_context))
 
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
-        if isinstance(frame, FunctionCallInProgressFrame) or (
-            isinstance(frame, LLMTextFrame) and frame.text
-        ):
+        # Streamed answer text is the ONLY output signal visible here: tool
+        # calls never pass through push_frame (FunctionCallInProgressFrame is
+        # broadcast_frame'd from a created task AFTER _process_context
+        # returns — gating on it false-fired the recovery line before every
+        # tool turn). Tool output is detected in run_function_calls below.
+        if isinstance(frame, LLMTextFrame) and frame.text:
             self._turn_had_output = True
         await super().push_frame(frame, direction)
+
+    async def run_function_calls(self, function_calls):
+        # The synchronous, race-free "this completion produced a tool call"
+        # signal — awaited by the base service at the end of the stream,
+        # inside _process_context.
+        if function_calls:
+            self._turn_had_output = True
+        await super().run_function_calls(function_calls)
 
     async def _process_context(self, context):
         self._turn_had_output = False
