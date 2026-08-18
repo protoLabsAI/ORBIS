@@ -59,11 +59,16 @@ def is_cancel_phrase(text: str) -> bool:
 
 
 class CancelGate(FrameProcessor):
-    """Swallow a cancel utterance and close the listening window."""
+    """Swallow a cancel utterance and close the listening window. With a
+    delegate ``registry``, a cancel phrase while delegated work is in flight
+    ALSO cancels the newest live outbound task (the layer-2 verbal cancel,
+    #681): "stop" during a long hub delegation most plausibly means the
+    work, and if nothing is live it's a plain dismiss as before."""
 
-    def __init__(self, transport, **kwargs):
+    def __init__(self, transport, registry=None, **kwargs):
         super().__init__(**kwargs)
         self._transport = transport
+        self._registry = registry
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -80,6 +85,14 @@ class CancelGate(FrameProcessor):
                 await self._transport._send_control(CTRL_STOP_LISTENING)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[cancel-gate] send_control failed: %s", e)
+            if self._registry is not None:
+                # Fire-and-forget: cancels the newest live delegated task if
+                # one exists (no-op otherwise). Never delays the dismiss.
+                import asyncio
+
+                from agent.outbound_cancel import cancel_latest_outbound
+
+                asyncio.create_task(cancel_latest_outbound(self._registry))
             # Tell the stall watchdog the turn was intentionally dismissed, so it
             # doesn't speak a "still working" recovery line into the now-empty
             # turn. (A shared signal, not a frame — frames get consumed before

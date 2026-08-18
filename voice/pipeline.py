@@ -711,8 +711,10 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         audio_tags,
         # CancelGate — a bare "cancel" / "never mind" / "stop listening"
         # swallows the turn and closes the listening window (CTRL_STOP_LISTENING
-        # → Rust mutes; wake mode re-arms). Normal turns pass through.
-        CancelGate(transport),
+        # → Rust mutes; wake mode re-arms). With delegated work in flight it
+        # ALSO cancels the newest live outbound task (layer-2 verbal cancel,
+        # #681). Normal turns pass through.
+        CancelGate(transport, registry=_DELEGATES),
         # AskGate — if something is waiting on the user's answer (a paused
         # orchestration run, or an A2A task parked on input-required — #681),
         # the next user transcript answers it (and is swallowed) instead of

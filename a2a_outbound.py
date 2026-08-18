@@ -377,6 +377,36 @@ class A2AClient:
             input_required=input_required,
         )
 
+    async def cancel(self, task_id: str, *, timeout: float = 15.0) -> str | None:
+        """Cancel a previously dispatched task (A2A ``tasks/cancel``) — the
+        wire half of verbal cancel (#681, "stop that" → the delegated work
+        actually stops). Returns the remote's post-cancel state name (may be
+        ``canceled``, or a terminal state if it finished first). Raises
+        ``A2ADispatchError`` on failure — the caller decides what that means
+        (ORBIS still marks its local handle canceled: the USER's intent is
+        authoritative for what gets delivered later)."""
+        from a2a.types import CancelTaskRequest
+
+        try:
+            client = await self._ensure_client()
+        except Exception as exc:  # noqa: BLE001
+            raise A2ADispatchError(f"{self.name}: client init failed: {exc}") from exc
+        try:
+            task = await asyncio.wait_for(
+                _maybe_await(client.cancel_task(CancelTaskRequest(id=task_id))),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise A2ADispatchError(
+                f"{self.name}: tasks/cancel timed out after {timeout:.0f}s"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise A2ADispatchError(f"{self.name}: tasks/cancel failed: {exc}") from exc
+        state = getattr(getattr(task, "status", None), "state", None)
+        name = _STATE_NAMES.get(state) if state is not None else None
+        logger.info(f"[a2a/{self.name}] cancelled task {task_id} → {name}")
+        return name
+
     async def get_task(self, task_id: str, *, timeout: float = 15.0) -> A2AResult:
         """Requery a previously dispatched task by id (A2A ``tasks/get``).
 
