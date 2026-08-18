@@ -574,6 +574,37 @@ hint).
 
 ---
 
+## Amendment — 2026-08-17: protoAgent is the brain (delegation promoted to primary)
+
+**Context:** a cross-repo audit (ORBIS loop audit × protoAgent v0.138.0
+machinery map) found that ORBIS's weakest agentic-loop points — no task
+identity/durability for delegated work, an orchestration loop with no
+state model that was never live-tested, no trajectory, an unwired
+facts/FTS memory half, zero delegation-path observability, single-slot
+HITL — are all solved subsystems in protoAgent (ADRs 0050/0069/0070/
+0102). Two blockers had quietly expired: protoAgent's buffering
+`<scratch_pad>/<output>` protocol was deleted in favor of native
+streaming (its A2A contract emits delta/tool/input_required events),
+and ORBIS's deferred A2A push hardening was only blocked for *cloud*
+delegates that can't reach 127.0.0.1 — a local hub can.
+
+**Decision:** ORBIS keeps the voice layer (native audio, orb, Pipecat
+pipeline, presence/barge-in/fillers/personas) and **delegates the
+agentic brain to a locally-running protoAgent hub** over A2A. The hub
+owns deep tool use, multi-step orchestration, subagents, background
+work, long-term memory, trajectory, plugins, and fleet delegation (the
+fleet agents are protoAgent forks). ORBIS's `orchestrate.py` and the
+unwired memory half are retired rather than matured. This *activates*
+the original "pure delegation over bundling protoAgent" decision
+(see Explicitly out of scope) and points the whole product at the
+JARVIS goal: one voice interface controlling the system and fleet.
+
+Plan + phase gates: `docs/internal/protoagent-brain-direction.md`.
+Native-audio phases are unchanged; on iOS the hub is reached over the
+tailnet.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and rejected during the design conversation:
