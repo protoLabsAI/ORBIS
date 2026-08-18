@@ -418,9 +418,19 @@ class Settings:
     progress_first_secs: float = 6.0
     progress_interval_secs: float = 10.0
     recency_window: int = 6
-    max_gen_tokens: int = 30
+    # Generation cap. NOT a brevity control — brevity comes from the prompt
+    # (2-8 word styles); a non-reasoning model stops early regardless. The
+    # budget must leave room for REASONING models: the gateway remapped
+    # protolabs/fast to a model that burns ~30-60 tokens in
+    # reasoning_content before any content, so the old cap of 30 starved
+    # every ack/progress/announce line into an empty string and the whole
+    # micro tier went silent (live-QA 2026-08-18).
+    max_gen_tokens: int = 300
     temperature: float = 0.9
-    timeout_secs: float = 2.5
+    # Measured gateway latency for these generations is ~1.3-1.6s with a
+    # reasoning burst; 2.5s timed out on the tail. Matches the presence
+    # loop's PROGRESS_GEN_TIMEOUT_SECS.
+    timeout_secs: float = 4.0
 
 
 class _Recent:
@@ -675,10 +685,20 @@ class FillerGenerator:
             logger.warning(f"[filler:gen] {kind} failed: {e}")
             return None
 
-        text = (r.choices[0].message.content or "").strip()
+        msg = r.choices[0].message
+        text = (msg.content or "").strip()
         if text and text[0] in "\"'" and text[-1] in "\"'":
             text = text[1:-1].strip()
         if not text:
+            # Distinguish "model returned nothing" from "reasoning ate the
+            # budget" — the latter cost a live session to diagnose.
+            reasoning = getattr(msg, "reasoning_content", None) or ""
+            if reasoning:
+                logger.warning(
+                    f"[filler:gen] {kind} empty content but {len(reasoning)} chars "
+                    "of reasoning — a reasoning model exhausted max_gen_tokens; "
+                    "raise Settings.max_gen_tokens"
+                )
             return None
         text = _clean_for_tts(text, tts_backend)
         return text or None
