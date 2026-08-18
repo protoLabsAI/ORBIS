@@ -55,6 +55,10 @@ PROFILES: list[dict] = [
     {"id": "medium_quick", "tool": "(hypothetical medium)", "tier": Latency.MEDIUM,
      "is_async": False, "completion_at": 2.0, "visual_at": (),
      "note": "genuine fast-ish MEDIUM — finishes before the first line, no spam"},
+    {"id": "hub_delegation_long", "tool": "delegate_to", "completion_at": 300.0,
+     "visual_at": (30.0, 90.0, 180.0),
+     "note": "5-min hub task (#678 Phase B) — 2 check-ins then ONE spoken yield; "
+             "post-yield silence is contractual, come-back via durable handle"},
 ]
 
 

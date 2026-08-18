@@ -930,6 +930,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             _fg = _filler_gen_for(user_id)
             await asyncio.sleep(_fs.progress_first_secs)
             tick = 0
+            spoken = 0
             while True:
                 # During a HITL ask_user pause (orchestrate parked on the user's
                 # answer) the tool is still "in flight" but the agent is waiting on
@@ -962,7 +963,23 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                         await task.queue_frame(
                             TTSSpeakFrame(phrase, append_to_context=False)
                         )
+                        spoken += 1
                 tick += 1
+                # Yield after N spoken check-ins (#678 Phase B, push-only
+                # doctrine): tell the user ONCE that the work is long and
+                # they'll be pinged, then go quiet. The durable outbound
+                # handle + DeliveryController/result-injection guarantee the
+                # come-back, so continued narration is spam, and post-yield
+                # silence is contractual. See agent/presence.py.
+                if spoken >= presence.YIELD_AFTER_CHECKINS:
+                    line = presence.yield_line(
+                        tool_name, pick=random.randrange(len(presence.YIELD_LINES))
+                    )
+                    logger.info(f"[filler:yield] {line!r}")
+                    await task.queue_frame(
+                        TTSSpeakFrame(line, append_to_context=False)
+                    )
+                    break
                 await asyncio.sleep(_fs.progress_interval_secs)
         except asyncio.CancelledError:
             pass
