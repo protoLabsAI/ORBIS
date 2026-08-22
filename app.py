@@ -64,6 +64,35 @@ except ImportError:
     # from the shell env in that case.
     pass
 
+
+def _init_sentry() -> bool:
+    """Crash reporting (#488) — opt-in via ``ORBIS_SENTRY_DSN``.
+
+    Shipped builds set no DSN, so this is a hard no-op for every real user;
+    a dev (or a future opt-in toggle) exports the var to have uncaught
+    sidecar exceptions reported. The ``sentry_sdk`` import lives inside the
+    guard so an unset DSN costs nothing at boot, and any SDK failure is
+    swallowed — crash *reporting* must never become a crash *source*.
+    Returns whether Sentry was actually initialized (testable seam).
+    """
+    dsn = os.environ.get("ORBIS_SENTRY_DSN", "").strip()
+    if not dsn:
+        return False
+    try:
+        import sentry_sdk
+
+        # Errors only — no performance tracing on a realtime voice pipeline.
+        sentry_sdk.init(dsn=dsn, traces_sample_rate=0.0)
+        return True
+    except Exception as e:
+        print(f"[sentry] init failed, crash reporting disabled: {e}", flush=True)
+        return False
+
+
+# Before the heavy imports so a crash while loading torch/MLX/pipecat (the
+# ~80s cold-start window) is still captured.
+_init_sentry()
+
 # Route HF downloads to the ORBIS cache directory before transformers
 # imports anything. Honors ORBIS_CACHE_DIR / HF_HOME / MODEL_DIR in that
 # order; falls back to a per-OS user cache dir when run as a bundled

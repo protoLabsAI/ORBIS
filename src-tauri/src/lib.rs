@@ -660,6 +660,188 @@ fn reveal_logs(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Substrings that mark a config key as secret-bearing. Covers the sidecar's
+/// `agent/config_store.py::redact_secrets` exposure (`api_key`,
+/// `micro_api_key`, `tts_api_key`, nested `llm.fallback.api_key`) plus the
+/// generic token/secret/password families so future fields fail safe.
+const SECRET_MARKERS: [&str; 4] = ["api_key", "token", "secret", "password"];
+
+/// Line-based secret redaction for the exported config copy (#488). The
+/// sidecar redacts the *parsed* dict for GET /api/config; here we redact the
+/// *text* so the exported file stays byte-identical to what's on disk for
+/// every non-secret line (comments, ordering, unknown keys included) —
+/// that's what makes it useful for debugging config-precedence issues.
+///
+/// Rules, per line:
+/// * key (text before the first `:`) contains a secret marker → the value is
+///   replaced with `__redacted__` (the sidecar's placeholder). `*_env` keys
+///   are exempt — they hold an env-var NAME, not a secret, and knowing which
+///   var a user pointed at is exactly what a diagnostic bundle is for.
+/// * the value side nests a `<marker>:` (a flow-style mapping like
+///   `fallback: {api_key: sk-…}`) → the whole value is replaced.
+///   `config_store` writes block style, so this is belt-and-suspenders.
+fn redact_config(raw: &str) -> String {
+    let redact_line = |line: &str| -> String {
+        let Some((key, value)) = line.split_once(':') else {
+            return line.to_string();
+        };
+        if value.trim().is_empty() {
+            // Block-mapping header (`llm:`) — nothing on this line to hide.
+            return line.to_string();
+        }
+        let key_l = key
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_ascii_lowercase();
+        let value_l = value.to_ascii_lowercase();
+        let key_is_secret = SECRET_MARKERS.iter().any(|m| key_l.contains(m))
+            && !key_l.ends_with("_env")
+            // `max_tokens` (and namespaced variants like `micro_max_tokens`)
+            // are sampling params, not credentials. Keep the exemption that
+            // narrow — a broad `contains("tokens")` would also skip real
+            // secret fields like `auth_tokens`.
+            && !(key_l == "max_tokens" || key_l.ends_with("_max_tokens"));
+        let value_nests_secret = SECRET_MARKERS
+            .iter()
+            .any(|m| value_l.contains(&format!("{m}:")) || value_l.contains(&format!("{m}\":")));
+        if key_is_secret || value_nests_secret {
+            format!("{key}: __redacted__")
+        } else {
+            line.to_string()
+        }
+    };
+    let mut out: String = raw.lines().map(redact_line).collect::<Vec<_>>().join("\n");
+    if raw.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Format Unix seconds as a UTC `YYYYMMDD-HHMMSS` stamp without pulling in a
+/// date crate (Howard Hinnant's civil-from-days algorithm). Used for the
+/// export filename, so it only needs to be monotonic-ish and readable.
+fn utc_timestamp(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}{m:02}{d:02}-{hh:02}{mm:02}{ss:02}")
+}
+
+/// Export a support bundle to the Desktop (#488, export-zip slice):
+/// `sidecar.log` + `/healthz` + app version/config-path metadata + the
+/// config with secrets redacted, zipped as
+/// `~/Desktop/orbis-diagnostics-<timestamp>.zip`. Returns the zip path.
+///
+/// Every ingredient degrades to an explanatory note instead of failing the
+/// export — like `build_diagnostics_report()` on the Python side, this is
+/// the tool people reach for precisely *when* parts of the app are broken
+/// (sidecar never booted → no /healthz → the bundle must still produce).
+/// Zipping shells out to macOS's `ditto` — same rationale as `reveal_logs`
+/// using `open`: the app is Apple-Silicon-only, so no zip crate needed.
+#[tauri::command]
+async fn export_diagnostics(
+    app: AppHandle,
+    state: tauri::State<'_, BackendUrl>,
+) -> Result<String, String> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("system clock before epoch: {e}"))?
+        .as_secs();
+    let stamp = utc_timestamp(secs);
+
+    let staging = std::env::temp_dir().join(format!("orbis-diagnostics-{stamp}"));
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("create staging dir {}: {e}", staging.display()))?;
+
+    // --- sidecar.log ------------------------------------------------------
+    let log_src = app.path().app_log_dir().ok().map(|d| d.join("sidecar.log"));
+    match log_src {
+        Some(src) if src.is_file() => {
+            std::fs::copy(&src, staging.join("sidecar.log"))
+                .map_err(|e| format!("copy {}: {e}", src.display()))?;
+        }
+        _ => {
+            let _ = std::fs::write(
+                staging.join("sidecar.log"),
+                "sidecar.log not found — the sidecar may never have started\n",
+            );
+        }
+    }
+
+    // --- /healthz ---------------------------------------------------------
+    // Clone the base URL out before awaiting — never hold the lock across it.
+    let base = state.0.lock().ok().and_then(|g| g.clone());
+    let healthz = match base {
+        Some(base) => {
+            let url = format!("{}/healthz", base.trim_end_matches('/'));
+            match reqwest::Client::new()
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(resp) => resp
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("{{\"error\": \"read /healthz body: {e}\"}}")),
+                Err(e) => format!("{{\"error\": \"GET {url}: {e}\"}}"),
+            }
+        }
+        None => {
+            "{\"error\": \"backend not ready — sidecar never reached ORBIS_READY\"}".to_string()
+        }
+    };
+    std::fs::write(staging.join("healthz.json"), healthz)
+        .map_err(|e| format!("write healthz.json: {e}"))?;
+
+    // --- app version + config path ----------------------------------------
+    let config_path = resolve_config_path(&app)?;
+    let info = app.package_info();
+    let meta = format!(
+        "app: {} {}\nconfig: {}\nexported: {stamp} UTC\n",
+        info.name,
+        info.version,
+        config_path.display()
+    );
+    std::fs::write(staging.join("meta.txt"), meta).map_err(|e| format!("write meta.txt: {e}"))?;
+
+    // --- config, secrets redacted -----------------------------------------
+    let config_out = match std::fs::read_to_string(&config_path) {
+        Ok(raw) => redact_config(&raw),
+        Err(e) => format!("# config unreadable at {}: {e}\n", config_path.display()),
+    };
+    std::fs::write(staging.join("config-redacted.yaml"), config_out)
+        .map_err(|e| format!("write config-redacted.yaml: {e}"))?;
+
+    // --- zip to the Desktop -----------------------------------------------
+    let desktop = app
+        .path()
+        .desktop_dir()
+        .map_err(|e| format!("resolve Desktop dir: {e}"))?;
+    let dest = desktop.join(format!("orbis-diagnostics-{stamp}.zip"));
+    let status = std::process::Command::new("/usr/bin/ditto")
+        .args(["-c", "-k", "--keepParent"])
+        .arg(&staging)
+        .arg(&dest)
+        .status()
+        .map_err(|e| format!("run ditto: {e}"))?;
+    let _ = std::fs::remove_dir_all(&staging);
+    if !status.success() {
+        return Err(format!("ditto exited with {status}"));
+    }
+    log::info!("[diagnostics] exported {}", dest.display());
+    Ok(dest.display().to_string())
+}
+
 /// Tauri-managed state: the currently-spawned sidecar child, guarded
 /// so the exit handler can kill it from outside the async task.
 struct Sidecar {
@@ -1537,6 +1719,7 @@ pub fn run() {
                     open_microphone_settings,
                     clear_browsing_data,
                     reveal_logs,
+                    export_diagnostics,
                     backend_url,
                     set_mic_listening,
                     mic_listening,
@@ -1566,6 +1749,7 @@ pub fn run() {
                     get_audio_input_mode,
                     clear_browsing_data,
                     reveal_logs,
+                    export_diagnostics,
                     backend_url,
                     get_discoverable,
                     set_discoverable,
@@ -2528,7 +2712,7 @@ fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_audio_input_mode, parse_ready};
+    use super::{get_audio_input_mode, parse_ready, redact_config, utc_timestamp};
 
     #[test]
     fn parse_ready_happy_path() {
@@ -2579,5 +2763,83 @@ mod tests {
 
         #[cfg(not(feature = "native-audio"))]
         assert_eq!(get_audio_input_mode(), "unsupported");
+    }
+
+    // --- export_diagnostics helpers (#488) ---------------------------------
+
+    #[test]
+    fn redact_config_strips_api_keys_keeps_the_rest() {
+        let raw = "llm:\n  api_key: sk-live-should-never-leak\n  model: gpt-4\n  micro_api_key: \"sk-also-secret\"\nvoice:\n  tts_api_key: fish-abc123\n";
+        let out = redact_config(raw);
+        assert!(!out.contains("sk-live-should-never-leak"));
+        assert!(!out.contains("sk-also-secret"));
+        assert!(!out.contains("fish-abc123"));
+        // Indentation + non-secret fields survive byte-for-byte.
+        assert!(out.contains("  api_key: __redacted__"));
+        assert!(out.contains("  model: gpt-4"));
+        assert!(out.contains("llm:\n"));
+        // Trailing newline is preserved.
+        assert!(out.ends_with('\n'));
+    }
+
+    #[test]
+    fn redact_config_keeps_env_var_pointers() {
+        // `api_key_env` names an env VAR — that's diagnostic gold, not a
+        // secret (see reference_config_precedence: Finder-launch env issues).
+        let raw = "llm:\n  api_key_env: OPENAI_API_KEY\n";
+        assert_eq!(redact_config(raw), raw);
+    }
+
+    #[test]
+    fn redact_config_covers_flow_style_nesting() {
+        // config_store writes block style; a hand-edited flow mapping must
+        // still fail safe (the whole value goes, not just nothing).
+        let raw = "llm:\n  fallback: {api_key: sk-nested-leak, url: http://x}\n";
+        let out = redact_config(raw);
+        assert!(!out.contains("sk-nested-leak"));
+        assert!(out.contains("  fallback: __redacted__"));
+    }
+
+    #[test]
+    fn redact_config_redacts_token_secret_password_families() {
+        let raw = "a2a_auth_token: tok-123\nwebhook_secret: whsec_9\npassword: hunter2\n";
+        let out = redact_config(raw);
+        for leak in ["tok-123", "whsec_9", "hunter2"] {
+            assert!(!out.contains(leak), "{leak} leaked");
+        }
+    }
+
+    #[test]
+    fn redact_config_leaves_urls_and_comments_alone() {
+        let raw = "# ORBIS config\nllm:\n  url: http://localhost:8100/v1\n";
+        assert_eq!(redact_config(raw), raw);
+    }
+
+    #[test]
+    fn redact_config_keeps_max_tokens() {
+        // Real config_store sampling params (`llm.max_tokens` + namespaced
+        // variants) — the "token" marker must not eat them.
+        let raw = "llm:\n  max_tokens: 150\n  micro_max_tokens: 40\n";
+        assert_eq!(redact_config(raw), raw);
+    }
+
+    #[test]
+    fn redact_config_still_redacts_plural_token_keys() {
+        // The max_tokens exemption is exact-match only — plural token stores
+        // (`auth_tokens`, `refresh_tokens`) are credentials and must go.
+        let raw = "auth_tokens: tok-plural-leak\nrefresh_tokens: tok-refresh-leak\n";
+        let out = redact_config(raw);
+        for leak in ["tok-plural-leak", "tok-refresh-leak"] {
+            assert!(!out.contains(leak), "{leak} leaked");
+        }
+        assert!(out.contains("auth_tokens: __redacted__"));
+    }
+
+    #[test]
+    fn utc_timestamp_known_instants() {
+        assert_eq!(utc_timestamp(0), "19700101-000000");
+        assert_eq!(utc_timestamp(1_000_000_000), "20010909-014640");
+        // 2026-08-21 00:00:00 UTC — a leap-year-adjacent modern date.
+        assert_eq!(utc_timestamp(1_787_270_400), "20260821-000000");
     }
 }

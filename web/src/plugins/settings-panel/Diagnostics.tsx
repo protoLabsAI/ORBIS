@@ -16,6 +16,11 @@ import { api, type DiagnosticsReport } from '@/lib/api';
  * - "Reveal logs in Finder" — invokes the `reveal_logs` Tauri IPC, which
  *   opens the app log dir (sidecar.log + the Rust/tauri-plugin-log output)
  *   so a user can attach logs to a bug report.
+ * - "Export diagnostics…" — invokes the `export_diagnostics` Tauri IPC, which
+ *   zips sidecar.log + the /healthz snapshot + app version + the config with
+ *   secrets redacted (Rust-side, before anything leaves the box) to
+ *   `~/Desktop/orbis-diagnostics-<timestamp>.zip` — the one-file attachment
+ *   for a bug report (#488 export slice).
  * - "Clear browsing data" — invokes `clear_browsing_data`, which calls
  *   `Webview::clear_all_browsing_data()` to wipe cookies, IndexedDB,
  *   localStorage, service-worker registrations, and the fetch cache. Use
@@ -60,6 +65,8 @@ function formatDiagnostics(d: DiagnosticsReport): string {
 export function Diagnostics() {
   const [status, setStatus] = useState<'idle' | 'clearing' | 'cleared' | 'error'>('idle');
   const [copy, setCopy] = useState<'idle' | 'copying' | 'copied'>('idle');
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'done'>('idle');
+  const [exportPath, setExportPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Fetch the redacted bundle and drop it on the clipboard as markdown so the
@@ -90,6 +97,24 @@ export function Diagnostics() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStatus('error');
+    }
+  };
+
+  // Bundle sidecar.log + /healthz + app version + redacted config into a zip
+  // on the Desktop — the attach-one-file complement to "Copy diagnostics".
+  // Redaction happens Rust-side before the zip is written (#488).
+  const exportDiagnostics = async () => {
+    setExportState('exporting');
+    setError(null);
+    try {
+      const path = await invoke<string>('export_diagnostics');
+      setExportPath(path);
+      setExportState('done');
+    } catch (e) {
+      // `error` renders the failure; `status` belongs to the unrelated
+      // "Clear browsing data" state machine — don't cross-contaminate it.
+      setError(e instanceof Error ? e.message : String(e));
+      setExportState('idle');
     }
   };
 
@@ -131,6 +156,23 @@ export function Diagnostics() {
           <Button variant="outline" onClick={() => void revealLogs()}>
             Reveal logs in Finder
           </Button>
+        </div>
+        <div className="space-y-2">
+          <p className="text-sm text-fg-muted leading-relaxed">
+            Save everything as one zip on your Desktop — the sidecar log, a /healthz
+            snapshot, app version, and your config with secrets redacted. Attach it to
+            a bug report instead of gathering the pieces by hand.
+          </p>
+          <Button
+            variant="outline"
+            onClick={() => void exportDiagnostics()}
+            disabled={exportState === 'exporting'}
+          >
+            {exportState === 'exporting' ? 'Exporting…' : 'Export diagnostics…'}
+          </Button>
+          {exportState === 'done' && exportPath && (
+            <p className="text-xs text-fg-muted break-all">Saved to {exportPath}</p>
+          )}
         </div>
         <div className="space-y-2">
           <p className="text-sm text-fg-muted leading-relaxed">
