@@ -40,7 +40,7 @@ import httpx
 from a2a_outbound import A2AClient, A2ADispatchError, ProgressCallback
 from acp import AcpClient, AcpError
 from agent.delegates import Delegate, DelegateError, _expand_env
-from agent.tracing import active_trace, propagation_headers
+from agent.tracing import _NULL, active_trace, propagation_headers
 
 # --- durable outbound-task registry seam (#678 Phase B) ---------------------
 # app.py injects its get_memory at boot; adapters record dispatched A2A task
@@ -244,7 +244,8 @@ def _open_dispatch_span(delegate: Delegate, query: str) -> Any:
         )
     except Exception as e:  # noqa: BLE001 — observability never breaks dispatch
         logger.warning(f"[delegates] dispatch span open failed: {e}")
-        from agent.tracing import _NULL
+        # _NULL is a module-level binding — a deferred import here could
+        # itself raise inside the handler and break the no-raise contract.
         return _NULL
 
 

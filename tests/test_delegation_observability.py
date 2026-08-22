@@ -254,6 +254,32 @@ async def test_a2a_dispatch_works_with_tracing_off(monkeypatch):
     assert await adapter.dispatch(_a2a_delegate(), "hello") == "answer"
 
 
+@pytest.mark.asyncio
+async def test_span_open_fallback_cannot_raise_via_deferred_import(monkeypatch):
+    # Regression: the except-fallback used to do `from agent.tracing import
+    # _NULL` INSIDE the handler — an import that can itself raise (poisoned
+    # sys.modules, interpreter teardown), escaping the already-entered
+    # except and breaking the "never raises" contract for every dispatch
+    # caller. The null handle must be a module-level binding. Poisoning the
+    # sys.modules entry makes any fresh `from agent.tracing import …` raise
+    # ImportError, so this test fails against the deferred-import version.
+    import sys
+
+    from agent.tracing import _NULL
+
+    def _boom(user_id=None):
+        raise RuntimeError("tracer exploded")
+
+    monkeypatch.setattr(adapters, "active_trace", _boom)
+    monkeypatch.setitem(sys.modules, "agent.tracing", None)
+    assert adapters._open_dispatch_span(_a2a_delegate(), "hello") is _NULL
+    # The full dispatch shell must survive the same failure untouched.
+    monkeypatch.setenv("A2A_STREAM", "0")
+    adapter = adapters.A2AAdapter()
+    monkeypatch.setattr(adapter, "client_for", lambda d: _FakeA2AClient())
+    assert await adapter.dispatch(_a2a_delegate(), "hello") == "answer"
+
+
 # --- W3C traceparent propagation --------------------------------------------
 
 
