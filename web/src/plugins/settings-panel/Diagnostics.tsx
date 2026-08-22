@@ -111,9 +111,10 @@ export function Diagnostics() {
       setExportPath(path);
       setExportState('done');
     } catch (e) {
+      // `error` renders the failure; `status` belongs to the unrelated
+      // "Clear browsing data" state machine — don't cross-contaminate it.
       setError(e instanceof Error ? e.message : String(e));
       setExportState('idle');
-      setStatus('error');
     }
   };
 
