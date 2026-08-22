@@ -701,20 +701,16 @@ fn redact_config(raw: &str) -> String {
             // narrow — a broad `contains("tokens")` would also skip real
             // secret fields like `auth_tokens`.
             && !(key_l == "max_tokens" || key_l.ends_with("_max_tokens"));
-        let value_nests_secret = SECRET_MARKERS.iter().any(|m| {
-            value_l.contains(&format!("{m}:")) || value_l.contains(&format!("{m}\":"))
-        });
+        let value_nests_secret = SECRET_MARKERS
+            .iter()
+            .any(|m| value_l.contains(&format!("{m}:")) || value_l.contains(&format!("{m}\":")));
         if key_is_secret || value_nests_secret {
             format!("{key}: __redacted__")
         } else {
             line.to_string()
         }
     };
-    let mut out: String = raw
-        .lines()
-        .map(redact_line)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut out: String = raw.lines().map(redact_line).collect::<Vec<_>>().join("\n");
     if raw.ends_with('\n') {
         out.push('\n');
     }
@@ -767,11 +763,7 @@ async fn export_diagnostics(
         .map_err(|e| format!("create staging dir {}: {e}", staging.display()))?;
 
     // --- sidecar.log ------------------------------------------------------
-    let log_src = app
-        .path()
-        .app_log_dir()
-        .ok()
-        .map(|d| d.join("sidecar.log"));
+    let log_src = app.path().app_log_dir().ok().map(|d| d.join("sidecar.log"));
     match log_src {
         Some(src) if src.is_file() => {
             std::fs::copy(&src, staging.join("sidecar.log"))
@@ -804,8 +796,9 @@ async fn export_diagnostics(
                 Err(e) => format!("{{\"error\": \"GET {url}: {e}\"}}"),
             }
         }
-        None => "{\"error\": \"backend not ready — sidecar never reached ORBIS_READY\"}"
-            .to_string(),
+        None => {
+            "{\"error\": \"backend not ready — sidecar never reached ORBIS_READY\"}".to_string()
+        }
     };
     std::fs::write(staging.join("healthz.json"), healthz)
         .map_err(|e| format!("write healthz.json: {e}"))?;
