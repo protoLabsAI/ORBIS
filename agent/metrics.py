@@ -26,6 +26,16 @@ Gauge vs counter
 Most callers use ``inc()`` (monotonic counter). For point-in-time
 state (queue depth, last latency) use ``set(name, value)``; the
 snapshot returns whatever was last written.
+
+Delegation family (#683 Phase E, written by ``agent/delegates.py``)
+-------------------------------------------------------------------
+``delegate_dispatch:<status>`` (+ per-name variants) counts every
+finished dispatch under ok / error / timeout / cancelled;
+``delegate_barge_drop_total`` counts the cancelled ones and
+``delegate_ask_timeout_total`` expired input-required asks. The
+``delegate_dispatch_latency_ms`` gauge holds the last COMPLETED
+round-trip — cancelled dispatches never write it (a sub-second
+barge-in abort would clobber the meaningful reading).
 """
 
 from __future__ import annotations

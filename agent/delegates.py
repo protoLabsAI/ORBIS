@@ -313,6 +313,36 @@ class DelegateError(RuntimeError):
     """Raised on any dispatch failure. Caller speaks the message back to the user."""
 
 
+def _count_dispatch(delegate: Delegate, status: str, secs: float) -> None:
+    """Count one finished dispatch under its terminal status — ``ok`` /
+    ``error`` / ``timeout`` / ``cancelled`` (#683 Phase E).
+
+    The unlabelled ``delegate_dispatch_total`` / ``delegate_dispatch_errors``
+    counters are compatibility aliases with the original semantics: total
+    counts successes only, errors counts raised dispatches (timeouts
+    included), and a cancelled dispatch — a barge-in — counts toward
+    NEITHER, exactly as before (CancelledError bypassed ``except
+    Exception``). The latency gauge follows the same rule: a barge-in
+    abort lands in well under a second, so writing it would clobber the
+    last meaningful round-trip time with noise."""
+    from agent import metrics
+    metrics.inc(f"delegate_dispatch:{status}")
+    metrics.inc(f"delegate_dispatch:{delegate.name}:{status}")
+    if status == "ok":
+        metrics.inc("delegate_dispatch_total")
+        metrics.inc(f"delegate_dispatch_total:{delegate.name}")
+    elif status in ("error", "timeout"):
+        metrics.inc("delegate_dispatch_errors")
+        metrics.inc(f"delegate_dispatch_errors:{delegate.name}")
+    if status == "cancelled":
+        metrics.inc("delegate_barge_drop_total")
+        metrics.inc(f"delegate_barge_drop_total:{delegate.name}")
+        return
+    ms = int(secs * 1000)
+    metrics.set("delegate_dispatch_latency_ms", ms)
+    metrics.set(f"delegate_dispatch_latency_ms:{delegate.name}", ms)
+
+
 async def dispatch(
     delegate: Delegate,
     query: str,
@@ -327,11 +357,12 @@ async def dispatch(
     acp stdio) live in ``agent/delegate_adapters.py``.
 
     This is the single observability chokepoint for outbound delegation:
-    every dispatch gets a ``delegate.<type>`` span, success/failure
-    counters, and a greppable ``[delegate]`` latency line — the audited
-    gap was that a 90s hand-off returning junk was only diagnosable by
-    vibes."""
-    from agent import metrics, tracing
+    every dispatch gets a ``delegate.<type>`` span, per-status counters
+    (ok / error / timeout / cancelled — see ``_count_dispatch``), and a
+    greppable ``[delegate]`` latency line — the audited gap was that a 90s
+    hand-off returning junk was only diagnosable by vibes."""
+    from a2a_outbound import A2ADispatchTimeout
+    from agent import tracing
     from agent.delegate_adapters import get_adapter
     try:
         adapter = get_adapter(delegate.type)
@@ -351,10 +382,28 @@ async def dispatch(
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
+        except asyncio.CancelledError:
+            # Barge-in / caller bailed. Count the drop, but never as an
+            # error and never into the latency gauge (see _count_dispatch).
+            secs = time.monotonic() - t0
+            _count_dispatch(delegate, "cancelled", secs)
+            logger.info(
+                f"[delegate] dispatch name={delegate.name} type={delegate.type} "
+                f"ok=false secs={secs:.2f} cancelled"
+            )
+            try:
+                sp.update(level="WARNING", status_message="cancelled")
+            except Exception:  # noqa: BLE001
+                pass
+            raise
         except Exception as e:
             secs = time.monotonic() - t0
-            metrics.inc("delegate_dispatch_errors")
-            metrics.inc(f"delegate_dispatch_errors:{delegate.name}")
+            status = (
+                "timeout"
+                if isinstance(e, (A2ADispatchTimeout, asyncio.TimeoutError))
+                else "error"
+            )
+            _count_dispatch(delegate, status, secs)
             logger.warning(
                 f"[delegate] dispatch name={delegate.name} type={delegate.type} "
                 f"ok=false secs={secs:.2f} error={type(e).__name__}: {e}"
@@ -365,8 +414,7 @@ async def dispatch(
                 pass
             raise
         secs = time.monotonic() - t0
-        metrics.inc("delegate_dispatch_total")
-        metrics.inc(f"delegate_dispatch_total:{delegate.name}")
+        _count_dispatch(delegate, "ok", secs)
         logger.info(
             f"[delegate] dispatch name={delegate.name} type={delegate.type} "
             f"ok=true secs={secs:.2f} chars={len(result)}"

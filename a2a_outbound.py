@@ -57,6 +57,13 @@ class A2ADispatchError(Exception):
     """Outbound A2A failure. The caller speaks the message back to the user."""
 
 
+class A2ADispatchTimeout(A2ADispatchError):
+    """The delegate didn't answer within the wall-clock bound. A distinct
+    type so the dispatch chokepoint (``agent/delegates.py``) can count
+    timeouts separately from hard failures (#683 Phase E); callers that
+    catch ``A2ADispatchError`` are unaffected."""
+
+
 @dataclass
 class A2AResult:
     """Result of one outbound turn — preserves the old client's surface so
@@ -359,7 +366,7 @@ class A2AClient:
         try:
             await asyncio.wait_for(_consume(), timeout=timeout)
         except asyncio.TimeoutError as exc:
-            raise A2ADispatchError(
+            raise A2ADispatchTimeout(
                 f"{self.name}: no response within {timeout:.0f}s"
             ) from exc
         except Exception as exc:  # noqa: BLE001
@@ -410,7 +417,7 @@ class A2AClient:
                 timeout=timeout,
             )
         except asyncio.TimeoutError as exc:
-            raise A2ADispatchError(
+            raise A2ADispatchTimeout(
                 f"{self.name}: tasks/cancel timed out after {timeout:.0f}s"
             ) from exc
         except Exception as exc:  # noqa: BLE001
@@ -439,7 +446,7 @@ class A2AClient:
                 timeout=timeout,
             )
         except asyncio.TimeoutError as exc:
-            raise A2ADispatchError(
+            raise A2ADispatchTimeout(
                 f"{self.name}: tasks/get timed out after {timeout:.0f}s"
             ) from exc
         except Exception as exc:  # noqa: BLE001

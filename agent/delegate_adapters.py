@@ -230,6 +230,36 @@ class DelegateAdapter:
 # ---------------------------------------------------------------------------
 
 
+def _open_dispatch_span(delegate: Delegate, query: str) -> Any:
+    """Open the ``delegate.dispatch`` span on the live turn trace — the A2A
+    round-trip leg of a delegation, alongside the chokepoint's
+    ``delegate.a2a`` tool span (#683 Phase E). Returns a no-op handle when
+    tracing is off (``active_trace()`` is already the null span then);
+    never raises."""
+    try:
+        return active_trace().start_observation(
+            name="delegate.dispatch",
+            as_type="span",
+            input={"delegate": delegate.name, "query_len": len(query)},
+        )
+    except Exception as e:  # noqa: BLE001 — observability never breaks dispatch
+        logger.warning(f"[delegates] dispatch span open failed: {e}")
+        from agent.tracing import _NULL
+        return _NULL
+
+
+def _end_dispatch_span(span: Any, **fields: Any) -> None:
+    """Close the dispatch span, folding ``fields`` (output / level /
+    status_message) into it first. Never raises — the span is a pure
+    observer and must not alter dispatch results or error handling."""
+    try:
+        if fields:
+            span.update(**fields)
+        span.end()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[delegates] dispatch span end failed: {e}")
+
+
 class A2AAdapter(DelegateAdapter):
     type = "a2a"
     label = "A2A agent"
@@ -338,6 +368,36 @@ class A2AAdapter(DelegateAdapter):
         return client
 
     async def dispatch(
+        self, delegate: Delegate, query: str, *, timeout: float = 60.0,
+        progress_callback: ProgressCallback | None = None,
+        push_notification_url: str | None = None,
+        push_notification_token: str | None = None,
+    ) -> str:
+        """Observability shell around the A2A round-trip (#683 Phase E): one
+        ``delegate.dispatch`` span covering the full send, including the
+        streaming→sync fallback. The trace itself rides the wire via the
+        per-request httpx hook (``a2a_outbound._stamp_trace_headers``),
+        which stamps the Langfuse-* + W3C ``traceparent`` headers from
+        ``propagation_headers()`` on every outbound request. The span is a
+        pure observer — results and error handling are unchanged."""
+        span = _open_dispatch_span(delegate, query)
+        try:
+            result = await self._dispatch_inner(
+                delegate, query, timeout=timeout,
+                progress_callback=progress_callback,
+                push_notification_url=push_notification_url,
+                push_notification_token=push_notification_token,
+            )
+        except asyncio.CancelledError:
+            _end_dispatch_span(span, level="WARNING", status_message="cancelled")
+            raise
+        except Exception as e:
+            _end_dispatch_span(span, level="ERROR", status_message=str(e)[:300])
+            raise
+        _end_dispatch_span(span, output={"chars": len(result)})
+        return result
+
+    async def _dispatch_inner(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
         push_notification_url: str | None = None,
