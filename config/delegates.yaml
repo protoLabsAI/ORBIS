@@ -16,7 +16,15 @@
 # Settings → Agent → Delegates. Empty list = `delegate_to` is not
 # registered. See docs/reference/agent.md.
 
-delegates: []
+delegates:
+  - name: hub
+    type: a2a
+    description: >
+      Multi-step reasoning, tool use, fleet delegation, background work,
+      and long-horizon tasks. Use for: complex goals requiring multiple
+      tools, tasks that should run in the background, research, anything
+      that spans multiple turns.
+    url: http://127.0.0.1:7871/a2a
 
 # ─── Examples (uncomment + edit) ────────────────────────────────────────
 #
