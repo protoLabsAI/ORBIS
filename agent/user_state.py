@@ -219,6 +219,9 @@ def take_oldest_delegate_ask() -> DelegateAsk | None:
             task_id = next(iter(st.pending_delegate_asks))
             ask = st.pending_delegate_asks.pop(task_id)
             if ask.expired(now=now):
+                from agent import metrics
+                metrics.inc("delegate_ask_timeout_total")
+                metrics.inc(f"delegate_ask_timeout_total:{ask.delegate}")
                 logger.info(f"[delegate-ask] expired task={task_id}; dropping")
                 continue
             return ask

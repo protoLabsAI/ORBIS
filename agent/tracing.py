@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -546,14 +547,28 @@ def make_turn_tracer(
 # Cross-fleet trace propagation
 # ---------------------------------------------------------------------------
 
+# W3C trace-context id shapes (https://www.w3.org/TR/trace-context/):
+# 16-byte trace id + 8-byte parent id, lowercase hex, all-zero forbidden.
+# Langfuse v4 ids are OTEL-format and already match; anything else
+# (tests, legacy ids) must NOT be shipped as a malformed traceparent.
+_W3C_TRACE_ID_RE = re.compile(r"(?!0{32})[0-9a-f]{32}")
+_W3C_PARENT_ID_RE = re.compile(r"(?!0{16})[0-9a-f]{16}")
+
+
 def propagation_headers(
     *,
     trace: Any | None = None,
     parent_observation_id: str | None = None,
 ) -> dict[str, str]:
-    """Return the Langfuse-* HTTP headers that carry the current trace
-    across fleet boundaries. Empty dict if tracing is off or there's no
-    live trace. See docs/reference/tracing-contract.md for the spec.
+    """Return the HTTP headers that carry the current trace across fleet
+    boundaries: the Langfuse-* pair plus a W3C ``traceparent`` (#683
+    Phase E — the protoAgent hub joins fleet traces keyed on a W3C-shaped
+    caller trace id). Empty dict if tracing is off or there's no live
+    trace. See docs/reference/tracing-contract.md for the spec.
+
+    ``traceparent`` is only emitted when the ids validate as W3C hex —
+    OTEL/Langfuse-v4 ids always do. No ``tracestate``: we have no vendor
+    state to carry, and the Langfuse-* headers already hold the session id.
 
     Reads session_id off the ORBIS-stamped attribute we set at span
     creation — v4 spans don't expose session_id as a direct property.
@@ -576,6 +591,9 @@ def propagation_headers(
     obs_id = parent_observation_id or getattr(trace, "id", "")
     if obs_id:
         headers["Langfuse-Parent-Observation-Id"] = str(obs_id)
+    tid, pid = str(trace_id), str(obs_id or "")
+    if _W3C_TRACE_ID_RE.fullmatch(tid) and _W3C_PARENT_ID_RE.fullmatch(pid):
+        headers["traceparent"] = f"00-{tid}-{pid}-01"
     return headers
 
 
