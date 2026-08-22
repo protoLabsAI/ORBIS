@@ -43,6 +43,9 @@ dependencies = [
     "zeroconf",
     # Observability
     "langfuse>=4,<5",
+    # Crash reporting (#488) — dormant unless ORBIS_SENTRY_DSN is set at
+    # boot (app.py::_init_sentry). Shipped builds carry no DSN.
+    "sentry-sdk>=2",
     # MLX-LM for native Apple Silicon LLM inference (Mac arm64 only).
     # Added so the desktop sidecar can run the LLM in-process via
     # Apple's MLX framework instead of requiring a separate Ollama
