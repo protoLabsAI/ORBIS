@@ -78,7 +78,8 @@ get their own live-tested PR.
       production endpoint at `:7870`; launchd/service installation remains an
       operator responsibility.
 - [x] Bundle a `hub` A2A delegate row, with a description written so the
-      router prefers it for multi-step/fleet/background asks.
+      router prefers it for multi-step/fleet/background asks. Untouched
+      persistent `:7871` seeds migrate atomically; custom hubs are preserved.
 - [ ] Validate dispatch through ORBIS's real adapter path (registry →
       `A2ADelegateAdapter.dispatch`) and measure time-to-first-delta
       on a trivial and a tool-using prompt.

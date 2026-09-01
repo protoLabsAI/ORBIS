@@ -35,6 +35,7 @@ import logging
 import os
 import random
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +48,10 @@ if TYPE_CHECKING:  # type-only — the runtime bodies live in delegate_adapters
 
 logger = logging.getLogger(__name__)
 
+_LEGACY_HUB_URL = "http://127.0.0.1:7871/a2a"
+_PRODUCTION_HUB_URL = "http://127.0.0.1:7870/a2a"
+_DEFAULT_HUB_KEYS = {"name", "type", "description", "url"}
+
 
 # POSIX env substitution shared with the old AgentRegistry semantics.
 _ENV_RE = re.compile(r"\$\{?([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}?")
@@ -57,6 +62,82 @@ def _expand_env(value: str) -> str:
         name, default = m.group(1), m.group(2) or ""
         return os.environ.get(name, default)
     return _ENV_RE.sub(repl, value)
+
+
+def migrate_default_hub_endpoint(path: str | Path) -> bool:
+    """Atomically promote only the untouched bundled hub seed to ``:7870``.
+
+    Existing delegate files are persistent across app upgrades, so changing the
+    bundled seed alone would strand prior installs on the dev port. Treat any
+    extra field, different type/name, or different URL as user customization
+    and leave the file byte-for-byte alone.
+    """
+    target = Path(path)
+    if not target.exists():
+        return False
+    try:
+        original = target.read_text(encoding="utf-8")
+        data = yaml.safe_load(original) or {}
+        matches = [
+            raw for raw in (data.get("delegates") or [])
+            if isinstance(raw, dict)
+            and set(raw) == _DEFAULT_HUB_KEYS
+            and raw.get("name") == "hub"
+            and raw.get("type") == "a2a"
+            and raw.get("url") == _LEGACY_HUB_URL
+        ]
+        if len(matches) != 1:
+            return False
+
+        # Use the YAML node marks to change the matched hub's URL scalar only.
+        # A different delegate or comment may legitimately mention the same URL.
+        document = yaml.compose(original)
+        delegates_node = next(
+            value for key, value in document.value if key.value == "delegates"
+        )
+        url_nodes = []
+        for item in delegates_node.value:
+            fields = {key.value: value for key, value in item.value}
+            if (
+                set(fields) == _DEFAULT_HUB_KEYS
+                and fields["name"].value == "hub"
+                and fields["type"].value == "a2a"
+                and fields["url"].value == _LEGACY_HUB_URL
+            ):
+                url_nodes.append(fields["url"])
+        if len(url_nodes) != 1:
+            return False
+        url_node = url_nodes[0]
+        scalar = original[url_node.start_mark.index:url_node.end_mark.index]
+        replacement = scalar.replace(_LEGACY_HUB_URL, _PRODUCTION_HUB_URL, 1)
+        migrated = (
+            original[:url_node.start_mark.index]
+            + replacement
+            + original[url_node.end_mark.index:]
+        )
+        if migrated == original:
+            return False
+        mode = target.stat().st_mode
+        tmp_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=target.parent, delete=False,
+                prefix=f".{target.name}.",
+            ) as tmp:
+                tmp_name = tmp.name
+                tmp.write(migrated)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.chmod(tmp_name, mode)
+            os.replace(tmp_name, target)
+        finally:
+            if tmp_name and os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        logger.info("[delegates] migrated bundled hub endpoint :7871 → :7870")
+        return True
+    except Exception as e:  # noqa: BLE001 — migration must never break boot
+        logger.warning(f"[delegates] hub endpoint migration skipped: {e}")
+        return False
 
 
 @dataclass
@@ -460,14 +541,15 @@ async def probe(delegate: Delegate, *, timeout: float = 8.0) -> dict:
 _HEALTH_INTERVAL_SECS = float(
     os.environ.get("DELEGATE_HEALTH_INTERVAL", "300")
 )
-# The first probe starts immediately, but health_loop itself is a background
-# task and every network operation is async, so it never holds the boot gate.
-# This lets the ready-stage UI surface a confirmed-down local hub before the
-# user's first delegation. Operators with a large remote fleet can restore a
-# grace period through the environment variable.
+# Defer the fleet-wide first pass so model loading and the SPA handshake do not
+# compete with ACP checks or remote probes. The named local hub has a separate,
+# narrow startup confirmation below; no other delegate bypasses this grace.
 _HEALTH_INITIAL_DELAY_SECS = float(
-    os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "0")
+    os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "30")
 )
+
+_HUB_STARTUP_ATTEMPTS = 2
+_HUB_STARTUP_RETRY_SECS = 1.0
 
 # Per-delegate fast-retry steps (seconds) for the first N consecutive
 # failures, before settling into the base interval. Picks up a recovery
@@ -500,6 +582,38 @@ def _next_probe_delay(consecutive_failures: int, base_interval: float) -> float:
         if idx < len(_RETRY_STEPS_SECS):
             return _RETRY_STEPS_SECS[idx]
     return base_interval * random.uniform(0.9, 1.1)
+
+
+async def probe_local_hub_at_boot(
+    registry: "DelegateRegistry",
+    *,
+    attempts: int = _HUB_STARTUP_ATTEMPTS,
+    retry_delay_secs: float = _HUB_STARTUP_RETRY_SECS,
+) -> None:
+    """Confirm the named loopback A2A hub without waking the rest of the fleet."""
+    from urllib.parse import urlparse
+
+    hub = registry.get("hub")
+    if not hub or hub.type != "a2a":
+        return
+    if urlparse(hub.url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return
+
+    for attempt in range(max(0, attempts)):
+        try:
+            result = await probe(hub)
+        except Exception as e:  # noqa: BLE001 — boot availability is best-effort
+            result = {"ok": False, "error": str(e)}
+        registry.record_health(
+            hub.name,
+            ok=bool(result.get("ok")),
+            latency_ms=result.get("latency_ms"),
+            error=result.get("error"),
+        )
+        if result.get("ok"):
+            return
+        if attempt + 1 < attempts:
+            await asyncio.sleep(retry_delay_secs)
 
 
 async def health_loop(

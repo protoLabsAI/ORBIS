@@ -14,8 +14,9 @@
 #
 # The local protoAgent hub ships as the default delegate. It is a separately
 # managed service; ORBIS probes it at boot and warns without blocking voice if
-# it is unavailable. Add other delegates here, or from Settings → Agent →
-# Delegates. See docs/reference/agent.md.
+# it is unavailable. Existing untouched `:7871` hub seeds migrate once; custom
+# hub entries are preserved. Add other delegates here, or from Settings →
+# Agent → Delegates. See docs/reference/agent.md.
 
 delegates:
   - name: hub

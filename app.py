@@ -137,7 +137,7 @@ from voice.local_transport import LocalAudioTransport, audio_runtime_info  # noq
 from voice.sse_bus import sse_bus
 
 from a2a_server import register_a2a_routes
-from agent.delegates import DelegateRegistry
+from agent.delegates import DelegateRegistry, migrate_default_hub_endpoint
 from agent.echo_guard import (
     EchoGuardState,
 )
@@ -208,6 +208,7 @@ load_users(CONFIG_DIR / "users.yaml")
 # Delegate registry — A2A agents + OpenAI-compat endpoints the agent can
 # hand off to via `delegate_to`. Loaded once at boot. Shared across users.
 _DELEGATES_YAML = Path(os.environ.get("DELEGATES_YAML", "config/delegates.yaml"))
+migrate_default_hub_endpoint(_DELEGATES_YAML)
 _DELEGATES = DelegateRegistry(_DELEGATES_YAML)
 
 # Single ORBIS persona loaded from config/orbis.yaml (see agent/persona.py).
@@ -1396,7 +1397,13 @@ async def lifespan(app: FastAPI):
         _reminder_scheduler.run(), name="orbis-reminders"
     )
 
-    from agent.delegates import health_loop as _delegate_health_loop
+    from agent.delegates import (
+        health_loop as _delegate_health_loop,
+        probe_local_hub_at_boot as _probe_local_hub_at_boot,
+    )
+    hub_health_task = asyncio.create_task(
+        _probe_local_hub_at_boot(_DELEGATES), name="orbis-hub-startup-health",
+    )
     delegate_health_task = asyncio.create_task(
         _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",
     )
@@ -1477,7 +1484,7 @@ async def lifespan(app: FastAPI):
                 pass
         _native_pipeline_task = None
         _native_transport = None
-        for t in (curator_task, reminder_task, delegate_health_task):
+        for t in (curator_task, reminder_task, hub_health_task, delegate_health_task):
             t.cancel()
             try:
                 await t

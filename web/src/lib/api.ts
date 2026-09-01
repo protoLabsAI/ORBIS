@@ -304,12 +304,12 @@ export type DelegateWithStatus = Delegate & {
 
 export type SystemHealth = {
   status: string;
-  delegates: Array<{
+  delegates: Array<Pick<
+    DelegateHealth,
+    'ok' | 'latency_ms' | 'last_checked' | 'consecutive_failures'
+  > & {
     name: string;
-    ok: boolean | null;
-    latency_ms: number | null;
-    last_checked: number | null;
-    consecutive_failures: number;
+    type: string;
   }>;
 };
 

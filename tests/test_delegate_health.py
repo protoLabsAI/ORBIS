@@ -20,6 +20,7 @@ from agent.delegates import (
     DelegateRegistry,
     health_loop,
     probe,
+    probe_local_hub_at_boot,
 )
 
 
@@ -314,9 +315,8 @@ async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_default_loop_probes_during_boot_and_counts_failures(respx_mock):
-    """The default loop promptly populates health and metrics for boot UI."""
-    metrics.reset()
+async def test_default_loop_preserves_fleet_boot_grace(respx_mock):
+    """The normal fleet loop must not touch delegates during startup."""
     respx_mock.get("http://ava/.well-known/agent-card.json").respond(
         status_code=503, text="warming up",
     )
@@ -324,18 +324,89 @@ async def test_default_loop_probes_during_boot_and_counts_failures(respx_mock):
     reg._items["ava"] = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
 
     task = asyncio.create_task(health_loop(reg, interval_secs=10.0))
-    for _ in range(5):
-        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    assert reg.health("ava") is None
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
 
-    h = reg.health("ava")
-    assert h is not None
-    assert h.ok is False
-    assert metrics.snapshot()["counters"]["delegate_probe_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_confirms_only_local_named_hub(monkeypatch):
+    calls: list[str] = []
+    results = iter([
+        {"ok": False, "error": "starting"},
+        {"ok": False, "error": "still down"},
+    ])
+
+    async def _probe(delegate, *, timeout=8.0):
+        calls.append(delegate.name)
+        return next(results)
+
+    monkeypatch.setattr("agent.delegates.probe", _probe)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="brain", type="a2a",
+        url="http://127.0.0.1:7870/a2a",
+    )
+    reg._items["coder"] = Delegate(
+        name="coder", description="code", type="acp", command="codex",
+    )
+    reg._items["remote"] = Delegate(
+        name="remote", description="fleet", type="a2a",
+        url="https://agent.example/a2a",
+    )
+
+    await probe_local_hub_at_boot(reg, attempts=2, retry_delay_secs=0)
+
+    assert calls == ["hub", "hub"]
+    assert reg.health("hub").consecutive_failures == 2
+    assert reg.health("coder") is None
+    assert reg.health("remote") is None
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_suppresses_launch_race_after_recovery(monkeypatch):
+    results = iter([
+        {"ok": False, "error": "starting"},
+        {"ok": True, "latency_ms": 4},
+    ])
+
+    async def _probe(delegate, *, timeout=8.0):
+        return next(results)
+
+    monkeypatch.setattr("agent.delegates.probe", _probe)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="brain", type="a2a",
+        url="http://localhost:7870/a2a",
+    )
+
+    await probe_local_hub_at_boot(reg, attempts=2, retry_delay_secs=0)
+
+    health = reg.health("hub")
+    assert health.ok is True
+    assert health.consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_skips_remote_named_hub(monkeypatch):
+    async def _unexpected_probe(delegate, *, timeout=8.0):
+        raise AssertionError("remote hub must retain the fleet grace period")
+
+    monkeypatch.setattr("agent.delegates.probe", _unexpected_probe)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="remote brain", type="a2a",
+        url="https://hub.example/a2a",
+    )
+
+    await probe_local_hub_at_boot(reg, attempts=2, retry_delay_secs=0)
+
+    assert reg.health("hub") is None
 
 
 @pytest.mark.asyncio

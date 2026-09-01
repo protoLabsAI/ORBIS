@@ -14,6 +14,9 @@ from pathlib import Path
 
 import yaml
 
+import agent.delegates as delegates_module
+from agent.delegates import migrate_default_hub_endpoint
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -49,12 +52,56 @@ def test_bundled_hub_uses_production_endpoint() -> None:
     assert hub["url"] == "http://127.0.0.1:7870/a2a"
 
 
-def test_boot_status_warns_without_blocking_on_confirmed_hub_failure() -> None:
-    source = (ROOT / "web/src/components/BootStatus.tsx").read_text(
-        encoding="utf-8"
+def test_migrates_only_legacy_default_hub_and_preserves_file_shape(
+    tmp_path, monkeypatch,
+) -> None:
+    path = tmp_path / "delegates.yaml"
+    path.write_text(
+        "# keep this unrelated URL: http://127.0.0.1:7871/a2a\n"
+        "delegates:\n"
+        "  - name: other\n"
+        "    type: a2a\n"
+        "    description: other agent\n"
+        "    url: http://127.0.0.1:7871/a2a\n"
+        "    headers: {X-Custom: yes}\n"
+        "  - name: hub\n"
+        "    type: a2a\n"
+        "    description: local brain\n"
+        "    url: http://127.0.0.1:7871/a2a\n",
+        encoding="utf-8",
     )
-    assert "setReady(true);" in source
-    assert "void warnIfHubUnavailable();" in source
-    assert "delegate.name === 'hub'" in source
-    assert "hub.ok === false" in source
-    assert "hub unavailable — delegated work is offline" in source
+    replacements = []
+    real_replace = delegates_module.os.replace
+
+    def _recording_replace(source, destination):
+        replacements.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(delegates_module.os, "replace", _recording_replace)
+
+    assert migrate_default_hub_endpoint(path) is True
+    migrated = path.read_text(encoding="utf-8")
+    assert migrated.count("http://127.0.0.1:7871/a2a") == 2  # comment + other
+    assert migrated.count("http://127.0.0.1:7870/a2a") == 1
+    assert "# keep this unrelated URL" in migrated
+    assert "headers: {X-Custom: yes}" in migrated
+    assert len(replacements) == 1
+    assert replacements[0][0].parent == path.parent
+    assert replacements[0][1] == path
+    assert migrate_default_hub_endpoint(path) is False  # one-time / idempotent
+
+
+def test_does_not_migrate_custom_hub(tmp_path) -> None:
+    path = tmp_path / "delegates.yaml"
+    original = (
+        "delegates:\n"
+        "  - name: hub\n"
+        "    type: a2a\n"
+        "    description: secured local brain\n"
+        "    url: http://127.0.0.1:7871/a2a\n"
+        "    auth: {scheme: apiKey, credentialsEnv: HUB_KEY}\n"
+    )
+    path.write_text(original, encoding="utf-8")
+
+    assert migrate_default_hub_endpoint(path) is False
+    assert path.read_text(encoding="utf-8") == original

@@ -66,7 +66,8 @@ const SLOW_AFTER_S = 180;
 const HARD_AFTER_S = 300;
 const HUB_HEALTH_RETRIES = 20;
 const HUB_HEALTH_RETRY_MS = 500;
-const HUB_UNAVAILABLE_WARNING = 'hub unavailable — delegated work is offline';
+const HUB_UNAVAILABLE_WARNING =
+  'protoAgent unavailable — start the local hub to restore delegation';
 
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
@@ -86,6 +87,16 @@ export function BootStatus() {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     let hubHealthStarted = false;
+    const healthTimers = new Map<number, () => void>();
+
+    const waitForHealth = () => new Promise<void>((resolve) => {
+      const finish = () => {
+        healthTimers.delete(id);
+        resolve();
+      };
+      const id = window.setTimeout(finish, HUB_HEALTH_RETRY_MS);
+      healthTimers.set(id, finish);
+    });
 
     const warnIfHubUnavailable = async () => {
       // The background probe normally lands before the ready marker. If the
@@ -93,9 +104,11 @@ export function BootStatus() {
       for (let attempt = 0; attempt < HUB_HEALTH_RETRIES && !cancelled; attempt += 1) {
         try {
           const health = await api.health();
+          if (cancelled) return;
           const hub = health.delegates.find((delegate) => delegate.name === 'hub');
           if (!hub || hub.ok === true) return;
-          if (hub.ok === false) {
+          if (hub.ok === false && hub.consecutive_failures >= 2) {
+            if (cancelled) return;
             pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
             return;
           }
@@ -104,7 +117,8 @@ export function BootStatus() {
           // is down. The normal boot/error surfaces own that failure instead.
           return;
         }
-        await new Promise((resolve) => window.setTimeout(resolve, HUB_HEALTH_RETRY_MS));
+        await waitForHealth();
+        if (cancelled) return;
       }
     };
 
@@ -142,6 +156,11 @@ export function BootStatus() {
 
     return () => {
       cancelled = true;
+      healthTimers.forEach((finish, id) => {
+        window.clearTimeout(id);
+        finish();
+      });
+      healthTimers.clear();
       if (unlisten) unlisten();
     };
   }, []);
