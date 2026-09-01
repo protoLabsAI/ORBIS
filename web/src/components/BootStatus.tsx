@@ -4,6 +4,8 @@ import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
+import { api } from '@/lib/api';
+import { pushStatusTransient } from '@/shared/statusBus';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -62,6 +64,9 @@ const STAGE_PROGRESS: Record<string, number> = {
 const REASSURE_AFTER_S = 15;
 const SLOW_AFTER_S = 180;
 const HARD_AFTER_S = 300;
+const HUB_HEALTH_RETRIES = 20;
+const HUB_HEALTH_RETRY_MS = 500;
+const HUB_UNAVAILABLE_WARNING = 'hub unavailable — delegated work is offline';
 
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
@@ -80,6 +85,28 @@ export function BootStatus() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
+    let hubHealthStarted = false;
+
+    const warnIfHubUnavailable = async () => {
+      // The background probe normally lands before the ready marker. If the
+      // snapshot is still unknown, retry briefly without holding the boot gate.
+      for (let attempt = 0; attempt < HUB_HEALTH_RETRIES && !cancelled; attempt += 1) {
+        try {
+          const health = await api.health();
+          const hub = health.delegates.find((delegate) => delegate.name === 'hub');
+          if (!hub || hub.ok === true) return;
+          if (hub.ok === false) {
+            pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
+            return;
+          }
+        } catch {
+          // Backend diagnostics being unavailable is not evidence that the hub
+          // is down. The normal boot/error surfaces own that failure instead.
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, HUB_HEALTH_RETRY_MS));
+      }
+    };
 
     const apply = (raw: string) => {
       const s = parseBoot(raw);
@@ -91,7 +118,13 @@ export function BootStatus() {
       }
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
-      if (s.stage === 'ready') setReady(true);
+      if (s.stage === 'ready') {
+        setReady(true);
+        if (!hubHealthStarted) {
+          hubHealthStarted = true;
+          void warnIfHubUnavailable();
+        }
+      }
     };
 
     // Catch markers emitted before this component subscribed.

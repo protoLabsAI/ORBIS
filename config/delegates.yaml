@@ -12,9 +12,10 @@
 #            `command` + `args` (how to start it in ACP mode) and `workdir`
 #            (the directory it's responsible for — its session cwd + sandbox).
 #
-# No delegates ship by default — add your own here, or from
-# Settings → Agent → Delegates. Empty list = `delegate_to` is not
-# registered. See docs/reference/agent.md.
+# The local protoAgent hub ships as the default delegate. It is a separately
+# managed service; ORBIS probes it at boot and warns without blocking voice if
+# it is unavailable. Add other delegates here, or from Settings → Agent →
+# Delegates. See docs/reference/agent.md.
 
 delegates:
   - name: hub
@@ -24,7 +25,7 @@ delegates:
       and long-horizon tasks. Use for: complex goals requiring multiple
       tools, tasks that should run in the background, research, anything
       that spans multiple turns.
-    url: http://127.0.0.1:7871/a2a
+    url: http://127.0.0.1:7870/a2a
 
 # ─── Examples (uncomment + edit) ────────────────────────────────────────
 #

@@ -302,6 +302,17 @@ export type DelegateWithStatus = Delegate & {
   health?: DelegateHealth | null;
 };
 
+export type SystemHealth = {
+  status: string;
+  delegates: Array<{
+    name: string;
+    ok: boolean | null;
+    latency_ms: number | null;
+    last_checked: number | null;
+    consecutive_failures: number;
+  }>;
+};
+
 export type DelegateTestResult = {
   ok: boolean;
   latency_ms?: number;
@@ -451,6 +462,7 @@ export interface DiagnosticsReport {
 }
 
 export const api = {
+  health: () => get<SystemHealth>('/healthz'),
   whoami: () => get<Whoami>('/api/whoami'),
   reminders: {
     list: () => get<{ ok: boolean; reminders: ReminderItem[] }>('/api/reminders'),

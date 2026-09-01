@@ -314,8 +314,8 @@ async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_loop_counts_delegate_probe_failures(respx_mock):
-    """Expected negative probe results should surface in /api/metrics."""
+async def test_default_loop_probes_during_boot_and_counts_failures(respx_mock):
+    """The default loop promptly populates health and metrics for boot UI."""
     metrics.reset()
     respx_mock.get("http://ava/.well-known/agent-card.json").respond(
         status_code=503, text="warming up",
@@ -323,9 +323,7 @@ async def test_loop_counts_delegate_probe_failures(respx_mock):
     reg = DelegateRegistry(None)
     reg._items["ava"] = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
 
-    task = asyncio.create_task(
-        health_loop(reg, interval_secs=10.0, initial_delay_secs=0.0),
-    )
+    task = asyncio.create_task(health_loop(reg, interval_secs=10.0))
     for _ in range(5):
         await asyncio.sleep(0.01)
     task.cancel()
@@ -343,8 +341,7 @@ async def test_loop_counts_delegate_probe_failures(respx_mock):
 @pytest.mark.asyncio
 async def test_loop_initial_delay_blocks_first_probe(respx_mock):
     """A non-zero initial delay means the cache stays empty until it
-    elapses — protects boot from probe stampedes when the LLM is
-    still loading."""
+    elapses — operators can opt into this for a large remote fleet."""
     respx_mock.get("http://ava/.well-known/agent-card.json").respond(
         status_code=200, json={"name": "ava"},
     )
@@ -363,8 +360,6 @@ async def test_loop_initial_delay_blocks_first_probe(respx_mock):
         await task
     except asyncio.CancelledError:
         pass
-
-
 # ---------------------------------------------------------------------------
 # Fast-retry / jitter scheduling — _next_probe_delay
 # ---------------------------------------------------------------------------

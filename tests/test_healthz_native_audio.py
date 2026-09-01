@@ -12,6 +12,7 @@ import asyncio
 import pytest
 
 import app as app_module  # noqa: F401 — patched via app_module.* (handler reads app.<name>)
+from agent.delegates import Delegate, DelegateRegistry
 from server.routers.system import health
 
 
@@ -19,6 +20,26 @@ class _DummyTransport:
     connected = True
     mic_frames_received = 7
     speaker_frames_sent = 3
+
+
+@pytest.mark.asyncio
+async def test_healthz_exposes_confirmed_hub_failure(monkeypatch: pytest.MonkeyPatch):
+    registry = DelegateRegistry(None)
+    registry._items["hub"] = Delegate(
+        name="hub",
+        description="local brain",
+        type="a2a",
+        url="http://127.0.0.1:7870/a2a",
+    )
+    registry.record_health("hub", ok=False, error="unreachable")
+    monkeypatch.setattr(app_module, "_DELEGATES", registry)
+
+    payload = await health()
+
+    hub = next(delegate for delegate in payload["delegates"] if delegate["name"] == "hub")
+    assert hub["ok"] is False
+    assert hub["consecutive_failures"] == 1
+    assert "last_error" not in hub  # public health never leaks endpoint details
 
 
 @pytest.mark.asyncio

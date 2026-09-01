@@ -460,11 +460,13 @@ async def probe(delegate: Delegate, *, timeout: float = 8.0) -> dict:
 _HEALTH_INTERVAL_SECS = float(
     os.environ.get("DELEGATE_HEALTH_INTERVAL", "300")
 )
-# Defer the FIRST probe by this many seconds after boot so the LLM model
-# loads + the SPA hands shake without a stampede of probes competing for
-# the event loop on a cold start.
+# The first probe starts immediately, but health_loop itself is a background
+# task and every network operation is async, so it never holds the boot gate.
+# This lets the ready-stage UI surface a confirmed-down local hub before the
+# user's first delegation. Operators with a large remote fleet can restore a
+# grace period through the environment variable.
 _HEALTH_INITIAL_DELAY_SECS = float(
-    os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "30")
+    os.environ.get("DELEGATE_HEALTH_INITIAL_DELAY", "0")
 )
 
 # Per-delegate fast-retry steps (seconds) for the first N consecutive
