@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
-import type { PublicDelegateHealth } from '@/lib/api';
 import { pushStatusTransient } from '@/shared/statusBus';
+import {
+  createBootSignals,
+  startBootStatusRuntime,
+  type BootStage,
+  type SsePayload,
+} from './bootStatusRuntime';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -25,21 +30,6 @@ import { pushStatusTransient } from '@/shared/statusBus';
  * component keeps all the ORBIS-specific stage/progress/stall logic and
  * slots the progress bar + escape hatch in.
  */
-
-interface BootStage {
-  stage: string;
-  detail: string;
-}
-
-function parseBoot(raw: string): BootStage | null {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw) as BootStage;
-    return typeof v?.stage === 'string' ? v : null;
-  } catch {
-    return null;
-  }
-}
 
 // Fraction of the boot the gate shows as complete at each stage. The STT
 // step is the long pole (first-run model download), so it claims the
@@ -67,26 +57,6 @@ const HARD_AFTER_S = 300;
 const HUB_UNAVAILABLE_WARNING =
   'protoAgent unavailable — start the local hub to restore delegation';
 
-interface SsePayload {
-  event: string;
-  data: string;
-}
-
-function parseHubHealth(payload: SsePayload): PublicDelegateHealth | null {
-  if (payload.event !== 'delegate-health') return null;
-  try {
-    const value = JSON.parse(payload.data) as Partial<PublicDelegateHealth>;
-    if (
-      value.name !== 'hub'
-      || typeof value.ok !== 'boolean'
-      || typeof value.consecutive_failures !== 'number'
-    ) return null;
-    return value as PublicDelegateHealth;
-  } catch {
-    return null;
-  }
-}
-
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
   const [progress, setProgress] = useState(0.05);
@@ -100,30 +70,12 @@ export function BootStatus() {
   // Seconds since mount, ticked until ready — drives the slow/stalled escape
   // hatch below so a wedged boot isn't an infinite spinner.
   const [elapsed, setElapsed] = useState(0);
+  // React StrictMode replays effects without resetting refs. Keep the
+  // user-visible warning dedupe outside the effect-local runtime session.
+  const hubWarningShown = useRef(false);
 
   useEffect(() => {
-    let unlistenBoot: (() => void) | null = null;
-    let unlistenHealth: (() => void) | null = null;
-    let cancelled = false;
-    let bootReady = false;
-    let pendingHubHealth: PublicDelegateHealth | null = null;
-    let hubWarningShown = false;
-
-    const maybeWarnForHub = () => {
-      if (
-        cancelled
-        || !bootReady
-        || hubWarningShown
-        || pendingHubHealth?.ok !== false
-        || pendingHubHealth.consecutive_failures < 2
-      ) return;
-      hubWarningShown = true;
-      pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
-    };
-
-    const apply = (raw: string) => {
-      const s = parseBoot(raw);
-      if (!s || cancelled) return;
+    const applyBootStage = (s: BootStage) => {
       if (s.detail) {
         setDetail(s.detail);
         // "Loading Parakeet speech model…" → real load; "…loads on first use" → deferred.
@@ -132,45 +84,33 @@ export function BootStatus() {
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
       if (s.stage === 'ready') {
-        bootReady = true;
         setReady(true);
-        maybeWarnForHub();
       }
     };
-
-    // Catch markers emitted before this component subscribed.
-    invoke<string>('boot_status').then(apply).catch(() => {
-      // Command unavailable (non-Tauri dev) — don't block the UI.
-      if (!cancelled) setReady(true);
+    const signals = createBootSignals({
+      onBootStage: applyBootStage,
+      onHubUnavailable: () => {
+        if (hubWarningShown.current) return;
+        hubWarningShown.current = true;
+        pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
+      },
     });
 
-    listen<string>('orbis-boot', (e) => apply(e.payload))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlistenBoot = fn;
-      })
-      .catch(() => {});
-
-    // The bounded backend startup probe publishes one retained result. The
-    // Rust SSE bridge forwards it over its existing long-lived connection, so
-    // this component starts no request that could outlive its effect.
-    listen<SsePayload>('orbis-sse', (e) => {
-      const health = parseHubHealth(e.payload);
-      if (!health || cancelled) return;
-      pendingHubHealth = health;
-      maybeWarnForHub();
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlistenHealth = fn;
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-      if (unlistenBoot) unlistenBoot();
-      if (unlistenHealth) unlistenHealth();
-    };
+    return startBootStatusRuntime(
+      {
+        listenBoot: (handler) => listen<string>(
+          'orbis-boot', (event) => handler(event.payload),
+        ),
+        listenSse: (handler) => listen<SsePayload>(
+          'orbis-sse', (event) => handler(event.payload),
+        ),
+        bootSnapshot: () => invoke<string>('boot_status'),
+        hubHealthSnapshot: () => invoke<SsePayload | null>('delegate_health_status'),
+      },
+      signals,
+      // Commands/listeners are unavailable in plain browser development.
+      () => setReady(true),
+    );
   }, []);
 
   // Tick a seconds counter until ready.
