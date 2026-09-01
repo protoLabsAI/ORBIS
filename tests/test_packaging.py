@@ -12,7 +12,9 @@ invisible to CI. This test closes that gap and auto-covers future packages.
 
 from __future__ import annotations
 
+import ast
 import re
+import shlex
 from pathlib import Path
 
 try:
@@ -103,5 +105,31 @@ def test_docker_boot_import_smoke_follows_all_runtime_copies():
 
     assert smoke > last_copy, "boot import smoke must follow every runtime COPY"
     smoke_instruction = instructions[smoke]
-    for module in ("acp", "app", "server", "agent.delegate_adapters"):
-        assert module in smoke_instruction, f"Docker boot smoke must import {module}"
+    command = shlex.split(smoke_instruction)
+    script = command[command.index("-c") + 1]
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(script))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    required = {"acp", "app", "server", "agent.delegate_adapters"}
+    assert required <= imported, (
+        f"Docker boot smoke is missing exact imports: {sorted(required - imported)}"
+    )
+
+
+def test_pull_request_docker_build_cannot_publish_packages():
+    """PR-authored workflow code must run without registry credentials."""
+    verify = (ROOT / ".github/workflows/docker-verify.yml").read_text(
+        encoding="utf-8"
+    )
+    publish = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert re.search(r"^permissions:\n  contents: read\n", verify, re.MULTILINE)
+    assert not re.search(r"^\s*packages:", verify, re.MULTILINE)
+    assert "docker/login-action" not in verify
+    assert "push: false" in verify
+    assert "pull_request:" not in publish.split("concurrency:", maxsplit=1)[0]
