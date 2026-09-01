@@ -1401,8 +1401,19 @@ async def lifespan(app: FastAPI):
         health_loop as _delegate_health_loop,
         probe_local_hub_at_boot as _probe_local_hub_at_boot,
     )
+
+    async def _publish_confirmed_hub_health(delegate, _health) -> None:
+        await sse_bus.publish(
+            "delegate-health",
+            _delegate_health_payload(delegate, public=True),
+            retain=True,
+        )
+
     hub_health_task = asyncio.create_task(
-        _probe_local_hub_at_boot(_DELEGATES), name="orbis-hub-startup-health",
+        _probe_local_hub_at_boot(
+            _DELEGATES, on_confirmed=_publish_confirmed_hub_health,
+        ),
+        name="orbis-hub-startup-health",
     )
     delegate_health_task = asyncio.create_task(
         _delegate_health_loop(_DELEGATES), name="orbis-delegate-health",

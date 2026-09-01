@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
-import { api } from '@/lib/api';
+import type { PublicDelegateHealth } from '@/lib/api';
 import { pushStatusTransient } from '@/shared/statusBus';
 
 /**
@@ -64,13 +64,28 @@ const STAGE_PROGRESS: Record<string, number> = {
 const REASSURE_AFTER_S = 15;
 const SLOW_AFTER_S = 180;
 const HARD_AFTER_S = 300;
-const HUB_HEALTH_RETRY_MS = 500;
-// Backend confirmation is capped at 2s + 1s retry + 2s. Keep three seconds of
-// margin for startup scheduling and transient local /healthz failures.
-const HUB_HEALTH_DEADLINE_MS = 8000;
-const HUB_HEALTH_FETCH_TIMEOUT_MS = 1000;
 const HUB_UNAVAILABLE_WARNING =
   'protoAgent unavailable — start the local hub to restore delegation';
+
+interface SsePayload {
+  event: string;
+  data: string;
+}
+
+function parseHubHealth(payload: SsePayload): PublicDelegateHealth | null {
+  if (payload.event !== 'delegate-health') return null;
+  try {
+    const value = JSON.parse(payload.data) as Partial<PublicDelegateHealth>;
+    if (
+      value.name !== 'hub'
+      || typeof value.ok !== 'boolean'
+      || typeof value.consecutive_failures !== 'number'
+    ) return null;
+    return value as PublicDelegateHealth;
+  } catch {
+    return null;
+  }
+}
 
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
@@ -87,67 +102,23 @@ export function BootStatus() {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    let unlistenBoot: (() => void) | null = null;
+    let unlistenHealth: (() => void) | null = null;
     let cancelled = false;
-    let hubHealthStarted = false;
-    const healthTimers = new Map<number, () => void>();
+    let bootReady = false;
+    let pendingHubHealth: PublicDelegateHealth | null = null;
+    let hubWarningShown = false;
 
-    const clearHealthTimer = (id: number) => {
-      window.clearTimeout(id);
-      healthTimers.delete(id);
-    };
-
-    const waitForHealth = (delayMs: number) => new Promise<void>((resolve) => {
-      const finish = () => {
-        healthTimers.delete(id);
-        resolve();
-      };
-      const id = window.setTimeout(finish, delayMs);
-      healthTimers.set(id, finish);
-    });
-
-    const fetchHealth = async () => {
-      let timeoutId = 0;
-      const timeout = new Promise<never>((_, reject) => {
-        const fail = () => {
-          healthTimers.delete(timeoutId);
-          reject(new Error('health request timed out'));
-        };
-        timeoutId = window.setTimeout(fail, HUB_HEALTH_FETCH_TIMEOUT_MS);
-        healthTimers.set(timeoutId, fail);
-      });
-      try {
-        return await Promise.race([api.health(), timeout]);
-      } finally {
-        clearHealthTimer(timeoutId);
-      }
-    };
-
-    const warnIfHubUnavailable = async () => {
-      // The background probe normally lands before the ready marker. If the
-      // snapshot is still unknown, retry briefly without holding the boot gate.
-      const deadline = performance.now() + HUB_HEALTH_DEADLINE_MS;
-      while (!cancelled && performance.now() < deadline) {
-        try {
-          const health = await fetchHealth();
-          if (cancelled) return;
-          const hub = health.delegates.find((delegate) => delegate.name === 'hub');
-          if (!hub || hub.ok === true) return;
-          if (hub.ok === false && hub.consecutive_failures >= 2) {
-            if (cancelled) return;
-            pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
-            return;
-          }
-        } catch {
-          // Backend diagnostics being unavailable is not evidence that the hub
-          // is down. Retry inside the bounded startup window; the normal boot /
-          // error surfaces own a sustained sidecar failure.
-        }
-        const remaining = deadline - performance.now();
-        if (remaining <= 0) return;
-        await waitForHealth(Math.min(HUB_HEALTH_RETRY_MS, remaining));
-        if (cancelled) return;
-      }
+    const maybeWarnForHub = () => {
+      if (
+        cancelled
+        || !bootReady
+        || hubWarningShown
+        || pendingHubHealth?.ok !== false
+        || pendingHubHealth.consecutive_failures < 2
+      ) return;
+      hubWarningShown = true;
+      pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
     };
 
     const apply = (raw: string) => {
@@ -161,11 +132,9 @@ export function BootStatus() {
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
       if (s.stage === 'ready') {
+        bootReady = true;
         setReady(true);
-        if (!hubHealthStarted) {
-          hubHealthStarted = true;
-          void warnIfHubUnavailable();
-        }
+        maybeWarnForHub();
       }
     };
 
@@ -178,18 +147,29 @@ export function BootStatus() {
     listen<string>('orbis-boot', (e) => apply(e.payload))
       .then((fn) => {
         if (cancelled) fn();
-        else unlisten = fn;
+        else unlistenBoot = fn;
+      })
+      .catch(() => {});
+
+    // The bounded backend startup probe publishes one retained result. The
+    // Rust SSE bridge forwards it over its existing long-lived connection, so
+    // this component starts no request that could outlive its effect.
+    listen<SsePayload>('orbis-sse', (e) => {
+      const health = parseHubHealth(e.payload);
+      if (!health || cancelled) return;
+      pendingHubHealth = health;
+      maybeWarnForHub();
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlistenHealth = fn;
       })
       .catch(() => {});
 
     return () => {
       cancelled = true;
-      healthTimers.forEach((finish, id) => {
-        clearHealthTimer(id);
-        finish();
-      });
-      healthTimers.clear();
-      if (unlisten) unlisten();
+      if (unlistenBoot) unlistenBoot();
+      if (unlistenHealth) unlistenHealth();
     };
   }, []);
 

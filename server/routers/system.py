@@ -89,6 +89,7 @@ async def events(user: User = Depends(require_user)):
         bot-state   {"state": "idle"|"listening"|"thinking"|"speaking"}
         transcript  {"source": "user"|"bot", "text": "...", "final": true|false}
         session     {"event": "start"|"end", "session_id": "..."}
+        delegate-health  {"name": "hub", "ok": bool, ...} at startup
     """
     from fastapi.responses import StreamingResponse
     return StreamingResponse(

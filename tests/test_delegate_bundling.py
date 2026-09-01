@@ -15,6 +15,7 @@ from pathlib import Path
 import yaml
 
 import agent.delegates as delegates_module
+from agent.delegate_config_store import read_delegates, write_delegates
 from agent.delegates import _DEFAULT_HUB_DESCRIPTION, migrate_default_hub_endpoint
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,3 +131,54 @@ def test_does_not_migrate_aliased_default_hub(tmp_path) -> None:
 
     assert migrate_default_hub_endpoint(path) is False
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_migrates_untouched_hub_after_settings_round_trip(tmp_path) -> None:
+    """Settings strips description edges; that is not a user customization."""
+    path = tmp_path / "delegates.yaml"
+    path.write_text(
+        "delegates:\n"
+        "  - name: hub\n"
+        "    type: a2a\n"
+        "    description: >\n"
+        "      Multi-step reasoning, tool use, fleet delegation, background work,\n"
+        "      and long-horizon tasks. Use for: complex goals requiring multiple\n"
+        "      tools, tasks that should run in the background, research, anything\n"
+        "      that spans multiple turns.\n"
+        "    url: http://127.0.0.1:7871/a2a\n",
+        encoding="utf-8",
+    )
+
+    # Exercise the same read/normalize/write path as the Delegates Settings API.
+    write_delegates(read_delegates(path), path)
+    round_tripped = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert round_tripped["delegates"][0]["description"] == (
+        _DEFAULT_HUB_DESCRIPTION.strip()
+    )
+
+    assert migrate_default_hub_endpoint(path) is True
+    migrated = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert migrated["delegates"][0]["url"] == "http://127.0.0.1:7870/a2a"
+
+
+def test_does_not_replace_symlinked_delegates_file(tmp_path, monkeypatch) -> None:
+    real_path = tmp_path / "real-delegates.yaml"
+    real_path.write_text(
+        "delegates:\n"
+        "  - name: hub\n"
+        "    type: a2a\n"
+        f"    description: {_DEFAULT_HUB_DESCRIPTION.strip()!r}\n"
+        "    url: http://127.0.0.1:7871/a2a\n",
+        encoding="utf-8",
+    )
+    link_path = tmp_path / "delegates.yaml"
+    link_path.symlink_to(real_path)
+
+    def _unexpected_replace(*_args) -> None:
+        raise AssertionError("symlinked config must never reach os.replace")
+
+    monkeypatch.setattr(delegates_module.os, "replace", _unexpected_replace)
+
+    assert migrate_default_hub_endpoint(link_path) is False
+    assert link_path.is_symlink()
+    assert "http://127.0.0.1:7871/a2a" in real_path.read_text(encoding="utf-8")

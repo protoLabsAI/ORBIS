@@ -35,11 +35,12 @@ import logging
 import os
 import random
 import re
+import stat
 import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 import yaml
 
@@ -79,7 +80,14 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
     and leave the file byte-for-byte alone.
     """
     target = Path(path)
-    if not target.exists():
+    try:
+        original_stat = target.lstat()
+    except FileNotFoundError:
+        return False
+    # Never follow or replace a user-managed symlink. Aside from changing the
+    # link itself into a regular file, following it would make the atomic temp
+    # file land in a different directory from the actual config target.
+    if not stat.S_ISREG(original_stat.st_mode):
         return False
     try:
         original = target.read_text(encoding="utf-8")
@@ -100,7 +108,8 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
             and set(raw) == _DEFAULT_HUB_KEYS
             and raw.get("name") == "hub"
             and raw.get("type") == "a2a"
-            and raw.get("description") == _DEFAULT_HUB_DESCRIPTION
+            and isinstance(raw.get("description"), str)
+            and raw["description"].strip() == _DEFAULT_HUB_DESCRIPTION.strip()
             and raw.get("url") == _LEGACY_HUB_URL
         ]
         if len(matches) != 1:
@@ -119,7 +128,8 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
                 set(fields) == _DEFAULT_HUB_KEYS
                 and fields["name"].value == "hub"
                 and fields["type"].value == "a2a"
-                and fields["description"].value == _DEFAULT_HUB_DESCRIPTION
+                and fields["description"].value.strip()
+                == _DEFAULT_HUB_DESCRIPTION.strip()
                 and fields["url"].value == _LEGACY_HUB_URL
             ):
                 url_nodes.append(fields["url"])
@@ -135,7 +145,16 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
         )
         if migrated == original:
             return False
-        mode = target.stat().st_mode
+        # Re-check immediately before creating/replacing anything. A path that
+        # was swapped for a symlink while parsing is no longer eligible.
+        current_stat = target.lstat()
+        if (
+            not stat.S_ISREG(current_stat.st_mode)
+            or (current_stat.st_dev, current_stat.st_ino)
+            != (original_stat.st_dev, original_stat.st_ino)
+        ):
+            return False
+        mode = stat.S_IMODE(current_stat.st_mode)
         tmp_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -609,6 +628,7 @@ async def probe_local_hub_at_boot(
     attempts: int = _HUB_STARTUP_ATTEMPTS,
     retry_delay_secs: float = _HUB_STARTUP_RETRY_SECS,
     timeout_secs: float = _HUB_STARTUP_TIMEOUT_SECS,
+    on_confirmed: Callable[[Delegate, DelegateHealth], Awaitable[None]] | None = None,
 ) -> None:
     """Confirm the named loopback A2A hub without waking the rest of the fleet."""
     from urllib.parse import urlparse
@@ -628,16 +648,23 @@ async def probe_local_hub_at_boot(
             result = {"ok": False, "error": "startup probe timed out"}
         except Exception as e:  # noqa: BLE001 — boot availability is best-effort
             result = {"ok": False, "error": str(e)}
-        registry.record_health(
+        health = registry.record_health(
             hub.name,
             ok=bool(result.get("ok")),
             latency_ms=result.get("latency_ms"),
             error=result.get("error"),
         )
-        if result.get("ok"):
+        confirmed = bool(result.get("ok")) or attempt + 1 >= attempts
+        if confirmed:
+            if on_confirmed is not None:
+                try:
+                    await on_confirmed(hub, health)
+                except Exception as e:  # noqa: BLE001 — notification is best-effort
+                    logger.warning(
+                        f"[delegate-health] hub startup notification failed: {e}"
+                    )
             return
-        if attempt + 1 < attempts:
-            await asyncio.sleep(retry_delay_secs)
+        await asyncio.sleep(retry_delay_secs)
 
 
 async def health_loop(

@@ -297,6 +297,14 @@ export type DelegateHealth = {
   consecutive_failures: number;
 };
 
+export type PublicDelegateHealth = Pick<
+  DelegateHealth,
+  'ok' | 'latency_ms' | 'last_checked' | 'consecutive_failures'
+> & {
+  name: string;
+  type: string;
+};
+
 export type DelegateWithStatus = Delegate & {
   configured: boolean;
   health?: DelegateHealth | null;
@@ -304,13 +312,7 @@ export type DelegateWithStatus = Delegate & {
 
 export type SystemHealth = {
   status: string;
-  delegates: Array<Pick<
-    DelegateHealth,
-    'ok' | 'latency_ms' | 'last_checked' | 'consecutive_failures'
-  > & {
-    name: string;
-    type: string;
-  }>;
+  delegates: PublicDelegateHealth[];
 };
 
 export type DelegateTestResult = {

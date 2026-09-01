@@ -53,6 +53,26 @@ async def test_publish_reaches_subscriber():
 
 
 @pytest.mark.asyncio
+async def test_retained_event_reaches_late_subscriber_once():
+    """Boot results published before the native bridge connects are replayed."""
+    bus = SseBus()
+    await bus.publish(
+        "delegate-health",
+        {"name": "hub", "ok": False, "consecutive_failures": 2},
+        retain=True,
+    )
+
+    gen = bus.subscribe()
+    assert (await gen.__anext__()).startswith(":")
+    chunk = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+    assert chunk.count("event: delegate-health") == 1
+    data = json.loads(chunk.split("data: ")[1].strip())
+    assert data == {"name": "hub", "ok": False, "consecutive_failures": 2}
+
+    await gen.aclose()
+
+
+@pytest.mark.asyncio
 async def test_multiple_subscribers_all_receive():
     """All subscribers receive the same published event."""
     bus = SseBus()

@@ -372,6 +372,38 @@ async def test_startup_probe_confirms_only_local_named_hub(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_startup_probe_publishes_only_final_confirmed_health(monkeypatch):
+    results = iter([
+        {"ok": False, "error": "starting"},
+        {"ok": False, "error": "still down"},
+    ])
+    published = []
+
+    async def _probe(delegate, *, timeout=8.0):
+        return next(results)
+
+    async def _publish(delegate, health):
+        published.append((delegate.name, health))
+
+    monkeypatch.setattr("agent.delegates.probe", _probe)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="brain", type="a2a",
+        url="http://127.0.0.1:7870/a2a",
+    )
+
+    await probe_local_hub_at_boot(
+        reg, attempts=2, retry_delay_secs=0, on_confirmed=_publish,
+    )
+
+    assert len(published) == 1
+    name, health = published[0]
+    assert name == "hub"
+    assert health.ok is False
+    assert health.consecutive_failures == 2
+
+
+@pytest.mark.asyncio
 async def test_startup_probe_suppresses_launch_race_after_recovery(monkeypatch):
     results = iter([
         {"ok": False, "error": "starting"},
