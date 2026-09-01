@@ -7,14 +7,10 @@ pushes *before* the HTTP call — and the resulting ``ErrorFrame`` flows
 **upstream** (``FrameProcessor.push_error``), where nothing re-arms or
 reacts. Worst first-run failure now that every user wires their own LLM.
 
-Why an observer and not a processor: ``LLMSwitcher`` re-propagates the
-``ErrorFrame`` upstream *even when failover succeeds* ("so that
-application-level error handlers can observe it" — pipecat
-``service_switcher.py``), so a processor upstream of the LLM would announce
-an outage the switcher already recovered from. An observer sees every frame
-in both directions regardless of position (same family as SseBusObserver /
-EchoGuardObserver), so it can instead wait out a short debounce for signs of
-recovery.
+Why an observer and not a processor: ``LLMSwitcher`` absorbs an error after a
+successful switch, while an observer still sees the member LLM push it into
+the switcher. That lets the announcer arm before failover and then wait out a
+short debounce for signs of recovery.
 
 Flow: on a non-fatal ``ErrorFrame`` whose ``.processor`` is an LLM service,
 arm the debounce; cancel it on any sign of life (a new completion attempt,
@@ -70,12 +66,8 @@ _LINES: dict[str, str] = {
         "My language model just hit an error — "
         "if this keeps happening, check the model settings."
     ),
-    # LLMSwitcher failover does NOT retry the failed generation — it only
-    # routes subsequent turns to the backup (pipecat
-    # ServiceSwitcherStrategyFailover.handle_error switches and returns).
-    # The erroring turn still dies unanswered and deserves an announcement,
-    # but "check settings" is the wrong advice when a backup just took
-    # over: the useful action is simply to ask again.
+    # Kept as a safety net if a switch succeeds but its same-turn retry never
+    # produces output before the debounce expires.
     "failover": (
         "My main language model isn't responding, so I've switched to my "
         "backup — ask me that again."
@@ -177,12 +169,10 @@ class LLMErrorAnnouncer(BaseObserver):
     def note_failover(self) -> None:
         """Called from app.py's on_service_switched handler.
 
-        The FIRST failover of an incident reclassifies a pending
-        announcement to the "switched to backup — ask again" line (pipecat
-        does not retry the failed generation, so the turn died either way).
-        A SECOND failover inside the same window means the backup errored
-        too — the member list wrapped, everything is down — so the streak
-        keeps the original error-class line ("check settings")."""
+        One switch reclassifies a pending announcement to the backup line.
+        If that backup errors, ``_on_error`` advances the streak so the real
+        error class wins instead; the strategy never wraps within an incident.
+        """
         now = time.monotonic()
         if now - self._last_failover_at > self._debounce_secs + 5.0:
             self._failover_streak = 0
@@ -208,6 +198,13 @@ class LLMErrorAnnouncer(BaseObserver):
         # the context and the (alive) LLM narrates the failure itself.
         if "executing function call" in frame.error.lower():
             return
+        # A distinct LLM error after a recent switch means the attempted
+        # backup also failed. Do not claim that failover recovered the incident.
+        if (
+            self._failover_streak == 1
+            and time.monotonic() - self._last_failover_at < self._debounce_secs + 5.0
+        ):
+            self._failover_streak = 2
         error_class = classify_llm_error(frame.error, frame.exception)
         logger.warning(
             f"[llm-error] {error_class}: {frame.error!r} — "
@@ -233,10 +230,8 @@ class LLMErrorAnnouncer(BaseObserver):
                 return
             self._last_spoke_at = now
             error_class = self._pending_class or "generic"
-            # A single failover since (just before) the debounce armed means
-            # a live backup took over — small grace because the switcher and
-            # the observer see the same ErrorFrame in the same instant. A
-            # streak ≥ 2 means the backup died too: keep the class line.
+            # One recent failover means the retry has not produced output yet.
+            # A streak ≥ 2 means the attempted backup also errored.
             if (
                 now - self._last_failover_at < self._debounce_secs + 5.0
                 and self._failover_streak == 1
