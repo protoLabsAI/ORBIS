@@ -70,14 +70,22 @@ COPY app.py ./
 # A2A 1.0 (#354) replaced the hand-rolled `a2a/` package with flat
 # `a2a_*.py` modules (import a2a = the a2a-sdk pip dep). Copy those.
 COPY a2a_*.py ./
+COPY acp/ ./acp/
 COPY agent/ ./agent/
 COPY auth/ ./auth/
 COPY config/ ./config/
 COPY memory/ ./memory/
+COPY server/ ./server/
 COPY static/ ./static/
 COPY voice/ ./voice/
 # Built SPA from stage 1 — served at / when FRONTEND=react (default once verified).
 COPY --from=web /web/dist/ ./web/dist/
+
+# Prove the final runtime filesystem can import every boot-critical module.
+# Keep this after all COPY instructions: BuildKit will refuse to publish an
+# image when a source package is missing, and disabling bytecode avoids baking
+# build-host .pyc files into the runtime layer.
+RUN PYTHONDONTWRITEBYTECODE=1 python3 -c "import acp, app, server, agent.delegate_adapters, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print('imports ok')"
 
 ENV PYTHONUNBUFFERED=1
 ENV HF_HOME=/models

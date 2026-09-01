@@ -1,0 +1,70 @@
+name: Verify Docker image
+
+# Exercise the exact image build for changes that can alter its runtime. This
+# workflow never authenticates to GHCR and has no package-write permission;
+# PR-authored steps therefore cannot publish or replace fleet-visible tags.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.dockerignore'
+      - '.github/workflows/docker-publish.yml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/docker-verify.yml'
+      - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'app.py'
+      - 'a2a_*.py'
+      - 'acp/**'
+      - 'agent/**'
+      - 'auth/**'
+      - 'config/**'
+      - 'memory/**'
+      - 'packages/**'
+      - 'server/**'
+      - 'static/**'
+      - 'voice/**'
+      - 'web/**'
+
+concurrency:
+  group: docker-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main (2023-10-18)
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Dockerfile's final source layer imports every boot-critical module.
+      # `push: false` plus read-only workflow permissions makes this a pure
+      # verification build even for PRs authored in the base repository.
+      - name: Build verified image without publishing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=orbis-docker
+          cache-to: type=gha,scope=orbis-docker,mode=max

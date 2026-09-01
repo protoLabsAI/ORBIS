@@ -15,6 +15,11 @@ on:
   # tag never ships a red suite (#490). Single source of truth for "the
   # backend test suite" — the same job that gates PRs gates releases.
   workflow_call:
+    inputs:
+      ref:
+        description: 'Exact commit or tag to test; defaults to the caller ref'
+        required: false
+        type: string
 
 # Group includes github.workflow so that when this is reused as a release
 # gate (workflow_call from release.yml AND desktop-build.yml on the SAME tag
@@ -23,7 +28,7 @@ on:
 # group with cancel-in-progress, so they cancelled each other and the Release
 # job was skipped (v0.2.149 incident). PR/push runs still dedupe per ref.
 concurrency:
-  group: pytest-${{ github.workflow }}-${{ github.ref }}
+  group: pytest-${{ github.workflow }}-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -36,6 +41,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-python@v5
         with:

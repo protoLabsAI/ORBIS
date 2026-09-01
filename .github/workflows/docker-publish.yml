@@ -5,8 +5,9 @@ name: Publish Docker image to GHCR
 # pinned `sha-<short>` for rollbacks.
 #
 # Stable semver Docker tags (vX.Y.Z, X.Y) are cut by release.yml when
-# prepare-release.yml pushes a version tag. This workflow is main-only so
-# the two never step on each other.
+# prepare-release.yml pushes a version tag. Pull requests build the image in
+# docker-verify.yml under a read-only token; this workflow remains the only
+# rolling publisher, so the two release paths never step on each other.
 
 on:
   push:
@@ -27,7 +28,6 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -36,8 +36,15 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.repository == 'protoLabsAI/ORBIS'
+    # workflow_dispatch can target any branch. Never grant a branch-authored
+    # workflow the package-writing job or let it replace rolling tags.
+    if: >-
+      github.repository == 'protoLabsAI/ORBIS' &&
+      github.ref == 'refs/heads/main'
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout
@@ -84,7 +91,9 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Build and push
+      # Dockerfile's final source layer imports every boot-critical module.
+      # BuildKit cannot publish a tag unless that exact image passes the RUN.
+      - name: Build and push verified image
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -96,14 +105,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
-      - name: Verify — module import in runtime image
-        run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          docker run --rm \
-            --entrypoint sh \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" \
-            -c 'cd /app && python -c "import app, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print(\"imports ok\")"'
 
       - name: Summary
         run: |

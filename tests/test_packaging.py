@@ -12,6 +12,9 @@ invisible to CI. This test closes that gap and auto-covers future packages.
 
 from __future__ import annotations
 
+import ast
+import re
+import shlex
 from pathlib import Path
 
 try:
@@ -56,3 +59,94 @@ def test_all_shipped_packages_declared_in_pyproject():
         "first-party packages missing from [tool.hatch.build.targets.sdist] "
         f"include: {sorted(missing_sdist)}"
     )
+
+
+def test_all_shipped_packages_copied_into_docker_runtime():
+    """Keep the source-copy image path in sync with packaged installs.
+
+    Docker installs dependencies from ``pyproject.toml`` and then copies the
+    application source directly, so hatchling's include lists cannot protect
+    this build path.  A newly shipped package must have an explicit directory
+    copy or imports can pass from the checkout and fail only when the runtime
+    image boots.
+    """
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    copied_packages = {
+        match.group("source")
+        for match in re.finditer(
+            r"^COPY\s+(?P<source>[A-Za-z0-9_-]+)/\s+\./(?P=source)/\s*$",
+            dockerfile,
+            flags=re.MULTILINE,
+        )
+    }
+
+    missing_docker = _shipped_packages() - copied_packages
+    assert not missing_docker, (
+        "first-party packages missing from the Docker runtime source copies: "
+        f"{sorted(missing_docker)} — add `COPY <package>/ ./<package>/` or "
+        "the image can fail with ModuleNotFoundError at boot"
+    )
+
+
+def test_docker_boot_import_smoke_follows_all_runtime_copies():
+    """The exact final source filesystem must pass imports before export."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    instructions = [
+        line.strip()
+        for line in dockerfile.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    last_copy = max(i for i, line in enumerate(instructions) if line.startswith("COPY "))
+    smoke = next(
+        i
+        for i, line in enumerate(instructions)
+        if line.startswith("RUN PYTHONDONTWRITEBYTECODE=1 python3 -c")
+    )
+
+    assert smoke > last_copy, "boot import smoke must follow every runtime COPY"
+    smoke_instruction = instructions[smoke]
+    command = shlex.split(smoke_instruction)
+    script = command[command.index("-c") + 1]
+    imported = {
+        alias.name
+        for node in ast.walk(ast.parse(script))
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    required = {"acp", "app", "server", "agent.delegate_adapters"}
+    assert required <= imported, (
+        f"Docker boot smoke is missing exact imports: {sorted(required - imported)}"
+    )
+
+
+def test_pull_request_docker_build_cannot_publish_packages():
+    """PR-authored workflow code must run without registry credentials."""
+    verify = (ROOT / ".github/workflows/docker-verify.yml").read_text(
+        encoding="utf-8"
+    )
+    publish = (ROOT / ".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert re.search(r"^permissions:\n  contents: read\n", verify, re.MULTILINE)
+    assert not re.search(r"^\s*packages:", verify, re.MULTILINE)
+    assert "docker/login-action" not in verify
+    assert "push: false" in verify
+    assert "- '.github/workflows/docker-publish.yml'" in verify
+    assert "- '.github/workflows/release.yml'" in verify
+    assert "pull_request:" not in publish.split("concurrency:", maxsplit=1)[0]
+    assert "github.ref == 'refs/heads/main'" in publish
+
+
+def test_release_tests_and_builds_only_the_validated_gated_tag():
+    """Manual releases cannot test one ref and publish another or an old image."""
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    pytest_workflow = (ROOT / ".github/workflows/pytest.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Reject non-main manual dispatch" in release
+    assert "Validate exact tagged source and Docker import gate" in release
+    assert 'ref: ${{ needs.validate.outputs.sha }}' in release
+    assert 'ref: ${{ inputs.ref || github.ref }}' in pytest_workflow
+    assert "release tag predates the final Docker boot-import gate" in release
