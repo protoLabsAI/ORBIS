@@ -8,6 +8,8 @@ on:
     branches: [main]
     paths:
       - '.dockerignore'
+      - '.github/workflows/docker-publish.yml'
+      - '.github/workflows/release.yml'
       - '.github/workflows/docker-verify.yml'
       - 'Dockerfile'
       - 'pyproject.toml'

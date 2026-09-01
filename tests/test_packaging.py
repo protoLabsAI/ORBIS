@@ -132,4 +132,21 @@ def test_pull_request_docker_build_cannot_publish_packages():
     assert not re.search(r"^\s*packages:", verify, re.MULTILINE)
     assert "docker/login-action" not in verify
     assert "push: false" in verify
+    assert "- '.github/workflows/docker-publish.yml'" in verify
+    assert "- '.github/workflows/release.yml'" in verify
     assert "pull_request:" not in publish.split("concurrency:", maxsplit=1)[0]
+    assert "github.ref == 'refs/heads/main'" in publish
+
+
+def test_release_tests_and_builds_only_the_validated_gated_tag():
+    """Manual releases cannot test one ref and publish another or an old image."""
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    pytest_workflow = (ROOT / ".github/workflows/pytest.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Reject non-main manual dispatch" in release
+    assert "Validate exact tagged source and Docker import gate" in release
+    assert 'ref: ${{ needs.validate.outputs.sha }}' in release
+    assert 'ref: ${{ inputs.ref || github.ref }}' in pytest_workflow
+    assert "release tag predates the final Docker boot-import gate" in release

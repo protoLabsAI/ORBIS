@@ -36,7 +36,11 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    if: github.repository == 'protoLabsAI/ORBIS'
+    # workflow_dispatch can target any branch. Never grant a branch-authored
+    # workflow the package-writing job or let it replace rolling tags.
+    if: >-
+      github.repository == 'protoLabsAI/ORBIS' &&
+      github.ref == 'refs/heads/main'
     timeout-minutes: 30
     permissions:
       contents: read
