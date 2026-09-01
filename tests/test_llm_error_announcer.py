@@ -6,7 +6,13 @@ import asyncio
 import time
 
 import pytest
-from pipecat.frames.frames import ErrorFrame, LLMTextFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    ErrorFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+    TTSSpeakFrame,
+)
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -155,16 +161,14 @@ async def test_fish_gets_softly_prefix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failover_reclassifies_the_line() -> None:
-    # pipecat's failover switches the active service but does NOT retry the
-    # failed generation — the erroring turn dies unanswered either way. When
-    # app.py's on_service_switched handler notes the failover, the
-    # announcement must say "switched to backup — ask again", not "check
-    # settings". (Live-soaked 2026-07-11: switcher + observer see the same
-    # ErrorFrame in the same instant.)
+async def test_backup_start_without_output_keeps_failover_safety_line() -> None:
+    # Neither starting the backup completion nor a MicroAck is LLM recovery.
+    # If the backup hangs before text/tool output, keep exactly one warning.
     a, spoken = _make()
     await a.on_push_frame(_pushed(_llm_error("Connection refused")))
     a.note_failover()
+    await a.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await a.on_push_frame(_pushed(BotStartedSpeakingFrame()))
     await asyncio.sleep(0.05)
     assert len(spoken) == 1
     assert spoken[0].text == _LINES["failover"]
@@ -184,14 +188,14 @@ async def test_stale_failover_does_not_reclassify() -> None:
 
 
 @pytest.mark.asyncio
-async def test_double_failover_means_all_dead_keeps_class_line() -> None:
-    # Primary dies → failover → retry on backup → backup dies → second
-    # failover (the member list wrapped). "Switched to my backup — ask me
-    # that again" would be a lie; the class line is the honest one.
+async def test_backup_error_after_failover_keeps_class_line() -> None:
+    # Primary dies → failover → retry on backup → backup dies. The strategy
+    # does not wrap, and the distinct backup error must replace the safety-net
+    # failover line with the real error class.
     a, spoken = _make()
     await a.on_push_frame(_pushed(_llm_error("Connection refused")))
     a.note_failover()
-    a.note_failover()  # backup errored too, switcher wrapped around
+    await a.on_push_frame(_pushed(_llm_error("Connection refused again")))
     await asyncio.sleep(0.05)
     assert len(spoken) == 1
     assert spoken[0].text == _LINES["unreachable"]

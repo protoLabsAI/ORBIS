@@ -36,11 +36,9 @@ from agent.user_state import user_state_for
 from auth.context import current_session_id, current_user_id
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
-from pipecat.pipeline.llm_switcher import LLMSwitcher
+from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregatorParams, LLMContextAggregatorPair, LLMUserAggregatorParams, UserTurnCompletionConfig
@@ -50,6 +48,7 @@ from pipecat.utils.context.llm_context_summarization import LLMAutoContextSummar
 from voice.ask_gate import AskGate
 from voice.cancel_gate import CancelGate
 from voice.llm import make_llm
+from voice.llm.failover import make_orbis_llm_switcher, queue_failover_retry
 from voice.local_transport import LocalAudioTransport
 from voice.native_bargein import NativeBargeInObserver
 from voice.sse_bus import sse_bus
@@ -172,20 +171,19 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     # Optional failover backup (orbis-1dd). When a fallback LLM is
     # configured (persona.llm.fallback or LLM_FALLBACK_URL), wrap primary
-    # + backup in a pipecat LLMSwitcher with the failover strategy: a
-    # non-fatal ErrorFrame from the active LLM (e.g. the cloud gateway is
-    # down) automatically switches to the next member for the rest of the
-    # session. When unconfigured, `_llm_members == [llm]` and the pipeline
+    # + backup in a pipecat LLMSwitcher with the failover strategy. Auth,
+    # provider-availability, and provider-capacity failures try each backup
+    # once per LLM turn; invalid request/application/unknown errors do not. When
+    # unconfigured, `_llm_members == [llm]` and the pipeline
     # uses the bare `llm` — byte-for-byte the single-LLM path as before.
     # LLM error announcer (#576): a dead/401'd LLM otherwise leaves the orb
     # in "thinking" forever — the ErrorFrame flows upstream where the (long
     # since disarmed) StallWatchdog never looks. Must be an observer, not a
-    # processor: LLMSwitcher re-propagates the ErrorFrame upstream even on a
-    # successful failover, so anything positional would announce recovered
-    # outages. Constructed here (before the switcher) so the failover event
-    # handler below can reclassify a pending announcement; registered in the
-    # task's observers list; emitter (task.queue_frame) wired after task
-    # creation.
+    # processor: an observer sees the member LLM's ErrorFrame before the
+    # switcher either absorbs a successful failover or propagates an
+    # unrecovered error. Constructed here so the failover event handler can
+    # reclassify a pending announcement; registered in the task's observers
+    # list; emitter (task.queue_frame) wired after task creation.
     llm_error_announcer = LLMErrorAnnouncer(
         debounce_secs=float(os.environ.get("LLM_ERROR_DEBOUNCE_SECS", "2.5")),
         throttle_secs=float(os.environ.get("LLM_ERROR_THROTTLE_SECS", "20")),
@@ -638,19 +636,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Failover wrapper (orbis-1dd). With a single member this stays the
     # bare LLMService — no LLMSwitcher overhead on the default path. With
     # a configured backup, the switcher routes frames to the active LLM
-    # and fails over to the next on a non-fatal ErrorFrame.
+    # and fails over on auth, provider availability, or provider capacity
+    # errors. Application, invalid-request, and unknown errors propagate.
     if len(_llm_members) == 1:
         pipeline_llm = llm
     else:
-        pipeline_llm = LLMSwitcher(
-            llms=_llm_members,
-            strategy_type=ServiceSwitcherStrategyFailover,
-        )
-
-        # The switcher does NOT retry the failed generation — it only routes
-        # subsequent turns. Budgeted so an all-dead member list can't
-        # ping-pong retries forever: members-1 retries per incident window.
-        _failover_retry = {"used": 0, "window_start": float("-inf")}
+        pipeline_llm = make_orbis_llm_switcher(_llm_members)
 
         @pipeline_llm.strategy.event_handler("on_service_switched")
         async def _on_llm_failover(_strategy, service):
@@ -659,25 +650,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             role = "primary" if idx == 0 else f"backup#{idx}"
             logger.warning("[llm] failover → now using %s (%s)", role, service.name)
             _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
-            # Reclassify the announcer's pending line: if the retry below
-            # can't run (budget spent), "ask me again" beats "check
-            # settings"; a second failover in the same window means the
-            # backup died too, and the announcer falls back to the error
-            # class (#576).
-            llm_error_announcer.note_failover()
-            # Retry the failed generation on the new active member so the
-            # user's question is answered without re-asking: LLMRunFrame
-            # re-pushes the aggregated context — which still holds the
-            # unanswered turn — through the switcher to the backup. The
-            # retry's own output cancels the announcer's debounce, so a
-            # successful failover is completely silent (live-soak 07-11).
-            now = time.monotonic()
-            if now - _failover_retry["window_start"] > 15.0:
-                _failover_retry.update(used=0, window_start=now)
-            if _failover_retry["used"] < len(_llm_members) - 1:
-                _failover_retry["used"] += 1
-                logger.warning("[llm] failover retry — re-running the turn on %s", role)
-                await task.queue_frame(LLMRunFrame())
             await sse_bus.publish("llm", {"event": "failover", "active": role})
 
     pipeline = Pipeline([
@@ -863,6 +835,18 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # The announcer's canned line goes through TTS only — no LLM round-trip,
     # since the LLM is exactly what's broken.
     llm_error_announcer.set_emitter(task.queue_frame)
+    if len(_llm_members) > 1:
+        async def _queue_llm_failover_retry() -> None:
+            service = pipeline_llm.strategy.active_service
+            idx = _llm_members.index(service) if service in _llm_members else -1
+            role = "primary" if idx == 0 else f"backup#{idx}"
+            logger.warning("[llm] failover retry — re-running the turn on %s", role)
+            await queue_failover_retry(
+                note_failover=llm_error_announcer.note_failover,
+                queue_frame=task.queue_frame,
+            )
+
+        pipeline_llm.strategy.set_retry_callback(_queue_llm_failover_retry)
     # Per-delivery voice override (kokoro): lets a delivery speak in another
     # voice for one utterance then revert — e.g. notifications attributed to
     # different agents in distinct voices. Only kokoro honours the frame.
@@ -1290,4 +1274,3 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 # ---------------------------------------------------------------------------
 # Prewarm
 # ---------------------------------------------------------------------------
-

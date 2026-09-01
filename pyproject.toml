@@ -6,7 +6,9 @@ requires-python = ">=3.11"
 dependencies = [
     # Pipecat + transports. The `anthropic` extra backs the anthropic-oauth
     # provider (Claude subscription via OAuth — voice/llm/anthropic_oauth.py).
-    "pipecat-ai[silero,openai,anthropic]>=1.5,<2",
+    # 1.8.1 adds ErrorCategory + processor usability, which the fallback LLM
+    # policy uses to distinguish provider outages from application errors.
+    "pipecat-ai[silero,openai,anthropic]>=1.8.1,<2",
     # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
     # but baseline; users who only want cloud STT/TTS can skip by
     # installing a slim variant (future work).

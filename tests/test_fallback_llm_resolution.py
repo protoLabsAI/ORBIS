@@ -8,9 +8,11 @@ via persona.llm.fallback or the LLM_FALLBACK_* env knobs.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
+from pipecat.processors.frame_processor import FrameProcessor
 
 
 @pytest.fixture
@@ -99,42 +101,327 @@ def test_persona_fallback_takes_precedence_over_env(helper, monkeypatch) -> None
     assert cfg["url"] == "http://persona-backup/v1"
 
 
-# --- failover strategy actually switches on error --------------------------
+# --- failover strategy + real LLMSwitcher error handling -------------------
 
 
-class _FakeService:
-    """Minimal stand-in for an LLMService FrameProcessor — the switcher
-    strategy calls ``queue_frame`` when it activates a service."""
+class _FakeService(FrameProcessor):
+    """FrameProcessor-compatible service without starting worker tasks."""
 
-    def __init__(self, name: str) -> None:
-        self.name = name
+    def __init__(self, name: str, *, is_usable: bool = True) -> None:
+        super().__init__(name=name, enable_direct_mode=True)
+        self._is_usable = is_usable
+        self.queued = []
 
-    async def queue_frame(self, _frame) -> None:  # noqa: D401
+    async def queue_frame(self, frame, *args, **kwargs) -> None:
+        self.queued.append(frame)
+
+    def _sync_registered_tool_handlers(self, _tools) -> None:
         return None
 
 
-@pytest.mark.asyncio
-async def test_failover_strategy_switches_on_error() -> None:
+class _FrameSink(FrameProcessor):
+    def __init__(self) -> None:
+        super().__init__(enable_direct_mode=True)
+        self.frames = []
+
+    async def queue_frame(self, frame, *args, **kwargs) -> None:
+        self.frames.append(frame)
+
+
+def _error(service, category):
     from pipecat.frames.frames import ErrorFrame
-    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
+
+    return ErrorFrame(error="boom", processor=service, category=category)
+
+
+def _arm_retry(strat):
+    retries = []
+
+    async def retry() -> None:
+        retries.append(True)
+
+    strat.set_retry_callback(retry)
+    return retries
+
+
+@pytest.mark.asyncio
+async def test_failover_strategy_switches_on_recoverable_error() -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
 
     primary = _FakeService("primary")
     backup = _FakeService("backup")
-    strat = ServiceSwitcherStrategyFailover(services=[primary, backup])
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
+    retries = _arm_retry(strat)
     assert strat.active_service is primary
 
-    new_active = await strat.handle_error(ErrorFrame(error="boom", processor=primary))
+    new_active = await strat.handle_error(_error(primary, ErrorCategory.CONNECTIVITY))
     assert new_active is backup
     assert strat.active_service is backup
+    assert retries == [True]
 
 
 @pytest.mark.asyncio
 async def test_failover_noop_with_single_service() -> None:
-    from pipecat.frames.frames import ErrorFrame
-    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
 
     only = _FakeService("only")
-    strat = ServiceSwitcherStrategyFailover(services=[only])
+    strat = OrbisLLMFailoverStrategy(services=[only])
+    retries = _arm_retry(strat)
     # No other service to switch to → returns None, stays put.
-    assert await strat.handle_error(ErrorFrame(error="boom", processor=only)) is None
+    assert await strat.handle_error(_error(only, ErrorCategory.CONNECTIVITY)) is None
     assert strat.active_service is only
+    assert retries == []
+
+
+@pytest.mark.asyncio
+async def test_failover_skips_unusable_backup() -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary")
+    dead_backup = _FakeService("dead-backup", is_usable=False)
+    healthy_backup = _FakeService("healthy-backup")
+    strat = OrbisLLMFailoverStrategy(
+        services=[primary, dead_backup, healthy_backup]
+    )
+    _arm_retry(strat)
+
+    new_active = await strat.handle_error(_error(primary, ErrorCategory.SERVER))
+    assert new_active is healthy_backup
+    assert strat.active_service is healthy_backup
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "category_name",
+    ["APPLICATION", "INVALID_REQUEST", "UNKNOWN"],
+)
+async def test_still_usable_nonavailability_errors_do_not_fail_over(
+    category_name,
+) -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
+    retries = _arm_retry(strat)
+
+    switched = await strat.handle_error(_error(primary, ErrorCategory[category_name]))
+    assert switched is None
+    assert strat.active_service is primary
+    assert retries == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category_name", ["RATE_LIMIT", "QUOTA"])
+async def test_capacity_errors_fail_over(category_name) -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
+    retries = _arm_retry(strat)
+
+    switched = await strat.handle_error(_error(primary, ErrorCategory[category_name]))
+    assert switched is backup
+    assert retries == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category_name", ["AUTHENTICATION", "AUTHORIZATION"])
+async def test_permanently_unusable_service_uses_pipecat_failover(
+    category_name,
+) -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary", is_usable=False)
+    backup = _FakeService("backup")
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
+    retries = _arm_retry(strat)
+
+    switched = await strat.handle_error(_error(primary, ErrorCategory[category_name]))
+    assert switched is backup
+    assert strat.active_service is backup
+    assert retries == [True]
+
+
+@pytest.mark.asyncio
+async def test_strategy_does_not_switch_without_retry_queue() -> None:
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
+
+    switched = await strat.handle_error(_error(primary, ErrorCategory.CONNECTIVITY))
+    assert switched is None
+    assert strat.active_service is primary
+
+
+@pytest.mark.asyncio
+async def test_real_switcher_absorbs_one_failover_then_propagates_second_error() -> None:
+    from pipecat.frames.frames import LLMContextFrame, LLMRunFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import (
+        OrbisLLMFailoverStrategy,
+        make_orbis_llm_switcher,
+        queue_failover_retry,
+    )
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    switcher = make_orbis_llm_switcher([primary, backup])
+    assert isinstance(switcher.strategy, OrbisLLMFailoverStrategy)
+    sink = _FrameSink()
+    sink.link(switcher)
+    retries = []
+    failovers = []
+    announcer_notes = []
+
+    async def queue_retry(frame) -> None:
+        retries.append(frame)
+
+    async def retry() -> None:
+        await queue_failover_retry(
+            note_failover=lambda: announcer_notes.append(switcher.active_llm),
+            queue_frame=queue_retry,
+        )
+
+    switcher.strategy.set_retry_callback(retry)
+
+    @switcher.strategy.event_handler("on_service_switched")
+    async def on_switched(_strategy, service) -> None:
+        failovers.append(service)
+
+    first = _error(primary, ErrorCategory.CONNECTIVITY)
+    await switcher.push_frame(first, FrameDirection.UPSTREAM)
+    await asyncio.sleep(0)  # Pipecat dispatches event handlers as tasks.
+
+    assert switcher.active_llm is backup
+    assert failovers == [backup]
+    assert announcer_notes == [backup]
+    assert len(retries) == 1
+    assert isinstance(retries[0], LLMRunFrame)
+    assert sink.frames == []  # recovered errors are absorbed
+
+    # The user aggregator consumes LLMRunFrame and emits the same context.
+    # That automatic retry context must not reset the current incident.
+    context = LLMContext(messages=[])
+    await switcher.process_frame(LLMContextFrame(context), FrameDirection.DOWNSTREAM)
+
+    second = _error(backup, ErrorCategory.SERVER)
+    await switcher.push_frame(second, FrameDirection.UPSTREAM)
+
+    assert switcher.active_llm is backup  # no wrap back to the failed primary
+    assert failovers == [backup]
+    assert announcer_notes == [backup]
+    assert len(retries) == 1
+    assert sink.frames == [second]  # exhausted incidents stay observable
+
+    # A genuinely new run gets a fresh budget and may try the old primary.
+    await switcher.process_frame(LLMContextFrame(context), FrameDirection.DOWNSTREAM)
+    third = _error(backup, ErrorCategory.CONNECTIVITY)
+    await switcher.push_frame(third, FrameDirection.UPSTREAM)
+    assert switcher.active_llm is primary
+    assert len(retries) == 2
+
+
+@pytest.mark.asyncio
+async def test_real_switcher_propagates_when_no_backup_is_usable() -> None:
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import make_orbis_llm_switcher
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup", is_usable=False)
+    switcher = make_orbis_llm_switcher([primary, backup])
+    retries = _arm_retry(switcher.strategy)
+    sink = _FrameSink()
+    sink.link(switcher)
+
+    error = _error(primary, ErrorCategory.CONNECTIVITY)
+    await switcher.push_frame(error, FrameDirection.UPSTREAM)
+
+    assert switcher.active_llm is primary
+    assert sink.frames == [error]
+    assert retries == []
+
+
+@pytest.mark.asyncio
+async def test_real_switcher_absorbs_stock_permanent_failover() -> None:
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import make_orbis_llm_switcher
+
+    primary = _FakeService("primary", is_usable=False)
+    backup = _FakeService("backup")
+    switcher = make_orbis_llm_switcher([primary, backup])
+    retries = _arm_retry(switcher.strategy)
+    sink = _FrameSink()
+    sink.link(switcher)
+
+    error = _error(primary, ErrorCategory.AUTHENTICATION)
+    await switcher.push_frame(error, FrameDirection.UPSTREAM)
+
+    assert switcher.active_llm is backup
+    assert sink.frames == []
+    assert retries == [True]
+
+
+@pytest.mark.asyncio
+async def test_substantive_backup_output_clears_incident_attempts() -> None:
+    from pipecat.frames.frames import LLMTextFrame
+    from pipecat.processors.frame_processor import FrameDirection
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import make_orbis_llm_switcher
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    switcher = make_orbis_llm_switcher([primary, backup])
+    retries = _arm_retry(switcher.strategy)
+
+    await switcher.push_frame(
+        _error(primary, ErrorCategory.CONNECTIVITY), FrameDirection.UPSTREAM
+    )
+    assert switcher.active_llm is backup
+
+    await switcher.push_frame(LLMTextFrame(text="recovered"), FrameDirection.DOWNSTREAM)
+    await switcher.push_frame(
+        _error(backup, ErrorCategory.CONNECTIVITY), FrameDirection.UPSTREAM
+    )
+
+    assert switcher.active_llm is primary
+    assert retries == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_real_invalid_request_marks_service_unusable_but_does_not_switch() -> None:
+    from pipecat.frames.frames import ErrorFrame
+    from pipecat.utils.errors import ErrorCategory
+    from voice.llm.failover import make_orbis_llm_switcher
+
+    primary = _FakeService("primary")
+    backup = _FakeService("backup")
+    switcher = make_orbis_llm_switcher([primary, backup])
+    retries = _arm_retry(switcher.strategy)
+    sink = _FrameSink()
+    sink.link(switcher)
+    error = ErrorFrame(
+        error="unknown model", processor=primary, category=ErrorCategory.INVALID_REQUEST
+    )
+
+    await primary.push_error_frame(error)
+
+    assert primary.is_usable is False
+    assert switcher.active_llm is primary
+    assert retries == []
+    assert len(sink.frames) == 1
+    assert sink.frames[0].processor is switcher
