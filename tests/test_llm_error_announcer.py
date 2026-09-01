@@ -6,7 +6,12 @@ import asyncio
 import time
 
 import pytest
-from pipecat.frames.frames import ErrorFrame, LLMTextFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    ErrorFrame,
+    LLMFullResponseStartFrame,
+    LLMTextFrame,
+    TTSSpeakFrame,
+)
 from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import LLMService
@@ -155,12 +160,13 @@ async def test_fish_gets_softly_prefix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failover_reclassifies_the_line() -> None:
-    # The retry normally cancels the pending announcement with output. If it
-    # stalls, keep the truthful "switched to backup" safety-net line.
+async def test_backup_start_without_output_keeps_failover_safety_line() -> None:
+    # Starting the backup completion is not recovery. If it hangs before text
+    # or a tool call, keep exactly one truthful safety-net announcement.
     a, spoken = _make()
     await a.on_push_frame(_pushed(_llm_error("Connection refused")))
     a.note_failover()
+    await a.on_push_frame(_pushed(LLMFullResponseStartFrame()))
     await asyncio.sleep(0.05)
     assert len(spoken) == 1
     assert spoken[0].text == _LINES["failover"]

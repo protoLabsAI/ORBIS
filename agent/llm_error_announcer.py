@@ -13,9 +13,9 @@ the switcher. That lets the announcer arm before failover and then wait out a
 short debounce for signs of recovery.
 
 Flow: on a non-fatal ``ErrorFrame`` whose ``.processor`` is an LLM service,
-arm the debounce; cancel it on any sign of life (a new completion attempt,
-LLM text, a tool call, bot audio — a retry or failover recovered; or the
-user speaking — the next turn will re-error if the LLM is truly dead). If it
+arm the debounce; cancel it on actual output evidence (LLM text, a tool call,
+or bot audio — a retry or failover recovered) or when the user speaks and the
+failed turn has moved on. If it
 fires, speak ONE canned line classified auth / unreachable / generic via an
 out-of-band ``TTSSpeakFrame`` — TTS only, no LLM round-trip, because the LLM
 is exactly what's broken. A hard throttle keeps a flapping endpoint from
@@ -41,7 +41,6 @@ from pipecat.frames.frames import (
     Frame,
     FunctionCallsStartedFrame,
     InterruptionFrame,
-    LLMFullResponseStartFrame,
     LLMTextFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
@@ -101,7 +100,6 @@ _UNREACHABLE_MARKERS = (
 # Signs the agent recovered (retry / failover produced work) or that the turn
 # moved on — either way the pending announcement no longer describes reality.
 _CANCEL_FRAMES = (
-    LLMFullResponseStartFrame,
     LLMTextFrame,
     FunctionCallsStartedFrame,
     BotStartedSpeakingFrame,
@@ -167,7 +165,7 @@ class LLMErrorAnnouncer(BaseObserver):
         self._emit = emit
 
     def note_failover(self) -> None:
-        """Called from app.py's on_service_switched handler.
+        """Called when the failover retry is successfully queued.
 
         One switch reclassifies a pending announcement to the backup line.
         If that backup errors, ``_on_error`` advances the streak so the real
