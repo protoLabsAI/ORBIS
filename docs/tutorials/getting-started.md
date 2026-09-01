@@ -47,9 +47,10 @@ It answers from memory — the proactive line is part of the conversation.
 
 ## 4. Hand work to an agent
 
-ORBIS ships with **no delegates** — you add the agents you want it to hand work
-to. Configure one first (see [Add a delegate](/how-to/add-a-delegate)), then ask
-for it by name:
+ORBIS ships with a local **protoAgent hub** delegate on port 7870; protoAgent is
+a separately managed service, so start it before asking for substantial work.
+You can also add other agents (see [Add a delegate](/how-to/add-a-delegate)).
+Then ask for one by name:
 
 > *"Ask my agent to do X and let me know."*
 

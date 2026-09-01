@@ -51,6 +51,12 @@ logger = logging.getLogger(__name__)
 _LEGACY_HUB_URL = "http://127.0.0.1:7871/a2a"
 _PRODUCTION_HUB_URL = "http://127.0.0.1:7870/a2a"
 _DEFAULT_HUB_KEYS = {"name", "type", "description", "url"}
+_DEFAULT_HUB_DESCRIPTION = (
+    "Multi-step reasoning, tool use, fleet delegation, background work, and "
+    "long-horizon tasks. Use for: complex goals requiring multiple tools, "
+    "tasks that should run in the background, research, anything that spans "
+    "multiple turns.\n"
+)
 
 
 # POSIX env substitution shared with the old AgentRegistry semantics.
@@ -77,6 +83,16 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
         return False
     try:
         original = target.read_text(encoding="utf-8")
+        # PyYAML resolves aliases to their anchor node and reports the anchor's
+        # source span. Rewriting that span could silently change multiple
+        # delegates, so anchored/aliased documents are deliberately ineligible.
+        from yaml.events import AliasEvent
+        events = list(yaml.parse(original))
+        if any(
+            isinstance(event, AliasEvent) or getattr(event, "anchor", None)
+            for event in events
+        ):
+            return False
         data = yaml.safe_load(original) or {}
         matches = [
             raw for raw in (data.get("delegates") or [])
@@ -84,6 +100,7 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
             and set(raw) == _DEFAULT_HUB_KEYS
             and raw.get("name") == "hub"
             and raw.get("type") == "a2a"
+            and raw.get("description") == _DEFAULT_HUB_DESCRIPTION
             and raw.get("url") == _LEGACY_HUB_URL
         ]
         if len(matches) != 1:
@@ -102,6 +119,7 @@ def migrate_default_hub_endpoint(path: str | Path) -> bool:
                 set(fields) == _DEFAULT_HUB_KEYS
                 and fields["name"].value == "hub"
                 and fields["type"].value == "a2a"
+                and fields["description"].value == _DEFAULT_HUB_DESCRIPTION
                 and fields["url"].value == _LEGACY_HUB_URL
             ):
                 url_nodes.append(fields["url"])
@@ -550,6 +568,7 @@ _HEALTH_INITIAL_DELAY_SECS = float(
 
 _HUB_STARTUP_ATTEMPTS = 2
 _HUB_STARTUP_RETRY_SECS = 1.0
+_HUB_STARTUP_TIMEOUT_SECS = 2.0
 
 # Per-delegate fast-retry steps (seconds) for the first N consecutive
 # failures, before settling into the base interval. Picks up a recovery
@@ -589,6 +608,7 @@ async def probe_local_hub_at_boot(
     *,
     attempts: int = _HUB_STARTUP_ATTEMPTS,
     retry_delay_secs: float = _HUB_STARTUP_RETRY_SECS,
+    timeout_secs: float = _HUB_STARTUP_TIMEOUT_SECS,
 ) -> None:
     """Confirm the named loopback A2A hub without waking the rest of the fleet."""
     from urllib.parse import urlparse
@@ -601,7 +621,11 @@ async def probe_local_hub_at_boot(
 
     for attempt in range(max(0, attempts)):
         try:
-            result = await probe(hub)
+            result = await asyncio.wait_for(
+                probe(hub, timeout=timeout_secs), timeout=timeout_secs,
+            )
+        except asyncio.TimeoutError:
+            result = {"ok": False, "error": "startup probe timed out"}
         except Exception as e:  # noqa: BLE001 — boot availability is best-effort
             result = {"ok": False, "error": str(e)}
         registry.record_health(

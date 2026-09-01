@@ -64,8 +64,11 @@ const STAGE_PROGRESS: Record<string, number> = {
 const REASSURE_AFTER_S = 15;
 const SLOW_AFTER_S = 180;
 const HARD_AFTER_S = 300;
-const HUB_HEALTH_RETRIES = 20;
 const HUB_HEALTH_RETRY_MS = 500;
+// Backend confirmation is capped at 2s + 1s retry + 2s. Keep three seconds of
+// margin for startup scheduling and transient local /healthz failures.
+const HUB_HEALTH_DEADLINE_MS = 8000;
+const HUB_HEALTH_FETCH_TIMEOUT_MS = 1000;
 const HUB_UNAVAILABLE_WARNING =
   'protoAgent unavailable — start the local hub to restore delegation';
 
@@ -89,21 +92,44 @@ export function BootStatus() {
     let hubHealthStarted = false;
     const healthTimers = new Map<number, () => void>();
 
-    const waitForHealth = () => new Promise<void>((resolve) => {
+    const clearHealthTimer = (id: number) => {
+      window.clearTimeout(id);
+      healthTimers.delete(id);
+    };
+
+    const waitForHealth = (delayMs: number) => new Promise<void>((resolve) => {
       const finish = () => {
         healthTimers.delete(id);
         resolve();
       };
-      const id = window.setTimeout(finish, HUB_HEALTH_RETRY_MS);
+      const id = window.setTimeout(finish, delayMs);
       healthTimers.set(id, finish);
     });
+
+    const fetchHealth = async () => {
+      let timeoutId = 0;
+      const timeout = new Promise<never>((_, reject) => {
+        const fail = () => {
+          healthTimers.delete(timeoutId);
+          reject(new Error('health request timed out'));
+        };
+        timeoutId = window.setTimeout(fail, HUB_HEALTH_FETCH_TIMEOUT_MS);
+        healthTimers.set(timeoutId, fail);
+      });
+      try {
+        return await Promise.race([api.health(), timeout]);
+      } finally {
+        clearHealthTimer(timeoutId);
+      }
+    };
 
     const warnIfHubUnavailable = async () => {
       // The background probe normally lands before the ready marker. If the
       // snapshot is still unknown, retry briefly without holding the boot gate.
-      for (let attempt = 0; attempt < HUB_HEALTH_RETRIES && !cancelled; attempt += 1) {
+      const deadline = performance.now() + HUB_HEALTH_DEADLINE_MS;
+      while (!cancelled && performance.now() < deadline) {
         try {
-          const health = await api.health();
+          const health = await fetchHealth();
           if (cancelled) return;
           const hub = health.delegates.find((delegate) => delegate.name === 'hub');
           if (!hub || hub.ok === true) return;
@@ -114,10 +140,12 @@ export function BootStatus() {
           }
         } catch {
           // Backend diagnostics being unavailable is not evidence that the hub
-          // is down. The normal boot/error surfaces own that failure instead.
-          return;
+          // is down. Retry inside the bounded startup window; the normal boot /
+          // error surfaces own a sustained sidecar failure.
         }
-        await waitForHealth();
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) return;
+        await waitForHealth(Math.min(HUB_HEALTH_RETRY_MS, remaining));
         if (cancelled) return;
       }
     };
@@ -157,7 +185,7 @@ export function BootStatus() {
     return () => {
       cancelled = true;
       healthTimers.forEach((finish, id) => {
-        window.clearTimeout(id);
+        clearHealthTimer(id);
         finish();
       });
       healthTimers.clear();

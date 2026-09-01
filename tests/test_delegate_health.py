@@ -337,6 +337,7 @@ async def test_default_loop_preserves_fleet_boot_grace(respx_mock):
 @pytest.mark.asyncio
 async def test_startup_probe_confirms_only_local_named_hub(monkeypatch):
     calls: list[str] = []
+    timeouts: list[float] = []
     results = iter([
         {"ok": False, "error": "starting"},
         {"ok": False, "error": "still down"},
@@ -344,6 +345,7 @@ async def test_startup_probe_confirms_only_local_named_hub(monkeypatch):
 
     async def _probe(delegate, *, timeout=8.0):
         calls.append(delegate.name)
+        timeouts.append(timeout)
         return next(results)
 
     monkeypatch.setattr("agent.delegates.probe", _probe)
@@ -363,6 +365,7 @@ async def test_startup_probe_confirms_only_local_named_hub(monkeypatch):
     await probe_local_hub_at_boot(reg, attempts=2, retry_delay_secs=0)
 
     assert calls == ["hub", "hub"]
+    assert timeouts == [2.0, 2.0]
     assert reg.health("hub").consecutive_failures == 2
     assert reg.health("coder") is None
     assert reg.health("remote") is None
@@ -390,6 +393,61 @@ async def test_startup_probe_suppresses_launch_race_after_recovery(monkeypatch):
     health = reg.health("hub")
     assert health.ok is True
     assert health.consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_bounds_hung_attempts(monkeypatch):
+    calls = 0
+
+    async def _hung_probe(delegate, *, timeout=8.0):
+        nonlocal calls
+        calls += 1
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("agent.delegates.probe", _hung_probe)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="brain", type="a2a",
+        url="http://127.0.0.1:7870/a2a",
+    )
+    started = asyncio.get_running_loop().time()
+
+    await probe_local_hub_at_boot(
+        reg, attempts=2, retry_delay_secs=0, timeout_secs=0.01,
+    )
+
+    elapsed = asyncio.get_running_loop().time() - started
+    assert calls == 2
+    assert elapsed < 0.1
+    assert reg.health("hub").consecutive_failures == 2
+    assert reg.health("hub").last_error == "startup probe timed out"
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_recovers_after_delayed_first_attempt(monkeypatch):
+    calls = 0
+
+    async def _delayed_then_ready(delegate, *, timeout=8.0):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(timeout * 2)
+        return {"ok": True, "latency_ms": 3}
+
+    monkeypatch.setattr("agent.delegates.probe", _delayed_then_ready)
+    reg = DelegateRegistry(None)
+    reg._items["hub"] = Delegate(
+        name="hub", description="brain", type="a2a",
+        url="http://127.0.0.1:7870/a2a",
+    )
+
+    await probe_local_hub_at_boot(
+        reg, attempts=2, retry_delay_secs=0, timeout_secs=0.01,
+    )
+
+    assert calls == 2
+    assert reg.health("hub").ok is True
+    assert reg.health("hub").consecutive_failures == 0
 
 
 @pytest.mark.asyncio

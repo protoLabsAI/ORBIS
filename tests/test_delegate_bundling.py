@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 import agent.delegates as delegates_module
-from agent.delegates import migrate_default_hub_endpoint
+from agent.delegates import _DEFAULT_HUB_DESCRIPTION, migrate_default_hub_endpoint
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,6 +49,7 @@ def test_bundled_hub_uses_production_endpoint() -> None:
     )
     hub = next(d for d in config["delegates"] if d["name"] == "hub")
     assert hub["type"] == "a2a"
+    assert hub["description"] == _DEFAULT_HUB_DESCRIPTION
     assert hub["url"] == "http://127.0.0.1:7870/a2a"
 
 
@@ -66,7 +67,11 @@ def test_migrates_only_legacy_default_hub_and_preserves_file_shape(
         "    headers: {X-Custom: yes}\n"
         "  - name: hub\n"
         "    type: a2a\n"
-        "    description: local brain\n"
+        "    description: >\n"
+        "      Multi-step reasoning, tool use, fleet delegation, background work,\n"
+        "      and long-horizon tasks. Use for: complex goals requiring multiple\n"
+        "      tools, tasks that should run in the background, research, anything\n"
+        "      that spans multiple turns.\n"
         "    url: http://127.0.0.1:7871/a2a\n",
         encoding="utf-8",
     )
@@ -91,7 +96,7 @@ def test_migrates_only_legacy_default_hub_and_preserves_file_shape(
     assert migrate_default_hub_endpoint(path) is False  # one-time / idempotent
 
 
-def test_does_not_migrate_custom_hub(tmp_path) -> None:
+def test_does_not_migrate_description_customized_hub(tmp_path) -> None:
     path = tmp_path / "delegates.yaml"
     original = (
         "delegates:\n"
@@ -99,7 +104,27 @@ def test_does_not_migrate_custom_hub(tmp_path) -> None:
         "    type: a2a\n"
         "    description: secured local brain\n"
         "    url: http://127.0.0.1:7871/a2a\n"
-        "    auth: {scheme: apiKey, credentialsEnv: HUB_KEY}\n"
+    )
+    path.write_text(original, encoding="utf-8")
+
+    assert migrate_default_hub_endpoint(path) is False
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_does_not_migrate_aliased_default_hub(tmp_path) -> None:
+    path = tmp_path / "delegates.yaml"
+    original = (
+        "defaults: &legacy_hub\n"
+        "  name: hub\n"
+        "  type: a2a\n"
+        "  description: >\n"
+        "    Multi-step reasoning, tool use, fleet delegation, background work,\n"
+        "    and long-horizon tasks. Use for: complex goals requiring multiple\n"
+        "    tools, tasks that should run in the background, research, anything\n"
+        "    that spans multiple turns.\n"
+        "  url: http://127.0.0.1:7871/a2a\n"
+        "delegates:\n"
+        "  - *legacy_hub\n"
     )
     path.write_text(original, encoding="utf-8")
 
