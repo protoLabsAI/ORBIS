@@ -13,9 +13,8 @@ the switcher. That lets the announcer arm before failover and then wait out a
 short debounce for signs of recovery.
 
 Flow: on a non-fatal ``ErrorFrame`` whose ``.processor`` is an LLM service,
-arm the debounce; cancel it on actual output evidence (LLM text, a tool call,
-or bot audio — a retry or failover recovered) or when the user speaks and the
-failed turn has moved on. If it
+arm the debounce; cancel it on actual LLM output evidence (text or a tool call)
+or when the user speaks and the failed turn has moved on. If it
 fires, speak ONE canned line classified auth / unreachable / generic via an
 out-of-band ``TTSSpeakFrame`` — TTS only, no LLM round-trip, because the LLM
 is exactly what's broken. A hard throttle keeps a flapping endpoint from
@@ -36,7 +35,6 @@ from collections import deque
 from typing import Awaitable, Callable
 
 from pipecat.frames.frames import (
-    BotStartedSpeakingFrame,
     ErrorFrame,
     Frame,
     FunctionCallsStartedFrame,
@@ -97,12 +95,12 @@ _UNREACHABLE_MARKERS = (
     "dns",
 )
 
-# Signs the agent recovered (retry / failover produced work) or that the turn
-# moved on — either way the pending announcement no longer describes reality.
+# Substantive LLM output proves the retry/failover recovered. User speech or an
+# interruption abandons the failed turn. BotStartedSpeakingFrame is deliberately
+# excluded: a MicroAck may speak while the backup completion is still hung.
 _CANCEL_FRAMES = (
     LLMTextFrame,
     FunctionCallsStartedFrame,
-    BotStartedSpeakingFrame,
     UserStartedSpeakingFrame,
     InterruptionFrame,
 )

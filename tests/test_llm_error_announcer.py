@@ -7,6 +7,7 @@ import time
 
 import pytest
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     ErrorFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
@@ -161,12 +162,13 @@ async def test_fish_gets_softly_prefix() -> None:
 
 @pytest.mark.asyncio
 async def test_backup_start_without_output_keeps_failover_safety_line() -> None:
-    # Starting the backup completion is not recovery. If it hangs before text
-    # or a tool call, keep exactly one truthful safety-net announcement.
+    # Neither starting the backup completion nor a MicroAck is LLM recovery.
+    # If the backup hangs before text/tool output, keep exactly one warning.
     a, spoken = _make()
     await a.on_push_frame(_pushed(_llm_error("Connection refused")))
     a.note_failover()
     await a.on_push_frame(_pushed(LLMFullResponseStartFrame()))
+    await a.on_push_frame(_pushed(BotStartedSpeakingFrame()))
     await asyncio.sleep(0.05)
     assert len(spoken) == 1
     assert spoken[0].text == _LINES["failover"]
