@@ -118,7 +118,30 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
-      - name: Build and push Docker image
+      # Smoke the complete runtime filesystem before stable semver tags become
+      # visible.  The second build reuses BuildKit's cache and preserves the
+      # provenance/SBOM attached to the published image.
+      - name: Build Docker image for verification
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: orbis-smoke:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+
+      - name: Verify — module import in runtime image
+        run: |
+          docker run --rm \
+            --entrypoint sh \
+            "orbis-smoke:${{ github.sha }}" \
+            -c 'cd /app && python -c "import acp, app, server, agent.delegate_adapters, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print(\"imports ok\")"'
+
+      - name: Push verified Docker image
         id: build
         uses: docker/build-push-action@v5
         with:

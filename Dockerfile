@@ -70,10 +70,12 @@ COPY app.py ./
 # A2A 1.0 (#354) replaced the hand-rolled `a2a/` package with flat
 # `a2a_*.py` modules (import a2a = the a2a-sdk pip dep). Copy those.
 COPY a2a_*.py ./
+COPY acp/ ./acp/
 COPY agent/ ./agent/
 COPY auth/ ./auth/
 COPY config/ ./config/
 COPY memory/ ./memory/
+COPY server/ ./server/
 COPY static/ ./static/
 COPY voice/ ./voice/
 # Built SPA from stage 1 — served at / when FRONTEND=react (default once verified).

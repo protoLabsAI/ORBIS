@@ -84,7 +84,28 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Build and push
+      # Load the exact runtime image locally and exercise its boot imports
+      # before assigning any fleet-visible tag.  Publishing first turns a
+      # failed smoke test into a broken `latest` rollout.
+      - name: Build Docker image for verification
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: orbis-smoke:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+
+      - name: Verify — module import in runtime image
+        run: |
+          docker run --rm \
+            --entrypoint sh \
+            "orbis-smoke:${{ github.sha }}" \
+            -c 'cd /app && python -c "import acp, app, server, agent.delegate_adapters, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print(\"imports ok\")"'
+
+      - name: Push verified Docker image
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -96,14 +117,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-
-      - name: Verify — module import in runtime image
-        run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          docker run --rm \
-            --entrypoint sh \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" \
-            -c 'cd /app && python -c "import app, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print(\"imports ok\")"'
 
       - name: Summary
         run: |
