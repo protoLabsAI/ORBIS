@@ -40,7 +40,6 @@ from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
 from pipecat.pipeline.llm_switcher import LLMSwitcher
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMAssistantAggregatorParams, LLMContextAggregatorPair, LLMUserAggregatorParams, UserTurnCompletionConfig
@@ -50,6 +49,7 @@ from pipecat.utils.context.llm_context_summarization import LLMAutoContextSummar
 from voice.ask_gate import AskGate
 from voice.cancel_gate import CancelGate
 from voice.llm import make_llm
+from voice.llm.failover import OrbisLLMFailoverStrategy
 from voice.local_transport import LocalAudioTransport
 from voice.native_bargein import NativeBargeInObserver
 from voice.sse_bus import sse_bus
@@ -638,13 +638,13 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Failover wrapper (orbis-1dd). With a single member this stays the
     # bare LLMService — no LLMSwitcher overhead on the default path. With
     # a configured backup, the switcher routes frames to the active LLM
-    # and fails over to the next on a non-fatal ErrorFrame.
+    # and fails over to the next usable member on any non-fatal ErrorFrame.
     if len(_llm_members) == 1:
         pipeline_llm = llm
     else:
         pipeline_llm = LLMSwitcher(
             llms=_llm_members,
-            strategy_type=ServiceSwitcherStrategyFailover,
+            strategy_type=OrbisLLMFailoverStrategy,
         )
 
         # The switcher does NOT retry the failed generation — it only routes
@@ -1290,4 +1290,3 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 # ---------------------------------------------------------------------------
 # Prewarm
 # ---------------------------------------------------------------------------
-

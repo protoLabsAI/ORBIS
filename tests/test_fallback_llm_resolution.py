@@ -106,21 +106,22 @@ class _FakeService:
     """Minimal stand-in for an LLMService FrameProcessor — the switcher
     strategy calls ``queue_frame`` when it activates a service."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, is_usable: bool = True) -> None:
         self.name = name
+        self.is_usable = is_usable
 
     async def queue_frame(self, _frame) -> None:  # noqa: D401
         return None
 
 
 @pytest.mark.asyncio
-async def test_failover_strategy_switches_on_error() -> None:
+async def test_failover_strategy_switches_on_recoverable_error() -> None:
     from pipecat.frames.frames import ErrorFrame
-    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
+    from voice.llm.failover import OrbisLLMFailoverStrategy
 
     primary = _FakeService("primary")
     backup = _FakeService("backup")
-    strat = ServiceSwitcherStrategyFailover(services=[primary, backup])
+    strat = OrbisLLMFailoverStrategy(services=[primary, backup])
     assert strat.active_service is primary
 
     new_active = await strat.handle_error(ErrorFrame(error="boom", processor=primary))
@@ -131,10 +132,27 @@ async def test_failover_strategy_switches_on_error() -> None:
 @pytest.mark.asyncio
 async def test_failover_noop_with_single_service() -> None:
     from pipecat.frames.frames import ErrorFrame
-    from pipecat.pipeline.service_switcher import ServiceSwitcherStrategyFailover
+    from voice.llm.failover import OrbisLLMFailoverStrategy
 
     only = _FakeService("only")
-    strat = ServiceSwitcherStrategyFailover(services=[only])
+    strat = OrbisLLMFailoverStrategy(services=[only])
     # No other service to switch to → returns None, stays put.
     assert await strat.handle_error(ErrorFrame(error="boom", processor=only)) is None
     assert strat.active_service is only
+
+
+@pytest.mark.asyncio
+async def test_failover_skips_unusable_backup() -> None:
+    from pipecat.frames.frames import ErrorFrame
+    from voice.llm.failover import OrbisLLMFailoverStrategy
+
+    primary = _FakeService("primary")
+    dead_backup = _FakeService("dead-backup", is_usable=False)
+    healthy_backup = _FakeService("healthy-backup")
+    strat = OrbisLLMFailoverStrategy(
+        services=[primary, dead_backup, healthy_backup]
+    )
+
+    new_active = await strat.handle_error(ErrorFrame(error="boom", processor=primary))
+    assert new_active is healthy_backup
+    assert strat.active_service is healthy_backup
