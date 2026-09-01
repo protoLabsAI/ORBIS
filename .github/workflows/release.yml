@@ -43,6 +43,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.tag || github.ref }}
 
+      # github.sha is the workflow ref on tag pushes, but on a manual rerun for
+      # an older tag it can name the branch that dispatched the workflow. Use
+      # the commit actually checked out for image identity and provenance.
+      - name: Resolve checkout revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       # Reclaim ~14 GB from the runner (pre-installed Android SDK /
       # .NET / Haskell / tool-cache we don't use). Without this the
       # torch +cu128 pip layer blows past the runner's ~14 GB default
@@ -115,33 +122,12 @@ jobs:
             org.opencontainers.image.title=orbis
             org.opencontainers.image.description=ORBIS — voice-first AI companion
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
 
-      # Smoke the complete runtime filesystem before stable semver tags become
-      # visible.  The second build reuses BuildKit's cache and preserves the
-      # provenance/SBOM attached to the published image.
-      - name: Build Docker image for verification
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64
-          load: true
-          tags: orbis-smoke:${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-
-      - name: Verify — module import in runtime image
-        run: |
-          docker run --rm \
-            --entrypoint sh \
-            "orbis-smoke:${{ github.sha }}" \
-            -c 'cd /app && python -c "import acp, app, server, agent.delegate_adapters, agent.tools, agent.filler, agent.delivery, agent.backchannel, voice.stt, voice.tts, a2a.server; print(\"imports ok\")"'
-
-      - name: Push verified Docker image
+      # Dockerfile's final source layer imports every boot-critical module.
+      # BuildKit cannot publish semver tags unless that exact image passes.
+      - name: Build and push verified Docker image
         id: build
         uses: docker/build-push-action@v5
         with:

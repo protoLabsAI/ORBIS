@@ -86,26 +86,22 @@ def test_all_shipped_packages_copied_into_docker_runtime():
     )
 
 
-def test_docker_workflows_verify_runtime_before_publishing():
-    """A failed boot smoke must not leave broken fleet or release tags."""
-    workflows = [
-        ROOT / ".github/workflows/docker-publish.yml",
-        ROOT / ".github/workflows/release.yml",
+def test_docker_boot_import_smoke_follows_all_runtime_copies():
+    """The exact final source filesystem must pass imports before export."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    instructions = [
+        line.strip()
+        for line in dockerfile.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
     ]
+    last_copy = max(i for i, line in enumerate(instructions) if line.startswith("COPY "))
+    smoke = next(
+        i
+        for i, line in enumerate(instructions)
+        if line.startswith("RUN PYTHONDONTWRITEBYTECODE=1 python3 -c")
+    )
 
-    for path in workflows:
-        workflow = path.read_text(encoding="utf-8")
-        build = workflow.index("- name: Build Docker image for verification")
-        verify = workflow.index("- name: Verify — module import in runtime image")
-        publish = workflow.index("- name: Push verified Docker image")
-
-        assert build < verify < publish, (
-            f"{path.name} must build, smoke, then publish the Docker image"
-        )
-        assert "load: true" in workflow[build:verify]
-        smoke = workflow[verify:publish]
-        for module in ("acp", "app", "server", "agent.delegate_adapters"):
-            assert module in smoke, f"{path.name} smoke must import {module}"
-        assert "push: true" not in workflow[:publish], (
-            f"{path.name} publishes an image before its runtime smoke test"
-        )
+    assert smoke > last_copy, "boot import smoke must follow every runtime COPY"
+    smoke_instruction = instructions[smoke]
+    for module in ("acp", "app", "server", "agent.delegate_adapters"):
+        assert module in smoke_instruction, f"Docker boot smoke must import {module}"
