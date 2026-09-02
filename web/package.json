@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test:boot": "bun test tests/bootStatusRuntime.test.ts",
+    "test:delegate-events": "bun test tests/delegateEvents.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

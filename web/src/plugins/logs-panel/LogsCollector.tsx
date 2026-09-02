@@ -50,13 +50,6 @@ export function LogsCollector() {
           message: `tool: ${snap.activeToolCall.name}`,
         });
       }
-      if (snap.delegationProgress && prev?.delegationProgress !== snap.delegationProgress) {
-        logBus.push({
-          source: 'voice',
-          level: 'info',
-          message: snap.delegationProgress,
-        });
-      }
     };
 
     prevRef.current = voiceStore.getSnapshot();

@@ -967,6 +967,11 @@ def _delegate_to_handler(
             except Exception:  # noqa: BLE001
                 pass
 
+        async def _delegate_event(event: dict) -> None:
+            if delivery is None:
+                return
+            await delivery.note_delegate_event(event)
+
         # Snapshot the barge epoch — if the user talks over us while the delegate
         # is in flight, the epoch advances and we drop the (now stale) answer
         # rather than narrating it into a turn that already moved on. The
@@ -985,6 +990,7 @@ def _delegate_to_handler(
                 delegate, query,
                 timeout=_DELEGATE_TIMEOUT,
                 progress_callback=_progress,
+                event_callback=_delegate_event if delegate.type == "a2a" else None,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
@@ -1106,6 +1112,10 @@ def _orchestrate_handler(
             finally:
                 take_pending_ask()  # clear if it timed out / wasn't answered
 
+        async def _delegate_event(event: dict) -> None:
+            if delivery is not None:
+                await delivery.note_delegate_event(event)
+
         # Drop the synthesized answer if the user barged in while the loop ran
         # (same stale-result gate as delegate_to). The ask_user intermediate
         # above is mid-flow and intentionally NOT gated.
@@ -1119,7 +1129,12 @@ def _orchestrate_handler(
             )
 
         try:
-            result = await runner(goal, progress=_progress, ask_user=_ask_user)
+            result = await runner(
+                goal,
+                progress=_progress,
+                delegate_event=_delegate_event,
+                ask_user=_ask_user,
+            )
             if _superseded():
                 logger.info("[orchestrate] completed after barge-in — dropping result.")
                 return

@@ -251,7 +251,9 @@ async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
 async def test_orchestrate_answer_dropped_when_barged_in(monkeypatch) -> None:
     delivery = FakeDelivery()
 
-    async def fake_runner(goal, *, progress=None, ask_user=None):
+    async def fake_runner(
+        goal, *, progress=None, delegate_event=None, ask_user=None,
+    ):
         await progress("working on step 1")  # visual pill — fine mid-flow
         delivery.bump_barge()  # user barges in while the loop runs
         return "the synthesized multi-step answer"
@@ -271,7 +273,9 @@ async def test_orchestrate_answer_dropped_when_barged_in(monkeypatch) -> None:
 async def test_orchestrate_answer_kept_when_no_bargein(monkeypatch) -> None:
     delivery = FakeDelivery()
 
-    async def fake_runner(goal, *, progress=None, ask_user=None):
+    async def fake_runner(
+        goal, *, progress=None, delegate_event=None, ask_user=None,
+    ):
         return "the synthesized multi-step answer"
 
     handler = _orchestrate_handler(

@@ -221,7 +221,16 @@ def test_native_voice_bridge_stays_sse_eventsource_based():
     assert "@tauri-apps/api/event" in bridge_hook
     assert "listen<" in bridge_hook or "listen(" in bridge_hook
     assert "orbis-sse" in bridge_hook
-    for event in ("bot-state", "transcript", "session", "tool-call", "delegation-progress"):
+    for event in (
+        "bot-state",
+        "transcript",
+        "session",
+        "tool-call",
+        "delegation-progress",
+        "delegate.status",
+        "delegate.tool",
+        "delegate.delta",
+    ):
         assert f"'{event}'" in bridge_hook
     assert "useVoiceBridge();" in bridge_mount
     assert "source: 'sse'" in logs_collector

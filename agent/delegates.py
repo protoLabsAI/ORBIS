@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 import yaml
 
 if TYPE_CHECKING:  # type-only — the runtime bodies live in delegate_adapters
-    from a2a_outbound import A2AClient, ProgressCallback
+    from a2a_outbound import A2AClient, DelegateEventCallback, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -467,6 +467,7 @@ async def dispatch(
     *,
     timeout: float = 60.0,
     progress_callback: ProgressCallback | None = None,
+    event_callback: DelegateEventCallback | None = None,
     push_notification_url: str | None = None,
     push_notification_token: str | None = None,
 ) -> str:
@@ -493,13 +494,17 @@ async def dispatch(
         input={"delegate": delegate.name, "query": query[:400]},
     ) as sp:
         try:
-            result = await adapter.dispatch(
-                delegate, query,
-                timeout=timeout,
-                progress_callback=progress_callback,
-                push_notification_url=push_notification_url,
-                push_notification_token=push_notification_token,
-            )
+            kwargs = {
+                "timeout": timeout,
+                "progress_callback": progress_callback,
+                "push_notification_url": push_notification_url,
+                "push_notification_token": push_notification_token,
+            }
+            # Keep existing third-party adapters source-compatible. Structured
+            # events are an optional extension and are passed only when wired.
+            if event_callback is not None:
+                kwargs["event_callback"] = event_callback
+            result = await adapter.dispatch(delegate, query, **kwargs)
         except asyncio.CancelledError:
             # Barge-in / caller bailed. Count the drop, but never as an
             # error and never into the latency gauge (see _count_dispatch).

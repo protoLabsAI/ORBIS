@@ -37,7 +37,12 @@ from typing import Any
 
 import httpx
 
-from a2a_outbound import A2AClient, A2ADispatchError, ProgressCallback
+from a2a_outbound import (
+    A2AClient,
+    A2ADispatchError,
+    DelegateEventCallback,
+    ProgressCallback,
+)
 from acp import AcpClient, AcpError
 from agent.delegates import Delegate, DelegateError, _expand_env
 from agent.tracing import _NULL, active_trace, propagation_headers
@@ -210,6 +215,7 @@ class DelegateAdapter:
         *,
         timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
     ) -> str:
@@ -371,6 +377,7 @@ class A2AAdapter(DelegateAdapter):
     async def dispatch(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
     ) -> str:
@@ -386,6 +393,7 @@ class A2AAdapter(DelegateAdapter):
             result = await self._dispatch_inner(
                 delegate, query, timeout=timeout,
                 progress_callback=progress_callback,
+                event_callback=event_callback,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
@@ -401,6 +409,7 @@ class A2AAdapter(DelegateAdapter):
     async def _dispatch_inner(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
     ) -> str:
@@ -479,6 +488,7 @@ class A2AAdapter(DelegateAdapter):
                         query,
                         context_id=ctx,
                         progress_callback=progress_callback,
+                        event_callback=event_callback,
                         prefer_stream=True,
                         timeout=timeout,
                         push_notification_url=push_notification_url,
@@ -496,6 +506,7 @@ class A2AAdapter(DelegateAdapter):
                 )
         res = await client.send(
             query, context_id=ctx, prefer_stream=False, timeout=timeout,
+            event_callback=event_callback,
             on_task=_record_task,
             push_notification_url=push_notification_url,
             push_notification_token=push_notification_token,
@@ -640,6 +651,7 @@ class OpenAIAdapter(DelegateAdapter):
     async def dispatch(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
     ) -> str:
@@ -797,6 +809,7 @@ class AcpAdapter(DelegateAdapter):
     async def dispatch(
         self, delegate: Delegate, query: str, *, timeout: float = 60.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
     ) -> str:

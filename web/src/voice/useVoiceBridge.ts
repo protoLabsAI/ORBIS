@@ -18,6 +18,9 @@
  *   session    { event: 'start'|'end', session_id?: string }
  *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
  *   delegation-progress { type, source, text }
+ *   delegate.status { delegate_id, task_id?, session_id?, state, text? }
+ *   delegate.tool   { delegate_id, task_id?, session_id?, name, status }
+ *   delegate.delta  { delegate_id, task_id?, session_id?, deltas }
  *   widget     { action: 'open'|'close', id, props? } — render_widget tool
  *   orb-config { variant?, palette?, params? } — set_orb_visual tool
  *   persona-switched { slug, name, applies, notes, viz? } — persona change
@@ -32,11 +35,15 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
 import { widgetWorkspace } from '../widgets/store';
 import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
+import { logBus } from '../shared/logBus';
+import { presentDelegateEvent } from './delegateEvents';
 
 interface SsePayload {
   event: string;
   data: string;
 }
+
+let lastStructuredProgress: { delegateId: string; text: string } | null = null;
 
 function handleSse(event: string, data: string): void {
   if (event === '__connected') {
@@ -96,8 +103,42 @@ function handleSse(event: string, data: string): void {
     }
     case 'delegation-progress': {
       if (typeof parsed.text === 'string') {
-        voiceStore.update({ delegationProgress: parsed.text });
+        const source = typeof parsed.source === 'string' ? parsed.source : '';
+        voiceStore.update({
+          delegationProgress: source ? `${source}: ${parsed.text}` : parsed.text,
+        });
+        const isStructuredDuplicate = lastStructuredProgress?.delegateId === source
+          && lastStructuredProgress.text === parsed.text.trim();
+        if (!isStructuredDuplicate) {
+          logBus.push({ source: 'delegate', level: 'info', message: parsed.text });
+        } else {
+          // Suppress only the compatibility mirror paired with this structured
+          // event; a later identical update is a new piece of activity.
+          lastStructuredProgress = null;
+        }
       }
+      break;
+    }
+    case 'delegate.status':
+    case 'delegate.tool':
+    case 'delegate.delta': {
+      const presentation = presentDelegateEvent(event, parsed);
+      if (!presentation) break;
+      if (event === 'delegate.status' && presentation.rawText) {
+        lastStructuredProgress = {
+          delegateId: presentation.delegateId,
+          text: presentation.rawText,
+        };
+      }
+      const patch: Partial<VoiceSnapshot> = {};
+      if (presentation.progress !== undefined) {
+        patch.delegationProgress = presentation.progress;
+      }
+      if (presentation.outcome !== undefined) {
+        patch.delegationOutcome = presentation.outcome;
+      }
+      if (Object.keys(patch).length > 0) voiceStore.update(patch);
+      logBus.push({ source: 'delegate', ...presentation.log, data: parsed });
       break;
     }
     case 'widget': {

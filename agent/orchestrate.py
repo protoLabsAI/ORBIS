@@ -26,7 +26,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 
-from a2a_outbound import A2AClient, A2ADispatchError
+from a2a_outbound import A2AClient, A2ADispatchError, DelegateEventCallback
 from agent.delegates import DelegateError, DelegateRegistry, dispatch
 from agent.tools import build_text_tool_schemas, run_text_tool
 
@@ -111,6 +111,7 @@ async def run_orchestration(
     max_tokens: int = 512,
     temperature: float = 0.4,
     progress: ProgressFn | None = None,
+    delegate_event: DelegateEventCallback | None = None,
     ask_user: AskUserFn | None = None,
     max_iter: int = _MAX_ITER,
 ) -> str:
@@ -216,6 +217,7 @@ async def run_orchestration(
             out = await _run_step(
                 name, args, delegates=delegates, client_for=_client_for,
                 progress=progress, step=step, announce=not preamble,
+                delegate_event=delegate_event,
                 ask_user=ask_user,
             )
             messages.append({
@@ -284,6 +286,7 @@ async def _run_step(
     delegates: DelegateRegistry,
     client_for: Callable[[str], A2AClient | None],
     progress: ProgressFn | None,
+    delegate_event: DelegateEventCallback | None,
     step: int,
     announce: bool = True,
     ask_user: AskUserFn | None = None,
@@ -334,7 +337,10 @@ async def _run_step(
                 client = client_for(target)
                 if client is None:
                     return f"(can't reach {target})"
-                res = await asyncio.wait_for(client.send(query), timeout=_STEP_TIMEOUT)
+                res = await asyncio.wait_for(
+                    client.send(query, event_callback=delegate_event),
+                    timeout=_STEP_TIMEOUT,
+                )
                 if res.input_required:
                     return f"[{target} needs more to proceed] {res.text}"
                 return res.text or f"({target} returned nothing)"
@@ -344,7 +350,12 @@ async def _run_step(
             timeout = _ACP_STEP_TIMEOUT if delegate.type == "acp" else _STEP_TIMEOUT
             try:
                 text = await asyncio.wait_for(
-                    dispatch(delegate, query, timeout=timeout, progress_callback=progress),
+                    dispatch(
+                        delegate,
+                        query,
+                        timeout=timeout,
+                        progress_callback=progress,
+                    ),
                     timeout=timeout + 30,
                 )
             except DelegateError as e:

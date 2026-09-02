@@ -275,6 +275,28 @@ class DeliveryController(FrameProcessor):
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[delivery] message emitter failed: {e}")
 
+    async def note_delegate_event(self, event: dict) -> None:
+        """Forward one structured delegate event to the native SSE plane.
+
+        Protocol adapters translate only events the delegate actually emitted;
+        this controller owns presentation plumbing and never invents work state.
+        """
+        event_type = str(event.get("type", ""))
+        if event_type not in {
+            "delegate.status",
+            "delegate.tool",
+            "delegate.delta",
+        }:
+            return
+        text = event.get("text")
+        if isinstance(text, str) and text.strip():
+            self._last_progress = text.strip()
+        if self._message_emitter is not None:
+            try:
+                await self._message_emitter(dict(event))
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[delivery] delegate event emitter failed: {e}")
+
     @property
     def last_progress(self) -> str | None:
         """The most recent delegate status line (for grounding spoken fillers)."""
