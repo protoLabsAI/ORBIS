@@ -149,3 +149,27 @@ async def test_unknown_delegate_event_is_not_forwarded(ctrl_with_emitters):
     ctrl, _frames, messages = ctrl_with_emitters
     await ctrl.note_delegate_event({"type": "delegate.secret", "token": "nope"})
     assert messages == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_progress_payload_is_bounded(ctrl_with_emitters):
+    ctrl, _frames, messages = ctrl_with_emitters
+    await ctrl.note_progress("é" * 10_000, source="a" * 1_000)
+
+    assert len(messages[0]["text"].encode()) <= 1024
+    assert len(messages[0]["source"].encode()) <= 256
+
+
+def test_delegate_event_scope_is_invalidated_by_barge_and_release():
+    ctrl = DeliveryController()
+    first = ctrl.begin_delegate_event_scope()
+    second = ctrl.begin_delegate_event_scope()
+    assert ctrl.owns_delegate_event_scope(first)
+    assert ctrl.owns_delegate_event_scope(second)
+
+    ctrl.end_delegate_event_scope(first)
+    assert not ctrl.owns_delegate_event_scope(first)
+    assert ctrl.owns_delegate_event_scope(second)
+
+    ctrl.bump_barge()
+    assert not ctrl.owns_delegate_event_scope(second)
