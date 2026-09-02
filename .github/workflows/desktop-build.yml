@@ -363,50 +363,26 @@ jobs:
           cargo tauri build --features native-audio,voice-processing \
             --config '{"bundle":{"createUpdaterArtifacts":true,"targets":["app","dmg"]}}'
 
-      - name: Restore .app from DMG for verification
+      - name: Verify macOS DMG app metadata
         shell: bash
-        # Tauri's DMG bundler DELETES bundle/macos/*.app after packaging it into
-        # the .dmg, but the verify steps below introspect that .app. Mount the
-        # signed+notarized DMG and ditto the .app back out (ditto preserves the
-        # code signature + xattrs) so the existing checks pass. Without this the
-        # job dies on the next step and the release-upload never runs — which is
-        # exactly why no release has ever shipped a downloadable .dmg.
         run: |
           set -euo pipefail
           shopt -s nullglob
-          APPS=(src-tauri/target/release/bundle/macos/*.app)
-          if [ "${#APPS[@]}" -gt 0 ]; then
-            echo "App still present under bundle/macos — no restore needed."
-            exit 0
-          fi
           DMGS=(src-tauri/target/release/bundle/dmg/*.dmg)
-          if [ "${#DMGS[@]}" -eq 0 ]; then
-            echo "::error::No .dmg under bundle/dmg — cannot restore .app for verification"
-            find src-tauri/target/release/bundle -maxdepth 3 2>/dev/null || true
+          if [ "${#DMGS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one DMG for app metadata verification, found ${#DMGS[@]}."
             exit 1
           fi
-          DMG="${DMGS[0]}"
           MNT="$(mktemp -d)"
-          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MNT"
-          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
-          INNER=("$MNT"/*.app)
-          if [ "${#INNER[@]}" -eq 0 ]; then
-            echo "::error::No .app inside the mounted DMG"
-            exit 1
-          fi
-          mkdir -p src-tauri/target/release/bundle/macos
-          ditto "${INNER[0]}" "src-tauri/target/release/bundle/macos/$(basename "${INNER[0]}")"
-          echo "Restored $(basename "${INNER[0]}") from $(basename "$DMG") for verification."
-
-      - name: Verify built macOS app metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          APPS=(src-tauri/target/release/bundle/macos/*.app)
-          if [ "${#APPS[@]}" -eq 0 ]; then
-            echo "::error::No .app bundle produced under bundle/macos"
-            find src-tauri/target/release/bundle -maxdepth 3 -type d 2>/dev/null || true
+          cleanup_mount() {
+            hdiutil detach "$MNT" >/dev/null 2>&1 || true
+            rmdir "$MNT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
+          hdiutil attach "${DMGS[0]}" -nobrowse -readonly -mountpoint "$MNT"
+          APPS=("$MNT"/*.app)
+          if [ "${#APPS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one .app inside the mounted DMG, found ${#APPS[@]}."
             exit 1
           fi
           APP="${APPS[0]}"
@@ -455,6 +431,8 @@ jobs:
         # the real notarized artifact. Self-gates on a Developer ID signature so
         # unsigned dev builds skip instead of failing (no longer push-only, so
         # it's exercised on workflow_dispatch too).
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -464,24 +442,34 @@ jobs:
             exit 1
           fi
           MNT="$(mktemp -d)"
+          cleanup_mount() {
+            hdiutil detach "$MNT" >/dev/null 2>&1 || true
+            rmdir "$MNT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
           hdiutil attach "${DMGS[0]}" -nobrowse -readonly -mountpoint "$MNT"
-          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
           APPS=("$MNT"/*.app)
-          if [ "${#APPS[@]}" -eq 0 ]; then
-            echo "::error::No .app inside the mounted DMG"
+          if [ "${#APPS[@]}" -ne 1 ] || [ "${APPS[0]}" != "$MNT/ORBIS.app" ]; then
+            echo "::error::DMG must contain exactly one root app named ORBIS.app."
             exit 1
           fi
           APP="${APPS[0]}"
 
-          if ! codesign -dv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
+          if ! codesign -dvv "$APP" 2>&1 | grep -q "Authority=Developer ID Application:"; then
             echo "Unsigned build (no Developer ID) — skipping release signing verification."
             exit 0
           fi
 
+          if [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::error::Signed release verification requires APPLE_TEAM_ID."
+            exit 1
+          fi
           codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dv "$APP" 2> codesign-details.txt
+          codesign -dvv "$APP" 2> codesign-details.txt
           grep -q "Authority=Developer ID Application:" codesign-details.txt
-          grep -q "TeamIdentifier=" codesign-details.txt
+          grep -F "Authority=Developer ID Application:" codesign-details.txt \
+            | grep -Fq " (${APPLE_TEAM_ID})"
+          grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}" codesign-details.txt
 
           codesign -d --entitlements :- "$APP" > actual-entitlements.plist
           python - <<'PY'
@@ -574,31 +562,36 @@ jobs:
         # No longer push-only — runs on dispatch too so the notarized dmg is
         # validated before a real release. Self-gates on a signed dmg so
         # unsigned dev builds skip.
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           DMG="${installer:?installer env missing}"
           test -f "$DMG"
-          if ! codesign -dv "$DMG" 2>&1 | grep -q "Authority=Developer ID"; then
+          if ! codesign -dvv "$DMG" 2>&1 | grep -q "Authority=Developer ID"; then
             echo "Unsigned dmg — skipping installer notarization checks (dev build)."
             exit 0
           fi
+          if [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::error::Signed release verification requires APPLE_TEAM_ID."
+            exit 1
+          fi
+          codesign --verify --strict --verbose=2 "$DMG"
+          codesign -dvv "$DMG" 2> dmg-codesign-details.txt
+          grep -F "Authority=Developer ID Application:" dmg-codesign-details.txt \
+            | grep -Fq " (${APPLE_TEAM_ID})"
+          grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}" dmg-codesign-details.txt
           spctl --assess --type open --context context:primary-signature \
             --verbose=4 "$DMG"
           xcrun stapler validate "$DMG"
 
       - name: Run macOS validation harness
-        # Advisory: the dmg's signing + notarization are AUTHORITATIVELY verified
-        # by "Verify macOS release signing" (pristine app inside the dmg) and
-        # "Verify macOS installer notarization" (the dmg) above — both required.
-        # This harness's --release signing checks duplicate those but (a) use
-        # `codesign -dv` (single v, which omits the Authority= chain) and (b)
-        # inspect the build-tree .app, which the dmg bundler cleans (we restore a
-        # ditto'd copy whose nested sig is altered). Don't let those false reds
-        # block a proven-notarized dmg. TODO: rework the harness's release path
-        # to validate the dmg's app with `codesign -dvv` and drop the build-tree
-        # check, then re-arm this gate.
-        continue-on-error: true
+        # Required integrity gate over the exact DMG that is uploaded below.
+        # In release mode the harness mounts that DMG and uses its pristine app
+        # for metadata, architecture, entitlement, signing, and stapling checks.
         shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -677,7 +670,7 @@ jobs:
             echo "::warning::no signed *.app.tar.gz updater artifact — skipping updater manifest (in-app updates disabled this release)."
             exit 0
           fi
-          # Clean dist dir (so build-updater-manifest doesn't walk the restored .app).
+          # Stage only the updater pair so manifest generation sees no other bundles.
           UPD="$(mktemp -d)"
           cp "${TARS[0]}" "${TARS[0]}.sig" "${UPD}/"
           # Polished notes from the GitHub release if release.yml has finished

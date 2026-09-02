@@ -387,6 +387,7 @@ def check_workflow() -> None:
     rebuild = ROOT / "scripts" / "nuke-and-rebuild.sh"
     text = read(workflow)
     preflight_text = read(preflight)
+    validation_text = read(live_validation)
 
     require_contains(workflow, "macos-14", "desktop workflow must build on Apple Silicon runner")
     require_contains(
@@ -413,6 +414,98 @@ def check_workflow() -> None:
         workflow,
         'scripts/validate-macos-native-audio.sh --dmg "${installer:?installer env missing}"',
         "manual desktop builds must still validate DMG payload contents",
+    )
+    harness_step = text.split("- name: Run macOS validation harness", 1)[1].split(
+        "- name: Upload macOS validation report", 1,
+    )[0]
+    require(
+        "continue-on-error" not in harness_step,
+        "macOS validation harness must remain a required desktop-build gate",
+    )
+    require(
+        "Restore .app from DMG for verification" not in text,
+        "desktop validation must inspect the pristine DMG app, not a reconstructed copy",
+    )
+    require_contains(
+        workflow,
+        'codesign -dvv "$APP"',
+        "desktop signing checks must request enough detail for the app authority chain",
+    )
+    require_contains(
+        workflow,
+        'codesign -dvv "$DMG"',
+        "desktop signing checks must request enough detail for the DMG authority chain",
+    )
+    require_contains(
+        workflow,
+        'codesign --verify --strict --verbose=2 "$DMG"',
+        "desktop signing checks must cryptographically verify the DMG container",
+    )
+    for step_name, next_step in (
+        ("Verify macOS release signing", "Notarize DMG"),
+        ("Verify macOS installer notarization", "Run macOS validation harness"),
+        ("Run macOS validation harness", "Upload macOS validation report"),
+    ):
+        step = text.split(f"- name: {step_name}", 1)[1].split(
+            f"- name: {next_step}", 1,
+        )[0]
+        require(
+            "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in step,
+            f"{step_name} must receive the configured Apple team identity",
+        )
+    require_contains(
+        workflow,
+        'grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}"',
+        "desktop signing checks must pin the signer team to APPLE_TEAM_ID",
+    )
+    require_contains(
+        live_validation,
+        "--release requires APPLE_TEAM_ID for signer identity verification",
+        "release validation must require the configured Apple team identity",
+    )
+    require_contains(
+        live_validation,
+        'grep -Fxq "TeamIdentifier=${expected_team}"',
+        "release validation must pin signer teams to APPLE_TEAM_ID",
+    )
+    require_contains(
+        live_validation,
+        'local root_apps=("$DMG_MOUNT"/*.app)',
+        "release validation must enumerate root apps in the DMG",
+    )
+    require_contains(
+        live_validation,
+        'if [ "${#root_apps[@]}" -ne 1 ]',
+        "release validation must reject zero or multiple root apps",
+    )
+    require_contains(
+        live_validation,
+        'if [ "${root_apps[0]}" != "$DMG_MOUNT/ORBIS.app" ]',
+        "release validation must require the root app to be ORBIS.app",
+    )
+    require_contains(
+        live_validation,
+        'validate_release_dmg_signing "$DMG"',
+        "release validation must verify the DMG signature and signer identity",
+    )
+    require_contains(
+        live_validation,
+        "using authoritative app mounted from DMG for validation",
+        "release validation must select the app from the DMG",
+    )
+    require_contains(
+        live_validation,
+        'codesign -dvv "$app"',
+        "release validation must request enough codesign detail for the authority chain",
+    )
+    require(
+        'codesign -dv "$app"' not in validation_text,
+        "release validation must not regress to single-v codesign details",
+    )
+    require(
+        "REQUESTED_APP" not in validation_text
+        and 'validate_release_app_signing "$REQUESTED_APP"' not in validation_text,
+        "release validation must not inspect a non-authoritative build-tree app",
     )
     require_contains(
         workflow,
@@ -697,8 +790,8 @@ def check_workflow() -> None:
     )
     require_contains(
         live_validation,
-        "using app mounted from DMG for validation",
-        "release validation must support validating downloaded DMGs without a separate built app",
+        "using authoritative app mounted from DMG for validation",
+        "release validation must use the downloaded DMG without a separate built app",
     )
     require_contains(
         live_validation,
@@ -757,18 +850,8 @@ def check_workflow() -> None:
     )
     require_contains(
         live_validation,
-        'validate_release_app_signing "$DMG_APP" "DMG app"',
+        'validate_release_app_signing "$APP" "DMG app"',
         "release validation must verify signing/notarization on the app inside the DMG",
-    )
-    require_contains(
-        live_validation,
-        'validate_release_app_signing "$REQUESTED_APP" "build-tree app"',
-        "release validation must check the original build-tree app when present",
-    )
-    require_contains(
-        live_validation,
-        "build-tree app is absent; release validation will use the mounted DMG app",
-        "release validation must not mislabel a downloaded DMG app as the build-tree app",
     )
     require_contains(
         live_validation,
