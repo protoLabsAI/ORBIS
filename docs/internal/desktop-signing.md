@@ -85,7 +85,10 @@ Next tagged release will sign + notarize the `.dmg` and `.app`
 inside. On semver tag builds, CI verifies the signed `.app`, checks
 the embedded entitlements, runs Gatekeeper assessment, and validates
 the stapled notarization tickets on the authoritative `ORBIS.app` mounted
-from the `.dmg` and on the `.dmg` container itself.
+from the `.dmg` and on the `.dmg` container itself. Release validation also
+requires both signatures' authority and `TeamIdentifier` to match the
+configured `APPLE_TEAM_ID`; a valid artifact from a different Apple team is
+rejected.
 Users no longer get the Gatekeeper warning on first open.
 
 ## Tauri auto-updater signing

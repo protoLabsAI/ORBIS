@@ -374,8 +374,12 @@ jobs:
             exit 1
           fi
           MNT="$(mktemp -d)"
+          cleanup_mount() {
+            hdiutil detach "$MNT" >/dev/null 2>&1 || true
+            rmdir "$MNT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
           hdiutil attach "${DMGS[0]}" -nobrowse -readonly -mountpoint "$MNT"
-          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
           APPS=("$MNT"/*.app)
           if [ "${#APPS[@]}" -ne 1 ]; then
             echo "::error::Expected exactly one .app inside the mounted DMG, found ${#APPS[@]}."
@@ -427,6 +431,8 @@ jobs:
         # the real notarized artifact. Self-gates on a Developer ID signature so
         # unsigned dev builds skip instead of failing (no longer push-only, so
         # it's exercised on workflow_dispatch too).
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -436,11 +442,15 @@ jobs:
             exit 1
           fi
           MNT="$(mktemp -d)"
+          cleanup_mount() {
+            hdiutil detach "$MNT" >/dev/null 2>&1 || true
+            rmdir "$MNT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_mount EXIT
           hdiutil attach "${DMGS[0]}" -nobrowse -readonly -mountpoint "$MNT"
-          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
           APPS=("$MNT"/*.app)
-          if [ "${#APPS[@]}" -eq 0 ]; then
-            echo "::error::No .app inside the mounted DMG"
+          if [ "${#APPS[@]}" -ne 1 ] || [ "${APPS[0]}" != "$MNT/ORBIS.app" ]; then
+            echo "::error::DMG must contain exactly one root app named ORBIS.app."
             exit 1
           fi
           APP="${APPS[0]}"
@@ -450,10 +460,16 @@ jobs:
             exit 0
           fi
 
+          if [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::error::Signed release verification requires APPLE_TEAM_ID."
+            exit 1
+          fi
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dvv "$APP" 2> codesign-details.txt
           grep -q "Authority=Developer ID Application:" codesign-details.txt
-          grep -q "TeamIdentifier=" codesign-details.txt
+          grep -F "Authority=Developer ID Application:" codesign-details.txt \
+            | grep -Fq " (${APPLE_TEAM_ID})"
+          grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}" codesign-details.txt
 
           codesign -d --entitlements :- "$APP" > actual-entitlements.plist
           python - <<'PY'
@@ -546,6 +562,8 @@ jobs:
         # No longer push-only — runs on dispatch too so the notarized dmg is
         # validated before a real release. Self-gates on a signed dmg so
         # unsigned dev builds skip.
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           DMG="${installer:?installer env missing}"
@@ -554,6 +572,15 @@ jobs:
             echo "Unsigned dmg — skipping installer notarization checks (dev build)."
             exit 0
           fi
+          if [ -z "${APPLE_TEAM_ID:-}" ]; then
+            echo "::error::Signed release verification requires APPLE_TEAM_ID."
+            exit 1
+          fi
+          codesign --verify --strict --verbose=2 "$DMG"
+          codesign -dvv "$DMG" 2> dmg-codesign-details.txt
+          grep -F "Authority=Developer ID Application:" dmg-codesign-details.txt \
+            | grep -Fq " (${APPLE_TEAM_ID})"
+          grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}" dmg-codesign-details.txt
           spctl --assess --type open --context context:primary-signature \
             --verbose=4 "$DMG"
           xcrun stapler validate "$DMG"
@@ -563,6 +590,8 @@ jobs:
         # In release mode the harness mounts that DMG and uses its pristine app
         # for metadata, architecture, entitlement, signing, and stapling checks.
         shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then

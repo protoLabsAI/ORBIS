@@ -437,6 +437,58 @@ def check_workflow() -> None:
         "desktop signing checks must request enough detail for the DMG authority chain",
     )
     require_contains(
+        workflow,
+        'codesign --verify --strict --verbose=2 "$DMG"',
+        "desktop signing checks must cryptographically verify the DMG container",
+    )
+    for step_name, next_step in (
+        ("Verify macOS release signing", "Notarize DMG"),
+        ("Verify macOS installer notarization", "Run macOS validation harness"),
+        ("Run macOS validation harness", "Upload macOS validation report"),
+    ):
+        step = text.split(f"- name: {step_name}", 1)[1].split(
+            f"- name: {next_step}", 1,
+        )[0]
+        require(
+            "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in step,
+            f"{step_name} must receive the configured Apple team identity",
+        )
+    require_contains(
+        workflow,
+        'grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}"',
+        "desktop signing checks must pin the signer team to APPLE_TEAM_ID",
+    )
+    require_contains(
+        live_validation,
+        "--release requires APPLE_TEAM_ID for signer identity verification",
+        "release validation must require the configured Apple team identity",
+    )
+    require_contains(
+        live_validation,
+        'grep -Fxq "TeamIdentifier=${expected_team}"',
+        "release validation must pin signer teams to APPLE_TEAM_ID",
+    )
+    require_contains(
+        live_validation,
+        'local root_apps=("$DMG_MOUNT"/*.app)',
+        "release validation must enumerate root apps in the DMG",
+    )
+    require_contains(
+        live_validation,
+        'if [ "${#root_apps[@]}" -ne 1 ]',
+        "release validation must reject zero or multiple root apps",
+    )
+    require_contains(
+        live_validation,
+        'if [ "${root_apps[0]}" != "$DMG_MOUNT/ORBIS.app" ]',
+        "release validation must require the root app to be ORBIS.app",
+    )
+    require_contains(
+        live_validation,
+        'validate_release_dmg_signing "$DMG"',
+        "release validation must verify the DMG signature and signer identity",
+    )
+    require_contains(
         live_validation,
         "using authoritative app mounted from DMG for validation",
         "release validation must select the app from the DMG",

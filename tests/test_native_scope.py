@@ -112,6 +112,17 @@ def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
     harness_step = workflow.split("- name: Run macOS validation harness", 1)[1].split(
         "- name: Upload macOS validation report", 1,
     )[0]
+    app_signing_step = workflow.split("- name: Verify macOS release signing", 1)[
+        1
+    ].split("- name: Notarize DMG", 1)[0]
+    dmg_signing_step = workflow.split(
+        "- name: Verify macOS installer notarization",
+        1,
+    )[1].split("- name: Run macOS validation harness", 1)[0]
+    metadata_step = workflow.split("- name: Verify macOS DMG app metadata", 1)[1].split(
+        "- name: Verify macOS release signing",
+        1,
+    )[0]
     assert "continue-on-error" not in harness_step
     assert "Restore .app from DMG for verification" not in workflow
     assert "using authoritative app mounted from DMG for validation" in harness
@@ -123,6 +134,20 @@ def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
     assert 'codesign -dv "$APP"' not in workflow
     assert 'codesign -dvv "$DMG"' in workflow
     assert 'codesign -dv "$DMG"' not in workflow
+    assert 'codesign --verify --strict --verbose=2 "$DMG"' in workflow
+    assert 'grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}"' in app_signing_step
+    assert 'grep -Fxq "TeamIdentifier=${APPLE_TEAM_ID}"' in dmg_signing_step
+    assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in app_signing_step
+    assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in dmg_signing_step
+    assert "APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}" in harness_step
+    assert "--release requires APPLE_TEAM_ID for signer identity verification" in harness
+    assert 'grep -Fxq "TeamIdentifier=${expected_team}"' in harness
+    assert 'local root_apps=("$DMG_MOUNT"/*.app)' in harness
+    assert 'if [ "${#root_apps[@]}" -ne 1 ]' in harness
+    assert 'if [ "${root_apps[0]}" != "$DMG_MOUNT/ORBIS.app" ]' in harness
+    assert 'validate_release_dmg_signing "$DMG"' in harness
+    for step in (metadata_step, app_signing_step):
+        assert step.index("trap cleanup_mount EXIT") < step.index("hdiutil attach")
 
 
 def test_native_operator_handoff_docs_stay_present():
