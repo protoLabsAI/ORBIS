@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.2.169",
+    "date": "2026-09-02",
+    "changes": [
+      "The local hub endpoint is promoted as the default agent connection point.",
+      "Hub boot availability is hardened to reduce failure modes during startup.",
+      "Hub startup confirmation is bounded to prevent indefinite blocking.",
+      "A warning is emitted if hub startup does not finalize within the expected window.",
+      "Web boot status events are closed to resolve race conditions during initialization.",
+      "macOS DMG artifacts are validated against authoritative sources to ensure integrity.",
+      "The macOS artifact signer is pinned to prevent unexpected signature mismatches.",
+      "Automated version bumps are kept in sync to prevent drift between release channels."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.169/ORBIS-0.2.169-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.168",
     "date": "2026-09-02",
     "changes": [
