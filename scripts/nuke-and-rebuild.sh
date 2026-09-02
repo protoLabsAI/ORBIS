@@ -40,6 +40,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
+source "${ROOT}/scripts/pyapp-installer-env.sh"
 
 LAUNCH=0
 TAIL=0
@@ -215,7 +216,7 @@ ok "sdist: ${SDIST} ($(du -h "${SDIST}" | cut -f1))"
 # ---------------------------------------------------------------------------
 # 5. PyApp sidecar
 # ---------------------------------------------------------------------------
-log "building pyapp sidecar (cargo install pyapp)…"
+log "building pyapp ${ORBIS_PYAPP_VERSION} sidecar with UV ${PYAPP_UV_VERSION}…"
 PYAPP_PROJECT_NAME="orbis" \
 PYAPP_PROJECT_VERSION="${VERSION}" \
 PYAPP_PROJECT_PATH="${SDIST}" \
@@ -223,7 +224,8 @@ PYAPP_PROJECT_FEATURES="parakeet,smart-turn" \
 PYAPP_PYTHON_VERSION="3.11" \
 PYAPP_EXEC_SPEC="app:main" \
 PYAPP_FULL_ISOLATION="1" \
-  cargo install pyapp --root /tmp/pyapp-build-fix --locked --force >/dev/null
+  cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" \
+    --root /tmp/pyapp-build-fix --locked --force >/dev/null
 # Bundles the Parakeet STT backend (parakeet-mlx) so STT_BACKEND=parakeet
 # works. It enlarges the sidecar; drop PYAPP_PROJECT_FEATURES to ship a
 # Whisper-only build.

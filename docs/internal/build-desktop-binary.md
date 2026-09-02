@@ -34,12 +34,19 @@ scripts/build-desktop-binary.sh
 ORBIS_ALLOW_CPU=1 ./dist/orbis-* --port 0
 ```
 
-Expected first-run behavior: the binary downloads Python (~40 MB) +
-the project's wheel dependencies (~800 MB on macOS, ~3 GB on Windows/
-Linux thanks to cu128 + cuda-toolkit), extracts everything under
-`~/.cache/orbis/` (or whatever `ORBIS_CACHE_DIR` points at), and
-starts ORBIS. Second run reuses the cache and boots in a couple of
-seconds.
+Expected first-run behavior: the binary downloads Python plus the project's
+wheel dependencies and installs them with PyApp's UV path. On macOS, PyApp's
+versioned environment lives under `~/Library/Application Support/pyapp/orbis/`;
+PyApp caches its pinned UV executable under `~/Library/Caches/pyapp/uv/`, and
+UV's shared package cache defaults to `~/.cache/uv/`. `ORBIS_CACHE_DIR` controls
+model/application caches, not these installer locations. A later ORBIS version
+creates a new PyApp environment but reuses UV's cache and APFS clones, so it
+does not download and physically duplicate the whole dependency set.
+
+All release and local builders source `scripts/pyapp-installer-env.sh`, which
+pins PyApp and UV. Treat those as release inputs: update the shared pins only
+after rebuilding a sidecar and repeating the benchmark/boot checks documented
+in [the UV benchmark](./pyapp-uv-benchmark.md).
 
 You should see on stdout, roughly:
 
@@ -93,6 +100,11 @@ orbis-x86_64-unknown-linux-gnu
 
 **"cargo install pyapp … failed"** — make sure Rust is up to date
 (`rustup update stable`).
+
+**First launch has no network** — the embedded ORBIS sdist is not an offline
+bundle of its third-party dependencies. A first-ever install still needs the
+network. Once UV's shared cache is warm, the same environment can be recreated
+offline.
 
 **"torch 2.x.y+cu128 is not compatible with this platform"** — you're
 on a non-Linux/Windows host. Drop the `--extra-index-url` (the script

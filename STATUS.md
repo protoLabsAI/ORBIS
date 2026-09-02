@@ -40,6 +40,15 @@ The release contains two important distribution corrections:
   for auth, connectivity/server, and rate/quota failures; it does not hide
   application, invalid-request, or unknown failures. A substantive answer
   suppresses the warning, while a micro-ack does not.
+- **Issue #489's remaining updater cost** is addressed by compiling every
+  release/local PyApp sidecar with pinned PyApp 0.29.0 and UV 0.12.9. On the
+  Apple Silicon benchmark, warm environment recreation fell from 54.47s to
+  9.78s and the next version's physical allocation fell from about 1.93 GiB
+  to 402 MiB because UV reuses its shared cache through APFS clones. The UV
+  install eagerly compiles bytecode like pip, so these numbers do not defer
+  work to first launch. The first machine install still requires network;
+  exact evidence and methodology live in
+  `docs/internal/pyapp-uv-benchmark.md`.
 
 ### protoAgent brain direction and phase status
 
