@@ -65,7 +65,10 @@ function clearDelegateLifecycle(patch: Partial<VoiceSnapshot> = {}): void {
 }
 
 function boundedSseText(value: string, maxBytes: number): string {
-  return new TextDecoder().decode(new TextEncoder().encode(value.trim()).slice(0, maxBytes));
+  const encoder = new TextEncoder();
+  let bounded = new TextDecoder().decode(encoder.encode(value.trim()).slice(0, maxBytes));
+  while (encoder.encode(bounded).length > maxBytes) bounded = bounded.slice(0, -1);
+  return bounded;
 }
 
 export function handleSse(event: string, data: string): void {

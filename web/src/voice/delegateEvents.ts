@@ -7,8 +7,10 @@ const MAX_FIELD_BYTES = 256;
 
 function boundedText(value: unknown, maxBytes: number): string {
   if (typeof value !== 'string') return '';
-  const bytes = new TextEncoder().encode(value.trim());
-  return new TextDecoder().decode(bytes.slice(0, maxBytes));
+  const encoder = new TextEncoder();
+  let bounded = new TextDecoder().decode(encoder.encode(value.trim()).slice(0, maxBytes));
+  while (encoder.encode(bounded).length > maxBytes) bounded = bounded.slice(0, -1);
+  return bounded;
 }
 
 export interface DelegateLifecycleState {
