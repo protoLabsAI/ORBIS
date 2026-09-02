@@ -82,7 +82,7 @@ describe('structured delegate event lifecycle', () => {
 
   test('status/log strings and logged delta data stay bounded', () => {
     const status = apply(initialDelegateLifecycle(), 'delegate.status', {
-      delegate_id: 'hub', task_id: 'A', state: 'working', text: 'x'.repeat(100_000),
+      delegate_id: 'hub', task_id: 'A', state: 'working', text: `x${'🙂'.repeat(100_000)}`,
     }).presentation;
     expect(new TextEncoder().encode(status?.rawText ?? '').length).toBeLessThanOrEqual(1024);
 
