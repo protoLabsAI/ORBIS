@@ -37,6 +37,8 @@ export interface VoiceSnapshot {
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
+  /** Correlation key for the delegate task currently owning the progress rail. */
+  delegationTaskKey: string | null;
   delegationProgress: string | null;
   delegationOutcome: 'success' | 'error' | null;
   sessionId: string | null;
@@ -57,6 +59,7 @@ const INITIAL: VoiceSnapshot = {
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,
+  delegationTaskKey: null,
   delegationProgress: null,
   delegationOutcome: null,
   sessionId: null,
