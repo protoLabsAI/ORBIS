@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the version in pyproject.toml.
+"""Bump the project version and keep generated lock metadata in sync.
 
 Usage:
     python scripts/version.py patch        # 0.1.0 → 0.1.1
@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 PYPROJECT = Path(__file__).parent.parent / "pyproject.toml"
+UV_LOCK = Path(__file__).parent.parent / "uv.lock"
 
 
 def read_version() -> str:
@@ -40,6 +41,18 @@ def write_version(new_version: str) -> None:
         flags=re.MULTILINE,
     )
     PYPROJECT.write_text(updated)
+
+    if UV_LOCK.exists():
+        lock_text = UV_LOCK.read_text()
+        lock_updated, replacements = re.subn(
+            r'(\[\[package\]\]\nname = "orbis"\nversion = ")[^"]+("\n)',
+            rf"\g<1>{new_version}\g<2>",
+            lock_text,
+            count=1,
+        )
+        if replacements != 1:
+            raise ValueError("orbis package version not found exactly once in uv.lock")
+        UV_LOCK.write_text(lock_updated)
 
 
 def bump(current: str, kind: str) -> str:
