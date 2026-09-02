@@ -579,6 +579,11 @@ def check_workflow() -> None:
         'export PYAPP_UV_VERSION="0.12.9"',
         "sidecar builds must pin UV instead of downloading latest",
     )
+    require_contains(
+        installer_env,
+        'export PYAPP_PIP_EXTRA_ARGS="--compile-bytecode"',
+        "UV sidecar installs must eagerly compile bytecode before first launch",
+    )
     for build_path in (
         workflow,
         ROOT / "scripts" / "build-desktop-binary.sh",
@@ -601,6 +606,10 @@ def check_workflow() -> None:
         require(
             "PYAPP_UV_ENABLED" not in build_text,
             f"{build_path.name} must not duplicate the shared UV enablement pin",
+        )
+        require(
+            "--compile-bytecode" not in build_text,
+            f"{build_path.name} must not duplicate the shared bytecode policy",
         )
     require_contains(
         workflow,

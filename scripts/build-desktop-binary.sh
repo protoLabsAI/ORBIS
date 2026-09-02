@@ -84,7 +84,7 @@ export PYAPP_PYTHON_VERSION="3.11"
 export PYAPP_EXEC_SPEC="app:main"
 export PYAPP_FULL_ISOLATION="1"
 if [ -n "${TORCH_INDEX}" ]; then
-  export PYAPP_PIP_EXTRA_ARGS="--extra-index-url ${TORCH_INDEX}"
+  export PYAPP_PIP_EXTRA_ARGS="${PYAPP_PIP_EXTRA_ARGS} --extra-index-url ${TORCH_INDEX}"
 fi
 
 OUT="dist/orbis-${TARGET}${SUFFIX}"

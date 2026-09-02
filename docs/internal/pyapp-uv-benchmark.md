@@ -9,16 +9,19 @@ standalone CPython 3.11.14 distribution, and UV 0.12.9.
 | Installer | Cold cache | Warm cache | Environment logical bytes | Environment allocated bytes |
 | --- | ---: | ---: | ---: | ---: |
 | pip 25.2 | 100.33 s | 54.47 s | 1,888,619,308 | 2,038,620,160 |
-| UV 0.12.9 | 34.07 s | 2.56 s | 1,499,109,549 | 1,607,417,856 |
+| UV 0.12.9 + bytecode | 46.34 s | 9.78 s | 1,882,361,821 | 2,044,239,872 |
 
-UV was 2.9x faster cold and 21.3x faster when recreating the environment from
-its warm shared cache. Both environments exposed 180 installed distributions
-with an identical package/version inventory, and successfully imported `app`,
-`acp`, `server`, and `agent.delegate_adapters`.
+UV was 2.2x faster cold and 5.6x faster when recreating the environment from
+its warm shared cache. UV was passed its officially supported
+`--compile-bytecode` install argument, matching pip's eager bytecode generation
+and removing deferred first-launch work from the comparison. Both environments
+exposed 180 installed distributions with an identical package/version
+inventory, and successfully imported `app`, `acp`, `server`, and
+`agent.delegate_adapters`.
 
 The per-directory allocated byte count above double-counts APFS shared blocks.
 A second warm installation measured with filesystem free blocks before/after
-used about 77 MiB physically for UV (`78,832 KiB`) versus about 1.93 GiB for
+used about 402 MiB physically for UV (`411,600 KiB`) versus about 1.93 GiB for
 pip (`2,028,648 KiB`). This is the updater-relevant number: each ORBIS version
 still gets an isolated PyApp environment, but UV reuses cached artifacts with
 APFS copy-on-write cloning instead of copying the dependency tree again.
@@ -32,17 +35,26 @@ and physical disk cost on each app update.
 
 Two official PyApp 0.29.0 sidecars were compiled from the same embedded sdist,
 one with the legacy pip path and one with `PYAPP_UV_ENABLED=1` plus
-`PYAPP_UV_VERSION=0.12.9`. Their installer cores were benchmarked against fresh
-copies of PyApp's exact standalone Python distribution, reproducing PyApp's
-full-isolation pip and UV commands. Install roots and pip/UV caches were all
-under a disposable `/tmp/orbis-pyapp-489.*` directory.
+`PYAPP_UV_VERSION=0.12.9`. The release configuration also passes
+`--compile-bytecode` to UV. Their installer cores were benchmarked against
+fresh copies of PyApp's exact standalone Python distribution, reproducing
+PyApp's full-isolation pip and UV commands. Install roots and pip/UV caches
+were all under a disposable `/tmp/orbis-pyapp-489.*` directory.
 
 PyApp exposes `PYAPP_INSTALL_DIR_ORBIS` but no override for its own macOS cache
 directory. Running the launchers from a test account would therefore acquire
 locks and populate the active user's PyApp cache. The benchmark did not do
 that: it left both the installed ORBIS app and user PyApp/UV caches untouched.
-This means the timings exclude the identical PyApp distribution-unpack wrapper
-around the measured installer commands.
+This means the install timings exclude the identical PyApp
+distribution-unpack wrapper around the measured installer commands. As a
+separate end-to-end check, the compiled UV environment booted the real ORBIS
+entry point and emitted `ORBIS_READY` after 14.55 seconds with database, model,
+session, and OAuth paths redirected into the disposable root. After that boot,
+the pip and UV roots remained comparable in size: 1,890,212,403 versus
+1,884,619,337 logical bytes, and 2,040,377,344 versus 2,045,394,944 allocated
+bytes. The pip environment had been imported before the timed launch, so its
+9.53-second ready time is recorded below but is not claimed as a fair launch
+speed comparison.
 
 Production UV package artifacts default to `~/.cache/uv`; PyApp separately
 caches the pinned UV executable under `~/Library/Caches/pyapp/uv`. The benchmark
@@ -52,7 +64,7 @@ existing PyApp distribution archive as the common Python input.
 ## Offline behavior
 
 With network denied by the macOS sandbox, UV recreated a fresh environment
-from the warm isolated cache in 6.23 seconds. With an empty cache it failed
+from the warm isolated cache in 9.47 seconds. With an empty cache it failed
 closed after 4.1 seconds while trying to reach PyPI. Enabling UV therefore does
 not make a fresh-machine installation offline: it makes later environment
 recreation cache-backed. The embedded ORBIS sdist alone cannot supply its 178
@@ -72,3 +84,36 @@ third-party packages.
    filesystem free blocks to capture APFS clone sharing.
 6. Deny network with `sandbox-exec`; verify warm-cache success and empty-cache
    failure.
+
+## Raw result summary
+
+The disposable run logs and roots were retained through review under
+`/tmp/orbis-pyapp-489.sMaJ23`. The values transcribed from them are:
+
+```text
+pip cold:                 real 100.33  user 38.91  sys 14.71
+pip warm:                 real  54.47  user 36.30  sys 12.53
+uv bytecode cold:         real  46.34  user 31.36  sys 20.26
+uv bytecode warm:         real   9.78  user 26.90  sys 12.39
+uv bytecode warm offline: real   9.47  user 27.12  sys 12.74
+
+pip post-install: logical 1,888,619,308; allocated 2,038,620,160
+uv post-install:  logical 1,882,361,821; allocated 2,044,239,872
+pip post-ready:   logical 1,890,212,403; allocated 2,040,377,344
+uv post-ready:    logical 1,884,619,337; allocated 2,045,394,944
+
+warm physical allocation: pip 2,028,648 KiB; uv 411,600 KiB
+installed inventory:      identical, 180 distributions
+uv installed entry point: ORBIS_READY in 14.55 s (15.08 s process wall time)
+compiled UV sidecar SHA:  f951060a340a4438ac3f1893cebd8d49067408899fcb52ab1695d9d645fce4bb
+```
+
+## Bootstrap trust boundary
+
+The release pins PyApp 0.29.0 and UV 0.12.9. PyApp constructs a versioned
+GitHub Releases URL and downloads it over TLS, but its current downloader does
+not verify a published checksum or attestation for that archive. The pinned,
+immutable URL prevents accidental version drift; it does not independently
+protect against a compromised release asset or delivery path. Follow-up issue
+[#718](https://github.com/protoLabsAI/ORBIS/issues/718) tracks adding checksum
+verification without blocking this measured installer improvement.

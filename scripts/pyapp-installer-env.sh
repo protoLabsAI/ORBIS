@@ -7,3 +7,6 @@ ORBIS_PYAPP_VERSION="0.29.0"
 export ORBIS_PYAPP_VERSION
 export PYAPP_UV_ENABLED="1"
 export PYAPP_UV_VERSION="0.12.9"
+# Match pip's eager .pyc generation so the first real ORBIS launch does not
+# inherit deferred compilation work from the faster installer.
+export PYAPP_PIP_EXTRA_ARGS="--compile-bytecode"

@@ -107,6 +107,7 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
     assert 'ORBIS_PYAPP_VERSION="0.29.0"' in installer
     assert 'export PYAPP_UV_ENABLED="1"' in installer
     assert 'export PYAPP_UV_VERSION="0.12.9"' in installer
+    assert 'export PYAPP_PIP_EXTRA_ARGS="--compile-bytecode"' in installer
 
     build_paths = (
         ROOT / ".github/workflows/desktop-build.yml",
@@ -122,6 +123,7 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
         )
         assert "PYAPP_UV_ENABLED=" not in source
         assert "PYAPP_UV_VERSION=" not in source
+        assert "--compile-bytecode" not in source
 
 
 def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
