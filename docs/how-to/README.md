@@ -29,4 +29,4 @@ Task-oriented — a recipe for a specific goal. These assume you've done the
 
 ### Desktop & access
 
-- **[Run ORBIS as a menu-bar agent](./menu-bar-mode)** — show, hide, quit.
+- **[Use ORBIS from the Dock or menu bar](./menu-bar-mode)** — show, hide, quit.

@@ -396,6 +396,8 @@ jobs:
           info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
           assert "NSMicrophoneUsageDescription" in info
           assert "NSCameraUsageDescription" not in info
+          assert info.get("LSUIElement") is not True
+          assert info.get("LSBackgroundOnly") is not True
           assert info["CFBundleIdentifier"] == "studio.protolabs.orbis"
 
           executable = app / "Contents" / "MacOS" / info["CFBundleExecutable"]

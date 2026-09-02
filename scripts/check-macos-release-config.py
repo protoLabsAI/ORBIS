@@ -161,6 +161,14 @@ def check_plists() -> None:
 
     require("NSMicrophoneUsageDescription" in info, "Info.plist missing microphone usage text")
     require("NSCameraUsageDescription" not in info, "Info.plist must not request camera")
+    require(
+        info.get("LSUIElement") is not True,
+        "Info.plist must not hide the installed app from the Dock/app switcher",
+    )
+    require(
+        info.get("LSBackgroundOnly") is not True,
+        "Info.plist must not make the installed app background-only",
+    )
 
     require(
         entitlements.get("com.apple.security.device.audio-input") is True,
@@ -196,6 +204,33 @@ def check_native_audio_sources() -> None:
         lib_rs,
         "ensure_microphone_permission()",
         "Rust startup must gate native audio on microphone permission",
+    )
+    require_contains(
+        lib_rs,
+        "app.set_activation_policy(tauri::ActivationPolicy::Regular);",
+        "installed macOS app must retain its independent Dock discoverability path",
+    )
+    require_absent(
+        lib_rs,
+        "set_activation_policy(tauri::ActivationPolicy::Accessory)",
+        "installed macOS app must not reintroduce the implicated Accessory transition",
+    )
+    require_absent(
+        lib_rs,
+        "set_dock_visibility(false)",
+        "installed macOS app must not hide its independent Dock discoverability path",
+    )
+    require_contains(
+        lib_rs,
+        "if matches!(&event, RunEvent::Reopen { .. })",
+        "Dock reopen must be handled by the native event loop",
+    )
+    reopen_block = read(lib_rs).split(
+        "if matches!(&event, RunEvent::Reopen { .. })", 1,
+    )[1].split("if let RunEvent::ExitRequested", 1)[0]
+    require(
+        "show_main_window(app_handle);" in reopen_block,
+        "Dock reopen must surface the existing main window",
     )
     require_contains(
         lib_rs,
@@ -446,6 +481,16 @@ def check_workflow() -> None:
         workflow,
         'codesign --verify --strict --verbose=2 "$DMG"',
         "desktop signing checks must cryptographically verify the DMG container",
+    )
+    require_contains(
+        workflow,
+        'assert info.get("LSUIElement") is not True',
+        "desktop build must verify the bundled app remains Dock-visible",
+    )
+    require_contains(
+        workflow,
+        'assert info.get("LSBackgroundOnly") is not True',
+        "desktop build must verify the bundled app is not background-only",
     )
     for step_name, next_step in (
         ("Verify macOS release signing", "Notarize DMG"),

@@ -52,9 +52,10 @@ it at. There's no multi-tenant cloud in the middle. See the privacy model
 
 ## Always available
 
-ORBIS lives in your **menu bar**, not the dock. Closing the window hides it;
-the sidecar and audio engine keep running, so it keeps listening in the
-background. Bring it back from the menu-bar icon. (See the menu-bar how-to.)
+ORBIS stays in your **Dock** and also creates a menu-bar orb. Closing the window
+hides it; the sidecar and audio engine keep running, so it keeps listening in
+the background. Bring it back from either icon. (See the desktop-access
+how-to.)
 
 ## Where to go next
 

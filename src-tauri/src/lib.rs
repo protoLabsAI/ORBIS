@@ -983,9 +983,9 @@ fn inject_backend_url(app: &AppHandle, url: &str) {
     log::info!("injected backend url {url}");
 }
 
-/// Bring the main window back to the foreground — used by the tray (click or
-/// "Show ORBIS") since in menu-bar-only mode there's no dock icon to click.
-/// Also leaves ambient mode (hides the mini-orb, re-docks widgets).
+/// Bring the main window back to the foreground — used by the tray, Dock
+/// reopen, and the "Show ORBIS" command. Also leaves ambient mode (hides the
+/// mini-orb, re-docks widgets).
 fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.unminimize();
@@ -1453,15 +1453,86 @@ fn handle_agent_click(app: AppHandle, agent_id: String) {
     }
 }
 
+const ORBIS_TRAY_ID: &str = "orbis-tray";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayPresence {
+    AlreadyPresent,
+    Created,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TrayRegistrationError<E> {
+    Build(E),
+    MissingAfterBuild,
+}
+
+/// Small test seam around Tauri's process-local tray registry. In production,
+/// `build_and_verify` constructs the native status item and then checks that
+/// Tauri can look up its registration under [`ORBIS_TRAY_ID`].
+fn ensure_tray_registration<E>(
+    already_registered: bool,
+    build_and_verify: impl FnOnce() -> Result<bool, E>,
+) -> Result<TrayPresence, TrayRegistrationError<E>> {
+    if already_registered {
+        return Ok(TrayPresence::AlreadyPresent);
+    }
+
+    match build_and_verify() {
+        Ok(true) => Ok(TrayPresence::Created),
+        Ok(false) => Err(TrayRegistrationError::MissingAfterBuild),
+        Err(error) => Err(TrayRegistrationError::Build(error)),
+    }
+}
+
+fn tray_process_diagnostic(app: &AppHandle) -> String {
+    let executable = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("<unavailable: {error}>"));
+    let build = if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "release"
+    };
+    format!(
+        "id={ORBIS_TRAY_ID} pid={} build={build} bundle_id={} executable={executable}",
+        std::process::id(),
+        app.config().identifier
+    )
+}
+
+fn tray_tooltip(development: bool) -> &'static str {
+    if development {
+        "ORBIS (development)"
+    } else {
+        "ORBIS"
+    }
+}
+
+/// Tauri stores builder menu callbacks in an app-global listener list. Register
+/// this once at startup so rebuilding a removed tray cannot duplicate actions.
+fn register_tray_menu_handler(app: &AppHandle) {
+    app.on_menu_event(|app, event| {
+        let id = event.id.as_ref();
+        match id {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ if id.starts_with("agent:") => {
+                handle_agent_click(app.clone(), id["agent:".len()..].to_string());
+            }
+            _ => {}
+        }
+    });
+}
+
 /// Build the macOS menu-bar (tray) item: the ORBIS orb (full-color, NOT a
 /// template — the lavender orb is our identity, so we don't let the system
 /// flatten it to monochrome) with a Show / Quit menu. Each protoLabs.studio app
 /// owns its own menu-bar presence (ORBIS = the orb; fleet agents = the robot),
 /// managed separately. Left-click surfaces the window; the menu's Quit is the
-/// real exit path in menu-bar-only mode. Returns Err if the tray can't be
-/// created, so the caller can stay in the dock as a fallback rather than leave
-/// the app unreachable.
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+/// explicit in-app exit path. Returns Err if the tray can't be created; the
+/// app remains reachable through its deliberately retained Dock presence.
+fn build_tray(app: &AppHandle) -> Result<(), String> {
     use tauri::menu::MenuBuilder;
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
@@ -1478,31 +1549,21 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             mb = mb.text(format!("agent:{}", m.id), &m.name);
         }
     }
-    let menu = mb.separator().text("quit", "Quit ORBIS").build()?;
+    let menu = mb
+        .separator()
+        .text("quit", "Quit ORBIS")
+        .build()
+        .map_err(|error| error.to_string())?;
 
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-orb.png"))?;
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-orb.png"))
+        .map_err(|error| error.to_string())?;
 
-    TrayIconBuilder::with_id("orbis-tray")
+    TrayIconBuilder::with_id(ORBIS_TRAY_ID)
         .icon(icon)
         .icon_as_template(false)
-        .tooltip("ORBIS")
+        .tooltip(tray_tooltip(cfg!(debug_assertions)))
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            let id = event.id.as_ref();
-            match id {
-                "show" => show_main_window(app),
-                "quit" => app.exit(0),
-                _ if id.starts_with("agent:") => {
-                    // Launch (free-port + spawn + /healthz wait) on click. The
-                    // embedded console window lands in the next PR — see
-                    // ORBIS#325 — so for now this brings the agent up + tracks
-                    // it (greppable in the unified log).
-                    handle_agent_click(app.clone(), id["agent:".len()..].to_string());
-                }
-                _ => {}
-            }
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -1513,9 +1574,57 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
                 show_main_window(tray.app_handle());
             }
         })
-        .build(app)?;
+        .build(app)
+        .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+fn ensure_tray(app: &AppHandle) -> Result<TrayPresence, String> {
+    let diagnostic = tray_process_diagnostic(app);
+    let result = ensure_tray_registration(app.tray_by_id(ORBIS_TRAY_ID).is_some(), || {
+        build_tray(app)?;
+        Ok::<bool, String>(app.tray_by_id(ORBIS_TRAY_ID).is_some())
+    });
+
+    match result {
+        Ok(TrayPresence::AlreadyPresent) => Ok(TrayPresence::AlreadyPresent),
+        Ok(TrayPresence::Created) => {
+            log::info!("[tray] registered in Tauri {diagnostic}");
+            Ok(TrayPresence::Created)
+        }
+        Err(TrayRegistrationError::Build(error)) => {
+            Err(format!("native creation failed ({diagnostic}): {error}"))
+        }
+        Err(TrayRegistrationError::MissingAfterBuild) => Err(format!(
+            "native creation returned successfully but Tauri did not retain the registration ({diagnostic})"
+        )),
+    }
+}
+
+fn reconcile_tray(app: &AppHandle, lifecycle: &str) {
+    match ensure_tray(app) {
+        Ok(TrayPresence::AlreadyPresent) => {
+            log::debug!("[tray] lifecycle check ({lifecycle}): retained");
+        }
+        Ok(TrayPresence::Created) if lifecycle != "startup" => {
+            log::warn!("[tray] lifecycle check ({lifecycle}): tray was missing and recreated");
+        }
+        Ok(TrayPresence::Created) => {}
+        Err(error) => {
+            // Tauri's registry cannot tell us whether macOS is visually
+            // presenting the status item. Keep Regular/Dock mode for the whole
+            // process lifetime, and surface the window when native creation is
+            // detectably unavailable.
+            #[cfg(target_os = "macos")]
+            log::error!(
+                "[tray] unavailable during {lifecycle}; retaining Regular/Dock policy: {error}"
+            );
+            #[cfg(not(target_os = "macos"))]
+            log::error!("[tray] unavailable during {lifecycle}: {error}");
+            show_main_window(app);
+        }
+    }
 }
 
 /// Response returned by `api_request` to the bundled UI.
@@ -1804,11 +1913,10 @@ pub fn run() {
         .manage(DelegateHealthState::default())
         .manage(FleetAgents::default())
         .on_window_event(|window, event| {
-            // Menu-bar agent: closing the MAIN window (red traffic light) hides
-            // it instead of quitting — ORBIS keeps listening in the background.
-            // Real exit is the tray's "Quit" (RunEvent::ExitRequested). Fleet
-            // console windows (`fleet-*`) close normally; their agent process
-            // keeps running and the window reopens on the next tray click.
+            // Background agent: closing the MAIN window (red traffic light)
+            // hides it instead of quitting — ORBIS keeps listening. The retained
+            // Dock icon or tray can surface it again. Fleet console windows
+            // (`fleet-*`) close normally; their agent process keeps running.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
@@ -1832,18 +1940,22 @@ pub fn run() {
                 app.manage(PendingAudio::default());
             }
 
-            // Menu-bar-only agent mode: build the tray first, and only drop
-            // the dock icon (Accessory) if it succeeds — so a tray failure
-            // can't leave the app with no way to surface itself.
-            match setup_tray(app) {
-                Ok(()) => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                    }
-                }
-                Err(e) => log::error!("tray setup failed; staying in the dock: {e}"),
+            // Keep macOS's default Regular activation policy for the entire app
+            // lifetime. In the macOS 26.5.2 reproduction, the status item briefly
+            // appeared during launch but was gone after the app loaded. Accessory
+            // was the policy boundary between tray creation and the running event
+            // loop; retaining Regular removes that implicated variable and leaves
+            // an independent Dock path while tray behavior remains unresolved.
+            #[cfg(target_os = "macos")]
+            {
+                app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                log::info!(
+                    "[tray] retaining Regular/Dock activation policy ({})",
+                    tray_process_diagnostic(app.handle())
+                );
             }
+            register_tray_menu_handler(app.handle());
+            reconcile_tray(app.handle(), "startup");
 
             // Global hotkey to summon the command bar (Raycast-style), even when
             // ORBIS is backgrounded. Cmd+Shift+O — distinctive enough to avoid
@@ -1891,6 +2003,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(&event, RunEvent::Reopen { .. }) {
+                // Clicking the deliberately retained Dock icon must surface
+                // the window just like clicking the tray. Reconcile the Tauri
+                // registration while handling this real macOS lifecycle event.
+                show_main_window(app_handle);
+                reconcile_tray(app_handle, "dock-reopen");
+            }
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<Sidecar>() {
                     log::info!("app exit requested — killing sidecar");
@@ -2748,9 +2868,43 @@ fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_audio_input_mode, parse_ready, redact_config, utc_timestamp, DelegateHealthState,
-        SsePayload,
+        ensure_tray_registration, get_audio_input_mode, parse_ready, redact_config, tray_tooltip,
+        utc_timestamp, DelegateHealthState, SsePayload, TrayPresence, TrayRegistrationError,
     };
+
+    #[test]
+    fn tray_registration_does_not_duplicate_an_existing_process_local_tray() {
+        let mut build_calls = 0;
+        let result = ensure_tray_registration::<&str>(true, || {
+            build_calls += 1;
+            Ok(true)
+        });
+
+        assert_eq!(result, Ok(TrayPresence::AlreadyPresent));
+        assert_eq!(build_calls, 0);
+    }
+
+    #[test]
+    fn development_tray_has_a_distinct_hover_label() {
+        assert_eq!(tray_tooltip(true), "ORBIS (development)");
+        assert_eq!(tray_tooltip(false), "ORBIS");
+    }
+
+    #[test]
+    fn tray_registration_requires_post_build_retention() {
+        assert_eq!(
+            ensure_tray_registration::<&str>(false, || Ok(true)),
+            Ok(TrayPresence::Created)
+        );
+        assert_eq!(
+            ensure_tray_registration::<&str>(false, || Ok(false)),
+            Err(TrayRegistrationError::MissingAfterBuild)
+        );
+        assert_eq!(
+            ensure_tray_registration(false, || Err("status item rejected")),
+            Err(TrayRegistrationError::Build("status item rejected"))
+        );
+    }
 
     #[test]
     fn parse_ready_happy_path() {
