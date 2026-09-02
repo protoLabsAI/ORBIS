@@ -10,8 +10,8 @@ name: 'Desktop Build'
 # entry that resolves per-target:
 #   orbis-aarch64-apple-darwin
 #
-# Built with PyApp — produces a small (~10 MB) Rust launcher that
-# lazily downloads Python + pip-installs ORBIS on first run. Matches
+# Built with PyApp — produces a small Rust launcher that lazily downloads
+# Python + installs ORBIS with pinned UV on first run. Matches
 # our "hardware-blessed users tolerate a first-run download" product
 # call. See docs/build-desktop-binary.md for the local flow.
 
@@ -170,12 +170,10 @@ jobs:
           PYAPP_FULL_ISOLATION: '1'
           # macOS arm64 uses default PyPI wheels; torch ships with MPS.
           PYAPP_PIP_EXTRA_ARGS: ${{ matrix.torch_index && format('--extra-index-url {0}', matrix.torch_index) || '' }}
-          # Show the full pip install log in CI so torch/wheel issues
-          # are easy to triage.
-          PYAPP_PIP_VERBOSE: '1'
         run: |
           mkdir -p dist
-          cargo install pyapp --root dist --locked
+          source scripts/pyapp-installer-env.sh
+          cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" --root dist --locked
           # PyApp produces `dist/bin/pyapp` (or `pyapp.exe`). Rename
           # to match Tauri's externalBin target-suffix convention.
           OUT="orbis-${{ matrix.target }}${{ matrix.binary_suffix }}"

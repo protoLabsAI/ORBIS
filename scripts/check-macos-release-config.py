@@ -388,6 +388,7 @@ def check_workflow() -> None:
     text = read(workflow)
     preflight_text = read(preflight)
     validation_text = read(live_validation)
+    installer_env = ROOT / "scripts" / "pyapp-installer-env.sh"
 
     require_contains(workflow, "macos-14", "desktop workflow must build on Apple Silicon runner")
     require_contains(
@@ -563,6 +564,44 @@ def check_workflow() -> None:
         "PYAPP_FULL_ISOLATION: '1'",
         "desktop workflow must keep the sidecar isolated from user Python installs",
     )
+    require_contains(
+        installer_env,
+        'ORBIS_PYAPP_VERSION="0.29.0"',
+        "sidecar builds must pin the audited PyApp release",
+    )
+    require_contains(
+        installer_env,
+        'export PYAPP_UV_ENABLED="1"',
+        "sidecar builds must use PyApp's official UV installer path",
+    )
+    require_contains(
+        installer_env,
+        'export PYAPP_UV_VERSION="0.12.9"',
+        "sidecar builds must pin UV instead of downloading latest",
+    )
+    for build_path in (
+        workflow,
+        ROOT / "scripts" / "build-desktop-binary.sh",
+        ROOT / "scripts" / "nuke-and-rebuild.sh",
+    ):
+        build_text = read(build_path)
+        require(
+            "pyapp-installer-env.sh" in build_text,
+            f"{build_path.name} must source the shared PyApp installer pins",
+        )
+        require(
+            '--version "${ORBIS_PYAPP_VERSION}"' in build_text,
+            f"{build_path.name} must build the pinned PyApp release",
+        )
+        require(
+            build_text.index("pyapp-installer-env.sh")
+            < build_text.index('--version "${ORBIS_PYAPP_VERSION}"'),
+            f"{build_path.name} must load installer pins before building PyApp",
+        )
+        require(
+            "PYAPP_UV_ENABLED" not in build_text,
+            f"{build_path.name} must not duplicate the shared UV enablement pin",
+        )
     require_contains(
         workflow,
         "ORBIS_ALLOW_CPU: '1'",
@@ -952,6 +991,11 @@ def check_scripts_executable() -> None:
         host_preflight,
         'bash -n "$0" scripts/validate-macos-native-audio.sh scripts/nuke-and-rebuild.sh',
         "host native-audio preflight must syntax-check itself and the Mac helper scripts",
+    )
+    require_contains(
+        host_preflight,
+        "scripts/pyapp-installer-env.sh",
+        "host native-audio preflight must syntax-check shared PyApp installer pins",
     )
     require_contains(
         host_preflight,

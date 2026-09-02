@@ -51,7 +51,8 @@ scripts/check-macos-release-config.py
 
 log "Python and shell syntax"
 "$PYTHON" -m py_compile scripts/check-macos-release-config.py app.py
-bash -n "$0" scripts/validate-macos-native-audio.sh scripts/nuke-and-rebuild.sh
+bash -n "$0" scripts/validate-macos-native-audio.sh scripts/nuke-and-rebuild.sh \
+    scripts/pyapp-installer-env.sh
 
 if command -v yamllint >/dev/null 2>&1; then
   log "workflow YAML lint"

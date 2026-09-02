@@ -16,6 +16,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/pyapp-installer-env.sh
 
 VERSION="${1:-}"
 if [ -z "${VERSION}" ]; then
@@ -82,7 +83,6 @@ export PYAPP_PROJECT_PATH="${SDIST}"
 export PYAPP_PYTHON_VERSION="3.11"
 export PYAPP_EXEC_SPEC="app:main"
 export PYAPP_FULL_ISOLATION="1"
-export PYAPP_PIP_VERBOSE="1"
 if [ -n "${TORCH_INDEX}" ]; then
   export PYAPP_PIP_EXTRA_ARGS="--extra-index-url ${TORCH_INDEX}"
 fi
@@ -90,8 +90,8 @@ fi
 OUT="dist/orbis-${TARGET}${SUFFIX}"
 mkdir -p dist
 
-echo "[build-desktop] Building ${OUT} (PyApp ${VERSION_NO_V}, target ${TARGET})..."
-cargo install pyapp --root dist --locked
+echo "[build-desktop] Building ${OUT} (ORBIS ${VERSION_NO_V}, PyApp ${ORBIS_PYAPP_VERSION}, UV ${PYAPP_UV_VERSION}, target ${TARGET})..."
+cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" --root dist --locked --force
 
 if [ "${HOST_OS}" = "Darwin" ] || [ "${HOST_OS}" = "Linux" ]; then
   mv dist/bin/pyapp "${OUT}"

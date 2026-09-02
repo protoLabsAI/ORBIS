@@ -24,6 +24,7 @@ def test_native_desktop_scaffold_stays_present():
         ".claude/skills/orbis-rebuild-install/SKILL.md",
         "CLAUDE.md",
         "docs/internal/build-desktop-binary.md",
+        "docs/internal/pyapp-uv-benchmark.md",
         "docs/internal/desktop-dev.md",
         "docs/internal/desktop-signing.md",
         "docs/internal/native-audio-direction.md",
@@ -47,6 +48,7 @@ def test_native_desktop_scaffold_stays_present():
         "src-tauri/tauri.conf.json",
         "scripts/check-macos-release-config.py",
         "scripts/nuke-and-rebuild.sh",
+        "scripts/pyapp-installer-env.sh",
         "scripts/preflight-native-audio-host.sh",
         "scripts/validate-macos-native-audio.sh",
         "tests/test_frontend_native_scope.py",
@@ -98,6 +100,28 @@ def test_native_workflow_guardrails_stay_present():
 
     for needle in required:
         assert needle in check_script
+
+
+def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
+    installer = (ROOT / "scripts/pyapp-installer-env.sh").read_text(encoding="utf-8")
+    assert 'ORBIS_PYAPP_VERSION="0.29.0"' in installer
+    assert 'export PYAPP_UV_ENABLED="1"' in installer
+    assert 'export PYAPP_UV_VERSION="0.12.9"' in installer
+
+    build_paths = (
+        ROOT / ".github/workflows/desktop-build.yml",
+        ROOT / "scripts/build-desktop-binary.sh",
+        ROOT / "scripts/nuke-and-rebuild.sh",
+    )
+    for path in build_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "pyapp-installer-env.sh" in source
+        assert '--version "${ORBIS_PYAPP_VERSION}"' in source
+        assert source.index("pyapp-installer-env.sh") < source.index(
+            '--version "${ORBIS_PYAPP_VERSION}"',
+        )
+        assert "PYAPP_UV_ENABLED=" not in source
+        assert "PYAPP_UV_VERSION=" not in source
 
 
 def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
