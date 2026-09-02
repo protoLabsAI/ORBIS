@@ -9,6 +9,8 @@ stdout for the `ORBIS_READY http://...` line defined in
 
 - **Rust + cargo** on `PATH` (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - **tauri-cli** (`cargo install tauri-cli --version '^2' --locked`)
+- **uv** on `PATH` (the sdist frontend is version-pinned and isolated from
+  `.venv`; a cold uv cache requires index access)
 - Python 3.11 + a GPU (or `ORBIS_ALLOW_CPU=1`) — same as the standalone
   backend
 

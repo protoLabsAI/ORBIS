@@ -16,8 +16,11 @@ end users download the app, not the source (see
   (`xcode-select --install` — provides `codesign`, `plutil`, `cc`).
 - **Rust** (stable) + **Tauri CLI**: `cargo install tauri-cli` (gives `cargo tauri`).
 - **Python 3.11** — the shipped sidecar runs on 3.11, so match your dev venv to
-  it (`uv venv --python 3.11`, or pyenv). `python -m build` must be available
-  (`pip install build`).
+  it (`uv venv --python 3.11`, or pyenv).
+- **uv** — the clean rebuild runs a version-pinned sdist frontend through
+  `uv tool run`; the project virtualenv does not need the `build` package
+  installed. Resolution follows your uv configuration and global cache, so a
+  first build with a cold cache requires index access.
 - **Bun** (`curl -fsSL https://bun.sh/install | bash`).
 - `jq` (and `hdiutil`, which ships with macOS).
 
@@ -51,8 +54,9 @@ list.
 
 ## What you actually need to run it
 
-ORBIS runs from a clean clone **offline / standalone** — none of proto-labs'
-infra is required:
+Once built, ORBIS runs **offline / standalone** — none of proto-labs' infra is
+required. Building from source may need network access for uncached tool and
+project dependencies.
 
 - **LLM** — defaults to `http://localhost:8100/v1`; point it at any
   OpenAI-compatible endpoint, Ollama, or an MLX model during first-run setup or

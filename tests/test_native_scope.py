@@ -126,6 +126,30 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
         assert "--compile-bytecode" not in source
 
 
+def test_clean_rebuild_uses_a_pinned_isolated_sdist_builder():
+    rebuild = (ROOT / "scripts/nuke-and-rebuild.sh").read_text(encoding="utf-8")
+    sanity = rebuild.split("# 1. Kill all ORBIS processes", 1)[0]
+    sdist_step = rebuild.split("# 4. Python sdist", 1)[1].split(
+        "# 5. PyApp sidecar",
+        1,
+    )[0]
+
+    assert 'PYTHON_BUILD_VERSION="1.4.4"' in sanity
+    assert "command -v uv " in sanity
+    assert (
+        'uv tool run --from "build==${PYTHON_BUILD_VERSION}" --isolated '
+        "pyproject-build"
+    ) in sanity
+    assert '"${PYTHON_BUILD[@]}" --version' in sanity
+    assert '"${PYTHON_BUILD[@]}" --installer uv --sdist' in sdist_step
+    assert '"${ROOT}" >/dev/null' in sdist_step
+    assert ".venv/bin/python" not in rebuild
+    assert "-m build" not in sdist_step
+    assert rebuild.index('"${PYTHON_BUILD[@]}" --installer uv --sdist') < rebuild.index(
+        'if [ "${LAUNCH}" = "1" ]',
+    )
+
+
 def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
     """Release validation must not regress to its former advisory false reds."""
     workflow = (ROOT / ".github/workflows/desktop-build.yml").read_text(
