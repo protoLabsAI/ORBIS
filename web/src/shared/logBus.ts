@@ -8,7 +8,7 @@ import { useSyncExternalStore } from 'react';
  *
  * Bounded to MAX_EVENTS so a long voice session cannot grow memory forever.
  */
-export type LogSource = 'api' | 'sse' | 'voice';
+export type LogSource = 'api' | 'sse' | 'voice' | 'delegate';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface LogEvent {

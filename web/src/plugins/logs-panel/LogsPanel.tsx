@@ -6,6 +6,7 @@ const SOURCE_COLOR: Record<LogSource, string> = {
   api: 'text-sky-400/80',
   sse: 'text-success/80',
   voice: 'text-violet-400/80',
+  delegate: 'text-brand/80',
 };
 
 const LEVEL_COLOR = {

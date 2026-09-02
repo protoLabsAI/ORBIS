@@ -21,15 +21,16 @@ export function StatusPill() {
   const micMuted = useVoiceStateSelector((s) => s.micMuted);
   const voiceLifecycle = useEffectiveVoiceLifecycle();
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
+  const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
   const externalTransient = useSyncExternalStore(
     statusBus.subscribe,
     statusBus.getSnapshot,
   );
-  const delegationText = activeToolCall
+  const delegationText = delegationProgress ?? (activeToolCall
     ? formatActiveToolCall(activeToolCall)
-    : null;
+    : null);
 
   // Auto-expire the externally-pushed transient once its TTL hits.
   useEffect(() => {
