@@ -1,5 +1,27 @@
 [
   {
+    "version": "v0.2.168",
+    "date": "2026-09-02",
+    "changes": [
+      "Verbal cancel phrases now cancel live delegated tasks, clearing pending input-required questions and marking local handles canceled.",
+      "When an A2A task parks on input-required, ORBIS routes your next utterance as the answer to that task, preserving task ID and context.",
+      "Reconnecting to a session requeries all live outbound tasks, delivering results missed while away exactly-once and re-arming input-required questions.",
+      "The `/a2a/callback` endpoint now correlates push-backs by task ID to mark durable rows terminal, preventing duplicate delivery on subsequent requeries.",
+      "A new durable outbound-task registry persists task handles in memory schema v5, surviving barge-ins, disconnects, and restarts.",
+      "Loopback A2A delegates now register push notification URLs, allowing results to be pushed to `/a2a/callback` even after dispatch timeouts.",
+      "The presence loop now yields after two spoken check-ins instead of narrating indefinitely, speaking one explicit yield line before going quiet.",
+      "A dead-turn recovery line now plays when an LLM completion emits no text or function calls, replacing silence on truncated or empty responses.",
+      "Reasoning tags are stripped from streamed LLM text before TTS, preventing leaked reasoning blocks from being spoken aloud.",
+      "Every delegation dispatch now generates a Langfuse span and success/error counters, with A2A trace headers stamped on outbound requests for end-to-end trace stitching.",
+      "Session tool logs are now persisted to `sessions.tool_calls`, recording up to 500 function calls per session.",
+      "The micro-LLM filler tier now has a 300-token budget and 4.0s timeout, fixing silent failures when reasoning models consume the token allowance.",
+      "Canned fallback lines now play when micro-LLM progress generation fails or times out, ensuring the presence loop never falls into dead air.",
+      "Docker runtime is verified before publish, and exact Docker image imports are gated.",
+      "Docker publication is now bound to verified refs, isolating PR Docker verification permissions."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.168/ORBIS-0.2.168-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.167",
     "date": "2026-08-17",
     "changes": [
