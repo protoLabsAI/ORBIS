@@ -5,9 +5,10 @@ guide covers how to find, show, and fully quit it.
 
 ## Find it
 
-The installed ORBIS app stays in the **Dock** and app switcher as its dependable
-way back to the app. It also creates an **ORBIS orb** in the macOS menu bar
-(top-right of the screen) when macOS presents the native status item.
+The installed ORBIS app stays in the **Dock** as its dependable way back to the
+app. Regular activation also leaves ORBIS in the app switcher and gives it a
+normal app menu. It creates an **ORBIS orb** in the macOS menu bar (top-right of
+the screen) when macOS presents the native status item.
 
 The Dock and app-switcher presence is intentional. In a macOS 26.5.2
 reproduction, the Tauri status item appeared briefly during launch and was gone

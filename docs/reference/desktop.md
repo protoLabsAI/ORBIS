@@ -5,9 +5,9 @@ its window is closed. This page covers how the app behaves on your Mac.
 
 ## Dock and menu-bar access
 
-The installed ORBIS app retains its **Dock icon** and app-switcher presence as
-the dependable handle to a running app. It also creates a native ORBIS status
-item for the menu bar:
+The installed ORBIS app retains its **Dock icon** as the dependable handle to a
+running app. Regular activation also leaves ORBIS in the app switcher and gives
+it a normal app menu. It creates a native ORBIS status item for the menu bar:
 
 - **Click the Dock icon** → show the orb window.
 - **Left-click** the icon → show the orb window.
