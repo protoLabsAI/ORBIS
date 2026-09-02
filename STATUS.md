@@ -1,12 +1,81 @@
 # STATUS — current snapshot
 
-*Last updated 2026-07-26 (**v0.2.166 RELEASED** — brand parity with
-protoAgent, and the first release to prove the changelog-sync fix. The
-download page had silently served v0.2.159 for two weeks — #664/#668.
-On `main`, all PRs merged.)*
+*Last updated 2026-09-01 (**v0.2.168 RELEASED** — the protoAgent delegation
+boundary is locked, the production path is shipped, and the distribution
+pipeline now verifies the container before publishing it. One promotion PR
+remains intentionally draft for native UX QA.)*
 
 This file is a point-in-time pickup doc. Always up-to-date; read this
 first on any resume before digging into code.
+
+---
+
+## Snapshot — 2026-09-01 (delegation shipped; promotion at the human gate)
+
+### v0.2.168 RELEASED
+
+Tag `v0.2.168` points at release commit `7079c560`. The Release workflow,
+pytest gate, Docker verification, GitHub release, changelog sync, and GHCR
+tags (`latest`, `0.2`, `0.2.168`) completed from that exact source. Desktop
+Build attached the DMG, signed updater archive, signature, and `latest.json`;
+its required signing, Gatekeeper, notarization, and stapling checks passed. A
+fresh download of the published DMG independently passed Gatekeeper as
+`Notarized Developer ID` and `xcrun stapler validate`. The chained marketing
+deploy completed and `/download` serves v0.2.168 with a live 200 asset.
+
+The advisory native-audio harness still prints its known two false reds for
+Developer ID authority: it uses `codesign -dv`, which omits the authority
+chain, while the required workflow checks use the correct detail level. The
+workflow's own comment documents this TODO; do not confuse that advisory
+annotation with the required signing/notarization gates above.
+
+The release contains two important distribution corrections:
+
+- **PR #704** restored missing `acp/` and `server/` packages to the Docker
+  image and moved the import smoke test into the image build, before any
+  registry push. Pull-request builds are read-only; only trusted `main` and
+  exact release-tag sources can publish. This fixed a real incident where
+  `latest` had already been replaced by a container that could not import at
+  runtime.
+- **PR #706** made the Pipecat 1.8 failover path turn-safe. It retries once
+  for auth, connectivity/server, and rate/quota failures; it does not hide
+  application, invalid-request, or unknown failures. A substantive answer
+  suppresses the warning, while a micro-ack does not.
+
+### protoAgent brain direction and phase status
+
+The durable boundary is in
+`docs/internal/protoagent-brain-direction.md`: ORBIS owns the real-time voice
+loop and user experience; protoAgent owns durable, inspectable work. Do not
+rebuild a second orchestration system inside ORBIS.
+
+- **Phase A / #701:** direction locked. **PR #705** implements hub discovery,
+  retained health, startup ordering, and a safe migration from the old default
+  `:7871` to production `:7870`. It is deliberately **draft** until a human
+  checks native startup and the StatusPill UX. Aliases, symlinks, and custom
+  hub entries are not rewritten.
+- **Phase B / #680:** complete through PRs #688, #689, #690, and #697; issue
+  closed. The early-complete hub caveat is documented and must stay in the
+  spoken soak matrix.
+- **Phase C:** cancellation/HITL work shipped in PRs #691 and #692. The
+  structured monitor remains open as #681.
+- **Phase D / #682:** intentionally untouched. Do not start advanced routing
+  until the delegation path survives the spoken matrix below.
+- **Phase E:** complete through PRs #685, #686, #687, and #703.
+
+Related reliability work is now on `main`: diagnostics export/crash reporting
+(#702), dead-turn handling (#698/#699), the Docker gate (#704), and Pipecat
+compatibility (#706). Issue #678 carries the phase-by-phase reconciliation.
+
+### Critical path from here
+
+1. Human-check PR #705 on the native app: startup status, hub health, warning
+   behavior, and absence of StrictMode flicker; then promote it if clean.
+2. Run the spoken delegation matrix in HANDOFF.md, especially early-complete,
+   barge-in/cancel, reconnect, and input-required resume.
+3. Treat #486 and #602 as the highest independent demo risk: a dead audio
+   transport can still require a relaunch even when delegation is correct.
+4. Only after that soak should #682 / Phase D move.
 
 ---
 

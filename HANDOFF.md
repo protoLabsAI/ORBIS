@@ -1,6 +1,6 @@
 # HANDOFF — ORBIS
 
-*Refreshed 2026-07-26 (v0.2.165 shipping). This is the durable handoff doc
+*Refreshed 2026-09-01 (v0.2.168 shipping). This is the durable handoff doc
 — the QA checklist, open design questions, and ordered next steps. For the
 point-in-time state, read [STATUS.md](./STATUS.md) first; it carries the
 live snapshot and is updated every session.*
@@ -15,11 +15,13 @@ Read order for someone picking ORBIS up cold:
 1. [STATUS.md](./STATUS.md) — current snapshot + active threads.
 2. [DECISIONS.md](./DECISIONS.md) — frozen architecture decisions; don't
    re-litigate without reading the entry.
-3. [CLAUDE.md](./CLAUDE.md) — agent operating notes + the nuke-and-rebuild
+3. [`docs/internal/protoagent-brain-direction.md`](./docs/internal/protoagent-brain-direction.md)
+   — the locked ORBIS/protoAgent ownership boundary and phased rollout.
+4. [CLAUDE.md](./CLAUDE.md) — agent operating notes + the nuke-and-rebuild
    dev loop + the "voice doesn't work" diagnosis checklist.
-4. [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md)
+5. [`docs/internal/native-audio-direction.md`](./docs/internal/native-audio-direction.md)
    — the Apple-Silicon-only direction + 4-phase migration plan.
-5. This file — what to test, what's open, what to do next.
+6. This file — what to test, what's open, what to do next.
 
 ---
 
@@ -49,14 +51,21 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 ### Voice loop + agent
 - [ ] Tap-to-talk → speak → STT → LLM → TTS round-trip; multi-turn stays clean.
 - [ ] *"Who can you delegate to?"* lists the configured delegates.
-- [ ] *"Ask <delegate> to …"* → A2A/ACP routing; the orb narrates the work and
-      speaks the result (ACP actually edits the file).
-- [ ] A multi-step goal → `orchestrate` narrates its plan, emits spoken
-      "still working" beats on slow steps (presence loop), and synthesizes a
-      final answer. HITL: if it `ask_user`s, it waits for your spoken answer
-      and resumes (watch the live voice timing — historically under-tested).
-- [ ] **Barge-in:** interrupt mid-delegation → the stale delegate/orchestrate
-      answer is dropped, not spoken late (#565).
+- [ ] Hub reports healthy, the retained snapshot survives a frontend listener
+      race, and a cold/unreachable hub produces one actionable warning rather
+      than a StrictMode flicker loop. This is the native gate on draft PR #705.
+- [ ] A trivial/tool delegation dispatches and produces audible first progress
+      promptly; a short task completes once with one spoken result.
+- [ ] A long task yields audible progress without duplicating the final result.
+- [ ] **Early-complete:** if the hub finishes before the monitor attaches, the
+      completion is still queried and spoken exactly once.
+- [ ] **Barge-in/cancel:** interrupt mid-delegation → the live handle is
+      retained long enough to cancel, and no stale result is spoken later.
+- [ ] **Reconnect:** after a transport drop, re-query authoritative hub state;
+      do not invent completion from a local timer or stale snapshot.
+- [ ] **Input required:** a delegated task can ask a question, wait for the
+      user's spoken answer, submit it, and resume to one final result.
+- [ ] Stop/cancel actually reaches durable work and produces a terminal state.
 - [ ] Add/remove a delegate in Settings while running → seen on the next turn
       (hot-swap, no restart).
 - [ ] **LLM-failure UX (#576):** break the API key → speak → the auth line
@@ -215,6 +224,22 @@ CLAUDE.md for why a partial rebuild silently misleads you).
 
 ## Recommended next steps (effort × impact × churn — do in this order)
 
+### September 2026 pickup
+
+1. **Native QA and promote draft PR #705.** The code and CI are green; the
+   remaining decision is visual/behavioral: StatusPill startup, retained hub
+   health, and one-time warning behavior on the shipping app.
+2. **Run the spoken delegation matrix above.** Record the exact failure phase
+   (dispatch, progress, HITL, cancellation, reconnect, or final narration).
+3. **#486 + #602 audio transport recovery.** This remains the highest
+   independent demo risk and can invalidate otherwise-correct delegation QA.
+4. **#681 structured monitor.** Finish Phase C from observed soak evidence.
+5. **#682 Phase D only after the soak.** Advanced routing is deliberately
+   gated; do not widen the state machine while the basic lifecycle is unproven.
+
+The historical list below is retained for context, but this ordered pickup
+supersedes its release-version assumptions.
+
 Banked so far: #490 test gate, #483 lazy torch, **#576 LLM-failure UX**,
 **#546 editor-ui extraction**, **#601 llm-key round-trip**, **personas epic
 #611 (#607–#610)**, **#577 set_orb_visual re-enabled**, and the whole
@@ -256,6 +281,14 @@ release, confirm orbis.protolabs.studio/download advertises it. The
 changelog sync now errors loudly on failure (#664), but the class of bug —
 a best-effort step swallowing failure into a green run — has now bitten
 twice (Discord notes at v0.2.113, changelog at v0.2.160–165).
+
+**Current release sequence:** merge the version-bump PR, verify `main`, then
+push the intended `vX.Y.Z` tag **exactly once** at that verified commit. A tag
+push triggers both Release and Desktop Build. Manually dispatching
+`release.yml` validates an existing tag/source; it does not create a tag.
+For every release, verify the GitHub release assets, signed/stapled DMG,
+marketing deploy, download-page version, and the exact GHCR revision. PR #704
+also ensures a container cannot publish before its runtime import smoke passes.
 
 ---
 
