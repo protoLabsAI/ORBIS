@@ -9,6 +9,8 @@
 
 export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
+import type { VoiceLifecycle } from './lifecycle';
+
 /** Wake-word activation state (Rust `wake-state` event). `null` when wake mode
  * is off (push-to-talk / open-mic). ARMED = detector running, waiting for the
  * phrase; LISTENING = phrase fired, window open. */
@@ -28,6 +30,8 @@ export interface VoiceSnapshot {
   micMuted: boolean;
   /** True once the SSE bridge has received its first event from the sidecar. */
   connected: boolean;
+  /** Backend-owned truth for whether Pipecat can consume native audio. */
+  voiceLifecycle: VoiceLifecycle | null;
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
@@ -46,6 +50,7 @@ const INITIAL: VoiceSnapshot = {
   micListening: false,
   micMuted: false,
   connected: false,
+  voiceLifecycle: null,
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,

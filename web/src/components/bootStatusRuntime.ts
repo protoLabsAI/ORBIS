@@ -1,4 +1,5 @@
 import type { PublicDelegateHealth } from '@/lib/api';
+import { parseVoiceLifecycle, type VoiceLifecycle } from '@/voice/lifecycle';
 
 export interface BootStage {
   stage: string;
@@ -15,11 +16,14 @@ export interface BootStatusRuntime {
   listenSse: (handler: (payload: SsePayload) => void) => Promise<() => void>;
   bootSnapshot: () => Promise<string>;
   hubHealthSnapshot: () => Promise<SsePayload | null>;
+  voiceLifecycleSnapshot: () => Promise<SsePayload | null>;
 }
 
 interface BootSignalCallbacks {
   onBootStage: (stage: BootStage) => void;
+  onApplicationReady: () => void;
   onHubUnavailable: () => void;
+  onVoiceLifecycle: (lifecycle: VoiceLifecycle) => void;
 }
 
 export interface BootSignals {
@@ -55,6 +59,15 @@ function parseHubHealth(payload: SsePayload): PublicDelegateHealth | null {
   }
 }
 
+function parseVoiceLifecycleEvent(payload: SsePayload): VoiceLifecycle | null {
+  if (payload.event !== 'voice-lifecycle') return null;
+  try {
+    return parseVoiceLifecycle(JSON.parse(payload.data));
+  } catch {
+    return null;
+  }
+}
+
 /** Order-independent boot/health coordinator for one mounted effect. */
 export function createBootSignals(callbacks: BootSignalCallbacks): BootSignals {
   let cancelled = false;
@@ -79,16 +92,21 @@ export function createBootSignals(callbacks: BootSignalCallbacks): BootSignals {
       const stage = parseBoot(raw);
       if (!stage || cancelled) return;
       callbacks.onBootStage(stage);
-      if (stage.stage === 'ready') {
+      if (stage.stage === 'app-ready' || stage.stage === 'ready') {
         bootReady = true;
+        callbacks.onApplicationReady();
         maybeWarn();
       }
     },
     applySse(payload) {
       const health = parseHubHealth(payload);
-      if (!health || cancelled) return;
-      hubHealth = health;
-      maybeWarn();
+      const lifecycle = parseVoiceLifecycleEvent(payload);
+      if (cancelled) return;
+      if (health) {
+        hubHealth = health;
+        maybeWarn();
+      }
+      if (lifecycle) callbacks.onVoiceLifecycle(lifecycle);
     },
     cancel() {
       cancelled = true;
@@ -115,8 +133,14 @@ export function startBootStatusRuntime(
     unavailable?: () => void,
   ) => {
     let listenerReady = false;
+    let liveUpdateSeen = false;
+    const applyLive = (value: T) => {
+      if (cancelled) return;
+      liveUpdateSeen = true;
+      apply(value);
+    };
     try {
-      const unlisten = await listenForUpdates(apply);
+      const unlisten = await listenForUpdates(applyLive);
       listenerReady = true;
       if (cancelled) {
         unlisten();
@@ -129,10 +153,42 @@ export function startBootStatusRuntime(
     if (cancelled) return;
     try {
       const snapshot = await readSnapshot();
-      if (!cancelled && snapshot !== null) apply(snapshot);
+      if (!cancelled && !liveUpdateSeen && snapshot !== null) apply(snapshot);
     } catch {
       if (!cancelled && !listenerReady) unavailable?.();
     }
+  };
+
+  const connectSse = async () => {
+    let hubLiveSeen = false;
+    let voiceLiveSeen = false;
+    try {
+      const unlisten = await runtime.listenSse((payload) => {
+        if (cancelled) return;
+        if (parseHubHealth(payload)) hubLiveSeen = true;
+        if (parseVoiceLifecycleEvent(payload)) voiceLiveSeen = true;
+        signals.applySse(payload);
+      });
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+      unlisteners.add(unlisten);
+    } catch {
+      // Each authoritative snapshot below can still initialize its own domain.
+    }
+    if (cancelled) return;
+
+    void runtime.hubHealthSnapshot()
+      .then((snapshot) => {
+        if (!cancelled && !hubLiveSeen && snapshot !== null) signals.applySse(snapshot);
+      })
+      .catch(() => {});
+    void runtime.voiceLifecycleSnapshot()
+      .then((snapshot) => {
+        if (!cancelled && !voiceLiveSeen && snapshot !== null) signals.applySse(snapshot);
+      })
+      .catch(() => {});
   };
 
   void connect<string>(
@@ -141,11 +197,7 @@ export function startBootStatusRuntime(
     signals.applyBoot,
     onBootUnavailable,
   );
-  void connect<SsePayload>(
-    runtime.listenSse,
-    runtime.hubHealthSnapshot,
-    signals.applySse,
-  );
+  void connectSse();
 
   return () => {
     cancelled = true;

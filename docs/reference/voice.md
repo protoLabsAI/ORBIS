@@ -98,6 +98,18 @@ Pipecat from starting, but Python cannot forcibly stop synchronous native model
 code already running inside `asyncio.to_thread`; process shutdown may therefore
 wait for that call to return.
 
+The desktop loading gate releases at `app-ready`, so Settings and first-run
+setup remain available while local speech models warm. Until lifecycle reaches
+`running`, the status line reports the current warmup/startup detail and the orb
+and microphone controls cannot begin a voice turn. A `failed` state remains
+visible rather than treating an acquired Mac microphone as a working voice
+pipeline. Correct the reported cause and use **Settings → Quick → Retry
+voice** only when the lifecycle advertises `action: retry`. Once the native
+socket has been consumed, Settings instead offers **Relaunch ORBIS** for
+`action: relaunch_required`; it never sends a retry that the backend cannot
+honor. Operators can trigger the same explicit, idempotent retry with
+`POST /api/voice/retry`; ORBIS never runs a blind retry loop.
+
 ## See also
 
 - [The voice loop](/explanation/the-voice-loop) — how a turn flows end to end.

@@ -313,6 +313,9 @@ export type DelegateWithStatus = Delegate & {
 export type SystemHealth = {
   status: string;
   delegates: PublicDelegateHealth[];
+  voice?: {
+    lifecycle: import('@/voice/lifecycle').VoiceLifecycle | null;
+  };
 };
 
 export type DelegateTestResult = {
@@ -465,6 +468,11 @@ export interface DiagnosticsReport {
 
 export const api = {
   health: () => get<SystemHealth>('/healthz'),
+  retryVoice: () => postJSON<{
+    ok: boolean;
+    started: boolean;
+    lifecycle: import('@/voice/lifecycle').VoiceLifecycle | null;
+  }>('/api/voice/retry', {}),
   whoami: () => get<Whoami>('/api/whoami'),
   reminders: {
     list: () => get<{ ok: boolean; reminders: ReminderItem[] }>('/api/reminders'),

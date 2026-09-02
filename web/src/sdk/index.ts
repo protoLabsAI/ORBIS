@@ -33,4 +33,5 @@ export type { CommandAction } from '@/command/registry';
 // — Runtime services an extension commonly needs —
 export { useVoiceState, useVoiceStateSelector } from '@/voice/hooks';
 export type { VoiceState, VoiceSnapshot, ActivationState } from '@/voice/state';
+export type { VoiceLifecycle, VoiceLifecycleState } from '@/voice/lifecycle';
 export { pushStatusTransient } from '@/shared/statusBus';

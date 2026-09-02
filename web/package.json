@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:boot": "bun test tests/bootStatusRuntime.test.ts",
+    "test:boot": "bun test tests/bootStatusRuntime.test.ts tests/voiceReadinessComponents.test.tsx",
     "preview": "vite preview"
   },
   "dependencies": {

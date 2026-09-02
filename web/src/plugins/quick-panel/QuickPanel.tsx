@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { voiceStore } from '@/voice/state';
 import { pushStatusTransient } from '@/sdk';
 import { api, type OrbisConfig, type PersonaEntry, type StarterOrb } from '@/lib/api';
@@ -27,7 +28,10 @@ import {
 } from '@/plugins/orb/definitions/runtime';
 import { useActivationConfig, type ActivationStyle } from './useActivationConfig';
 import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
+import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 import { PersonaManagerDialog } from '@/plugins/personas/PersonaManagerDialog';
+import { VoiceRecoveryNotice } from '@/voice/components';
+import { retryVoiceWithRefresh } from '@/voice/actions';
 
 const STYLE_LABELS: Record<ActivationStyle, string> = {
   push_to_talk: 'Tap to talk',
@@ -46,11 +50,21 @@ export function QuickPanel() {
     voiceStore.subscribe,
     () => voiceStore.getSnapshot().micMuted,
   );
+  const lifecycle = useSyncExternalStore(
+    voiceStore.subscribe,
+    () => voiceStore.getSnapshot().voiceLifecycle,
+  );
+  const voiceReady = voiceIsReady(lifecycle);
+  const [voiceRecovery, setVoiceRecovery] = useState<'retry' | 'relaunch' | null>(null);
 
   // The "Microphone" switch is the hard mute (on = mic live, off = muted) —
   // same top-level override as the chrome-rail mic button. Activation
   // (double-click / wake word) is separate and blocked while muted.
   const toggleMute = useCallback(() => {
+    if (!voiceReady) {
+      pushStatusTransient(voiceLifecycleText(lifecycle), 2400);
+      return;
+    }
     const next = !voiceStore.getSnapshot().micMuted;
     voiceStore.update(next ? { micMuted: true, micListening: false } : { micMuted: false });
     pushStatusTransient(next ? 'muted' : 'unmuted', 1800);
@@ -58,7 +72,7 @@ export function QuickPanel() {
       voiceStore.update({ micMuted: !next });
       pushStatusTransient('mic toggle failed', 2400);
     });
-  }, []);
+  }, [lifecycle, voiceReady]);
 
   const [config, setConfig] = useState<OrbisConfig | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -90,7 +104,11 @@ export function QuickPanel() {
     <div className="space-y-5">
       {/* At-a-glance state */}
       <div className="rounded-xl border border-edge bg-raised/40 p-4 space-y-2.5">
-        <StatusRow label="Microphone" value={micMuted ? 'Muted' : 'Live'} tone={micMuted ? 'idle' : 'live'} />
+        <StatusRow
+          label="Voice pipeline"
+          value={voiceReady ? (micMuted ? 'Muted' : 'Ready') : voiceLifecycleText(lifecycle)}
+          tone={voiceReady ? (micMuted ? 'idle' : 'live') : lifecycle?.state === 'failed' ? 'off' : 'idle'}
+        />
         <StatusRow
           label="Connection"
           value={connected === null ? '…' : connected ? 'Connected' : 'Offline'}
@@ -105,11 +123,37 @@ export function QuickPanel() {
         <Hint className="text-brand">Pick a model in the Brain tab to start talking.</Hint>
       )}
 
+      <VoiceRecoveryNotice
+        lifecycle={lifecycle}
+        busy={voiceRecovery !== null}
+        onRetry={() => {
+          setVoiceRecovery('retry');
+          retryVoiceWithRefresh({
+            retry: api.retryVoice,
+            readLifecycle: async () => (await api.health()).voice?.lifecycle ?? null,
+            applyLifecycle: (voiceLifecycle) => voiceStore.update({ voiceLifecycle }),
+          })
+            .catch(() => pushStatusTransient('voice retry failed', 3000))
+            .finally(() => setVoiceRecovery(null));
+        }}
+        onRelaunch={() => {
+          setVoiceRecovery('relaunch');
+          relaunch()
+            .catch(() => pushStatusTransient('ORBIS could not relaunch', 3000))
+            .finally(() => setVoiceRecovery(null));
+        }}
+      />
+
       {/* The handful of daily controls */}
       <div className="space-y-3.5">
         <SectionLabel>Quick controls</SectionLabel>
 
-        <SwitchRow label="Microphone" on={!micMuted} onToggle={toggleMute} />
+        <SwitchRow
+          label="Microphone"
+          on={voiceReady && !micMuted}
+          onToggle={toggleMute}
+          disabled={!voiceReady}
+        />
         <SwitchRow label="Allow interruptions" on={act.full_duplex} onToggle={() => act.setFullDuplex(!act.full_duplex)} />
 
         <PersonaSwitcher />
@@ -169,15 +213,22 @@ function SwitchRow({
   label,
   on,
   onToggle,
+  disabled = false,
 }: {
   label: string;
   on: boolean;
   onToggle: () => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-sm text-fg-body">{label}</span>
-      <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
+      <Switch
+        checked={on}
+        onCheckedChange={onToggle}
+        disabled={disabled}
+        aria-label={label}
+      />
     </div>
   );
 }
