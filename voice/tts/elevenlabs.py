@@ -62,7 +62,7 @@ def make(*, voice: str | None = None, **_unused):
     )
 
 
-def prewarm() -> None:
+def prewarm(**_overrides) -> None:
     """Best-effort warmup — ElevenLabs's WebSocket service is primarily
     latency-on-first-byte; we don't synthesize anything here because
     the websocket session is established at pipeline-start time."""

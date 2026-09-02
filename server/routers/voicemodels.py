@@ -11,16 +11,56 @@ import os
 
 from fastapi import APIRouter, Depends
 
+from agent.persona import get_active_persona
 from auth import require_user
 from auth.users import User
 from fastapi.responses import JSONResponse
+from voice.runtime_config import resolve_speech_config
 from voice.sse_bus import sse_bus
-from voice.stt import STT_BACKEND, prewarm as prewarm_stt
-from voice.tts import TTS_BACKEND, prewarm as prewarm_tts
+from voice.stt import prewarm as prewarm_stt
+from voice.tts import prewarm as prewarm_tts
 from app import _switch_live_voice
 
 
 router = APIRouter()
+
+
+@router.post("/api/voice/retry")
+async def voice_retry(user: User = Depends(require_user)):
+    """Retry only failures that happened before Rust consumed its connection."""
+    import app as app_module
+
+    sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
+    if not sock_path:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "error": "native audio socket is not configured"},
+        )
+    snapshot = app_module._voice_lifecycle.snapshot()
+    if snapshot and snapshot.get("action") == "relaunch_required":
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "code": "relaunch_required",
+                "lifecycle": snapshot,
+            },
+        )
+    started = await app_module.start_native_voice_lifecycle(sock_path)
+    if not started:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "code": "voice_start_active",
+                "lifecycle": app_module._voice_lifecycle.snapshot(),
+            },
+        )
+    return {
+        "ok": True,
+        "started": True,
+        "lifecycle": app_module._voice_lifecycle.snapshot(),
+    }
 
 
 @router.post("/api/voice/download_models")
@@ -46,15 +86,22 @@ async def voice_download_models():
     # Only local backends pull weights. Map the configured STT/TTS backend to its
     # HuggingFace repo (the progress denominator) + its prewarm fn (downloads,
     # then warms on the right thread). Cloud backends carry no big local download.
+    stt_config, tts_config = resolve_speech_config(get_active_persona())
     targets: list = []  # (label, repo_id, prewarm_fn)
-    if STT_BACKEND == "parakeet":
+    if stt_config["backend"] == "parakeet":
         from voice.stt_parakeet import _MODEL_ID as _stt_repo
-        targets.append(("speech recognition", _stt_repo, prewarm_stt))
-    elif STT_BACKEND == "local":
+        targets.append(
+            ("speech recognition", _stt_repo, lambda: prewarm_stt(**stt_config))
+        )
+    elif stt_config["backend"] == "local":
         from voice.stt import WHISPER_MODEL as _stt_repo
-        targets.append(("speech recognition", _stt_repo, prewarm_stt))
-    if TTS_BACKEND == "kokoro":
-        targets.append(("voice", "hexgrad/Kokoro-82M", prewarm_tts))
+        targets.append(
+            ("speech recognition", _stt_repo, lambda: prewarm_stt(**stt_config))
+        )
+    if tts_config["backend"] == "kokoro":
+        targets.append(
+            ("voice", "hexgrad/Kokoro-82M", lambda: prewarm_tts(**tts_config))
+        )
 
     async def _stream():
         try:

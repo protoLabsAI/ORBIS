@@ -14,6 +14,7 @@ import asyncio
 import os
 import random
 import time
+from collections.abc import Awaitable, Callable
 
 from agent import presence, tracing as _tracing
 from agent.audio_tags import make_audio_tags_tap
@@ -51,8 +52,9 @@ from voice.llm import make_llm
 from voice.llm.failover import make_orbis_llm_switcher, queue_failover_retry
 from voice.local_transport import LocalAudioTransport
 from voice.native_bargein import NativeBargeInObserver
+from voice.runtime_config import resolve_speech_config
 from voice.sse_bus import sse_bus
-from voice.stt import STT_BACKEND, make_stt
+from voice.stt import make_stt
 from voice.tts import TTS_BACKEND, make_tts
 
 from app import (
@@ -81,7 +83,15 @@ from app import (
 )
 
 
-async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | None = None) -> None:
+async def run_bot(
+    user_id: str = "default",
+    *,
+    transport: LocalAudioTransport | None = None,
+    on_transport_connected: Callable[[], Awaitable[None]] | None = None,
+    on_session_initialized: Callable[[], Awaitable[None]] | None = None,
+    on_pipeline_started: Callable[[], Awaitable[None]] | None = None,
+    persona=None,
+) -> None:
     """Run the persistent native voice pipeline.
 
     Called once from lifespan with a pre-built LocalAudioTransport that
@@ -97,8 +107,9 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     # Snapshot the active skill at connect time; the session keeps it even
     # if the operator flips the dropdown mid-call. Matches UX expectation.
-    skill = _active_skill(user_id)
-    tts_backend = skill.tts_backend or TTS_BACKEND
+    skill = persona or _active_skill(user_id)
+    stt_kwargs, tts_kwargs = resolve_speech_config(skill)
+    tts_backend = tts_kwargs["backend"]
 
     # Skills may override per-user filler verbosity.
     if skill.filler_verbosity:
@@ -133,7 +144,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     # Override via NATIVE_ECHO_GUARD_MS env var.
     _ECHO_STATE.guard_ms = int(os.environ.get("NATIVE_ECHO_GUARD_MS", "800"))
 
-    stt = make_stt(**(skill.stt or {}))
+    stt = make_stt(**stt_kwargs)
 
     # LLM routing — resolved by _resolve_skill_llm so the voice path and
     # the A2A inbound text path share a single source of truth. Per-field
@@ -215,27 +226,6 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
 
     # Per-skill delegate filter. Empty list / None = all delegates exposed.
     session_delegates = _DELEGATES.filtered(skill.delegates if skill else None)
-    tts_kwargs: dict = {"backend": tts_backend}
-    if skill.voice:
-        if tts_backend == "kokoro":
-            tts_kwargs["voice"] = skill.voice
-            # Persona has no lang field today — KOKORO_LANG env handles
-            # language overrides. getattr keeps this branch forward-
-            # compatible if a lang field is added later.
-            lang = getattr(skill, "lang", None)
-            if lang:
-                tts_kwargs["lang"] = lang
-        elif tts_backend == "fish":
-            tts_kwargs["reference_id"] = skill.voice
-        elif tts_backend == "openai":
-            tts_kwargs["voice"] = skill.voice
-    if tts_backend == "openai":
-        if skill.tts_url:
-            tts_kwargs["url"] = skill.tts_url
-        if skill.tts_model:
-            tts_kwargs["model"] = skill.tts_model
-        if skill.tts_api_key:
-            tts_kwargs["api_key"] = skill.tts_api_key
     tts = make_tts(**tts_kwargs)
 
     # Delivery controller — observes VAD + transcripts, drains push deliveries.
@@ -780,7 +770,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         session_id=_uuid.uuid4().hex,
         user_id=user_id,
         llm_model=llm_model,
-        stt_backend=(skill.stt or {}).get("backend") or STT_BACKEND,
+        stt_backend=stt_kwargs["backend"],
         tts_backend=tts_backend,
     )
 
@@ -827,6 +817,13 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             *_latency_observers,
         ],
     )
+
+    if on_pipeline_started is not None:
+        @task.event_handler("on_pipeline_started")
+        async def _report_pipeline_started(_task, _frame) -> None:
+            # Pipecat emits this only after StartFrame reaches the pipeline
+            # sink. Socket/device acquisition alone is not voice readiness.
+            await on_pipeline_started()
 
     # Wire the delivery + backchannel controllers' out-of-band emit paths
     # now that the task exists. queue_frame is the only safe way to inject
@@ -1137,8 +1134,12 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     for _member in _llm_members:
         _wire_llm_callbacks(_member)
 
-    @transport.event_handler("on_client_connected")
-    async def _on_connect(_t, _c):
+    # Pipecat schedules async transport handlers and logs/swallow exceptions.
+    # Bridge this initializer back into run_bot so pipeline startup awaits its
+    # real completion and an exception cannot leave lifecycle at `starting`.
+    initialization_ready = asyncio.get_running_loop().create_future()
+
+    async def _initialize_session(_t, _c):
         # Scope delivery + tracer + session to this user.
         state = user_state_for(user_id)
         state.active_delivery = delivery
@@ -1190,6 +1191,17 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         # Fire-and-forget — must never delay the connect path.
         from agent.outbound_requery import requery_outbound
         asyncio.create_task(requery_outbound(_DELEGATES, delivery))
+        if not initialization_ready.done():
+            initialization_ready.set_result(None)
+
+    @transport.event_handler("on_client_connected")
+    async def _on_connect(_t, _c):
+        try:
+            await _initialize_session(_t, _c)
+        except Exception as exc:
+            if not initialization_ready.done():
+                initialization_ready.set_exception(exc)
+            raise
 
     @transport.event_handler("on_client_disconnected")
     async def _on_disconnect(_t, _c):
@@ -1267,6 +1279,18 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
         await sse_bus.publish("bot-state", {"state": "idle"})
         _cancel_progress(publish_end=False)
         await task.cancel()
+
+    # Connect only after both transport handlers and all task emitters exist.
+    # LocalAudioInput's StartFrame path calls _connect again, but it is an
+    # idempotent no-op once connected. A failed initial connect raises before
+    # Pipecat can push StartFrame and falsely announce pipeline readiness.
+    if not await transport.connect():
+        raise RuntimeError("native audio transport connection failed")
+    if on_transport_connected is not None:
+        await on_transport_connected()
+    await initialization_ready
+    if on_session_initialized is not None:
+        await on_session_initialized()
 
     await PipelineRunner(handle_sigint=False).run(task)
 

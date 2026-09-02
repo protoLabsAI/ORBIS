@@ -23,8 +23,7 @@ from agent.user_state import active_user_states
 from auth import require_user, user_registry
 from auth.users import User
 from voice.sse_bus import sse_bus
-from voice.stt import STT_BACKEND
-from voice.tts import TTS_BACKEND
+from voice.runtime_config import resolve_speech_config
 from app import (
     NOISE_FILTER,
     SMART_TURN,
@@ -38,10 +37,11 @@ router = APIRouter()
 @router.get("/healthz")
 async def health():
     """Public — no auth. Reports process-wide shape, not per-user state."""
+    stt_config, tts_config = resolve_speech_config(get_active_persona())
     return {
         "status": "ok",
-        "stt_backend": STT_BACKEND,
-        "tts_backend": TTS_BACKEND,
+        "stt_backend": stt_config["backend"],
+        "tts_backend": tts_config["backend"],
         "auth_source": user_registry.source,
         "owner_configured": not user_registry.single_user_mode(),
         "active_sessions": len(active_user_states()),
@@ -49,6 +49,7 @@ async def health():
             _delegate_health_payload(d, public=True) for d in app._DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
+        "voice": {"lifecycle": app._voice_lifecycle.snapshot()},
         "audio": {
             "transport": "native",
             **app.audio_runtime_info(),
@@ -67,7 +68,11 @@ async def health():
                 else 0
             ),
             "pipeline_running": bool(
-                app._native_pipeline_task and not app._native_pipeline_task.done()
+                app._voice_lifecycle.is_running()
+                and app._native_transport
+                and app._native_transport.connected
+                and app._native_pipeline_task
+                and not app._native_pipeline_task.done()
             ),
             "half_duplex": HALF_DUPLEX,
             "echo_guard_ms": ECHO_GUARD_MS,
@@ -90,6 +95,9 @@ async def events(user: User = Depends(require_user)):
         transcript  {"source": "user"|"bot", "text": "...", "final": true|false}
         session     {"event": "start"|"end", "session_id": "..."}
         delegate-health  {"name": "hub", "ok": bool, ...} at startup
+        voice-lifecycle  {"state": "warming"|"starting"|"running"|"failed",
+                          "detail": "...", "code"?: "...",
+                          "action"?: "retry"|"relaunch_required"} (retained)
     """
     from fastapi.responses import StreamingResponse
     return StreamingResponse(
@@ -150,10 +158,11 @@ def build_diagnostics_report() -> dict:
 
     # --- runtime shape (mirrors /healthz, no per-user state) -------------
     try:
+        stt_config, tts_config = resolve_speech_config(get_active_persona())
         report["runtime"] = {
             "uptime_secs": round(time.time() - _METRICS["boot_at"], 1),
-            "stt_backend": STT_BACKEND,
-            "tts_backend": TTS_BACKEND,
+            "stt_backend": stt_config["backend"],
+            "tts_backend": tts_config["backend"],
             "transport": "native",
             "persona": get_active_persona().slug,
             "active_sessions": len(active_user_states()),
@@ -161,8 +170,13 @@ def build_diagnostics_report() -> dict:
                 app._native_transport and app._native_transport.connected
             ),
             "pipeline_running": bool(
-                app._native_pipeline_task and not app._native_pipeline_task.done()
+                app._voice_lifecycle.is_running()
+                and app._native_transport
+                and app._native_transport.connected
+                and app._native_pipeline_task
+                and not app._native_pipeline_task.done()
             ),
+            "voice_lifecycle": app._voice_lifecycle.snapshot(),
             "half_duplex": HALF_DUPLEX,
         }
     except Exception as e:

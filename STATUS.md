@@ -10,6 +10,26 @@ first on any resume before digging into code.
 
 ---
 
+## In flight — native voice startup lifecycle (#713)
+
+Native startup now has one lifecycle owner: required local speech engines warm
+off-loop before Pipecat setup begins, using the same captured active-persona
+STT/TTS resolution as the pipeline. The unrelated best-effort LLM ping runs
+separately and cannot spend its 30-second timeout inside voice startup.
+`/healthz.voice.lifecycle` and the
+retained `voice-lifecycle` SSE event distinguish `warming`, `starting`,
+`running`, and `failed`; only Pipecat's actual pipeline-start signal counts as
+running. A connected Mac microphone/socket therefore no longer masks a setup
+timeout as usable voice. Direct `python app.py` remains socket-free and reports
+a null lifecycle. Public failures expose stable codes rather than exception
+text; private detail remains in sidecar logs. No periodic pipeline restart is included.
+Failed startup is retried through the explicit authenticated voice action only
+when model warmup or the initial connection failed before Rust accepted its
+one-shot socket. Pipeline/setup failure after acceptance reports
+`relaunch_required`; socket supervision remains explicitly owned by #486.
+
+---
+
 ## Snapshot — 2026-09-01 (delegation shipped; promotion at the human gate)
 
 ### v0.2.168 RELEASED

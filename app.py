@@ -172,7 +172,7 @@ from agent.user_state import all_user_states, user_state_for
 
 _emit_boot("import", "Loading speech + voice engines…")
 
-from voice.stt import STT_BACKEND, prewarm as prewarm_stt, stt_emits_audio_tags
+from voice.stt import prewarm as prewarm_stt, stt_emits_audio_tags
 from voice.tts import TTS_BACKEND, prewarm as prewarm_tts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -221,6 +221,11 @@ from memory import Memory  # noqa: E402
 _memory: Memory | None = None
 _native_transport: LocalAudioTransport | None = None
 _native_pipeline_task: asyncio.Task | None = None
+_native_lifecycle_task: asyncio.Task | None = None
+
+from voice.lifecycle import VoiceLifecycle  # noqa: E402
+
+_voice_lifecycle = VoiceLifecycle()
 
 
 def get_memory() -> Memory:
@@ -1296,8 +1301,16 @@ def prewarm_llm() -> None:
         logger.info(f"LLM prewarm skipped ({type(e).__name__})")
 
 
-def prewarm_all() -> None:
-    logger.info(f"Prewarming (tts_backend={TTS_BACKEND})")
+def prewarm_all(
+    *, strict_local: bool = False, persona=None, include_llm: bool = True,
+) -> None:
+    from voice.runtime_config import resolve_speech_config
+
+    persona = persona or _active_skill("default")
+    stt_kwargs, tts_kwargs = resolve_speech_config(persona)
+    stt_backend = stt_kwargs["backend"]
+    tts_backend = tts_kwargs["backend"]
+    logger.info("Prewarming (stt_backend=%s, tts_backend=%s)", stt_backend, tts_backend)
     # Real boot stages — each marker is emitted as that component begins
     # loading, so the UI loading screen reflects actual work, not a timer.
     # Each step is guarded so a failure never strands the loading gate
@@ -1308,10 +1321,10 @@ def prewarm_all() -> None:
         "parakeet": "Loading on-device speech model (Parakeet)…",
         "sensevoice": "Loading on-device speech model (SenseVoice)…",
         "openai": "Connecting speech recognition…",
-    }.get(STT_BACKEND, "Loading on-device speech model (Whisper)…")
+    }.get(stt_backend, "Loading on-device speech model (Whisper)…")
     tts_detail = (
         "Loading on-device voice model (Kokoro)…"
-        if TTS_BACKEND == "kokoro"
+        if tts_backend == "kokoro"
         else "Loading speech synthesis…"
     )
     # Defer the on-device STT/TTS download until the user opts in via the setup
@@ -1326,14 +1339,17 @@ def prewarm_all() -> None:
     except Exception:  # noqa: BLE001
         _vm = None
     _opted_in = _vm == "on_device"
-    _local_stt = STT_BACKEND in ("local", "parakeet", "sensevoice")
-    _local_tts = TTS_BACKEND == "kokoro"
+    _local_stt = stt_backend in ("local", "parakeet", "sensevoice")
+    _local_tts = tts_backend == "kokoro"
 
-    for stage, detail, fn in (
-        ("stt", stt_detail, prewarm_stt),
-        ("tts", tts_detail, prewarm_tts),
-        ("llm", "Warming up the language model…", prewarm_llm),
-    ):
+    stages = [
+        ("stt", stt_detail, lambda: prewarm_stt(**stt_kwargs)),
+        ("tts", tts_detail, lambda: prewarm_tts(**tts_kwargs)),
+    ]
+    if include_llm:
+        stages.append(("llm", "Warming up the language model…", prewarm_llm))
+
+    for stage, detail, fn in stages:
         is_local = (stage == "stt" and _local_stt) or (stage == "tts" and _local_tts)
         if is_local and not _opted_in:
             logger.info(f"prewarm {stage} deferred — on-device models not opted in")
@@ -1344,7 +1360,68 @@ def prewarm_all() -> None:
             fn()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"prewarm {stage} failed: {e}")
+            if strict_local and is_local:
+                raise
     _emit_boot("ready", "Ready")
+
+
+async def start_native_voice_lifecycle(sock_path: str) -> bool:
+    """Start (or explicitly retry) the single native voice lifecycle owner.
+
+    Returns false when an owner is already active. There is intentionally no
+    automatic retry loop; the setup/settings UI may invoke this after the user
+    corrects a model or configuration failure.
+    """
+    global _native_lifecycle_task, _native_pipeline_task, _native_transport
+
+    if _native_lifecycle_task and not _native_lifecycle_task.done():
+        return False
+    if _voice_lifecycle.recovery_action() == "relaunch_required":
+        raise RuntimeError("native audio relaunch required")
+    if not sock_path:
+        raise RuntimeError("native audio socket is not configured")
+
+    from voice.lifecycle import run_native_voice_lifecycle
+
+    _native_pipeline_task = None
+    _native_transport = None
+    persona = _active_skill("default")
+
+    def _set_transport(transport: LocalAudioTransport) -> None:
+        global _native_transport
+        _native_transport = transport
+
+    def _set_pipeline_task(task: asyncio.Task | None) -> None:
+        global _native_pipeline_task
+        _native_pipeline_task = task
+
+    async def _run_pipeline(transport, on_connected, on_initialized, on_started) -> None:
+        await run_bot(
+            transport=transport,
+            user_id="default",
+            on_transport_connected=on_connected,
+            on_session_initialized=on_initialized,
+            on_pipeline_started=on_started,
+            persona=persona,
+        )
+
+    _native_lifecycle_task = asyncio.create_task(
+        run_native_voice_lifecycle(
+            lifecycle=_voice_lifecycle,
+            warm=lambda: prewarm_all(
+                strict_local=True, persona=persona, include_llm=False,
+            ),
+            make_transport=lambda: LocalAudioTransport(sock_path=sock_path),
+            transport_connected=lambda transport: transport.connected,
+            run_pipeline=_run_pipeline,
+            set_transport=_set_transport,
+            set_pipeline_task=_set_pipeline_task,
+        ),
+        name="orbis-native-voice-lifecycle",
+    )
+    # Let the owner publish its initial retained snapshot before returning.
+    await asyncio.sleep(0)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1353,14 +1430,14 @@ def prewarm_all() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _native_pipeline_task, _native_transport
+    global _native_lifecycle_task, _native_pipeline_task, _native_transport
 
+    _native_lifecycle_task = None
     _native_pipeline_task = None
     _native_transport = None
-
-    # Prewarm off the event loop so the startup handshake isn't blocked by
-    # TTS / STT / LLM cold starts; we just begin work in the background.
-    asyncio.get_running_loop().run_in_executor(None, prewarm_all)
+    _voice_lifecycle.reset()
+    direct_prewarm_task: asyncio.Task | None = None
+    llm_prewarm_task: asyncio.Task | None = None
 
     # Curator task — 90-day half-life decay on facts + prune below 0.2
     # confidence, plus a session-transcript retention sweep (#482: full
@@ -1446,53 +1523,49 @@ async def lifespan(app: FastAPI):
     # test suite, A2A-only deployments) skip the pipeline cleanly.
     sock_path = os.environ.get("ORBIS_AUDIO_SOCK", "")
     if sock_path:
-        native_transport = LocalAudioTransport(sock_path=sock_path)
-        _native_transport = native_transport
-        _native_pipeline_task = asyncio.create_task(
-            run_bot(transport=native_transport, user_id="default"),
-            name="orbis-native-pipeline",
+        await start_native_voice_lifecycle(sock_path)
+        # LLM readiness is unrelated to whether Pipecat can consume audio.
+        # Keep the legacy best-effort ping, but never put its 30s network
+        # timeout on the native voice startup critical path.
+        llm_prewarm_task = asyncio.create_task(
+            asyncio.to_thread(prewarm_llm), name="orbis-llm-prewarm"
         )
-
-        def _on_pipeline_done(task: asyncio.Task) -> None:
-            # Without this the pipeline can die (build error, unhandled
-            # frame-processing exception escaping the runner) and voice goes
-            # silently dead for the rest of the process life — the exception
-            # only surfaces as "Task exception was never retrieved" at GC /
-            # shutdown. Log it loudly the moment it happens. /healthz already
-            # reports pipeline_running=false for an external watcher. See
-            # audit M2.
-            if task.cancelled():
-                return
-            exc = task.exception()
-            if exc is not None:
-                logger.error(
-                    "[native audio] persistent pipeline EXITED with an "
-                    "exception — voice is now dead until relaunch",
-                    exc_info=exc,
-                )
-            else:
-                logger.warning(
-                    "[native audio] persistent pipeline returned unexpectedly "
-                    "(no exception) — voice is now idle until relaunch"
-                )
-
-        _native_pipeline_task.add_done_callback(_on_pipeline_done)
-        logger.info(f"[native audio] persistent pipeline started (sock={sock_path})")
+        logger.info("[native audio] voice lifecycle started (sock=%s)", sock_path)
     else:
+        # Direct `python app.py` remains an API/A2A-friendly entry point. It
+        # has no native readiness contract, but retains best-effort background
+        # warming for callers that later invoke run_bot themselves.
+        direct_prewarm_task = asyncio.create_task(
+            asyncio.to_thread(prewarm_all), name="orbis-direct-prewarm"
+        )
         logger.info(
             "[native audio] ORBIS_AUDIO_SOCK not set — native pipeline skipped "
             "(this is normal for `python app.py` outside the Tauri shell)"
         )
 
+    _emit_boot("app-ready", "Ready")
     try:
         yield
     finally:
-        if _native_pipeline_task and not _native_pipeline_task.done():
-            _native_pipeline_task.cancel()
+        if _native_lifecycle_task and not _native_lifecycle_task.done():
+            _native_lifecycle_task.cancel()
             try:
-                await _native_pipeline_task
+                await _native_lifecycle_task
             except (asyncio.CancelledError, Exception):
                 pass
+        if direct_prewarm_task and not direct_prewarm_task.done():
+            direct_prewarm_task.cancel()
+            try:
+                await direct_prewarm_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if llm_prewarm_task and not llm_prewarm_task.done():
+            llm_prewarm_task.cancel()
+            try:
+                await llm_prewarm_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        _native_lifecycle_task = None
         _native_pipeline_task = None
         _native_transport = None
         for t in (curator_task, reminder_task, hub_health_task, delegate_health_task):

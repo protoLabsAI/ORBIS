@@ -208,7 +208,14 @@ def add_reference(
 # Prewarm — CRITICAL. Without this the first real call is ~2 min on cold compile.
 # ---------------------------------------------------------------------------
 
-def prewarm(*, fish_url: str = FISH_URL, reference_id: str | None = FISH_REFERENCE_ID) -> None:
+def prewarm(
+    *,
+    fish_url: str = FISH_URL,
+    url: str | None = None,
+    reference_id: str | None = FISH_REFERENCE_ID,
+    **_overrides,
+) -> None:
+    fish_url = url or fish_url
     t0 = time.time()
     logger.info(f"Fish prewarm → {fish_url} (may take ~2min on first boot)")
     payload: dict = {"text": "Hello.", "format": "wav", "streaming": False}
