@@ -346,7 +346,13 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
     if delivery is not None:
         _orch_client = _get_text_client(llm_cfg["url"], llm_cfg["api_key"], llm_cfg["provider"])
 
-        async def _orch_runner(goal: str, *, progress=None, ask_user=None) -> str:
+        async def _orch_runner(
+            goal: str,
+            *,
+            progress=None,
+            delegate_event=None,
+            ask_user=None,
+        ) -> str:
             return await run_orchestration(
                 goal,
                 delegates=_DELEGATES.filtered(skill.delegates if skill else None),
@@ -356,6 +362,7 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
                 max_tokens=skill.max_tokens,
                 temperature=skill.temperature,
                 progress=progress,
+                delegate_event=delegate_event,
                 ask_user=ask_user,
             )
 
@@ -869,9 +876,11 @@ async def run_bot(user_id: str = "default", *, transport: LocalAudioTransport | 
             )
 
         delivery.set_announcer(_announce)
-    delivery.set_message_emitter(
-        lambda payload: sse_bus.publish("delegation-progress", payload)
-    )
+    async def _emit_delivery_message(payload: dict) -> None:
+        event = str(payload.get("type") or "delegation-progress")
+        await sse_bus.publish(event, payload)
+
+    delivery.set_message_emitter(_emit_delivery_message)
     backchannel.set_emitter(task.queue_frame)
 
     # --- Duplex speak-while-thinking ---

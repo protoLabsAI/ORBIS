@@ -219,6 +219,13 @@ class DeliveryController(FrameProcessor):
         # talked over isn't narrated out of context. Monotonic (never resets), so
         # a fresh tool call can't accidentally un-invalidate an older one.
         self._barge_epoch = 0
+        # Structured progress callbacks can outlive their Pipecat function call
+        # because A2A dispatch is deliberately not cancelled on interruption.
+        # Each handler owns a lease; cancellation invalidates every live lease,
+        # and completion releases its own lease so late callbacks cannot repaint
+        # a newer task's UI.
+        self._delegate_event_owner_seq = 0
+        self._delegate_event_owners: set[int] = set()
         # Shared LLMContext (orbis-3ta). When set, real proactive deliveries
         # are recorded as assistant turns so the orb remembers saying them and
         # can reference them in conversation. Fillers/bids/storm-notice are
@@ -264,6 +271,9 @@ class DeliveryController(FrameProcessor):
         text = (text or "").strip()
         if not text:
             return
+        text = text.encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        if source is not None:
+            source = source.encode("utf-8")[:256].decode("utf-8", errors="ignore")
         self._last_progress = text
         if self._message_emitter is not None:
             try:
@@ -274,6 +284,28 @@ class DeliveryController(FrameProcessor):
                 })
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[delivery] message emitter failed: {e}")
+
+    async def note_delegate_event(self, event: dict) -> None:
+        """Forward one structured delegate event to the native SSE plane.
+
+        Protocol adapters translate only events the delegate actually emitted;
+        this controller owns presentation plumbing and never invents work state.
+        """
+        event_type = str(event.get("type", ""))
+        if event_type not in {
+            "delegate.status",
+            "delegate.tool",
+            "delegate.delta",
+        }:
+            return
+        text = event.get("text")
+        if isinstance(text, str) and text.strip():
+            self._last_progress = text.strip()
+        if self._message_emitter is not None:
+            try:
+                await self._message_emitter(dict(event))
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[delivery] delegate event emitter failed: {e}")
 
     @property
     def last_progress(self) -> str | None:
@@ -291,6 +323,21 @@ class DeliveryController(FrameProcessor):
     def bump_barge(self) -> None:
         """Record a barge-in — invalidates any in-flight async delegate result."""
         self._barge_epoch += 1
+        self._delegate_event_owners.clear()
+
+    def begin_delegate_event_scope(self) -> tuple[int, int]:
+        """Return an epoch/owner lease for one async delegate handler."""
+        self._delegate_event_owner_seq += 1
+        owner = self._delegate_event_owner_seq
+        self._delegate_event_owners.add(owner)
+        return self._barge_epoch, owner
+
+    def owns_delegate_event_scope(self, lease: tuple[int, int]) -> bool:
+        epoch, owner = lease
+        return epoch == self._barge_epoch and owner in self._delegate_event_owners
+
+    def end_delegate_event_scope(self, lease: tuple[int, int]) -> None:
+        self._delegate_event_owners.discard(lease[1])
 
     async def speak_now(self, phrase: str, *, source: str | None = None) -> None:
         """Push a TTSSpeakFrame immediately without touching the pending

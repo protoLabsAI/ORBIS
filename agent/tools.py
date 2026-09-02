@@ -953,6 +953,15 @@ def _delegate_to_handler(
             f"[delegate_to] target={target} type={delegate.type} query={query!r}"
         )
 
+        _lease = delivery.begin_delegate_event_scope() if delivery is not None else None
+
+        def _superseded() -> bool:
+            return (
+                delivery is not None
+                and _lease is not None
+                and not delivery.owns_delegate_event_scope(_lease)
+            )
+
         # Real streamed progress → the VISUAL pill (delegation-progress SSE), NOT
         # spoken. The StatusPill shows "asking ava… routing to Quinn" so people can
         # glance at progress; the answer is the only spoken turn (besides the ack),
@@ -960,31 +969,24 @@ def _delegate_to_handler(
         # text; bare heartbeats yield nothing → pill just shows "asking ava…".
         async def _progress(text: str) -> None:
             text = (text or "").strip()
-            if not text or delivery is None:
+            if not text or delivery is None or _superseded():
                 return
             try:
                 await delivery.note_progress(text, source=target)
             except Exception:  # noqa: BLE001
                 pass
 
-        # Snapshot the barge epoch — if the user talks over us while the delegate
-        # is in flight, the epoch advances and we drop the (now stale) answer
-        # rather than narrating it into a turn that already moved on. The
-        # dispatch itself can't be cancelled, so dropping the result is the gate.
-        _epoch0 = delivery.barge_epoch if delivery is not None else None
-
-        def _superseded() -> bool:
-            return (
-                delivery is not None
-                and _epoch0 is not None
-                and delivery.barge_epoch != _epoch0
-            )
+        async def _delegate_event(event: dict) -> None:
+            if delivery is None or _superseded():
+                return
+            await delivery.note_delegate_event(event)
 
         try:
             result = await delegate_dispatch(
                 delegate, query,
                 timeout=_DELEGATE_TIMEOUT,
                 progress_callback=_progress,
+                event_callback=_delegate_event if delegate.type == "a2a" else None,
                 push_notification_url=push_notification_url,
                 push_notification_token=push_notification_token,
             )
@@ -1005,6 +1007,9 @@ def _delegate_to_handler(
             if _superseded():
                 return
             await params.result_callback(f"Delegation to {target} errored: {e}")
+        finally:
+            if delivery is not None and _lease is not None:
+                delivery.end_delegate_event_scope(_lease)
 
     return _handler
 
@@ -1074,9 +1079,18 @@ def _orchestrate_handler(
 
         logger.info(f"[orchestrate] goal={goal!r}")
 
+        _lease = delivery.begin_delegate_event_scope() if delivery is not None else None
+
+        def _superseded() -> bool:
+            return (
+                delivery is not None
+                and _lease is not None
+                and not delivery.owns_delegate_event_scope(_lease)
+            )
+
         async def _progress(text: str) -> None:
             text = (text or "").strip()
-            if not text or delivery is None:
+            if not text or delivery is None or _superseded():
                 return
             try:
                 await delivery.note_progress(text, source="orchestrator")
@@ -1106,20 +1120,17 @@ def _orchestrate_handler(
             finally:
                 take_pending_ask()  # clear if it timed out / wasn't answered
 
-        # Drop the synthesized answer if the user barged in while the loop ran
-        # (same stale-result gate as delegate_to). The ask_user intermediate
-        # above is mid-flow and intentionally NOT gated.
-        _epoch0 = delivery.barge_epoch if delivery is not None else None
-
-        def _superseded() -> bool:
-            return (
-                delivery is not None
-                and _epoch0 is not None
-                and delivery.barge_epoch != _epoch0
-            )
+        async def _delegate_event(event: dict) -> None:
+            if delivery is not None and not _superseded():
+                await delivery.note_delegate_event(event)
 
         try:
-            result = await runner(goal, progress=_progress, ask_user=_ask_user)
+            result = await runner(
+                goal,
+                progress=_progress,
+                delegate_event=_delegate_event,
+                ask_user=_ask_user,
+            )
             if _superseded():
                 logger.info("[orchestrate] completed after barge-in — dropping result.")
                 return
@@ -1131,6 +1142,9 @@ def _orchestrate_handler(
             await params.result_callback(
                 "that multi-step thing I was working on ran into trouble."
             )
+        finally:
+            if delivery is not None and _lease is not None:
+                delivery.end_delegate_event_scope(_lease)
 
     return _handler
 

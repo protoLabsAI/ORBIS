@@ -53,10 +53,12 @@ class _FakeA2AClient:
     def __init__(self, url, *, headers=None, card_origin=None, name=None):
         self.name = name
         self.sends = []
+        self.send_kwargs = []
         _FakeA2AClient.constructed.append(self)
 
     async def send(self, query, **kw):
         self.sends.append(query)
+        self.send_kwargs.append(kw)
         return A2AResult(
             text=f"{self.name}::{query}", state="completed",
             task_id="t", context_id="ctx",
@@ -95,13 +97,18 @@ async def test_single_step_then_synthesis(monkeypatch, registry):
         _msg(content="The fleet is green; no incidents."),
     ])
     steps = []
+    async def delegate_event(_event):
+        return None
+
     out = await orch.run_orchestration(
         "check the fleet", delegates=registry, client=llm, model="m",
         progress=lambda t: steps.append(t) or _noop(),
+        delegate_event=delegate_event,
     )
     assert out == "The fleet is green; no incidents."
     assert len(_FakeA2AClient.constructed) == 1
     assert _FakeA2AClient.constructed[0].sends == ["fleet status?"]
+    assert _FakeA2AClient.constructed[0].send_kwargs[0]["event_callback"] is delegate_event
     assert steps and "ava" in steps[0]
 
 

@@ -17,21 +17,36 @@ glue builds the request Message and reads text/state off the terminal Task.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import logging
 import os
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from a2a.client import ClientConfig, ClientFactory
 from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
+from google.protobuf import json_format
+
+import protolabs_a2a as pa
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+DelegateEvent = dict[str, Any]
+DelegateEventCallback = Callable[[DelegateEvent], Awaitable[None]]
+
+_EVENT_DEDUP_LIMIT = 256
+_EVENT_TEXT_MAX_BYTES = 1024
+_EVENT_FIELD_MAX_BYTES = 256
+_EVENT_DELTAS_MAX_BYTES = 8192
+_EVENT_DELTAS_MAX_ITEMS = 32
 
 # Min gap between spoken progress lines, so a chatty agent's status_updates
 # don't flood. We only narrate the agent's REAL streamed status text (the
@@ -149,6 +164,97 @@ def _status_text(task: Task) -> str:
     return _status_message_text(task.status)
 
 
+def _part_delegate_event(part: Part) -> DelegateEvent | None:
+    """Translate declared protoLabs data extensions into UI-safe events.
+
+    ORBIS owns transport and presentation; the delegate owns the event content.
+    Tool arguments and results deliberately stay off the client event plane.
+    """
+    try:
+        raw = json_format.MessageToDict(part)
+        tool = pa.parse_tool_call(raw)
+        if tool is not None:
+            return {
+                "type": "delegate.tool",
+                "tool_call_id": str(tool.get("toolCallId", "")),
+                "name": str(tool.get("name", "")),
+                "status": str(tool.get("phase", "")),
+            }
+        delta = pa.parse_worldstate_delta(raw)
+        if delta is not None:
+            changes = delta.get("deltas")
+            return {
+                "type": "delegate.delta",
+                "deltas": changes if isinstance(changes, list) else [],
+            }
+    except Exception:  # noqa: BLE001 — unknown extensions remain opaque
+        return None
+    return None
+
+
+def _bounded_text(value: Any, max_bytes: int) -> str:
+    raw = str(value or "").encode("utf-8")[:max_bytes]
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _bounded_json_value(value: Any, *, depth: int = 0) -> Any:
+    """Bound untrusted extension shape before it reaches SSE/log memory."""
+    if depth >= 4:
+        return None
+    if isinstance(value, str):
+        return _bounded_text(value, _EVENT_TEXT_MAX_BYTES)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [
+            _bounded_json_value(item, depth=depth + 1)
+            for item in value[:_EVENT_DELTAS_MAX_ITEMS]
+        ]
+    if isinstance(value, dict):
+        return {
+            _bounded_text(key, _EVENT_FIELD_MAX_BYTES): _bounded_json_value(
+                item, depth=depth + 1
+            )
+            for key, item in list(value.items())[:_EVENT_DELTAS_MAX_ITEMS]
+        }
+    return _bounded_text(value, _EVENT_TEXT_MAX_BYTES)
+
+
+def _bounded_deltas(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    bounded: list[Any] = []
+    for item in value[:_EVENT_DELTAS_MAX_ITEMS]:
+        candidate = [*bounded, _bounded_json_value(item)]
+        encoded = json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > _EVENT_DELTAS_MAX_BYTES:
+            break
+        bounded = candidate
+    return bounded
+
+
+def _sanitize_delegate_event(event: DelegateEvent) -> DelegateEvent:
+    event_type = str(event.get("type", ""))
+    if event_type == "delegate.status":
+        return {
+            "type": event_type,
+            "state": _bounded_text(event.get("state"), _EVENT_FIELD_MAX_BYTES),
+            "text": _bounded_text(event.get("text"), _EVENT_TEXT_MAX_BYTES),
+        }
+    if event_type == "delegate.tool":
+        return {
+            "type": event_type,
+            "tool_call_id": _bounded_text(
+                event.get("tool_call_id"), _EVENT_FIELD_MAX_BYTES
+            ),
+            "name": _bounded_text(event.get("name"), _EVENT_FIELD_MAX_BYTES),
+            "status": _bounded_text(event.get("status"), _EVENT_FIELD_MAX_BYTES),
+        }
+    if event_type == "delegate.delta":
+        return {"type": event_type, "deltas": _bounded_deltas(event.get("deltas"))}
+    return {"type": _bounded_text(event_type, _EVENT_FIELD_MAX_BYTES)}
+
+
 async def _stamp_trace_headers(request: httpx.Request) -> None:
     """httpx request hook: attach the live Langfuse trace headers to every
     outbound A2A request, so a delegate that joins caller traces (protoAgent
@@ -230,6 +336,7 @@ class A2AClient:
         prefer_stream: bool = False,
         timeout: float = 120.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         on_task: Callable[[str, str | None], None] | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
@@ -279,6 +386,59 @@ class A2AClient:
         last_progress_at = 0.0
         last_progress = ""
         task_seen = False
+        seen_events: OrderedDict[bytes, None] = OrderedDict()
+        terminal_emitted = False
+
+        async def _emit(event: DelegateEvent) -> None:
+            nonlocal terminal_emitted
+            if event_callback is None:
+                return
+            event = _sanitize_delegate_event(event)
+            event_type = event.get("type")
+            if terminal_emitted and event_type in {
+                "delegate.status",
+                "delegate.tool",
+                "delegate.delta",
+            }:
+                return
+            payload = {
+                **event,
+                "delegate_id": _bounded_text(self.name, _EVENT_FIELD_MAX_BYTES),
+                "task_id": _bounded_text(resolved_task_id, _EVENT_FIELD_MAX_BYTES),
+                "session_id": _bounded_text(resolved_ctx, _EVENT_FIELD_MAX_BYTES),
+            }
+            # Streaming snapshots may repeat extension parts. Keep the client
+            # event plane idempotent without retaining attacker-sized payloads
+            # or growing cardinality for the lifetime of a long stream.
+            encoded = json.dumps(
+                payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            ).encode("utf-8")
+            signature = hashlib.sha256(encoded).digest()
+            if signature in seen_events:
+                return
+            seen_events[signature] = None
+            if len(seen_events) > _EVENT_DEDUP_LIMIT:
+                seen_events.popitem(last=False)
+            is_terminal = (
+                event_type == "delegate.status"
+                and event.get("state") in {"completed", "failed", "canceled"}
+            )
+            if is_terminal:
+                terminal_emitted = True
+            try:
+                await event_callback(payload)
+            except Exception:  # noqa: BLE001 — monitoring never breaks work
+                logger.warning(
+                    "[a2a/%s] delegate event callback failed",
+                    self.name,
+                    exc_info=True,
+                )
+
+        async def _emit_parts(parts) -> None:
+            for part in parts:
+                event = _part_delegate_event(part)
+                if event is not None:
+                    await _emit(event)
 
         def _notify_task() -> None:
             # Fire on_task ONCE, at the first event carrying a task id —
@@ -312,6 +472,19 @@ class A2AClient:
                     if resp.task.context_id:
                         resolved_ctx = resp.task.context_id
                     _notify_task()
+                    for artifact in resp.task.artifacts:
+                        await _emit_parts(artifact.parts)
+                    try:
+                        await _emit_parts(resp.task.status.message.parts)
+                    except Exception:  # noqa: BLE001 — message is optional
+                        pass
+                    await _emit({
+                        "type": "delegate.status",
+                        "state": _STATE_NAMES.get(
+                            resp.task.status.state, str(resp.task.status.state)
+                        ),
+                        "text": _status_message_text(resp.task.status),
+                    })
                 elif which == "status_update":
                     su = resp.status_update
                     final_state = su.status.state
@@ -326,6 +499,17 @@ class A2AClient:
                         f"state={_STATE_NAMES.get(su.status.state, su.status.state)} "
                         f"text={(msg_text or '')[:90]!r}"
                     )
+                    try:
+                        await _emit_parts(su.status.message.parts)
+                    except Exception:  # noqa: BLE001 — message is optional
+                        pass
+                    await _emit({
+                        "type": "delegate.status",
+                        "state": _STATE_NAMES.get(
+                            su.status.state, str(su.status.state)
+                        ),
+                        "text": msg_text,
+                    })
                     if su.status.state == TaskState.TASK_STATE_WORKING:
                         # Narrate the agent's REAL streamed progress — the text it
                         # puts on an intermediate status message (and, when the
@@ -342,21 +526,35 @@ class A2AClient:
                             last_progress_at = now
                             last_progress = msg_text
                             try:
-                                await progress_callback(msg_text)
+                                await progress_callback(
+                                    _bounded_text(msg_text, _EVENT_TEXT_MAX_BYTES)
+                                )
                             except Exception:  # noqa: BLE001
                                 pass
                     elif msg_text:
                         status_text = msg_text  # terminal / input-required text
                 elif which == "artifact_update":
+                    if resp.artifact_update.task_id:
+                        resolved_task_id = resp.artifact_update.task_id
+                    if resp.artifact_update.context_id:
+                        resolved_ctx = resp.artifact_update.context_id
+                    _notify_task()
                     t = "".join(
                         _part_text(p) for p in resp.artifact_update.artifact.parts
                     )
                     logger.info(f"[a2a/{self.name}] ←#{ev_count} artifact_update +{len(t)} chars")
                     if t:
                         artifact_text = t
+                    await _emit_parts(resp.artifact_update.artifact.parts)
                 elif which == "message" or (which is None and resp.HasField("message")):
+                    if resp.message.task_id:
+                        resolved_task_id = resp.message.task_id
+                    if resp.message.context_id:
+                        resolved_ctx = resp.message.context_id
+                    _notify_task()
                     for p in resp.message.parts:
                         message_text += _part_text(p)
+                    await _emit_parts(resp.message.parts)
 
         # Enforce the wall-clock bound. A buffer-then-answer gateway (Ava routes
         # through the fleet) can hold the response; without this the await could

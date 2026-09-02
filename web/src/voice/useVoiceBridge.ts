@@ -18,6 +18,9 @@
  *   session    { event: 'start'|'end', session_id?: string }
  *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
  *   delegation-progress { type, source, text }
+ *   delegate.status { delegate_id, task_id?, session_id?, state, text? }
+ *   delegate.tool   { delegate_id, task_id?, session_id?, name, status }
+ *   delegate.delta  { delegate_id, task_id?, session_id?, deltas }
  *   widget     { action: 'open'|'close', id, props? } — render_widget tool
  *   orb-config { variant?, palette?, params? } — set_orb_visual tool
  *   persona-switched { slug, name, applies, notes, viz? } — persona change
@@ -32,15 +35,48 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
 import { widgetWorkspace } from '../widgets/store';
 import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
+import { logBus } from '../shared/logBus';
+import {
+  initialDelegateLifecycle,
+  reduceDelegateEvent,
+} from './delegateEvents';
 
 interface SsePayload {
   event: string;
   data: string;
 }
 
-function handleSse(event: string, data: string): void {
+let delegateLifecycle = initialDelegateLifecycle();
+let lastStructuredProgress: {
+  delegateId: string;
+  taskKey: string;
+  text: string;
+} | null = null;
+
+function clearDelegateLifecycle(patch: Partial<VoiceSnapshot> = {}): void {
+  delegateLifecycle = initialDelegateLifecycle();
+  lastStructuredProgress = null;
+  voiceStore.update({
+    delegationTaskKey: null,
+    delegationProgress: null,
+    delegationOutcome: null,
+    ...patch,
+  });
+}
+
+function boundedSseText(value: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  let bounded = new TextDecoder().decode(encoder.encode(value.trim()).slice(0, maxBytes));
+  while (encoder.encode(bounded).length > maxBytes) bounded = bounded.slice(0, -1);
+  return bounded;
+}
+
+export function handleSse(event: string, data: string): void {
   if (event === '__connected') {
-    voiceStore.update({ connected: true });
+    // The bounded SSE bus has no replay cursor. Reconnect cannot prove that a
+    // previously visible task is still current, so clear rather than display a
+    // stale progress rail until fresh authoritative events arrive.
+    clearDelegateLifecycle({ connected: true });
     return;
   }
 
@@ -67,13 +103,13 @@ function handleSse(event: string, data: string): void {
     case 'session': {
       const ev = parsed.event as 'start' | 'end' | undefined;
       if (ev === 'start') {
-        voiceStore.update({
+        clearDelegateLifecycle({
           connected: true,
           sessionId: (parsed.session_id as string | undefined) ?? null,
           state: 'idle',
         });
       } else if (ev === 'end') {
-        voiceStore.update({ state: 'idle', sessionId: null });
+        clearDelegateLifecycle({ state: 'idle', sessionId: null });
       }
       break;
     }
@@ -82,12 +118,14 @@ function handleSse(event: string, data: string): void {
       if (ev === 'start' && parsed.name) {
         voiceStore.update({
           activeToolCall: { name: String(parsed.name), args: parseArgs(parsed.args) },
+          delegationTaskKey: null,
           delegationProgress: null,
           delegationOutcome: null,
         });
       } else if (ev === 'end') {
         voiceStore.update({
           activeToolCall: null,
+          delegationTaskKey: null,
           delegationProgress: null,
           delegationOutcome: (parsed.outcome as 'success' | 'error' | undefined) ?? 'success',
         });
@@ -96,8 +134,49 @@ function handleSse(event: string, data: string): void {
     }
     case 'delegation-progress': {
       if (typeof parsed.text === 'string') {
-        voiceStore.update({ delegationProgress: parsed.text });
+        const text = boundedSseText(parsed.text, 1024);
+        const source = typeof parsed.source === 'string'
+          ? boundedSseText(parsed.source, 256)
+          : '';
+        const structuredMirror = lastStructuredProgress?.delegateId === source
+          && lastStructuredProgress.text === text;
+        if (structuredMirror) {
+          // The task-keyed structured reducer already decided whether this
+          // update owns the visible rail. Never let its task-blind compatibility
+          // mirror reverse that decision; suppress this one exact pair only.
+          lastStructuredProgress = null;
+          break;
+        }
+        voiceStore.update({
+          delegationProgress: source ? `${source}: ${text}` : text,
+        });
+        logBus.push({ source: 'delegate', level: 'info', message: text });
       }
+      break;
+    }
+    case 'delegate.status':
+    case 'delegate.tool':
+    case 'delegate.delta': {
+      const reduced = reduceDelegateEvent(delegateLifecycle, event, parsed);
+      delegateLifecycle = reduced.lifecycle;
+      const presentation = reduced.presentation;
+      if (!presentation) break;
+      const statusState = typeof parsed.state === 'string' ? parsed.state : '';
+      if (
+        event === 'delegate.status'
+        && presentation.rawText
+        && !['completed', 'failed', 'canceled'].includes(statusState)
+      ) {
+        lastStructuredProgress = {
+          delegateId: presentation.delegateId,
+          taskKey: presentation.taskKey,
+          text: presentation.rawText,
+        };
+      }
+      if (Object.keys(presentation.patch).length > 0) {
+        voiceStore.update(presentation.patch);
+      }
+      logBus.push({ source: 'delegate', ...presentation.log });
       break;
     }
     case 'widget': {
