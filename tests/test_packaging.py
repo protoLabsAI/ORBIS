@@ -150,3 +150,29 @@ def test_release_tests_and_builds_only_the_validated_gated_tag():
     assert 'ref: ${{ needs.validate.outputs.sha }}' in release
     assert 'ref: ${{ inputs.ref || github.ref }}' in pytest_workflow
     assert "release tag predates the final Docker boot-import gate" in release
+
+
+def test_prepare_release_instructs_exact_tag_push_not_manual_dispatch():
+    """The generated bump PR must describe the tag-driven release contract."""
+    prepare = (ROOT / ".github/workflows/prepare-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "push the exact \\`v${VERSION}\\` tag once" in prepare
+    assert "manual release.yml dispatch only validates an existing tag" in prepare
+    assert "then dispatch release.yml" not in prepare
+    assert "then run release.yml" not in prepare
+
+
+def test_project_version_matches_uv_lock_and_bump_commits_both():
+    """Release PRs must not leave the lock's local-project metadata behind."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    prepare = (ROOT / ".github/workflows/prepare-release.yml").read_text(
+        encoding="utf-8"
+    )
+    locked_orbis = [package for package in lock["package"] if package["name"] == "orbis"]
+
+    assert len(locked_orbis) == 1
+    assert locked_orbis[0]["version"] == project["project"]["version"]
+    assert "git add pyproject.toml uv.lock" in prepare

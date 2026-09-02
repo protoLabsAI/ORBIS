@@ -4,8 +4,8 @@ name: 'Prepare Release'
 # Bumps the version in pyproject.toml, opens a prepare-release/vX.Y.Z
 # branch, and commits it as "chore: release vX.Y.Z". It does NOT merge
 # or tag — a human merges the bump PR through the normal CI/review gate,
-# then dispatches release.yml (tag vX.Y.Z) which builds the stable semver
-# Docker image and creates the GitHub release. We do not auto-merge
+# verifies the resulting main commit, then pushes the exact vX.Y.Z tag once.
+# That tag push triggers Release and Desktop Build. We do not auto-merge
 # (fleet policy, 2026-06-02: auto-merge fires on stale SHAs + breaks
 # stacked PRs).
 
@@ -58,9 +58,8 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          # GH_PAT required (not GITHUB_TOKEN) so the tag push at the end
-          # of this job can trigger release.yml — the default token can't
-          # fire downstream workflows.
+          # GH_PAT required (not GITHUB_TOKEN) so this job's branch push and
+          # PR creation trigger the normal CI/review workflows.
           token: ${{ secrets.GH_PAT }}
 
       # One pending release at a time. The version on main only advances
@@ -107,7 +106,7 @@ jobs:
         if: inputs.dry_run == true && steps.guard.outputs.pending != 'true'
         run: |
           echo "New version: v${{ steps.version.outputs.version }}"
-          git diff pyproject.toml
+          git diff pyproject.toml uv.lock
 
       - name: Create release branch + PR
         if: inputs.dry_run != true && steps.guard.outputs.pending != 'true'
@@ -121,7 +120,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout -b "${BRANCH}"
-          git add pyproject.toml
+          git add pyproject.toml uv.lock
           git commit -m "chore: release v${VERSION}"
           # The guard above guarantees no OPEN release PR exists here, so a
           # remote branch of this name is an orphan from a closed/abandoned
@@ -133,12 +132,12 @@ jobs:
             --base main \
             --head "${BRANCH}" \
             --title "chore: release v${VERSION}" \
-            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, then dispatch release.yml (tag \`v${VERSION}\`) to tag main and cut the release.")
+            --body "Automated version bump to \`v${VERSION}\`. Review + merge through the normal CI/review gate, verify the resulting main commit, then push the exact \`v${VERSION}\` tag once. The tag push triggers Release and Desktop Build; manual release.yml dispatch only validates an existing tag.")
           echo "Opened: ${PR_URL}"
 
           # We do NOT auto-merge or tag here (fleet policy, 2026-06-02:
           # auto-merge fires on stale SHAs + breaks stacked PRs). A human
-          # merges this bump PR through the normal CI/review gate, then
-          # dispatches release.yml with tag v${VERSION} to tag main and
-          # cut the GitHub release.
-          echo "Next: review + merge that PR (we do not auto-merge), then run release.yml (tag v${VERSION})."
+          # merges this bump PR through the normal CI/review gate, verifies
+          # main, then pushes the exact tag once to trigger both release
+          # workflows.
+          echo "Next: review + merge that PR (we do not auto-merge), verify main, then push tag v${VERSION} exactly once."
