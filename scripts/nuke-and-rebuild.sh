@@ -110,6 +110,18 @@ if [ "$(uname -s)" != "Darwin" ] || [ "${HOST_ARCH}" != "arm64" ]; then
 fi
 TARGET="aarch64-apple-darwin"
 VERSION="$(grep '^version' pyproject.toml | head -1 | sed 's/.*= *"\(.*\)"/\1/')"
+PYTHON_BUILD_VERSION="1.4.4"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv must be on PATH — install it from https://docs.astral.sh/uv/getting-started/installation/" >&2
+  exit 2
+fi
+PYTHON_BUILD=(
+  uv tool run --from "build==${PYTHON_BUILD_VERSION}" --isolated pyproject-build
+)
+if ! "${PYTHON_BUILD[@]}" --version >/dev/null; then
+  echo "could not resolve build==${PYTHON_BUILD_VERSION}; check uv's Python, cache, and index settings" >&2
+  exit 2
+fi
 log "repo: ${ROOT}"
 log "version: ${VERSION}"
 log "target: ${TARGET}"
@@ -206,9 +218,8 @@ cd "${ROOT}"
 # 4. Python sdist
 # ---------------------------------------------------------------------------
 log "building Python sdist (orbis-${VERSION}.tar.gz)…"
-PYTHON="${ROOT}/.venv/bin/python"
-[ -x "${PYTHON}" ] || PYTHON="$(command -v python3)"
-"${PYTHON}" -m build --sdist --outdir "${ROOT}/dist-sdist" >/dev/null
+"${PYTHON_BUILD[@]}" --installer uv --sdist --outdir "${ROOT}/dist-sdist" \
+  "${ROOT}" >/dev/null
 SDIST="${ROOT}/dist-sdist/orbis-${VERSION}.tar.gz"
 [ -f "${SDIST}" ] || { echo "expected sdist at ${SDIST}" >&2; exit 3; }
 ok "sdist: ${SDIST} ($(du -h "${SDIST}" | cut -f1))"

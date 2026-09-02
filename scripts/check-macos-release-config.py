@@ -430,6 +430,31 @@ def check_workflow() -> None:
     validation_text = read(live_validation)
     installer_env = ROOT / "scripts" / "pyapp-installer-env.sh"
 
+    require_contains(
+        rebuild,
+        'command -v uv ',
+        "local rebuild must validate uv before destructive build preparation",
+    )
+    require_contains(
+        rebuild,
+        'uv tool run --from "build==${PYTHON_BUILD_VERSION}" --isolated pyproject-build',
+        "local sdist build must use a pinned isolated Python build frontend",
+    )
+    require_contains(
+        rebuild,
+        '"${PYTHON_BUILD[@]}" --version',
+        "local rebuild must resolve the pinned sdist frontend before destructive preparation",
+    )
+    require_contains(
+        rebuild,
+        '"${PYTHON_BUILD[@]}" --installer uv --sdist',
+        "local sdist build must use uv for its isolated build environment",
+    )
+    require(
+        '.venv/bin/python' not in read(rebuild),
+        "local sdist build must not depend on an arbitrary project virtualenv",
+    )
+
     require_contains(workflow, "macos-14", "desktop workflow must build on Apple Silicon runner")
     require_contains(
         workflow,
