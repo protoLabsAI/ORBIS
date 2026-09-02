@@ -24,14 +24,20 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from a2a.client import ClientConfig, ClientFactory
 from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
+from google.protobuf import json_format
+
+import protolabs_a2a as pa
 
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+DelegateEvent = dict[str, Any]
+DelegateEventCallback = Callable[[DelegateEvent], Awaitable[None]]
 
 # Min gap between spoken progress lines, so a chatty agent's status_updates
 # don't flood. We only narrate the agent's REAL streamed status text (the
@@ -149,6 +155,34 @@ def _status_text(task: Task) -> str:
     return _status_message_text(task.status)
 
 
+def _part_delegate_event(part: Part) -> DelegateEvent | None:
+    """Translate declared protoLabs data extensions into UI-safe events.
+
+    ORBIS owns transport and presentation; the delegate owns the event content.
+    Tool arguments and results deliberately stay off the client event plane.
+    """
+    try:
+        raw = json_format.MessageToDict(part)
+        tool = pa.parse_tool_call(raw)
+        if tool is not None:
+            return {
+                "type": "delegate.tool",
+                "tool_call_id": str(tool.get("toolCallId", "")),
+                "name": str(tool.get("name", "")),
+                "status": str(tool.get("phase", "")),
+            }
+        delta = pa.parse_worldstate_delta(raw)
+        if delta is not None:
+            changes = delta.get("deltas")
+            return {
+                "type": "delegate.delta",
+                "deltas": changes if isinstance(changes, list) else [],
+            }
+    except Exception:  # noqa: BLE001 — unknown extensions remain opaque
+        return None
+    return None
+
+
 async def _stamp_trace_headers(request: httpx.Request) -> None:
     """httpx request hook: attach the live Langfuse trace headers to every
     outbound A2A request, so a delegate that joins caller traces (protoAgent
@@ -230,6 +264,7 @@ class A2AClient:
         prefer_stream: bool = False,
         timeout: float = 120.0,
         progress_callback: ProgressCallback | None = None,
+        event_callback: DelegateEventCallback | None = None,
         on_task: Callable[[str, str | None], None] | None = None,
         push_notification_url: str | None = None,
         push_notification_token: str | None = None,
@@ -279,6 +314,37 @@ class A2AClient:
         last_progress_at = 0.0
         last_progress = ""
         task_seen = False
+        seen_events: set[str] = set()
+
+        async def _emit(event: DelegateEvent) -> None:
+            if event_callback is None:
+                return
+            payload = {
+                **event,
+                "delegate_id": self.name,
+                "task_id": resolved_task_id,
+                "session_id": resolved_ctx,
+            }
+            # Streaming snapshots may repeat extension parts. Keep the client
+            # event plane idempotent without changing the authoritative result.
+            signature = repr(payload)
+            if signature in seen_events:
+                return
+            seen_events.add(signature)
+            try:
+                await event_callback(payload)
+            except Exception:  # noqa: BLE001 — monitoring never breaks work
+                logger.warning(
+                    "[a2a/%s] delegate event callback failed",
+                    self.name,
+                    exc_info=True,
+                )
+
+        async def _emit_parts(parts) -> None:
+            for part in parts:
+                event = _part_delegate_event(part)
+                if event is not None:
+                    await _emit(event)
 
         def _notify_task() -> None:
             # Fire on_task ONCE, at the first event carrying a task id —
@@ -312,6 +378,15 @@ class A2AClient:
                     if resp.task.context_id:
                         resolved_ctx = resp.task.context_id
                     _notify_task()
+                    await _emit({
+                        "type": "delegate.status",
+                        "state": _STATE_NAMES.get(
+                            resp.task.status.state, str(resp.task.status.state)
+                        ),
+                        "text": _status_message_text(resp.task.status),
+                    })
+                    for artifact in resp.task.artifacts:
+                        await _emit_parts(artifact.parts)
                 elif which == "status_update":
                     su = resp.status_update
                     final_state = su.status.state
@@ -326,6 +401,17 @@ class A2AClient:
                         f"state={_STATE_NAMES.get(su.status.state, su.status.state)} "
                         f"text={(msg_text or '')[:90]!r}"
                     )
+                    await _emit({
+                        "type": "delegate.status",
+                        "state": _STATE_NAMES.get(
+                            su.status.state, str(su.status.state)
+                        ),
+                        "text": msg_text,
+                    })
+                    try:
+                        await _emit_parts(su.status.message.parts)
+                    except Exception:  # noqa: BLE001 — message is optional
+                        pass
                     if su.status.state == TaskState.TASK_STATE_WORKING:
                         # Narrate the agent's REAL streamed progress — the text it
                         # puts on an intermediate status message (and, when the
@@ -348,12 +434,18 @@ class A2AClient:
                     elif msg_text:
                         status_text = msg_text  # terminal / input-required text
                 elif which == "artifact_update":
+                    if resp.artifact_update.task_id:
+                        resolved_task_id = resp.artifact_update.task_id
+                    if resp.artifact_update.context_id:
+                        resolved_ctx = resp.artifact_update.context_id
+                    _notify_task()
                     t = "".join(
                         _part_text(p) for p in resp.artifact_update.artifact.parts
                     )
                     logger.info(f"[a2a/{self.name}] ←#{ev_count} artifact_update +{len(t)} chars")
                     if t:
                         artifact_text = t
+                    await _emit_parts(resp.artifact_update.artifact.parts)
                 elif which == "message" or (which is None and resp.HasField("message")):
                     for p in resp.message.parts:
                         message_text += _part_text(p)

@@ -97,7 +97,12 @@ class _Ev:
         raise AttributeError(name)
 
 
-def _stream_events(answer: str, progress: str | None = None):
+def _stream_events(
+    answer: str,
+    progress: str | None = None,
+    *,
+    structured: bool = False,
+):
     from a2a.types import (
         Artifact,
         Part,
@@ -119,6 +124,13 @@ def _stream_events(answer: str, progress: str | None = None):
     au.task_id = "t-stream"
     art = Artifact()
     art.parts.append(Part(text=answer))
+    if structured:
+        import protolabs_a2a as pa
+        from a2a_executor import _ext_data_part
+
+        art.parts.append(_ext_data_part(pa.emit_worldstate_delta([
+            {"domain": "reminders", "path": "call mom", "op": "add"},
+        ])))
     au.artifact.CopyFrom(art)
 
     done = TaskStatusUpdateEvent()
@@ -132,7 +144,25 @@ def _stream_events(answer: str, progress: str | None = None):
         wp.task_id = "t-stream"
         wp.status.state = TaskState.TASK_STATE_WORKING
         wp.status.message.parts.append(Part(text=progress))
+        if structured:
+            from a2a_executor import _tool_call_part
+
+            wp.status.message.parts.append(_tool_call_part(
+                "tool_start",
+                {"id": "tc-1", "name": "web_search", "input": {"q": "status"}},
+            ))
         events.append(_Ev("status_update", wp))
+    if structured:
+        from a2a_executor import _tool_call_part
+
+        tool_done = TaskStatusUpdateEvent()
+        tool_done.task_id = "t-stream"
+        tool_done.status.state = TaskState.TASK_STATE_WORKING
+        tool_done.status.message.parts.append(_tool_call_part(
+            "tool_end",
+            {"id": "tc-1", "name": "web_search", "output": "found it"},
+        ))
+        events.append(_Ev("status_update", tool_done))
     events += [_Ev("artifact_update", au), _Ev("status_update", done)]
     return events
 
@@ -199,6 +229,50 @@ async def test_send_streaming_bare_heartbeats_stay_silent(monkeypatch) -> None:
     res = await client.send("q", timeout=5.0, progress_callback=prog)
     assert res.text == "done"
     assert beats == []  # no generic filler
+
+
+@pytest.mark.asyncio
+async def test_send_streaming_emits_structured_delegate_events(monkeypatch) -> None:
+    events: list[dict] = []
+
+    async def capture(event: dict) -> None:
+        events.append(event)
+
+    client = A2AClient(url="http://hub:7870/a2a", name="hub")
+    monkeypatch.setattr(
+        client,
+        "_ensure_client",
+        _stream_sdk(_stream_events("done", progress="checking CI", structured=True)),
+    )
+
+    await client.send("q", timeout=5.0, event_callback=capture)
+
+    assert [event["type"] for event in events] == [
+        "delegate.status",
+        "delegate.status",
+        "delegate.status",
+        "delegate.tool",
+        "delegate.tool",
+        "delegate.delta",
+        "delegate.status",
+    ]
+    assert all(event["delegate_id"] == "hub" for event in events)
+    assert all(event["task_id"] == "t-stream" for event in events)
+    tools = [event for event in events if event["type"] == "delegate.tool"]
+    tool = tools[0]
+    assert tool == {
+        "type": "delegate.tool",
+        "tool_call_id": "tc-1",
+        "name": "web_search",
+        "status": "started",
+        "delegate_id": "hub",
+        "task_id": "t-stream",
+        "session_id": client.context_id,
+    }
+    assert "args" not in tool and "result" not in tool
+    assert tools[1]["status"] == "completed"
+    delta = next(event for event in events if event["type"] == "delegate.delta")
+    assert delta["deltas"][0]["domain"] == "reminders"
 
 
 def test_answer_text_from_status_message() -> None:
