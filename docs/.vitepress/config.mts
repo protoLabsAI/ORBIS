@@ -89,7 +89,7 @@ const LABELS: Record<string, string> = {
   'add-a-delegate': 'Add a delegate',
   'voice-drive-a-coding-agent': 'Voice-drive a coding agent',
   'personalize-orbis': 'Personalize ORBIS',
-  'menu-bar-mode': 'Menu-bar mode',
+  'menu-bar-mode': 'Dock & menu bar',
   'orbis-file-format': 'The .orbis format',
   'memory-and-persona': 'Memory & persona',
   'how-orbis-works': 'How ORBIS works',
