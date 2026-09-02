@@ -9,6 +9,7 @@ ORBIS going silent mid-turn. send() now wraps the consume loop in wait_for.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -250,8 +251,8 @@ async def test_send_streaming_emits_structured_delegate_events(monkeypatch) -> N
     assert [event["type"] for event in events] == [
         "delegate.status",
         "delegate.status",
-        "delegate.status",
         "delegate.tool",
+        "delegate.status",
         "delegate.tool",
         "delegate.delta",
         "delegate.status",
@@ -273,6 +274,117 @@ async def test_send_streaming_emits_structured_delegate_events(monkeypatch) -> N
     assert tools[1]["status"] == "completed"
     delta = next(event for event in events if event["type"] == "delegate.delta")
     assert delta["deltas"][0]["domain"] == "reminders"
+
+
+@pytest.mark.asyncio
+async def test_terminal_snapshot_emits_extensions_before_terminal(monkeypatch) -> None:
+    from a2a.types import Task, TaskState
+    import protolabs_a2a as pa
+    from a2a_executor import _ext_data_part, _tool_call_part
+
+    task = Task(id="done-task")
+    task.status.state = TaskState.TASK_STATE_COMPLETED
+    task.status.message.parts.append(_tool_call_part(
+        "tool_end", {"id": "tc", "name": "lookup", "output": "secret"},
+    ))
+    artifact = task.artifacts.add()
+    artifact.parts.append(_ext_data_part(pa.emit_worldstate_delta([
+        {"domain": "ci", "path": "run", "op": "replace"},
+    ])))
+    events: list[dict] = []
+    client = A2AClient(url="http://hub:7870/a2a", name="hub")
+    monkeypatch.setattr(client, "_ensure_client", _stream_sdk([_Ev("task", task)]))
+
+    await client.send("q", event_callback=lambda event: _capture(events, event))
+
+    assert [event["type"] for event in events] == [
+        "delegate.delta", "delegate.tool", "delegate.status",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_tombstone_drops_late_extension(monkeypatch) -> None:
+    from a2a.types import TaskState, TaskStatusUpdateEvent
+    from a2a_executor import _tool_call_part
+
+    done = TaskStatusUpdateEvent(task_id="t")
+    done.status.state = TaskState.TASK_STATE_COMPLETED
+    late = TaskStatusUpdateEvent(task_id="t")
+    late.status.state = TaskState.TASK_STATE_WORKING
+    late.status.message.parts.append(_tool_call_part(
+        "tool_start", {"id": "late", "name": "lookup", "input": {}},
+    ))
+    events: list[dict] = []
+    client = A2AClient(url="http://hub:7870/a2a", name="hub")
+    monkeypatch.setattr(
+        client, "_ensure_client", _stream_sdk([
+            _Ev("status_update", done), _Ev("status_update", late),
+        ]),
+    )
+
+    await client.send("q", event_callback=lambda event: _capture(events, event))
+
+    assert [event["type"] for event in events] == ["delegate.status"]
+    assert events[0]["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_message_shape_carries_extensions_and_correlation(monkeypatch) -> None:
+    from a2a.types import Message, Role
+    import protolabs_a2a as pa
+    from a2a_executor import _ext_data_part
+
+    message = Message(
+        message_id="m", task_id="message-task", context_id="message-session",
+        role=Role.ROLE_AGENT,
+        parts=[_ext_data_part(pa.emit_worldstate_delta([
+            {"domain": "ci", "path": "run", "op": "add"},
+        ]))],
+    )
+    events: list[dict] = []
+    client = A2AClient(url="http://hub:7870/a2a", name="hub")
+    monkeypatch.setattr(client, "_ensure_client", _stream_sdk([_Ev("message", message)]))
+
+    await client.send("q", event_callback=lambda event: _capture(events, event))
+
+    assert events == [{
+        "type": "delegate.delta",
+        "deltas": [{"domain": "ci", "path": "run", "op": "add"}],
+        "delegate_id": "hub",
+        "task_id": "message-task",
+        "session_id": "message-session",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_event_payload_and_dedup_cache_are_bounded(monkeypatch) -> None:
+    from a2a.types import Message, Role
+    import protolabs_a2a as pa
+    from a2a_executor import _ext_data_part
+
+    monkeypatch.setattr(a2a_outbound, "_EVENT_DEDUP_LIMIT", 3)
+    messages = []
+    for index in [0, 1, 2, 3, 0]:
+        messages.append(_Ev("message", Message(
+            message_id=f"m-{index}", task_id="t", role=Role.ROLE_AGENT,
+            parts=[_ext_data_part(pa.emit_worldstate_delta([
+                {"domain": f"d-{index}", "value": "x" * 100_000},
+            ]))],
+        )))
+    events: list[dict] = []
+    client = A2AClient(url="http://hub:7870/a2a", name="hub")
+    monkeypatch.setattr(client, "_ensure_client", _stream_sdk(messages))
+
+    await client.send("q", event_callback=lambda event: _capture(events, event))
+
+    # The first digest was evicted after three unique events, so it can appear
+    # again; retained digest cardinality never grows with the stream.
+    assert len(events) == 5
+    assert all(len(json.dumps(event).encode()) < 16_384 for event in events)
+
+
+async def _capture(events: list[dict], event: dict) -> None:
+    events.append(event)
 
 
 def test_answer_text_from_status_message() -> None:

@@ -50,7 +50,10 @@ class FakeDelivery:
 
     def __init__(self):
         self.progress: list[tuple] = []
+        self.events: list[dict] = []
         self._barge_epoch = 0
+        self._owner_seq = 0
+        self._owners: set[int] = set()
 
     async def note_progress(self, text, *, source=None):
         self.progress.append((text, source))
@@ -61,6 +64,21 @@ class FakeDelivery:
 
     def bump_barge(self) -> None:
         self._barge_epoch += 1
+        self._owners.clear()
+
+    def begin_delegate_event_scope(self):
+        self._owner_seq += 1
+        self._owners.add(self._owner_seq)
+        return self._barge_epoch, self._owner_seq
+
+    def owns_delegate_event_scope(self, lease):
+        return lease[0] == self._barge_epoch and lease[1] in self._owners
+
+    def end_delegate_event_scope(self, lease):
+        self._owners.discard(lease[1])
+
+    async def note_delegate_event(self, event):
+        self.events.append(event)
 
 
 def _delegate():
@@ -224,6 +242,29 @@ async def test_error_dropped_when_barged_in_midflight(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delegate_events_and_progress_drop_after_cancellation(monkeypatch) -> None:
+    delivery = FakeDelivery()
+
+    async def fake_dispatch(
+        d, query, *, progress_callback=None, event_callback=None, **kw,
+    ):
+        await event_callback({"type": "delegate.status", "task_id": "old"})
+        delivery.bump_barge()
+        await progress_callback("late progress")
+        await event_callback({"type": "delegate.tool", "task_id": "old"})
+        return "late answer"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+
+    assert delivery.events == [{"type": "delegate.status", "task_id": "old"}]
+    assert delivery.progress == []
+    assert params.results == []
+
+
+@pytest.mark.asyncio
 async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
     """Sanity: epoch unchanged → the gate doesn't false-positive; the fresh
     answer still speaks exactly once."""
@@ -240,11 +281,32 @@ async def test_answer_kept_when_no_bargein(monkeypatch) -> None:
     assert params.results == [("fresh answer", True)]
 
 
+@pytest.mark.asyncio
+async def test_delegate_event_owner_rejects_callback_after_handler_finishes(
+    monkeypatch,
+) -> None:
+    delivery = FakeDelivery()
+    callback = None
+
+    async def fake_dispatch(d, query, *, event_callback=None, **kw):
+        nonlocal callback
+        callback = event_callback
+        return "done"
+
+    monkeypatch.setattr(tools, "delegate_dispatch", fake_dispatch)
+    handler = _delegate_to_handler(FakeRegistry(_delegate()), delivery=delivery)
+    params = FakeParams({"target": "ava", "query": "q"})
+    await handler(params)
+    assert callback is not None
+
+    await callback({"type": "delegate.status", "task_id": "finished"})
+    assert delivery.events == []
+
+
 # --- orchestrate: the same barge-in gate on the multi-step loop ------------
 # orchestrate runs a bounded ReAct loop that can't be torn down mid-flight, so
-# the gate is identical to delegate_to: snapshot the epoch at dispatch, drop the
-# synthesized answer if the user talked over the loop. The per-step progress
-# (VISUAL pill) is mid-flow and NOT gated.
+# the gate is identical to delegate_to: own an epoch-bound callback lease and
+# drop progress, events, and synthesis if the user talked over the loop.
 
 
 @pytest.mark.asyncio
@@ -264,9 +326,35 @@ async def test_orchestrate_answer_dropped_when_barged_in(monkeypatch) -> None:
     params = FakeParams({"goal": "do the multi-step thing"})
     await handler(params)
 
-    # Synthesis dropped (no spoken result); the in-flight progress still pilled.
+    # Synthesis dropped; progress emitted before cancellation remains visible.
     assert params.results == []
     assert ("working on step 1", "orchestrator") in delivery.progress
+
+
+@pytest.mark.asyncio
+async def test_orchestrate_hitl_cancellation_drops_late_delegate_events() -> None:
+    delivery = FakeDelivery()
+
+    async def fake_runner(
+        goal, *, progress=None, delegate_event=None, ask_user=None,
+    ):
+        await delegate_event({"type": "delegate.status", "task_id": "step-1"})
+        # Mirrors Pipecat cancelling the tool while an orchestration/HITL pause
+        # is outstanding. The durable remote task may still call back later.
+        delivery.bump_barge()
+        await delegate_event({"type": "delegate.tool", "task_id": "step-1"})
+        await progress("late HITL progress")
+        return "late synthesis"
+
+    handler = _orchestrate_handler(
+        FakeRegistry(_delegate()), delivery=delivery, runner=fake_runner
+    )
+    params = FakeParams({"goal": "ask then continue"})
+    await handler(params)
+
+    assert delivery.events == [{"type": "delegate.status", "task_id": "step-1"}]
+    assert delivery.progress == []
+    assert params.results == []
 
 
 @pytest.mark.asyncio

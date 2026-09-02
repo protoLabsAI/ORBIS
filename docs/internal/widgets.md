@@ -149,6 +149,10 @@ need durable history/filtering and the operator-injection plane:
   titles through the compatibility `delegation-progress` event.
 - A2A `A2AClient.send(event_callback=...)` publishes `delegate.status`,
   `delegate.tool`, and `delegate.delta`, keyed by delegate/task/session.
+- The client bounds extension payloads and dedupe memory. The UI reduces events
+  monotonically per task, tombstones terminal tasks, and clears unreconciled
+  progress on SSE reconnect/session end. Barge-in invalidates the owning callback
+  lease, so a durable remote task cannot repaint a canceled voice turn.
 - OpenAI delegates are one-shot (`agent/delegates.py:547`) — show request/response
   pairs only; no stream.
 
