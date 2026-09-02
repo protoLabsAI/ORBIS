@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useVoiceStateSelector } from '@/voice/hooks';
 import { statusBus } from '@/shared/statusBus';
+import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 
 /**
  * Bottom-of-screen status hint.
@@ -18,6 +19,7 @@ export function StatusPill() {
   const voiceState = useVoiceStateSelector((s) => s.state);
   const micListening = useVoiceStateSelector((s) => s.micListening);
   const micMuted = useVoiceStateSelector((s) => s.micMuted);
+  const voiceLifecycle = useVoiceStateSelector((s) => s.voiceLifecycle);
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
@@ -53,6 +55,7 @@ export function StatusPill() {
   // say so instead of "listening…". An active delegation/tool call is more
   // specific still, so it wins above this.
   const text = externalTransient?.text
+    ?? (!voiceIsReady(voiceLifecycle) ? voiceLifecycleText(voiceLifecycle) : null)
     ?? delegationText
     ?? (micMuted
       ? 'muted'
@@ -72,6 +75,9 @@ export function StatusPill() {
 
   return (
     <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
       className={
         'pointer-events-none fixed left-1/2 -translate-x-1/2 z-10 text-fg-body text-label font-mono tracking-wide text-center px-4 ' +
         (text === delegationText ? 'animate-pulse' : '')

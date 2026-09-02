@@ -5,6 +5,13 @@ to bottom — each step rules out a layer of [the voice loop](/explanation/the-v
 
 ## ORBIS doesn't hear me
 
+First check the status text at the bottom of the ORBIS window. If it says voice
+is warming or starting, wait for it to become ready; macOS showing an active
+microphone only confirms device acquisition, not that the voice pipeline can
+respond. If voice failed, open **Settings → Quick**. ORBIS offers **Retry
+voice** only when startup can safely be retried in-process; otherwise use the
+displayed **Relaunch ORBIS** action.
+
 **1. Watch the level meter.** Open **Settings → Voice → Microphone** and speak.
 If the meter moves, your mic is reaching ORBIS — skip to
 [*it hears me but doesn't reply*](#orbis-hears-me-but-doesn-t-reply). If it

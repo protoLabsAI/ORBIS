@@ -8,6 +8,7 @@ import { useOrbState } from './useOrbState';
 import { pushStatusTransient } from '@/sdk';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
+import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 import type { FractalPreset } from './variants/fractal/presets';
 // Side-effect imports — variants register themselves on import.
 import './variants';
@@ -49,11 +50,16 @@ export function OrbStage() {
   // no-op (tap the mic button to unmute first) — the Rust engine gates the wake
   // word the same way, so muted is truly silent.
   const onDoubleClick = () => {
-    if (voiceStore.getSnapshot().micMuted) {
+    const voice = voiceStore.getSnapshot();
+    if (!voiceIsReady(voice.voiceLifecycle)) {
+      pushStatusTransient(voiceLifecycleText(voice.voiceLifecycle), 2400);
+      return;
+    }
+    if (voice.micMuted) {
       pushStatusTransient('muted — tap the mic to unmute', 2400);
       return;
     }
-    const next = !voiceStore.getSnapshot().micListening;
+    const next = !voice.micListening;
     voiceStore.update({ micListening: next });
     pushStatusTransient(next ? 'listening…' : 'stopped', 1800);
     invoke('set_mic_listening', { on: next }).catch(() => {

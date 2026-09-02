@@ -3,6 +3,8 @@ import { Mic } from 'lucide-react';
 import { type CommandAction, registerActions } from './registry';
 import { widgetRegistry } from '../widgets/registry';
 import { widgetWorkspace } from '../widgets/store';
+import { api } from '../lib/api';
+import { toggleVoiceWhenReady } from '../voice/actions';
 
 // Widget open/close — reflects current dock state each time the bar opens.
 registerActions(() => {
@@ -31,10 +33,13 @@ registerActions(() => [
     keywords: ['mic', 'mute', 'unmute', 'listen'],
     run: async () => {
       try {
-        const on = await invoke<boolean>('mic_listening');
-        await invoke('set_mic_listening', { on: !on });
+        await toggleVoiceWhenReady({
+          readLifecycle: async () => (await api.health()).voice?.lifecycle ?? null,
+          readListening: () => invoke<boolean>('mic_listening'),
+          setListening: (on) => invoke('set_mic_listening', { on }),
+        });
       } catch {
-        // mic commands exist only in native-audio builds
+        // API/mic commands exist only when the native backend is available.
       }
     },
   },

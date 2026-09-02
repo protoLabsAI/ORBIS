@@ -5,6 +5,8 @@ import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
 import { pushStatusTransient } from '@/shared/statusBus';
+import { api } from '@/lib/api';
+import { voiceStore } from '@/voice/state';
 import {
   createBootSignals,
   startBootStatusRuntime,
@@ -14,13 +16,14 @@ import {
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
- * sidecar loads real models on the way up — Whisper/Parakeet STT, Kokoro
- * TTS, the LLM warmup — which on a cold first launch takes a minute or
- * two (downloads + GIL-heavy loads that also stall the API). Letting the
- * user into the wizard during that window means the first save hangs.
+ * sidecar has a real import/startup phase before its API and settings surfaces
+ * are safe. Letting the user into the wizard during that window means the
+ * first save can race startup and hang.
  *
- * So we gate the whole UI behind this screen until the sidecar reports
- * `ready`. The stage text reflects ACTUAL backend progress: the sidecar
+ * So we gate the whole UI only until the sidecar reports `app-ready`.
+ * Voice model preparation continues behind the app and is represented by the
+ * separate `voice-lifecycle` contract in StatusPill and voice controls. The
+ * stage text here reflects ACTUAL backend progress: the sidecar
  * prints `ORBIS_BOOT {stage,detail}` markers as each component loads, the
  * Rust shell forwards them as `orbis-boot` events (and caches the latest
  * for `boot_status`, in case a marker landed before we subscribed).
@@ -31,14 +34,14 @@ import {
  * slots the progress bar + escape hatch in.
  */
 
-// Fraction of the boot the gate shows as complete at each stage. The STT
-// step is the long pole (first-run model download), so it claims the
-// biggest slice — the bar advances meaningfully as each stage lands.
+// Fraction of startup shown at each legacy/new marker. `ready` remains as a
+// compatibility marker; `app-ready` is the application gate.
 const STAGE_PROGRESS: Record<string, number> = {
   stt: 0.3,
   tts: 0.6,
   llm: 0.85,
   ready: 1,
+  'app-ready': 1,
 };
 
 // The cold start is legitimately slow AND opaque: the Python sidecar pays ~80s
@@ -48,8 +51,8 @@ const STAGE_PROGRESS: Record<string, number> = {
 // moving. That's normal here, not a hang. (Measured ~80s spawn→ORBIS_READY.)
 //
 // So: a gentle reassurance line after a short wait, and the actual escape hatch
-// (View logs / Continue anyway) only after a wait *well past* a normal cold
-// start + model warmup — so a genuinely wedged boot isn't an infinite spinner,
+// (View logs / Continue anyway) only after a wait *well past* normal app
+// startup — so a genuinely wedged boot isn't an infinite spinner,
 // without crying wolf on every launch.
 const REASSURE_AFTER_S = 15;
 const SLOW_AFTER_S = 180;
@@ -83,16 +86,17 @@ export function BootStatus() {
       }
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
-      if (s.stage === 'ready') {
-        setReady(true);
-      }
     };
     const signals = createBootSignals({
       onBootStage: applyBootStage,
+      onApplicationReady: () => setReady(true),
       onHubUnavailable: () => {
         if (hubWarningShown.current) return;
         hubWarningShown.current = true;
         pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
+      },
+      onVoiceLifecycle: (voiceLifecycle) => {
+        voiceStore.update({ voiceLifecycle });
       },
     });
 
@@ -106,6 +110,12 @@ export function BootStatus() {
         ),
         bootSnapshot: () => invoke<string>('boot_status'),
         hubHealthSnapshot: () => invoke<SsePayload | null>('delegate_health_status'),
+        voiceLifecycleSnapshot: async () => {
+          const lifecycle = (await api.health()).voice?.lifecycle;
+          return lifecycle
+            ? { event: 'voice-lifecycle', data: JSON.stringify(lifecycle) }
+            : null;
+        },
       },
       signals,
       // Commands/listeners are unavailable in plain browser development.
