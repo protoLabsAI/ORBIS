@@ -22,6 +22,6 @@ the system, accurately and completely.
 
 ### Desktop & access
 
-- **[The desktop app](./desktop)** — menu-bar agent, window, lifecycle.
+- **[The desktop app](./desktop)** — Dock/menu-bar access, window, lifecycle.
 - **[Access & privacy](./access)** — single-owner model, owner key, what's local.
 - **[Config](./config)** — the full `orbis.yaml`.

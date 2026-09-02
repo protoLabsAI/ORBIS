@@ -47,9 +47,10 @@ Lower the output volume, move the mic away from the speakers, or use headphones.
 
 ## Still stuck? Restart clean
 
-ORBIS keeps running in the menu bar, so a real restart is worth it:
+ORBIS keeps running after its window closes, so a real restart is worth it:
 
-1. Click the **menu-bar robot → Quit ORBIS** (this fully exits, not just hides).
+1. Use **⌘Q**, **Dock → Quit**, or **menu-bar orb → Quit ORBIS** (this fully
+   exits, not just hides).
 2. Relaunch ORBIS.
 
 A clean restart re-acquires the mic and rebuilds the audio pipeline, which
