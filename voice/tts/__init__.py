@@ -42,16 +42,17 @@ def make_tts(**overrides) -> TTSService:
     raise ValueError(f"Unknown TTS backend: {backend!r}")
 
 
-def prewarm() -> None:
-    if TTS_BACKEND == "kokoro":
+def prewarm(**overrides) -> None:
+    backend = (overrides.pop("backend", TTS_BACKEND) or "kokoro").lower()
+    if backend == "kokoro":
         from .kokoro import prewarm as _prewarm
-    elif TTS_BACKEND == "openai":
+    elif backend == "openai":
         from .openai import prewarm as _prewarm
-    elif TTS_BACKEND == "elevenlabs":
+    elif backend == "elevenlabs":
         from .elevenlabs import prewarm as _prewarm
-    elif TTS_BACKEND == "fish":
+    elif backend == "fish":
         from .fish import prewarm as _prewarm
     else:
-        logger.warning(f"No prewarm for backend {TTS_BACKEND!r}")
+        logger.warning(f"No prewarm for backend {backend!r}")
         return
-    _prewarm()
+    _prewarm(**overrides)

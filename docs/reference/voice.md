@@ -70,6 +70,34 @@ Kokoro voices are cached after first use; the TTS panel shows which voices are
 already cached so you know which will start instantly.
 :::
 
+## Startup readiness
+
+In the desktop app, opening the microphone or connecting the native audio
+socket is not enough to make voice usable. ORBIS warms required local speech
+engines first, then starts Pipecat. The current state is available at
+`/healthz` as `voice.lifecycle` and as the retained `voice-lifecycle` event on
+`/api/events`:
+
+| State | Meaning |
+| --- | --- |
+| `warming` | Required local speech engines are loading off the API event loop. |
+| `starting` | Models are ready and Pipecat is completing pipeline setup. |
+| `running` | Pipecat confirmed the complete pipeline can consume audio. |
+| `failed` | Warmup, socket connection, or pipeline setup stopped. Follow the payload's recovery action. |
+
+Direct `python app.py` runs without the native audio socket and reports a
+`null` lifecycle. This is expected for API-only and A2A-only deployments.
+
+Public failure details and codes are deliberately stable and sanitized. The
+full exception remains in the private sidecar log. `action: retry` is emitted
+only before Rust has accepted the one-shot socket connection (model warm or
+connection failure). Once accepted, a later failure emits
+`action: relaunch_required`; retrying in-process would be misleading until the
+separate socket-supervision work lands. Cancelling startup prevents
+Pipecat from starting, but Python cannot forcibly stop synchronous native model
+code already running inside `asyncio.to_thread`; process shutdown may therefore
+wait for that call to return.
+
 ## See also
 
 - [The voice loop](/explanation/the-voice-loop) — how a turn flows end to end.

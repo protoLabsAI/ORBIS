@@ -239,6 +239,11 @@ class LocalAudioTransport(BaseTransport):
 
     # --- Socket lifecycle ---
 
+    async def connect(self) -> bool:
+        """Connect before Pipecat setup and report whether Rust accepted it."""
+        await self._connect()
+        return self._connected
+
     async def _connect(self) -> None:
         """Open Unix socket connection to the Rust native audio engine."""
         if self._connected:
@@ -256,7 +261,6 @@ class LocalAudioTransport(BaseTransport):
             await self._call_event_handler("on_client_connected", self)
         except Exception as e:
             logger.error(f"[local_transport] connect failed: {e}")
-            await self._call_event_handler("on_client_disconnected", self)
 
     async def _disconnect(self) -> None:
         """Close the socket connection."""

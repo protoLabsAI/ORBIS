@@ -369,17 +369,18 @@ def make_stt(
     return LocalWhisperSTT()
 
 
-def prewarm() -> None:
-    if STT_BACKEND == "openai":
+def prewarm(*, backend: str | None = None, **_overrides) -> None:
+    chosen_backend = resolve_stt_backend(backend)
+    if chosen_backend == "openai":
         # No model-load step on a remote endpoint; pipecat's first call
         # opens the connection. Skip explicit warm.
         logger.info("STT backend: openai (no local prewarm)")
         return
-    if STT_BACKEND == "sensevoice":
+    if chosen_backend == "sensevoice":
         from voice.stt_sensevoice import prewarm as prewarm_sensevoice
         prewarm_sensevoice()
         return
-    if STT_BACKEND == "parakeet":
+    if chosen_backend == "parakeet":
         try:
             from voice.stt_parakeet import prewarm as prewarm_parakeet
         except ImportError as exc:

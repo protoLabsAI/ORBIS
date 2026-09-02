@@ -326,5 +326,10 @@ class LocalKokoroTTS(TTSService):
             except Exception: pass
 
 
-def prewarm() -> None:
+def prewarm(*, voice: str | None = None, **_overrides) -> None:
     _get_pipe()
+    chosen_voice = _coerce_voice(voice)
+    if chosen_voice != KOKORO_VOICE:
+        result = download_voice(chosen_voice)
+        if not result.get("ok"):
+            raise RuntimeError("configured Kokoro voice could not be loaded")

@@ -693,11 +693,13 @@ import sys
 payload = json.loads(sys.argv[1])
 if payload.get("audio", {}).get("pipeline_running") is not True:
     raise SystemExit(1)
+if payload.get("voice", {}).get("lifecycle", {}).get("state") != "running":
+    raise SystemExit(1)
 PY
         then
-          pass "healthz reports native voice pipeline running"
+          pass "healthz reports native voice lifecycle running"
         else
-          fail "healthz did not report native voice pipeline running: $health_json"
+          fail "healthz did not report native voice lifecycle running: $health_json"
         fi
         if python3 - "$health_json" <<'PY'
 import json

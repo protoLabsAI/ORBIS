@@ -304,6 +304,11 @@ def check_native_audio_sources() -> None:
     )
     require_contains(
         healthz,
+        '"voice": {"lifecycle": app._voice_lifecycle.snapshot()}',
+        "healthz must expose the authoritative native voice lifecycle snapshot",
+    )
+    require_contains(
+        healthz,
         '"mic_frames_received": (',
         "healthz must expose the Python-side received mic frame count",
     )
@@ -810,6 +815,11 @@ def check_workflow() -> None:
         live_validation,
         'payload.get("audio", {}).get("pipeline_running") is not True',
         "live validation must assert the sidecar reports the native voice pipeline running",
+    )
+    require_contains(
+        live_validation,
+        'payload.get("voice", {}).get("lifecycle", {}).get("state") != "running"',
+        "live validation must assert Pipecat confirmed native voice readiness",
     )
     require_contains(
         live_validation,

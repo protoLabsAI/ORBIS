@@ -91,6 +91,10 @@ class SseBus:
             return
         loop.create_task(self.publish(event, data))
 
+    def clear_retained(self, event: str) -> None:
+        """Forget the retained snapshot for one event name."""
+        self._retained.pop(event, None)
+
     # ------------------------------------------------------------------
     # Subscribe (async generator)
     # ------------------------------------------------------------------

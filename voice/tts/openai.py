@@ -76,16 +76,23 @@ def make(
     )
 
 
-def prewarm() -> None:
+def prewarm(
+    *,
+    url: str = OPENAI_TTS_URL,
+    model: str = OPENAI_TTS_MODEL,
+    voice: str = OPENAI_TTS_VOICE,
+    api_key: str = OPENAI_TTS_API_KEY,
+    **_overrides,
+) -> None:
     """One-shot synth call to absorb cold-start. Best-effort."""
     headers = {}
-    if OPENAI_TTS_API_KEY and OPENAI_TTS_API_KEY != "not-needed":
-        headers["Authorization"] = f"Bearer {OPENAI_TTS_API_KEY}"
+    if api_key and api_key != "not-needed":
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         r = httpx.post(
-            f"{OPENAI_TTS_URL.rstrip('/')}/audio/speech",
+            f"{url.rstrip('/')}/audio/speech",
             headers=headers,
-            json={"model": OPENAI_TTS_MODEL, "input": "Hello.", "voice": OPENAI_TTS_VOICE},
+            json={"model": model, "input": "Hello.", "voice": voice},
             timeout=30.0,
         )
         r.raise_for_status()
