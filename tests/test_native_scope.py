@@ -100,6 +100,31 @@ def test_native_workflow_guardrails_stay_present():
         assert needle in check_script
 
 
+def test_macos_validation_harness_is_required_and_uses_the_dmg_app():
+    """Release validation must not regress to its former advisory false reds."""
+    workflow = (ROOT / ".github/workflows/desktop-build.yml").read_text(
+        encoding="utf-8",
+    )
+    harness = (ROOT / "scripts/validate-macos-native-audio.sh").read_text(
+        encoding="utf-8",
+    )
+
+    harness_step = workflow.split("- name: Run macOS validation harness", 1)[1].split(
+        "- name: Upload macOS validation report", 1,
+    )[0]
+    assert "continue-on-error" not in harness_step
+    assert "Restore .app from DMG for verification" not in workflow
+    assert "using authoritative app mounted from DMG for validation" in harness
+    assert 'codesign -dvv "$app"' in harness
+    assert 'codesign -dv "$app"' not in harness
+    assert "REQUESTED_APP" not in harness
+    assert 'validate_release_app_signing "$REQUESTED_APP"' not in harness
+    assert 'codesign -dvv "$APP"' in workflow
+    assert 'codesign -dv "$APP"' not in workflow
+    assert 'codesign -dvv "$DMG"' in workflow
+    assert 'codesign -dv "$DMG"' not in workflow
+
+
 def test_native_operator_handoff_docs_stay_present():
     """Mac test handoff depends on the repo-local rebuild notes and skill."""
     claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")

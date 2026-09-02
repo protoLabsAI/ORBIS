@@ -84,8 +84,8 @@ on the repo.
 Next tagged release will sign + notarize the `.dmg` and `.app`
 inside. On semver tag builds, CI verifies the signed `.app`, checks
 the embedded entitlements, runs Gatekeeper assessment, and validates
-the stapled notarization tickets on both the build-tree `.app` and the
-`ORBIS.app` mounted from the `.dmg`, plus the `.dmg` container itself.
+the stapled notarization tickets on the authoritative `ORBIS.app` mounted
+from the `.dmg` and on the `.dmg` container itself.
 Users no longer get the Gatekeeper warning on first open.
 
 ## Tauri auto-updater signing
@@ -139,7 +139,7 @@ dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDQ0E3RjE2QzhFQTc0NEEKUldS
 ```sh
 # Signature + notarization status
 codesign --verify --deep --strict --verbose=2 "ORBIS.app"
-codesign -dv "ORBIS.app" 2>&1 | grep "Authority=Developer ID Application:"
+codesign -dvv "ORBIS.app" 2>&1 | grep "Authority=Developer ID Application:"
 codesign -d --entitlements :- "ORBIS.app"
 spctl --assess --type execute --verbose=4 "ORBIS.app"
 xcrun stapler validate "ORBIS.app"
@@ -155,11 +155,12 @@ Or run the project wrapper against a downloaded/built DMG:
 scripts/validate-macos-native-audio.sh --release --dmg "ORBIS.dmg"
 ```
 
-The wrapper requires the DMG path. If the local build `.app` is not present,
-it mounts the DMG and validates the contained `ORBIS.app` directly. It checks
-the app metadata, verifies the main executable is `arm64`, confirms the
-bundled PyApp sidecar is present, verifies the signed entitlement set stays
-narrow (microphone + network, no camera or broad code-signing exceptions),
+The wrapper requires the DMG path and treats the pristine `ORBIS.app` mounted
+from that DMG as the authoritative release payload, even if a build-tree app
+still exists. It checks the app metadata, verifies the main executable is
+`arm64`, confirms the bundled PyApp sidecar is present, and verifies that the
+signed entitlement set stays narrow (microphone + network, no camera or broad
+code-signing exceptions). It then
 runs the signing/notarization checks above, proves the DMG contains
 `ORBIS.app` with the arm64 executable, sidecar, and first-run config
 resources, and writes `macos-native-audio-validation.txt`.

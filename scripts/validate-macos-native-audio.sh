@@ -23,7 +23,6 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
 APP="${ROOT}/src-tauri/target/release/bundle/macos/ORBIS.app"
-REQUESTED_APP=""
 DMG=""
 LAUNCH=0
 RELEASE=0
@@ -41,7 +40,6 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --app)
       APP="${2:?--app requires a path}"
-      REQUESTED_APP="$APP"
       shift 2
       ;;
     --dmg)
@@ -75,10 +73,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-
-if [ -z "$REQUESTED_APP" ]; then
-  REQUESTED_APP="$APP"
-fi
 
 failures=0
 REPORT="${ROOT}/macos-native-audio-validation.txt"
@@ -261,7 +255,9 @@ validate_release_app_signing() {
     fail "$label codesign verify failed"
   fi
 
-  if codesign -dv "$app" 2> "$details" \
+  # `codesign -d` increases the displayed signature detail once per `v`.
+  # The Developer ID authority chain is not guaranteed at the single-v level.
+  if codesign -dvv "$app" 2> "$details" \
       && grep -q "Authority=Developer ID Application:" "$details" \
       && grep -q "TeamIdentifier=" "$details"; then
     pass "$label Developer ID authority and TeamIdentifier present"
@@ -345,14 +341,21 @@ require_cmd curl || true
 require_cmd python3 || true
 require_cmd hdiutil || true
 
-USING_DMG_APP_AS_APP=0
-if [ ! -d "$APP" ] && [ -n "$DMG" ] && [ -f "$DMG" ]; then
+if [ "$RELEASE" = "1" ] && [ -z "$DMG" ]; then
+  fail "--release requires --dmg <path-to-dmg>"
+fi
+
+# A release is the DMG users download, not a build-tree app that Tauri may
+# delete or a reconstructed copy whose nested signatures can differ. Always
+# make the pristine app mounted from that DMG authoritative for release checks.
+# Non-release `--dmg` validation keeps the same fallback when no app remains.
+if { [ "$RELEASE" = "1" ] || [ ! -d "$APP" ]; } \
+    && [ -n "$DMG" ] && [ -f "$DMG" ]; then
   if mount_dmg_for_validation; then
     DMG_APP="$DMG_MOUNT/ORBIS.app"
     if [ -d "$DMG_APP" ]; then
       APP="$DMG_APP"
-      USING_DMG_APP_AS_APP=1
-      log "using app mounted from DMG for validation: $APP"
+      log "using authoritative app mounted from DMG for validation: $APP"
     else
       fail "DMG does not contain ORBIS.app at the volume root"
     fi
@@ -441,28 +444,14 @@ if [ -n "$DMG" ]; then
 fi
 
 if [ "$RELEASE" = "1" ]; then
-  if [ -z "$DMG" ]; then
-    fail "--release requires --dmg <path-to-dmg>"
-  fi
-
   log "release signing/notarization checks"
-  if [ -d "$REQUESTED_APP" ]; then
-    validate_release_app_signing "$REQUESTED_APP" "build-tree app"
-  elif [ "$USING_DMG_APP_AS_APP" = "1" ]; then
-    warn "build-tree app is absent; release validation will use the mounted DMG app"
+  if [ -n "$DMG_MOUNT" ] && [ "$APP" = "$DMG_MOUNT/ORBIS.app" ] && [ -d "$APP" ]; then
+    validate_release_app_signing "$APP" "DMG app"
   else
-    fail "build-tree app missing for release signing checks: $REQUESTED_APP"
+    fail "authoritative DMG app unavailable for release signing checks"
   fi
 
   if [ -f "$DMG" ]; then
-    if mount_dmg_for_validation; then
-      DMG_APP="$DMG_MOUNT/ORBIS.app"
-      if [ -d "$DMG_APP" ]; then
-        validate_release_app_signing "$DMG_APP" "DMG app"
-      else
-        fail "DMG app missing for release signing checks: $DMG_APP"
-      fi
-    fi
     if spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"; then
       pass "Gatekeeper open assessment passed for DMG"
     else
