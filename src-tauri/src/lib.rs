@@ -938,6 +938,34 @@ fn boot_status(state: tauri::State<BootState>) -> String {
     state.0.lock().map(|g| g.clone()).unwrap_or_default()
 }
 
+/// Latest startup delegate-health SSE payload. The Rust SSE bridge can receive
+/// the retained Python event before the WebView has installed its ephemeral
+/// Tauri listener, so keep the last value at the native boundary as well.
+#[derive(Default)]
+struct DelegateHealthState(Mutex<Option<SsePayload>>);
+
+impl DelegateHealthState {
+    fn retain_if_delegate_health(&self, payload: SsePayload) -> bool {
+        if payload.event != "delegate-health" {
+            return false;
+        }
+        if let Ok(mut value) = self.0.lock() {
+            *value = Some(payload);
+            return true;
+        }
+        false
+    }
+
+    fn snapshot(&self) -> Option<SsePayload> {
+        self.0.lock().ok().and_then(|value| value.clone())
+    }
+}
+
+#[tauri::command]
+fn delegate_health_status(state: tauri::State<DelegateHealthState>) -> Option<SsePayload> {
+    state.snapshot()
+}
+
 /// Inject the backend URL into the already-loaded bundled UI and notify
 /// it. Replaces the old navigate-to-sidecar flow, which dropped the
 /// WKWebView's keyboard first-responder on macOS (tao#208 / wry#637) and
@@ -1542,7 +1570,7 @@ async fn api_request(
 }
 
 /// Payload for the `orbis-sse` Tauri event mirroring one SSE message.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 struct SsePayload {
     event: String,
     data: String,
@@ -1625,7 +1653,11 @@ async fn bridge_sse(app: AppHandle, base: String) {
                                     // listening window mid-exchange.
                                     #[cfg(feature = "native-audio")]
                                     update_conversation_busy(&event, &data);
-                                    let _ = app.emit("orbis-sse", SsePayload { event, data });
+                                    let payload = SsePayload { event, data };
+                                    if let Some(state) = app.try_state::<DelegateHealthState>() {
+                                        state.retain_if_delegate_health(payload.clone());
+                                    }
+                                    let _ = app.emit("orbis-sse", payload);
                                 }
                             }
                         }
@@ -1733,6 +1765,7 @@ pub fn run() {
                     open_url,
                     api_request,
                     boot_status,
+                    delegate_health_status,
                     open_widget_window,
                     open_command_bar,
                     show_main,
@@ -1756,6 +1789,7 @@ pub fn run() {
                     open_url,
                     api_request,
                     boot_status,
+                    delegate_health_status,
                     open_widget_window,
                     open_command_bar,
                     show_main,
@@ -1767,6 +1801,7 @@ pub fn run() {
         .manage(Sidecar::new())
         .manage(BackendUrl::default())
         .manage(BootState::default())
+        .manage(DelegateHealthState::default())
         .manage(FleetAgents::default())
         .on_window_event(|window, event| {
             // Menu-bar agent: closing the MAIN window (red traffic light) hides
@@ -2712,7 +2747,10 @@ fn fatal_dialog(app: &AppHandle, title: &str, body: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_audio_input_mode, parse_ready, redact_config, utc_timestamp};
+    use super::{
+        get_audio_input_mode, parse_ready, redact_config, utc_timestamp, DelegateHealthState,
+        SsePayload,
+    };
 
     #[test]
     fn parse_ready_happy_path() {
@@ -2748,6 +2786,31 @@ mod tests {
         assert_eq!(parse_ready("ORBIS_READY"), None);
         assert_eq!(parse_ready("ORBIS_READY "), None);
         assert_eq!(parse_ready("ORBIS_READY   "), None);
+    }
+
+    #[test]
+    fn delegate_health_snapshot_survives_ephemeral_emit_boundary() {
+        let state = DelegateHealthState::default();
+        assert_eq!(state.snapshot(), None);
+
+        let first = SsePayload {
+            event: "delegate-health".into(),
+            data: r#"{"name":"hub","ok":false,"consecutive_failures":2}"#.into(),
+        };
+        assert!(state.retain_if_delegate_health(first.clone()));
+        assert_eq!(state.snapshot(), Some(first));
+
+        assert!(!state.retain_if_delegate_health(SsePayload {
+            event: "bot-state".into(),
+            data: r#"{"state":"idle"}"#.into(),
+        }));
+
+        let recovered = SsePayload {
+            event: "delegate-health".into(),
+            data: r#"{"name":"hub","ok":true,"consecutive_failures":0}"#.into(),
+        };
+        assert!(state.retain_if_delegate_health(recovered.clone()));
+        assert_eq!(state.snapshot(), Some(recovered));
     }
 
     #[test]

@@ -72,14 +72,14 @@ the live user config already delegates to two protoAgent instances.
 Ordered by churn: bank low-churn high-value first; high-churn items
 get their own live-tested PR.
 
-### Phase A — wire the hub (config only, no repo change)
+### Phase A — wire the hub
 
-- [ ] Run a protoAgent instance locally (dev instance `:7871` for
-      validation; promote to a launchd-managed prod instance `:7870`
-      when adopted).
-- [ ] Add a `hub` A2A delegate row to the user `delegates.yaml`
-      (app support), description written so the router prefers it for
-      multi-step/fleet/background asks.
+- [ ] Run a protoAgent instance locally. The bundled delegate now targets the
+      production endpoint at `:7870`; launchd/service installation remains an
+      operator responsibility.
+- [x] Bundle a `hub` A2A delegate row, with a description written so the
+      router prefers it for multi-step/fleet/background asks. Untouched
+      persistent `:7871` seeds migrate atomically; custom hubs are preserved.
 - [ ] Validate dispatch through ORBIS's real adapter path (registry →
       `A2ADelegateAdapter.dispatch`) and measure time-to-first-delta
       on a trivial and a tool-using prompt.

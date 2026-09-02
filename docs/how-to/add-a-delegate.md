@@ -20,6 +20,22 @@ Decide which kind you're adding:
 If the endpoint needs a secret, put it in your **`.env`** on the host first —
 the UI references the env-var *name*, never the value.
 
+### The default protoAgent hub
+
+Fresh installs include a local A2A delegate named **hub** at
+`http://127.0.0.1:7870/a2a`. ORBIS does not install or supervise protoAgent;
+run it as its own persistent service (for example, with protoAgent's launchd
+setup) and keep its A2A listener on port 7870. Check it independently with:
+
+```bash
+curl -fsS http://127.0.0.1:7870/.well-known/agent-card.json
+```
+
+If ORBIS reports that protoAgent is unavailable after boot, start or restart
+that service and use **Settings → Agent → Delegates → hub → Test**. Removing or
+customizing the hub is safe; ORBIS only migrates an untouched legacy default
+from port 7871 once and never rewrites a customized entry.
+
 ## Steps
 
 1. Open **Settings → Agent → Delegates** and click **Add delegate**.

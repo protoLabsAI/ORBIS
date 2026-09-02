@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { appLogDir } from '@tauri-apps/api/path';
 import { BootGate } from '@protolabsai/ui/splash';
 import { Button } from '@/components/ui/button';
+import { pushStatusTransient } from '@/shared/statusBus';
+import {
+  createBootSignals,
+  startBootStatusRuntime,
+  type BootStage,
+  type SsePayload,
+} from './bootStatusRuntime';
 
 /**
  * Boot loading gate. The bundled UI paints instantly, but the Python
@@ -23,21 +30,6 @@ import { Button } from '@/components/ui/button';
  * component keeps all the ORBIS-specific stage/progress/stall logic and
  * slots the progress bar + escape hatch in.
  */
-
-interface BootStage {
-  stage: string;
-  detail: string;
-}
-
-function parseBoot(raw: string): BootStage | null {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw) as BootStage;
-    return typeof v?.stage === 'string' ? v : null;
-  } catch {
-    return null;
-  }
-}
 
 // Fraction of the boot the gate shows as complete at each stage. The STT
 // step is the long pole (first-run model download), so it claims the
@@ -62,6 +54,8 @@ const STAGE_PROGRESS: Record<string, number> = {
 const REASSURE_AFTER_S = 15;
 const SLOW_AFTER_S = 180;
 const HARD_AFTER_S = 300;
+const HUB_UNAVAILABLE_WARNING =
+  'protoAgent unavailable — start the local hub to restore delegation';
 
 export function BootStatus() {
   const [detail, setDetail] = useState<string>('Starting ORBIS…');
@@ -76,14 +70,12 @@ export function BootStatus() {
   // Seconds since mount, ticked until ready — drives the slow/stalled escape
   // hatch below so a wedged boot isn't an infinite spinner.
   const [elapsed, setElapsed] = useState(0);
+  // React StrictMode replays effects without resetting refs. Keep the
+  // user-visible warning dedupe outside the effect-local runtime session.
+  const hubWarningShown = useRef(false);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-
-    const apply = (raw: string) => {
-      const s = parseBoot(raw);
-      if (!s || cancelled) return;
+    const applyBootStage = (s: BootStage) => {
       if (s.detail) {
         setDetail(s.detail);
         // "Loading Parakeet speech model…" → real load; "…loads on first use" → deferred.
@@ -91,26 +83,34 @@ export function BootStatus() {
       }
       const p = STAGE_PROGRESS[s.stage];
       if (p !== undefined) setProgress((prev) => Math.max(prev, p));
-      if (s.stage === 'ready') setReady(true);
+      if (s.stage === 'ready') {
+        setReady(true);
+      }
     };
-
-    // Catch markers emitted before this component subscribed.
-    invoke<string>('boot_status').then(apply).catch(() => {
-      // Command unavailable (non-Tauri dev) — don't block the UI.
-      if (!cancelled) setReady(true);
+    const signals = createBootSignals({
+      onBootStage: applyBootStage,
+      onHubUnavailable: () => {
+        if (hubWarningShown.current) return;
+        hubWarningShown.current = true;
+        pushStatusTransient(HUB_UNAVAILABLE_WARNING, 8000);
+      },
     });
 
-    listen<string>('orbis-boot', (e) => apply(e.payload))
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
+    return startBootStatusRuntime(
+      {
+        listenBoot: (handler) => listen<string>(
+          'orbis-boot', (event) => handler(event.payload),
+        ),
+        listenSse: (handler) => listen<SsePayload>(
+          'orbis-sse', (event) => handler(event.payload),
+        ),
+        bootSnapshot: () => invoke<string>('boot_status'),
+        hubHealthSnapshot: () => invoke<SsePayload | null>('delegate_health_status'),
+      },
+      signals,
+      // Commands/listeners are unavailable in plain browser development.
+      () => setReady(true),
+    );
   }, []);
 
   // Tick a seconds counter until ready.

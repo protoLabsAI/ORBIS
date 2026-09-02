@@ -37,6 +37,10 @@ awaiting and used a 0.5s waker + ``get_nowait()`` drain so the generator
 always parked at a ``yield`` for ``aclose()``; that spun a CPU core because
 a bare ``yield`` to an eager consumer never actually yields control. The
 await-based design relies on cancellation, not ``aclose()``, for cleanup.
+
+Events published with ``retain=True`` keep only the latest frame per event
+name and enqueue it when a later subscriber connects. This is for bounded
+startup state such as the local hub confirmation, not an event history.
 """
 
 from __future__ import annotations
@@ -59,15 +63,20 @@ class SseBus:
 
     def __init__(self) -> None:
         self._subscribers: set[asyncio.Queue] = set()
+        self._retained: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Publish
     # ------------------------------------------------------------------
 
-    async def publish(self, event: str, data: Any = None) -> None:
-        """Publish an SSE event to all current subscribers."""
+    async def publish(
+        self, event: str, data: Any = None, *, retain: bool = False,
+    ) -> None:
+        """Publish an SSE event, optionally replaying it to late subscribers."""
         payload = json.dumps(data) if data is not None else "{}"
         message = f"event: {event}\ndata: {payload}\n\n"
+        if retain:
+            self._retained[event] = message
         for q in list(self._subscribers):
             try:
                 q.put_nowait(message)
@@ -97,6 +106,8 @@ class SseBus:
         """
         q: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._subscribers.add(q)
+        for message in self._retained.values():
+            q.put_nowait(message)
         logger.debug("[sse_bus] subscriber connected (total=%d)", len(self._subscribers))
 
         try:
