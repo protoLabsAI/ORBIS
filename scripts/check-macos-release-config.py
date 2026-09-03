@@ -806,6 +806,7 @@ def check_workflow() -> None:
     )
     for changed_path in (
         "scripts/build-patched-pyapp.sh",
+        "scripts/pyapp-installer-env.sh",
         "tests/test-build-patched-pyapp-cli.sh",
     ):
         require(

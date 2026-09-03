@@ -182,6 +182,7 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
     macos_preflight = preflight.split("macos-native-audio:", 1)[1]
     assert "tests/test-build-patched-pyapp-cli.sh" in macos_preflight
     assert "- 'scripts/build-patched-pyapp.sh'" in preflight
+    assert "- 'scripts/pyapp-installer-env.sh'" in preflight
     assert "- 'tests/test-build-patched-pyapp-cli.sh'" in preflight
 
 

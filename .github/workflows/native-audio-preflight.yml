@@ -41,6 +41,7 @@ jobs:
               - 'src-tauri/**'
               - 'scripts/check-macos-release-config.py'
               - 'scripts/build-patched-pyapp.sh'
+              - 'scripts/pyapp-installer-env.sh'
               - 'tests/test-build-patched-pyapp-cli.sh'
               - '.github/workflows/native-audio-preflight.yml'
 
