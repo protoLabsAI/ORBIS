@@ -431,6 +431,7 @@ def check_workflow() -> None:
     installer_env = ROOT / "scripts" / "pyapp-installer-env.sh"
     pyapp_builder = ROOT / "scripts" / "build-patched-pyapp.sh"
     pyapp_patch = ROOT / "scripts" / "pyapp-0.29.0-uv-sha256.patch"
+    pyapp_cli_test = ROOT / "tests" / "test-build-patched-pyapp-cli.sh"
 
     require_contains(
         rebuild,
@@ -792,6 +793,34 @@ def check_workflow() -> None:
         preflight,
         "scripts/build-patched-pyapp.sh --test",
         "preflight workflow must run the PyApp checksum regression tests",
+    )
+    require_contains(
+        preflight,
+        "tests/test-build-patched-pyapp-cli.sh",
+        "preflight workflow must exercise the PyApp builder CLI",
+    )
+    macos_preflight = preflight_text.split("macos-native-audio:", 1)[1]
+    require(
+        "tests/test-build-patched-pyapp-cli.sh" in macos_preflight,
+        "macOS preflight must exercise the PyApp builder CLI under system Bash",
+    )
+    for changed_path in (
+        "scripts/build-patched-pyapp.sh",
+        "tests/test-build-patched-pyapp-cli.sh",
+    ):
+        require(
+            f"- '{changed_path}'" in preflight_text,
+            f"changes to {changed_path} must trigger the macOS Bash compatibility gate",
+        )
+    require_contains(
+        pyapp_cli_test,
+        'build-patched-pyapp.sh" --root "$no_options_root"',
+        "PyApp CLI regression must exercise release-shaped no-option install mode",
+    )
+    require_contains(
+        pyapp_cli_test,
+        '--root "$options_root" --force --quiet',
+        "PyApp CLI regression must verify cargo option forwarding",
     )
     require_contains(
         preflight,
@@ -1158,6 +1187,7 @@ def check_scripts_executable() -> None:
         ROOT / "scripts" / "validate-macos-native-audio.sh",
         ROOT / "scripts" / "nuke-and-rebuild.sh",
         ROOT / "scripts" / "build-patched-pyapp.sh",
+        ROOT / "tests" / "test-build-patched-pyapp-cli.sh",
     ]
     for script in scripts:
         require(script.is_file(), f"required script is missing: {script}")
@@ -1178,6 +1208,11 @@ def check_scripts_executable() -> None:
         host_preflight,
         "scripts/build-patched-pyapp.sh --test",
         "host native-audio preflight must run the PyApp checksum regression tests",
+    )
+    require_contains(
+        host_preflight,
+        "tests/test-build-patched-pyapp-cli.sh",
+        "host native-audio preflight must exercise the PyApp builder CLI",
     )
     require_contains(
         host_preflight,

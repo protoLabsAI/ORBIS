@@ -54,6 +54,7 @@ def test_native_desktop_scaffold_stays_present():
         "scripts/preflight-native-audio-host.sh",
         "scripts/validate-macos-native-audio.sh",
         "tests/test_frontend_native_scope.py",
+        "tests/test-build-patched-pyapp-cli.sh",
         "tests/test_healthz_native_audio.py",
         "tests/test_inbox_tool.py",
         "tests/test_infisical.py",
@@ -177,6 +178,11 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
         encoding="utf-8",
     )
     assert "scripts/build-patched-pyapp.sh --test" in preflight
+    assert "tests/test-build-patched-pyapp-cli.sh" in preflight
+    macos_preflight = preflight.split("macos-native-audio:", 1)[1]
+    assert "tests/test-build-patched-pyapp-cli.sh" in macos_preflight
+    assert "- 'scripts/build-patched-pyapp.sh'" in preflight
+    assert "- 'tests/test-build-patched-pyapp-cli.sh'" in preflight
 
 
 def test_clean_rebuild_uses_a_pinned_isolated_sdist_builder():

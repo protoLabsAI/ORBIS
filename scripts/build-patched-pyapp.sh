@@ -27,7 +27,6 @@ usage() {
 
 mode="install"
 install_root=""
-cargo_args=()
 case "${1:-}" in
   --root)
     [ -n "${2:-}" ] || usage
@@ -35,7 +34,7 @@ case "${1:-}" in
     shift 2
     for arg in "$@"; do
       case "$arg" in
-        --force|--quiet) cargo_args+=("$arg") ;;
+        --force|--quiet) ;;
         *) usage ;;
       esac
     done
@@ -148,4 +147,7 @@ if [ "$mode" = "test" ]; then
 fi
 
 mkdir -p "$install_root"
-cargo install --path "$source_dir" --root "$install_root" --locked "${cargo_args[@]}"
+# After the --root pair is shifted, the remaining positional parameters are
+# the validated cargo options. Unlike an empty indexed-array expansion,
+# "$@" remains safe under Bash 3.2 with `set -u`.
+cargo install --path "$source_dir" --root "$install_root" --locked "$@"
