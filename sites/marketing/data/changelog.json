@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.2.170",
+    "date": "2026-09-03",
+    "changes": [
+      "fix(distribution): verify PyApp UV bootstrap archive (#724)",
+      "fix(build): isolate local sdist frontend (#723)",
+      "fix(ui): separate app and voice readiness (#717)",
+      "docs: align desktop access sidebar label (#721)",
+      "fix(macos): keep tray app discoverable (#720)",
+      "fix(voice): serialize cold model warmup before Pipecat startup (#715)",
+      "perf(desktop): use pinned UV for PyApp installs (#716)",
+      "chore(changelog): v0.2.169"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.170/ORBIS-0.2.170-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.169",
     "date": "2026-09-02",
     "changes": [
