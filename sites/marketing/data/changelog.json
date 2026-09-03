@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.2.171",
+    "date": "2026-09-03",
+    "changes": [
+      "fix(release): support empty PyApp cargo args on Bash 3.2 (#726)",
+      "chore(changelog): v0.2.170"
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.171/ORBIS-0.2.171-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.170",
     "date": "2026-09-03",
     "changes": [
