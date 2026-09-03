@@ -40,6 +40,9 @@ jobs:
             rust:
               - 'src-tauri/**'
               - 'scripts/check-macos-release-config.py'
+              - 'scripts/build-patched-pyapp.sh'
+              - 'scripts/pyapp-installer-env.sh'
+              - 'tests/test-build-patched-pyapp-cli.sh'
               - '.github/workflows/native-audio-preflight.yml'
 
   linux-source:
@@ -82,6 +85,9 @@ jobs:
 
       - name: macOS release config guardrails
         run: scripts/check-macos-release-config.py
+
+      - name: PyApp builder CLI regression
+        run: tests/test-build-patched-pyapp-cli.sh
 
       - name: PyApp UV checksum regression
         run: scripts/build-patched-pyapp.sh --test
@@ -138,6 +144,9 @@ jobs:
 
       - name: macOS release config guardrails
         run: scripts/check-macos-release-config.py
+
+      - name: PyApp builder CLI regression
+        run: tests/test-build-patched-pyapp-cli.sh
 
       - name: Compile and test macOS voice-processing path
         shell: bash
