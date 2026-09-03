@@ -429,6 +429,8 @@ def check_workflow() -> None:
     preflight_text = read(preflight)
     validation_text = read(live_validation)
     installer_env = ROOT / "scripts" / "pyapp-installer-env.sh"
+    pyapp_builder = ROOT / "scripts" / "build-patched-pyapp.sh"
+    pyapp_patch = ROOT / "scripts" / "pyapp-0.29.0-uv-sha256.patch"
 
     require_contains(
         rebuild,
@@ -646,6 +648,11 @@ def check_workflow() -> None:
     )
     require_contains(
         installer_env,
+        'ORBIS_PYAPP_SOURCE_SHA256="0533004baf6d1d46ef15abad02e98881ec92291c024182a36b57931c8d66df5f"',
+        "sidecar builds must pin the audited PyApp source archive",
+    )
+    require_contains(
+        installer_env,
         'export PYAPP_UV_ENABLED="1"',
         "sidecar builds must use PyApp's official UV installer path",
     )
@@ -654,10 +661,81 @@ def check_workflow() -> None:
         'export PYAPP_UV_VERSION="0.12.9"',
         "sidecar builds must pin UV instead of downloading latest",
     )
+    for target, checksum in (
+        (
+            "AARCH64_APPLE_DARWIN",
+            "301f72afaf54060f92da7016cb0115bd077f43a9c8e39c1d8170a0bac80fd398",
+        ),
+        (
+            "X86_64_UNKNOWN_LINUX_GNU",
+            "ec7a99cd05e0cd7f80243f135ce1361c76835cb0ee60055d14d20eba8eba1460",
+        ),
+        (
+            "X86_64_PC_WINDOWS_MSVC",
+            "ddbfcee1ac615a0499f6aa97b5ec8ebdf3ee4a7714a48055ec2ba0030e3cf810",
+        ),
+    ):
+        require_contains(
+            installer_env,
+            f'PYAPP_UV_SHA256_{target}="{checksum}"',
+            f"sidecar builds must pin the official UV 0.12.9 checksum for {target}",
+        )
+    for rust_target, variable in (
+        ("aarch64-apple-darwin", "PYAPP_UV_SHA256_AARCH64_APPLE_DARWIN"),
+        ("x86_64-unknown-linux-gnu", "PYAPP_UV_SHA256_X86_64_UNKNOWN_LINUX_GNU"),
+        ("x86_64-pc-windows-msvc", "PYAPP_UV_SHA256_X86_64_PC_WINDOWS_MSVC"),
+    ):
+        require_contains(
+            pyapp_builder,
+            f'{rust_target})\n    uv_sha256="${variable}"',
+            f"PyApp builds must select the pinned UV checksum for {rust_target}",
+        )
     require_contains(
         installer_env,
         'export PYAPP_PIP_EXTRA_ARGS="--compile-bytecode"',
         "UV sidecar installs must eagerly compile bytecode before first launch",
+    )
+    require_contains(
+        pyapp_builder,
+        'source_url="https://github.com/ofek/pyapp/releases/download/v${ORBIS_PYAPP_VERSION}/source.tar.gz"',
+        "PyApp builds must fetch the versioned official source archive",
+    )
+    require_contains(
+        pyapp_builder,
+        'actual_source_sha256="$(sha256_file "$archive")"',
+        "PyApp builds must hash the downloaded source before extraction",
+    )
+    require_contains(
+        pyapp_builder,
+        'export PYAPP_UV_SHA256="$uv_sha256"',
+        "PyApp builds must embed the target-specific UV checksum",
+    )
+    require_contains(
+        pyapp_builder,
+        'patch -f -p1 -d "$source_dir" -i "$patch_file"',
+        "PyApp builds must apply the pinned downstream checksum patch",
+    )
+    require_contains(
+        pyapp_builder,
+        'cargo install --path "$source_dir" --root "$install_root" --locked',
+        "sidecar builds must compile the verified and patched PyApp source",
+    )
+    require_contains(
+        pyapp_patch,
+        'panic!("{variable} must be exactly 64 hexadecimal characters when PYAPP_UV_ENABLED=1")',
+        "the PyApp patch must reject a missing or malformed UV digest at build time",
+    )
+    require_contains(
+        pyapp_patch,
+        'bail!("UV archive checksum mismatch: expected {expected}, got {actual}")',
+        "the PyApp patch must fail closed on a UV archive digest mismatch",
+    )
+    patch_text = read(pyapp_patch)
+    require(
+        patch_text.index('network::download(&app::uv_source(), &mut f, "UV")?')
+        < patch_text.index("verify_uv_archive_sha256(&temp_path, &app::uv_sha256())?")
+        < patch_text.index("compression::unpack_zip"),
+        "the UV archive must be checksum-verified after download and before extraction",
     )
     for build_path in (
         workflow,
@@ -670,13 +748,17 @@ def check_workflow() -> None:
             f"{build_path.name} must source the shared PyApp installer pins",
         )
         require(
-            '--version "${ORBIS_PYAPP_VERSION}"' in build_text,
-            f"{build_path.name} must build the pinned PyApp release",
+            "scripts/build-patched-pyapp.sh --root" in build_text,
+            f"{build_path.name} must build the checksum-verifying PyApp launcher",
         )
         require(
             build_text.index("pyapp-installer-env.sh")
-            < build_text.index('--version "${ORBIS_PYAPP_VERSION}"'),
+            < build_text.index("scripts/build-patched-pyapp.sh --root"),
             f"{build_path.name} must load installer pins before building PyApp",
+        )
+        require(
+            "cargo install pyapp" not in build_text,
+            f"{build_path.name} must not bypass the verified PyApp source build",
         )
         require(
             "PYAPP_UV_ENABLED" not in build_text,
@@ -705,6 +787,11 @@ def check_workflow() -> None:
         preflight,
         "scripts/check-macos-release-config.py",
         "preflight workflow must run static macOS release guardrails",
+    )
+    require_contains(
+        preflight,
+        "scripts/build-patched-pyapp.sh --test",
+        "preflight workflow must run the PyApp checksum regression tests",
     )
     require_contains(
         preflight,
@@ -1070,6 +1157,7 @@ def check_scripts_executable() -> None:
         ROOT / "scripts" / "preflight-native-audio-host.sh",
         ROOT / "scripts" / "validate-macos-native-audio.sh",
         ROOT / "scripts" / "nuke-and-rebuild.sh",
+        ROOT / "scripts" / "build-patched-pyapp.sh",
     ]
     for script in scripts:
         require(script.is_file(), f"required script is missing: {script}")
@@ -1085,6 +1173,11 @@ def check_scripts_executable() -> None:
         host_preflight,
         "scripts/pyapp-installer-env.sh",
         "host native-audio preflight must syntax-check shared PyApp installer pins",
+    )
+    require_contains(
+        host_preflight,
+        "scripts/build-patched-pyapp.sh --test",
+        "host native-audio preflight must run the PyApp checksum regression tests",
     )
     require_contains(
         host_preflight,

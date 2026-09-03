@@ -91,7 +91,7 @@ OUT="dist/orbis-${TARGET}${SUFFIX}"
 mkdir -p dist
 
 echo "[build-desktop] Building ${OUT} (ORBIS ${VERSION_NO_V}, PyApp ${ORBIS_PYAPP_VERSION}, UV ${PYAPP_UV_VERSION}, target ${TARGET})..."
-cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" --root dist --locked --force
+scripts/build-patched-pyapp.sh --root dist --force
 
 if [ "${HOST_OS}" = "Darwin" ] || [ "${HOST_OS}" = "Linux" ]; then
   mv dist/bin/pyapp "${OUT}"

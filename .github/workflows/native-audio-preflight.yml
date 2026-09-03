@@ -83,6 +83,9 @@ jobs:
       - name: macOS release config guardrails
         run: scripts/check-macos-release-config.py
 
+      - name: PyApp UV checksum regression
+        run: scripts/build-patched-pyapp.sh --test
+
       - name: Build web SPA
         working-directory: web
         run: |

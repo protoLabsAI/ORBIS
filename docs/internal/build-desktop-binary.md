@@ -44,9 +44,24 @@ creates a new PyApp environment but reuses UV's cache and APFS clones, so it
 does not download and physically duplicate the whole dependency set.
 
 All release and local builders source `scripts/pyapp-installer-env.sh`, which
-pins PyApp and UV. Treat those as release inputs: update the shared pins only
-after rebuilding a sidecar and repeating the benchmark/boot checks documented
-in [the UV benchmark](./pyapp-uv-benchmark.md).
+pins the PyApp version, PyApp source digest, UV version, and UV archive digest
+for every supported build host. `scripts/build-patched-pyapp.sh` downloads the
+versioned PyApp source release, verifies it before extraction, applies the
+checked-in checksum patch, and builds with its upstream lockfile. The resulting
+launcher verifies the downloaded UV archive before extraction or execution.
+
+Treat the version and digest block as one release input. To upgrade it:
+
+1. Take the PyApp source digest from the versioned upstream release and update
+   or replace the version-keyed patch.
+2. Take each UV archive digest from the same versioned upstream UV release's
+   published checksum assets; update every supported target together with
+   `PYAPP_UV_VERSION`.
+3. Run `scripts/build-patched-pyapp.sh --test`, rebuild a sidecar, and repeat
+   the benchmark/boot checks in [the UV benchmark](./pyapp-uv-benchmark.md).
+
+The static release guardrails intentionally fail if only a version or only a
+digest changes.
 
 You should see on stdout, roughly:
 
@@ -98,8 +113,11 @@ orbis-x86_64-unknown-linux-gnu
 
 ## Troubleshooting
 
-**"cargo install pyapp … failed"** — make sure Rust is up to date
-(`rustup update stable`).
+**"PyApp source checksum mismatch"** — do not bypass it. Confirm the pinned
+version and digest against the upstream PyApp release before changing either.
+
+**The patched PyApp build failed** — make sure Rust is up to date
+(`rustup update stable`) and that the version-keyed patch still applies cleanly.
 
 **First launch has no network** — the embedded ORBIS sdist is not an offline
 bundle of its third-party dependencies. A first-ever install still needs the

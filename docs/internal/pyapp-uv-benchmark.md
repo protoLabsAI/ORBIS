@@ -110,10 +110,21 @@ compiled UV sidecar SHA:  f951060a340a4438ac3f1893cebd8d49067408899fcb52ab1695d9
 
 ## Bootstrap trust boundary
 
-The release pins PyApp 0.29.0 and UV 0.12.9. PyApp constructs a versioned
-GitHub Releases URL and downloads it over TLS, but its current downloader does
-not verify a published checksum or attestation for that archive. The pinned,
-immutable URL prevents accidental version drift; it does not independently
-protect against a compromised release asset or delivery path. Follow-up issue
-[#718](https://github.com/protoLabsAI/ORBIS/issues/718) tracks adding checksum
-verification without blocking this measured installer improvement.
+The release pins PyApp 0.29.0 and UV 0.12.9. Upstream PyApp does not expose a
+UV-checksum setting, so ORBIS builds its launcher from PyApp's versioned source
+release after verifying that source archive's pinned SHA-256 and applying a
+narrow checked-in patch. The patched launcher embeds the official per-platform
+UV archive SHA-256 and compares it after download but before archive extraction
+or execution. A mismatched archive fails closed.
+
+The pinned Apple Silicon digest is
+`301f72afaf54060f92da7016cb0115bd077f43a9c8e39c1d8170a0bac80fd398`,
+matching both the downloaded archive and Astral's published checksum for
+[`uv-aarch64-apple-darwin.tar.gz` in the 0.12.9 release](https://github.com/astral-sh/uv/releases/tag/0.12.9).
+The source/digest mapping and update procedure live in
+[`scripts/pyapp-installer-env.sh`](../../scripts/pyapp-installer-env.sh) and
+[`build-desktop-binary.md`](./build-desktop-binary.md).
+
+This verifies release content, not the user's already-populated PyApp cache;
+the launcher keeps PyApp's existing behavior of trusting a cached UV binary.
+It also does not independently verify GitHub's artifact attestation at runtime.

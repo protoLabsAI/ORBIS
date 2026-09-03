@@ -235,8 +235,8 @@ PYAPP_PROJECT_FEATURES="parakeet,smart-turn" \
 PYAPP_PYTHON_VERSION="3.11" \
 PYAPP_EXEC_SPEC="app:main" \
 PYAPP_FULL_ISOLATION="1" \
-  cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" \
-    --root /tmp/pyapp-build-fix --locked --force >/dev/null
+  scripts/build-patched-pyapp.sh --root /tmp/pyapp-build-fix \
+    --force --quiet >/dev/null
 # Bundles the Parakeet STT backend (parakeet-mlx) so STT_BACKEND=parakeet
 # works. It enlarges the sidecar; drop PYAPP_PROJECT_FEATURES to ship a
 # Whisper-only build.

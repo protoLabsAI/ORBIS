@@ -30,6 +30,7 @@ def test_native_desktop_scaffold_stays_present():
         "docs/internal/native-audio-direction.md",
         "docs/internal/native-audio-transport.md",
         "scripts/build-desktop-binary.sh",
+        "scripts/build-patched-pyapp.sh",
         "src-tauri/Cargo.lock",
         "src-tauri/Cargo.toml",
         "src-tauri/Info.plist",
@@ -48,6 +49,7 @@ def test_native_desktop_scaffold_stays_present():
         "src-tauri/tauri.conf.json",
         "scripts/check-macos-release-config.py",
         "scripts/nuke-and-rebuild.sh",
+        "scripts/pyapp-0.29.0-uv-sha256.patch",
         "scripts/pyapp-installer-env.sh",
         "scripts/preflight-native-audio-host.sh",
         "scripts/validate-macos-native-audio.sh",
@@ -105,9 +107,54 @@ def test_native_workflow_guardrails_stay_present():
 def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
     installer = (ROOT / "scripts/pyapp-installer-env.sh").read_text(encoding="utf-8")
     assert 'ORBIS_PYAPP_VERSION="0.29.0"' in installer
+    assert (
+        'ORBIS_PYAPP_SOURCE_SHA256="'
+        '0533004baf6d1d46ef15abad02e98881ec92291c024182a36b57931c8d66df5f"'
+        in installer
+    )
     assert 'export PYAPP_UV_ENABLED="1"' in installer
     assert 'export PYAPP_UV_VERSION="0.12.9"' in installer
+    expected_uv_checksums = {
+        "AARCH64_APPLE_DARWIN": (
+            "301f72afaf54060f92da7016cb0115bd077f43a9c8e39c1d8170a0bac80fd398"
+        ),
+        "X86_64_UNKNOWN_LINUX_GNU": (
+            "ec7a99cd05e0cd7f80243f135ce1361c76835cb0ee60055d14d20eba8eba1460"
+        ),
+        "X86_64_PC_WINDOWS_MSVC": (
+            "ddbfcee1ac615a0499f6aa97b5ec8ebdf3ee4a7714a48055ec2ba0030e3cf810"
+        ),
+    }
+    for target, checksum in expected_uv_checksums.items():
+        assert f'PYAPP_UV_SHA256_{target}="{checksum}"' in installer
     assert 'export PYAPP_PIP_EXTRA_ARGS="--compile-bytecode"' in installer
+
+    builder = (ROOT / "scripts/build-patched-pyapp.sh").read_text(encoding="utf-8")
+    patch = (ROOT / "scripts/pyapp-0.29.0-uv-sha256.patch").read_text(
+        encoding="utf-8",
+    )
+    assert builder.index('caller_pip_extra_args="${PYAPP_PIP_EXTRA_ARGS:-}"') < (
+        builder.index('source "${ROOT}/scripts/pyapp-installer-env.sh"')
+    )
+    assert builder.index('source "${ROOT}/scripts/pyapp-installer-env.sh"') < (
+        builder.index('export PYAPP_PIP_EXTRA_ARGS="$caller_pip_extra_args"')
+    )
+    assert 'actual_source_sha256="$(sha256_file "$archive")"' in builder
+    assert 'export PYAPP_UV_SHA256="$uv_sha256"' in builder
+    for rust_target, variable in (
+        ("aarch64-apple-darwin", "PYAPP_UV_SHA256_AARCH64_APPLE_DARWIN"),
+        ("x86_64-unknown-linux-gnu", "PYAPP_UV_SHA256_X86_64_UNKNOWN_LINUX_GNU"),
+        ("x86_64-pc-windows-msvc", "PYAPP_UV_SHA256_X86_64_PC_WINDOWS_MSVC"),
+    ):
+        assert f'{rust_target})\n    uv_sha256="${variable}"' in builder
+    assert 'patch -f -p1 -d "$source_dir" -i "$patch_file"' in builder
+    assert 'cargo install --path "$source_dir" --root "$install_root" --locked' in builder
+    assert "UV archive checksum mismatch" in patch
+    assert (
+        patch.index('network::download(&app::uv_source(), &mut f, "UV")?')
+        < patch.index("verify_uv_archive_sha256(&temp_path, &app::uv_sha256())?")
+        < patch.index("compression::unpack_zip")
+    )
 
     build_paths = (
         ROOT / ".github/workflows/desktop-build.yml",
@@ -117,13 +164,19 @@ def test_pyapp_uv_installer_pins_are_shared_by_all_sidecar_builds():
     for path in build_paths:
         source = path.read_text(encoding="utf-8")
         assert "pyapp-installer-env.sh" in source
-        assert '--version "${ORBIS_PYAPP_VERSION}"' in source
+        assert "scripts/build-patched-pyapp.sh --root" in source
         assert source.index("pyapp-installer-env.sh") < source.index(
-            '--version "${ORBIS_PYAPP_VERSION}"',
+            "scripts/build-patched-pyapp.sh --root",
         )
+        assert "cargo install pyapp" not in source
         assert "PYAPP_UV_ENABLED=" not in source
         assert "PYAPP_UV_VERSION=" not in source
         assert "--compile-bytecode" not in source
+
+    preflight = (ROOT / ".github/workflows/native-audio-preflight.yml").read_text(
+        encoding="utf-8",
+    )
+    assert "scripts/build-patched-pyapp.sh --test" in preflight
 
 
 def test_clean_rebuild_uses_a_pinned_isolated_sdist_builder():

@@ -174,7 +174,7 @@ jobs:
           if [ -n "${{ matrix.torch_index }}" ]; then
             export PYAPP_PIP_EXTRA_ARGS="${PYAPP_PIP_EXTRA_ARGS} --extra-index-url ${{ matrix.torch_index }}"
           fi
-          cargo install pyapp --version "${ORBIS_PYAPP_VERSION}" --root dist --locked
+          scripts/build-patched-pyapp.sh --root dist
           # PyApp produces `dist/bin/pyapp` (or `pyapp.exe`). Rename
           # to match Tauri's externalBin target-suffix convention.
           OUT="orbis-${{ matrix.target }}${{ matrix.binary_suffix }}"
