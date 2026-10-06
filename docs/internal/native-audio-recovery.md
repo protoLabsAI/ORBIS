@@ -40,8 +40,9 @@ tool ownership, and device lifecycle contract.
 ## Device gate before promotion
 
 Automated tests use real Unix sockets and fake audio endpoints; they do not
-open a microphone or validate CoreAudio recovery. Keep the change draft until
-Apple Silicon testing records:
+open a microphone or validate CoreAudio recovery. These live acceptance checks
+remain outstanding for the v0.2.172 beta and are tracked in #743. Before broader
+promotion, Apple Silicon testing must record:
 
 - Fresh permission grant and returning-user launch reach callback, socket, and
   Pipecat readiness. Silence and hard mute stay healthy during a long soak.
