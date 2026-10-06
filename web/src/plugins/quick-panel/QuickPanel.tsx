@@ -163,19 +163,19 @@ export function QuickPanel() {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-fg-body">Activation</span>
-            <Select value={act.style} onValueChange={(v) => act.setStyle(v as ActivationStyle)}>
+            <Select disabled={act.loading || !act.loaded} value={act.style} onValueChange={(v) => act.setStyle(v as ActivationStyle)}>
               <SelectTrigger className="w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="push_to_talk">Tap to talk</SelectItem>
-                {/* Wake word hidden until the retrained model ships — see
-                    @/shared/wakeword/enabled. */}
-                {WAKE_WORD_ENABLED && <SelectItem value="wake_word">Wake word</SelectItem>}
+                {WAKE_WORD_ENABLED && <SelectItem value="wake_word" disabled={!act.canWake}>Wake word</SelectItem>}
                 <SelectItem value="open_mic">Open mic</SelectItem>
               </SelectContent>
             </Select>
           </div>
+          {!act.canWake && <Hint>Download and select a phrase in Settings → Voice → Activation to enable wake word.</Hint>}
+          {act.error && <Hint className="text-danger">{act.error}</Hint>}
           {act.needsRelaunch && (
             <Hint className="text-fg-subtle">Activation change applies on next launch.</Hint>
           )}
@@ -340,10 +340,8 @@ function OrbSwitcher() {
     variantRegistry.all,
     variantRegistry.all,
   );
-  const activeVariantId = useSyncExternalStore(
-    orbStore.subscribe,
-    () => orbStore.getSnapshot().variantId,
-  );
+  const orbSnapshot = useSyncExternalStore(orbStore.subscribe, orbStore.getSnapshot);
+  const activeVariantId = orbSnapshot.variantId;
 
   const entries = useMemo<OrbEntry[]>(
     () => [
@@ -354,7 +352,10 @@ function OrbSwitcher() {
     ],
     [starters, variants],
   );
-  const [index, setIndex] = useState(0);
+  const matchedIndex = entries.findIndex((e) => e.kind === 'starter'
+    ? e.starter.variant === activeVariantId && e.starter.palette === orbSnapshot.palette
+    : e.variantId === activeVariantId);
+  const index = Math.max(0, matchedIndex);
 
   useEffect(() => {
     let cancelled = false;
@@ -371,22 +372,9 @@ function OrbSwitcher() {
     };
   }, []);
 
-  // Keep the focused entry in sync with whatever is actually live
-  // (boot restore, an import that auto-activated, a removal fallback).
-  useEffect(() => {
-    const snap = orbStore.get().getSnapshot();
-    const i = entries.findIndex((e) =>
-      e.kind === 'starter'
-        ? e.starter.variant === snap.variantId && e.starter.palette === snap.palette
-        : e.variantId === snap.variantId,
-    );
-    if (i >= 0) setIndex(i);
-  }, [entries, activeVariantId]);
-
   const step = (dir: number) => {
     if (entries.length === 0) return;
     const next = (index + dir + entries.length) % entries.length;
-    setIndex(next);
     const e = entries[next];
     if (e.kind === 'starter') {
       setVariant(e.starter.variant); // live + broadcast

@@ -13,6 +13,7 @@
 pub mod aec;
 pub mod engine;
 pub mod socket;
+pub mod wake_catalog;
 pub mod wake_word;
 
 // Phase 2 — opt-in via the `voice-processing` Cargo feature. Replaces

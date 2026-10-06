@@ -1,9 +1,42 @@
 # Wake word — implementation plan
 
-Status: **PLAN** (2026-06-02). Decisions locked with Josh: **openWakeWord**
-(local/offline), **Rust-native**, custom **"Hey Orbis"** (model trained on the
-lab node). Part of the engagement-modes activation layer (`engagement-modes.md`).
-This is the ARMED state in `MUTED → ARMED → LISTENING → auto-close`.
+Status: **IMPLEMENTED, opt-in restoration** (2026-10-06). Native Mac
+spoken QA remains required before promotion. Tap to talk remains the default.
+The fresh phrase preference is stock **Hey Jarvis**; **Hey Orbis** is available
+but explicitly experimental after the June kill-switch documented insufficient
+real-world quality. No new recognition-accuracy claim is implied.
+
+`voice/wakeword_catalog.json` is the shared Python/Rust source of truth for
+pinned URLs, SHA256 checksums, filenames, embedding windows and classifier
+outputs. The picker and native command require the selected classifier and
+both shared assets to verify. Rust verifies again before loading and runs one
+full silent inference before reporting ARMED. Warmup/failed state is retained
+for WebView listeners that mount late. A load failure leaves manual talk
+available and gives an actionable status instead of silently claiming ARMED.
+
+Stock classifiers do **not** all have Hey Orbis's shape: timer needs 34
+embeddings, weather 22, the other phrases 16. Timer outputs seven classes;
+class zero is background and must be excluded from wake scoring. Its six timer
+phrases are not a generic “set a timer” trigger. The full-window buffer and
+embedding batch now follow the manifest. Catalog filenames are used directly
+(`hey_jarvis_v0.1.onnx`, etc.), fixing the old `<id>.onnx` loader mismatch.
+
+The Hey Orbis asset is pinned to Hugging Face revision
+`a5c9064affdfb487114c7dda083e38e4390e153d`. The Hey Orbis model card declares Apache-2.0. The stock wake classifiers are
+CC BY-NC-SA 4.0 per [upstream](https://github.com/dscripka/openWakeWord#license);
+source/license metadata is visible in the picker. All nine URLs resolved in a read-only
+verification on October 6. Shared assets and stock classifiers stay pinned to
+openWakeWord v0.5.1. Download installation is atomic, SHA256-verified and
+serialized per model, with finite network timeouts and retryable errors.
+
+Hard mute synchronizes the listening gate and advances a generation counter.
+The detector discards buffered and queued audio on every mute transition,
+including short toggles during an inference; the gate cannot be reopened while
+muted. Audio transport supervision is delivered independently under #486/#602.
+
+See [Enable wake word](../how-to/enable-wake-word.md) for the user flow.
+The historical plan below describes the original design; current manifest and
+runtime code supersede its Hey-Orbis-only constants and default recommendation.
 
 ## Where it taps (grounded in the audio map)
 

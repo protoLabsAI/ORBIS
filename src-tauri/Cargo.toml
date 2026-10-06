@@ -57,6 +57,7 @@ tokio  = { version = "1", features = ["net", "io-util", "sync", "rt", "time"] }
 # "STFT" in melspectrogram.onnx is realized as Conv, no STFT/DFT/custom op), so
 # there's no native dylib to bundle. See docs/internal/wake-word.md.
 tract-onnx = { version = "0.21", optional = true }
+sha2 = { version = "0.10", optional = true }
 
 # Apple voice-processing IO via AVAudioEngine. Replaces the CPAL input
 # path on macOS with Apple-tuned AEC + AGC + NS (per WWDC23-10235).
@@ -90,7 +91,7 @@ optional = true
 # Gate all native audio code behind this feature. Production macOS
 # builds enable this together with `voice-processing`; once compiled,
 # native audio is the desktop app's required transport.
-native-audio = ["dep:cpal", "dep:rubato", "dep:tract-onnx"]
+native-audio = ["dep:cpal", "dep:rubato", "dep:tract-onnx", "dep:sha2"]
 # Apple AVAudioEngine voice-processing input (AEC + AGC + NS). Implies
 # native-audio and is required for production macOS desktop builds:
 #   cargo tauri build --features native-audio,voice-processing

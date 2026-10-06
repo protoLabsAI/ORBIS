@@ -59,7 +59,7 @@ export function useWakewordDownloads(): WakeDownloadMap {
                 ? d.downloaded
                 : cur?.downloaded ?? 0,
             total: typeof d.total === 'number' ? d.total : cur?.total ?? 0,
-            done: d.done === true || cur?.done || false,
+            done: d.done === true,
             error: typeof d.error === 'string' ? d.error : undefined,
           },
         };

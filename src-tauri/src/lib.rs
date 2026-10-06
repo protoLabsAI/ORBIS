@@ -1867,6 +1867,7 @@ pub fn run() {
                     set_mic_muted,
                     mic_muted,
                     get_activation_config,
+                    get_wake_state,
                     set_activation_config,
                     set_full_duplex,
                     get_discoverable,
@@ -1935,6 +1936,7 @@ pub fn run() {
             #[cfg(feature = "native-audio")]
             {
                 app.manage(AudioEngineState::new());
+                app.manage(WakeStatus::default());
                 // Holds the deferred engine start until mic permission exists
                 // (first run grants it via the wizard). Bound by supervise_sidecar.
                 app.manage(PendingAudio::default());
@@ -2042,7 +2044,7 @@ pub fn run() {
 struct ActivationConfig {
     /// "push_to_talk" (default) | "wake_word" | "open_mic"
     style: String,
-    /// wake model id — the picker's `<id>.onnx` (e.g. "hey_orbis")
+    /// wake model catalog id (the manifest owns its filename and input shape)
     model: String,
     /// fire threshold 0..1
     threshold: f32,
@@ -2058,12 +2060,62 @@ impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
             style: "push_to_talk".into(),
-            model: "hey_orbis".into(),
+            model: "hey_jarvis".into(),
             threshold: 0.5,
             listen_window_s: 12.0,
             full_duplex: false,
         }
     }
+}
+
+#[cfg(feature = "native-audio")]
+impl ActivationConfig {
+    fn validate(&self, models_dir: &std::path::Path) -> Result<(), String> {
+        if !matches!(
+            self.style.as_str(),
+            "push_to_talk" | "wake_word" | "open_mic"
+        ) {
+            return Err("Unknown activation style.".into());
+        }
+        if !self.threshold.is_finite() || !(0.1..=0.9).contains(&self.threshold) {
+            return Err("Wake sensitivity must be between 0.1 and 0.9.".into());
+        }
+        if !self.listen_window_s.is_finite() || !(4.0..=30.0).contains(&self.listen_window_s) {
+            return Err("Listen window must be between 4 and 30 seconds.".into());
+        }
+        if self.style == "wake_word" {
+            audio::wake_catalog::verify_models(models_dir, &self.model)?;
+        } else if !self.model.is_empty() {
+            audio::wake_catalog::wake_model(&self.model)?;
+        }
+        Ok(())
+    }
+}
+
+/// Retained because detector warmup can finish before the WebView subscribes.
+#[cfg(feature = "native-audio")]
+#[derive(Default)]
+struct WakeStatus(Mutex<serde_json::Value>);
+
+#[cfg(feature = "native-audio")]
+fn emit_wake_state(app: &AppHandle, state: &str, phrase: &str) {
+    use tauri::{Emitter, Manager};
+    let value = serde_json::json!({ "state": state, "phrase": phrase });
+    if let Some(status) = app.try_state::<WakeStatus>() {
+        if let Ok(mut current) = status.0.lock() {
+            *current = value.clone();
+        }
+    }
+    let _ = app.emit("wake-state", value);
+}
+
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn get_wake_state(app: AppHandle) -> serde_json::Value {
+    use tauri::Manager;
+    app.try_state::<WakeStatus>()
+        .and_then(|s| s.0.lock().ok().map(|v| v.clone()))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(feature = "native-audio")]
@@ -2109,6 +2161,7 @@ fn set_activation_config(
         ..read_activation_config(&app)
     };
     let p = activation_config_path(&app).ok_or("no app data dir")?;
+    cfg.validate(&p.parent().ok_or("no app data dir")?.join("models/wakeword"))?;
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -2189,7 +2242,7 @@ fn wake_config(
     audio::wake_word::WakeConfig,
     audio::wake_word::WakeStateEmitter,
 )> {
-    use tauri::{Emitter, Manager};
+    use tauri::Manager;
     let cfg = read_activation_config(app);
     let env_on = std::env::var("ORBIS_WAKE_ENABLED").ok().as_deref() == Some("1");
     if cfg.style != "wake_word" && !env_on {
@@ -2212,13 +2265,18 @@ fn wake_config(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(threshold);
-    let listen_window_s = listen_window_s.max(1.0);
+    let listen_window_s = listen_window_s.clamp(4.0, 30.0);
     log::info!(
         "[wake] enabled: model={model} threshold={threshold:.2} window={listen_window_s:.0}s"
     );
     // The display phrase travels with the state so the pill can show the chosen
     // wake word (e.g. "Hey Orbis") rather than a generic label.
-    let phrase = wake_phrase(&model);
+    let phrase = match model.as_str() {
+        "timer" => "One minute timer".into(),
+        "weather" => "What's the weather".into(),
+        _ => wake_phrase(&model),
+    };
+    emit_wake_state(app, "starting", &phrase);
     let app2 = app.clone();
     let emit: audio::wake_word::WakeStateEmitter = Box::new(move |s: &str| {
         if s == "listening" {
@@ -2228,10 +2286,7 @@ fn wake_config(
             let app3 = app2.clone();
             let _ = app2.run_on_main_thread(move || show_main_window(&app3));
         }
-        let _ = app2.emit(
-            "wake-state",
-            serde_json::json!({ "state": s, "phrase": phrase }),
-        );
+        emit_wake_state(&app2, s, &phrase);
     });
     Some((
         audio::wake_word::WakeConfig {
@@ -2871,6 +2926,32 @@ mod tests {
         ensure_tray_registration, get_audio_input_mode, parse_ready, redact_config, tray_tooltip,
         utc_timestamp, DelegateHealthState, SsePayload, TrayPresence, TrayRegistrationError,
     };
+
+    #[cfg(feature = "native-audio")]
+    #[test]
+    fn activation_is_opt_in_and_validates_ranges_and_model_readiness() {
+        use super::ActivationConfig;
+        let dir = std::env::temp_dir().join("orbis-missing-wake-models");
+        let mut cfg = ActivationConfig::default();
+        assert_eq!(cfg.style, "push_to_talk");
+        assert_eq!(cfg.model, "hey_jarvis");
+        assert!(cfg.validate(&dir).is_ok());
+        cfg.style = "wake_word".into();
+        assert!(cfg.validate(&dir).is_err());
+        cfg.style = "open_mic".into();
+        cfg.threshold = f32::NAN;
+        assert!(cfg.validate(&dir).is_err());
+        cfg.threshold = 0.5;
+        cfg.listen_window_s = 0.0;
+        assert!(cfg.validate(&dir).is_err());
+        cfg.listen_window_s = 12.0;
+        cfg.model = "../hey_orbis".into();
+        assert!(cfg.validate(&dir).is_err());
+        cfg.model.clear();
+        assert!(cfg.validate(&dir).is_ok());
+        cfg.style = "invalid".into();
+        assert!(cfg.validate(&dir).is_err());
+    }
 
     #[test]
     fn tray_registration_does_not_duplicate_an_existing_process_local_tray() {

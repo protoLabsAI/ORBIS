@@ -27,6 +27,7 @@
  * pre-Tahoe it opened a browser EventSource directly. Both are gone.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
@@ -174,20 +175,23 @@ export function useVoiceBridge(): void {
         // listen() unavailable (non-Tauri dev) — voice state stays idle.
       });
 
-    // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
-    // independent of the Python SSE bridge (it fires while the mic is muted,
-    // before Python sees any audio). Payload: { state, phrase }.
+    // Subscribe before reading retained state: a detector can warm up before
+    // the UI mounts. An event received during the read beats the older snapshot.
+    let wakeEventSeen = false;
+    const applyWake = (payload: { state?: string; phrase?: string }) => {
+      const s = payload?.state;
+      const activation = s === 'starting' || s === 'armed' || s === 'listening' || s === 'failed' ? s : null;
+      voiceStore.update({ activation, wakePhrase: payload?.phrase ?? null });
+    };
     listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
-      const s = e.payload?.state;
-      const a = s === 'armed' || s === 'listening' ? s : null;
-      voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
+      wakeEventSeen = true;
+      if (!cancelled) applyWake(e.payload);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
+      .then(async (fn) => {
+        if (cancelled) { fn(); return; }
         unlistenWakeRef.current = fn;
+        const retained = await invoke<{ state?: string; phrase?: string } | null>('get_wake_state');
+        if (!cancelled && !wakeEventSeen && retained) applyWake(retained);
       })
       .catch(() => {});
 

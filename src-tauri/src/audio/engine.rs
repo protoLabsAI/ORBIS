@@ -88,6 +88,7 @@ pub struct AudioEngine {
     /// no activation (truly silent). Session-only; resets to false on launch.
     /// Toggled via `set_mic_muted`.
     pub muted: Arc<AtomicBool>,
+    mic_gate: MicGate,
     /// Full-duplex override. When true, the socket writer keeps the mic open
     /// while she speaks (instead of the half-duplex echo mute) so the user can
     /// barge in. Safe only with echo cancellation (VPIO) OR headphones (no
@@ -283,6 +284,7 @@ impl AudioEngine {
             rms,
             listening,
             muted,
+            mic_gate: MicGate::default(),
             full_duplex,
             last_play_ms,
             playback_rms,
@@ -301,7 +303,9 @@ impl AudioEngine {
     /// Toggle push-to-talk. When off, mic frames are dropped before
     /// reaching the sidecar.
     pub fn set_listening(&self, on: bool) {
-        self.listening.store(on, Ordering::Relaxed);
+        let on = self
+            .mic_gate
+            .set_listening(&self.listening, &self.muted, on);
         log::info!("[audio] mic listening = {on}");
     }
 
@@ -315,10 +319,7 @@ impl AudioEngine {
     /// (STT *and* the wake detector), so nothing can hear or activate. Muting
     /// also closes any open listening window so a mid-turn mute stops at once.
     pub fn set_muted(&self, on: bool) {
-        self.muted.store(on, Ordering::Relaxed);
-        if on {
-            self.listening.store(false, Ordering::Relaxed);
-        }
+        self.mic_gate.set_muted(&self.listening, &self.muted, on);
         log::info!("[audio] mic muted = {on}");
     }
 
@@ -327,19 +328,26 @@ impl AudioEngine {
         self.muted.load(Ordering::Relaxed)
     }
 
+    /// Every mute transition invalidates buffered detector audio.
+    pub fn mute_epoch(&self) -> u64 {
+        self.mic_gate.epoch.load(Ordering::Acquire)
+    }
+
     /// Open a listening window from a wake-word fire (the ARMED → LISTENING
     /// transition). Idempotent while already listening, so a burst of fires is
     /// one open. For now this just unmutes the mic — the same gate a manual
     /// double-click opens; the auto-close timer + orb ARMED cue land in the
     /// engagement-modes UX pass (docs/internal/wake-word.md, build step 3).
-    pub fn arm_listening_window(&self) {
-        if self.is_muted() {
-            return; // hard mute is king — the wake word can't open the mic
-        }
-        if !self.is_listening() {
-            self.set_listening(true);
+    pub fn arm_listening_window(&self, expected_mute_epoch: u64) -> bool {
+        // A mute+unmute between inference and activation invalidates the
+        // score. Compare its generation under the same lock as gate updates.
+        let armed = self
+            .mic_gate
+            .arm_if_epoch(&self.listening, &self.muted, expected_mute_epoch);
+        if armed {
             log::info!("[wake] fired → listening window opened");
         }
+        armed
     }
 
     /// Half-duplex echo guard: true if real TTS audio played within the
@@ -847,9 +855,78 @@ fn decimate_24k_to_16k(samples: &[i16]) -> Vec<i16> {
     resample_linear(samples, TTS_SAMPLE_RATE, MIC_SAMPLE_RATE)
 }
 
+/// Serialize explicit activation and hard mute off the real-time callback.
+/// The generation invalidates audio queued before any mute transition.
+#[derive(Default)]
+struct MicGate {
+    transition: Mutex<()>,
+    epoch: AtomicU64,
+}
+
+impl MicGate {
+    fn arm_if_epoch(&self, listening: &AtomicBool, muted: &AtomicBool, expected: u64) -> bool {
+        let _guard = self.transition.lock().unwrap_or_else(|e| e.into_inner());
+        if self.epoch.load(Ordering::Acquire) != expected || muted.load(Ordering::Relaxed) {
+            return false;
+        }
+        listening.store(true, Ordering::Relaxed);
+        true
+    }
+
+    fn set_listening(&self, listening: &AtomicBool, muted: &AtomicBool, on: bool) -> bool {
+        let _guard = self.transition.lock().unwrap_or_else(|e| e.into_inner());
+        let on = on && !muted.load(Ordering::Relaxed);
+        listening.store(on, Ordering::Relaxed);
+        on
+    }
+
+    fn set_muted(&self, listening: &AtomicBool, muted: &AtomicBool, on: bool) {
+        let _guard = self.transition.lock().unwrap_or_else(|e| e.into_inner());
+        muted.store(on, Ordering::Relaxed);
+        self.epoch.fetch_add(1, Ordering::Release);
+        if on {
+            listening.store(false, Ordering::Relaxed);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_wake_score_cannot_reopen_gate_after_short_mute_and_unmute() {
+        let gate = MicGate::default();
+        let listening = AtomicBool::new(false);
+        let muted = AtomicBool::new(false);
+        let inference_epoch = gate.epoch.load(Ordering::Acquire);
+        gate.set_muted(&listening, &muted, true);
+        gate.set_muted(&listening, &muted, false);
+        assert!(!gate.arm_if_epoch(&listening, &muted, inference_epoch));
+        assert!(!listening.load(Ordering::Relaxed));
+        assert!(gate.arm_if_epoch(&listening, &muted, gate.epoch.load(Ordering::Acquire)));
+        gate.set_muted(&listening, &muted, true);
+        assert!(!gate.arm_if_epoch(&listening, &muted, gate.epoch.load(Ordering::Acquire)));
+    }
+
+    #[test]
+    fn hard_mute_closes_and_blocks_activation_and_unmute_requires_fresh_phrase() {
+        let gate = MicGate::default();
+        let listening = AtomicBool::new(false);
+        let muted = AtomicBool::new(false);
+        assert!(gate.set_listening(&listening, &muted, true));
+        gate.set_muted(&listening, &muted, true);
+        assert!(!listening.load(Ordering::Relaxed));
+        assert!(!gate.set_listening(&listening, &muted, true));
+        gate.set_muted(&listening, &muted, false);
+        assert!(!listening.load(Ordering::Relaxed));
+        assert_eq!(
+            gate.epoch.load(Ordering::Acquire),
+            2,
+            "a short mute/unmute must invalidate a pre-mute inference"
+        );
+        assert!(gate.set_listening(&listening, &muted, true));
+    }
 
     #[test]
     fn resample_upsample_length() {

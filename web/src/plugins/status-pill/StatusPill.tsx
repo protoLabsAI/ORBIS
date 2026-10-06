@@ -65,6 +65,12 @@ export function StatusPill() {
         ? 'speaking…'
         : voiceState === 'thinking'
           ? 'thinking…'
+          : micListening
+            ? 'listening…'
+            : activation === 'starting'
+              ? 'loading wake word…'
+              : activation === 'failed'
+                ? 'wake word unavailable · double-click to talk · check Voice settings'
           : activation === 'armed'
             ? wakePhrase
               ? `“${wakePhrase}”`
