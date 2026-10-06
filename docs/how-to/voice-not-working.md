@@ -13,9 +13,11 @@ voice** only when startup can safely be retried in-process; otherwise use the
 displayed **Relaunch ORBIS** action.
 
 **1. Watch the level meter.** Open **Settings → Voice → Microphone** and speak.
-If the meter moves, your mic is reaching ORBIS — skip to
-[*it hears me but doesn't reply*](#orbis-hears-me-but-doesn-t-reply). If it
-doesn't move, continue.
+Moving bars confirm microphone activity, but do not prove audio reaches speech
+recognition. Check that voice is ready and a listening turn is open. If a
+transcript appears but no reply follows, skip to
+[*it hears me but doesn't reply*](#orbis-hears-me-but-doesn-t-reply). Otherwise
+continue with the input checks, even if the meter moves.
 
 **2. Check mic permission.** In the same panel, confirm microphone access is
 granted. If it shows as denied, click through to **System Settings → Privacy &
@@ -33,7 +35,7 @@ a beat after you stop talking.
 
 ## ORBIS hears me but doesn't reply
 
-If the transcript appears (or the level meter moved) but the orb never speaks:
+If the transcript appears but the orb never speaks:
 
 **1. Check the language model.** No reply usually means the LLM isn't reachable.
 Open **Settings → Agent → LLM** and confirm the endpoint and key. See the
