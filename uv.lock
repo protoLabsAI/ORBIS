@@ -3154,7 +3154,7 @@ wheels = [
 
 [[package]]
 name = "orbis"
-version = "0.2.171"
+version = "0.2.172"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk", extra = ["fastapi", "http-server", "sqlite"] },
