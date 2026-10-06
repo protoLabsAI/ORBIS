@@ -31,7 +31,8 @@ export function applyNativeAudioStatus(status: NonNullable<VoiceSnapshot['native
 export function createNativeWakeCoordinator() {
   let retainedWake: { state?: string; phrase?: string } | null = null;
   let nativeLossSeen = false;
-  const applyWake = (payload: { state?: string; phrase?: string }) => {
+  const applyWake = (payload: { state?: string; phrase?: string }, source: 'event' | 'snapshot' = 'event') => {
+    if (source === 'snapshot' && nativeLossSeen && payload.state === 'listening') return;
     retainedWake = payload;
     const s = payload?.state;
     const audio = voiceStore.getSnapshot().nativeAudio;
@@ -42,6 +43,7 @@ export function createNativeWakeCoordinator() {
   };
   return {
     applyWake,
+    applyRetainedWake: (payload: { state?: string; phrase?: string }) => applyWake(payload, 'snapshot'),
     applyAudio(status: NonNullable<VoiceSnapshot['nativeAudio']>) {
       applyNativeAudioStatus(status);
       if (!status.socket_connected || !status.capture_alive) {

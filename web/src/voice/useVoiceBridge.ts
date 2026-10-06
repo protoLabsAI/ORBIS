@@ -273,7 +273,7 @@ export function useVoiceBridge(): void {
     // readiness is independent of socket/capture readiness; it cannot establish
     // a live listening turn after an observed native loss.
     let wakeEventSeen = false;
-    const { applyWake, applyAudio } = createNativeWakeCoordinator();
+    const { applyWake, applyRetainedWake, applyAudio } = createNativeWakeCoordinator();
 
     // Register first, then read retained truth: mounting an event listener
     // says nothing about whether the sidecar or microphone is actually alive.
@@ -300,7 +300,7 @@ export function useVoiceBridge(): void {
         if (cancelled) { fn(); return; }
         unlistenWakeRef.current = fn;
         const retained = await invoke<{ state?: string; phrase?: string } | null>('get_wake_state');
-        if (!cancelled && !wakeEventSeen && retained) applyWake(retained);
+        if (!cancelled && !wakeEventSeen && retained) applyRetainedWake(retained);
       })
       .catch(() => {});
 

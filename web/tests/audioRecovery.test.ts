@@ -107,4 +107,14 @@ describe('native audio recovery truth', () => {
     expect(voiceStore.getSnapshot().activation).toBe('listening');
   });
 
+  test('a delayed retained listening read cannot bypass a native loss followed by recovery', () => {
+    const coordinator = createNativeWakeCoordinator();
+    coordinator.applyAudio({ socket_connected: false, capture_alive: false, detail: 'lost', relaunch_required: true });
+    coordinator.applyAudio({ socket_connected: true, capture_alive: true, detail: '', relaunch_required: false });
+    coordinator.applyRetainedWake({ state: 'listening', phrase: 'Hey Jarvis' });
+    expect(voiceStore.getSnapshot().activation).toBeNull();
+    coordinator.applyWake({ state: 'listening', phrase: 'Hey Jarvis' });
+    expect(voiceStore.getSnapshot().activation).toBe('listening');
+  });
+
 });
