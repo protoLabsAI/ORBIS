@@ -28,8 +28,10 @@
  */
 
 import { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
+import { applyConnectionSignal, applyNativeAudioStatus } from './connection';
 import { widgetWorkspace } from '../widgets/store';
 import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
 
@@ -39,10 +41,7 @@ interface SsePayload {
 }
 
 function handleSse(event: string, data: string): void {
-  if (event === '__connected') {
-    voiceStore.update({ connected: true });
-    return;
-  }
+  if (applyConnectionSignal(event)) return;
 
   let parsed: Record<string, unknown>;
   try {
@@ -68,7 +67,6 @@ function handleSse(event: string, data: string): void {
       const ev = parsed.event as 'start' | 'end' | undefined;
       if (ev === 'start') {
         voiceStore.update({
-          connected: true,
           sessionId: (parsed.session_id as string | undefined) ?? null,
           state: 'idle',
         });
@@ -154,30 +152,49 @@ function handleSse(event: string, data: string): void {
 
 export function useVoiceBridge(): void {
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const unlistenAudioRef = useRef<UnlistenFn | null>(null);
   const unlistenWakeRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    let connectionEventSeen = false;
 
     listen<SsePayload>('orbis-sse', (e) => {
+      if (cancelled) return;
+      if (e.payload.event.startsWith('__')) connectionEventSeen = true;
       handleSse(e.payload.event, e.payload.data);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
+      .then(async (fn) => {
+        if (cancelled) { fn(); return; }
         unlistenRef.current = fn;
-        voiceStore.update({ connected: true });
+        const connected = await invoke<boolean>('sse_connected');
+        if (!cancelled && !connectionEventSeen) voiceStore.update({ connected });
       })
       .catch(() => {
         // listen() unavailable (non-Tauri dev) — voice state stays idle.
       });
 
+    // Register first, then read retained truth: mounting an event listener
+    // says nothing about whether the sidecar or microphone is actually alive.
+    let audioEventSeen = false;
+    listen<NonNullable<VoiceSnapshot['nativeAudio']>>('orbis-audio-status', (e) => {
+      if (cancelled) return;
+      audioEventSeen = true;
+      applyNativeAudioStatus(e.payload);
+    }).then(async (fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenAudioRef.current = fn;
+      const status = await invoke<NonNullable<VoiceSnapshot['nativeAudio']>>('audio_status');
+      if (!cancelled && !audioEventSeen) applyNativeAudioStatus(status);
+    }).catch(() => {});
+
     // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
     // independent of the Python SSE bridge (it fires while the mic is muted,
     // before Python sees any audio). Payload: { state, phrase }.
     listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
+      if (cancelled) return;
+      const audio = voiceStore.getSnapshot().nativeAudio;
+      if (audio && (!audio.socket_connected || !audio.capture_alive)) return;
       const s = e.payload?.state;
       const a = s === 'armed' || s === 'listening' ? s : null;
       voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
@@ -196,6 +213,10 @@ export function useVoiceBridge(): void {
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
+      }
+      if (unlistenAudioRef.current) {
+        unlistenAudioRef.current();
+        unlistenAudioRef.current = null;
       }
       if (unlistenWakeRef.current) {
         unlistenWakeRef.current();

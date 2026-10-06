@@ -1,5 +1,6 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { voiceStore, type VoiceSnapshot } from './state';
+import { effectiveVoiceLifecycle } from './lifecycle';
 
 /**
  * Full derived snapshot. Re-renders on every store epoch tick.
@@ -16,4 +17,11 @@ export function useVoiceState(): VoiceSnapshot {
 export function useVoiceStateSelector<T>(selector: (s: VoiceSnapshot) => T): T {
   const get = useCallback(() => selector(voiceStore.getSnapshot()), [selector]);
   return useSyncExternalStore(voiceStore.subscribe, get, get);
+}
+
+
+export function useEffectiveVoiceLifecycle() {
+  const lifecycle = useVoiceStateSelector((s) => s.voiceLifecycle);
+  const audio = useVoiceStateSelector((s) => s.nativeAudio);
+  return useMemo(() => effectiveVoiceLifecycle(lifecycle, audio), [lifecycle, audio]);
 }

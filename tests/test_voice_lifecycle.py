@@ -554,3 +554,53 @@ async def test_real_connection_initializer_failure_becomes_terminal_failed() -> 
         server.close()
         await server.wait_closed()
         socket_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_real_peer_loss_invalidates_running_lifecycle():
+    socket_path = Path("/tmp") / f"orbis-loss-{uuid4().hex}.sock"
+    close_peer = asyncio.Event()
+    peer_done = asyncio.Event()
+    async def handle_peer(_reader, writer):
+        await close_peer.wait()
+        writer.close()
+        await writer.wait_closed()
+        peer_done.set()
+
+    server = await asyncio.start_unix_server(handle_peer, path=str(socket_path))
+    transport = LocalAudioTransport(sock_path=str(socket_path))
+    lifecycle = VoiceLifecycle(SseBus())
+    async def run_pipeline(value, connected, initialized, started):
+        assert await value.connect()
+        await connected()
+        await initialized()
+        await started()
+        await asyncio.Event().wait()
+
+    owner = asyncio.create_task(run_native_voice_lifecycle(
+        lifecycle=lifecycle, warm=lambda: None, make_transport=lambda: transport,
+        run_pipeline=run_pipeline, set_transport=lambda _: None,
+        set_pipeline_task=lambda _: None, transport_connected=lambda t: t.connected,
+    ))
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if lifecycle.is_running(): break
+        assert lifecycle.is_running()
+        close_peer.set()
+        await asyncio.wait_for(peer_done.wait(), 1)
+        for _ in range(100):
+            await asyncio.sleep(0)
+            if not lifecycle.is_running(): break
+        assert lifecycle.snapshot() == {
+            "state": "failed", "detail": "Native audio disconnected; relaunch ORBIS",
+            "code": "transport_disconnected", "action": "relaunch_required",
+        }
+    finally:
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError): await owner
+        close_peer.set()
+        await transport._disconnect()
+        server.close()
+        await server.wait_closed()
+        socket_path.unlink(missing_ok=True)

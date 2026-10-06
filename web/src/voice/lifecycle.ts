@@ -50,3 +50,20 @@ export function voiceLifecycleText(lifecycle: VoiceLifecycle | null): string {
   if (lifecycle.state === 'failed') return 'voice unavailable';
   return 'starting voice…';
 }
+
+
+/** Pipecat readiness and native callback/IPC health are separate contracts. */
+export function effectiveVoiceLifecycle(
+  lifecycle: VoiceLifecycle | null,
+  audio: { socket_connected: boolean; capture_alive: boolean; detail: string; relaunch_required: boolean } | null,
+): VoiceLifecycle | null {
+  if (!audio) return lifecycle?.state === 'running'
+    ? { state: 'starting', detail: 'Starting native audio…' } : lifecycle;
+  if (audio.socket_connected && audio.capture_alive) return lifecycle;
+  if (audio.relaunch_required) {
+    return { state: 'failed', detail: audio.detail,
+      code: 'native_audio_unavailable', action: 'relaunch_required' };
+  }
+  if (lifecycle?.state !== 'running') return lifecycle;
+  return { state: 'starting', detail: audio.detail, code: 'native_audio_unavailable' };
+}

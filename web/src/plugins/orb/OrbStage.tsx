@@ -8,7 +8,7 @@ import { useOrbState } from './useOrbState';
 import { pushStatusTransient } from '@/sdk';
 import { invoke } from '@tauri-apps/api/core';
 import { voiceStore } from '@/voice/state';
-import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
+import { effectiveVoiceLifecycle, voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 import type { FractalPreset } from './variants/fractal/presets';
 // Side-effect imports — variants register themselves on import.
 import './variants';
@@ -51,8 +51,9 @@ export function OrbStage() {
   // word the same way, so muted is truly silent.
   const onDoubleClick = () => {
     const voice = voiceStore.getSnapshot();
-    if (!voiceIsReady(voice.voiceLifecycle)) {
-      pushStatusTransient(voiceLifecycleText(voice.voiceLifecycle), 2400);
+    const lifecycle = effectiveVoiceLifecycle(voice.voiceLifecycle, voice.nativeAudio);
+    if (!voiceIsReady(lifecycle)) {
+      pushStatusTransient(voiceLifecycleText(lifecycle), 2400);
       return;
     }
     if (voice.micMuted) {
@@ -63,7 +64,8 @@ export function OrbStage() {
     voiceStore.update({ micListening: next });
     pushStatusTransient(next ? 'listening…' : 'stopped', 1800);
     invoke('set_mic_listening', { on: next }).catch(() => {
-      // Command unavailable (e.g. non-native dev build) — keep local UI state.
+      voiceStore.update({ micListening: false });
+      pushStatusTransient('Voice unavailable; relaunch ORBIS if it does not recover', 4000);
     });
   };
 

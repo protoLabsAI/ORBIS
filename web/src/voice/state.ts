@@ -32,6 +32,8 @@ export interface VoiceSnapshot {
   connected: boolean;
   /** Backend-owned truth for whether Pipecat can consume native audio. */
   voiceLifecycle: VoiceLifecycle | null;
+  /** Retained Rust socket/capture health, separate from Pipecat readiness. */
+  nativeAudio: { socket_connected: boolean; capture_alive: boolean; detail: string; relaunch_required: boolean } | null;
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
@@ -51,6 +53,7 @@ const INITIAL: VoiceSnapshot = {
   micMuted: false,
   connected: false,
   voiceLifecycle: null,
+  nativeAudio: null,
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,
