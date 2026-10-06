@@ -328,7 +328,8 @@ impl AudioEngine {
         self.muted.load(Ordering::Relaxed)
     }
 
-    /// Every mute transition invalidates buffered detector audio.
+    /// Activation generation: mute transitions and explicit listening closes
+    /// invalidate buffered detector audio and scores in flight.
     pub fn mute_epoch(&self) -> u64 {
         self.mic_gate.epoch.load(Ordering::Acquire)
     }
@@ -856,7 +857,7 @@ fn decimate_24k_to_16k(samples: &[i16]) -> Vec<i16> {
 }
 
 /// Serialize explicit activation and hard mute off the real-time callback.
-/// The generation invalidates audio queued before any mute transition.
+/// The generation invalidates audio queued before mute or an explicit close.
 #[derive(Default)]
 struct MicGate {
     transition: Mutex<()>,
@@ -875,8 +876,14 @@ impl MicGate {
 
     fn set_listening(&self, listening: &AtomicBool, muted: &AtomicBool, on: bool) -> bool {
         let _guard = self.transition.lock().unwrap_or_else(|e| e.into_inner());
+        let close_requested = !on;
         let on = on && !muted.load(Ordering::Relaxed);
         listening.store(on, Ordering::Relaxed);
+        if close_requested {
+            // Socket/capture loss, cancel, and manual stop share this atomic
+            // close. A score started before the close cannot reopen the gate.
+            self.epoch.fetch_add(1, Ordering::Release);
+        }
         on
     }
 
@@ -893,6 +900,19 @@ impl MicGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_close_invalidates_inflight_wake_score_without_hard_mute() {
+        let gate = MicGate::default();
+        let listening = AtomicBool::new(true);
+        let muted = AtomicBool::new(false);
+        let inference_epoch = gate.epoch.load(Ordering::Acquire);
+        gate.set_listening(&listening, &muted, false);
+        assert!(!listening.load(Ordering::Relaxed));
+        assert!(!muted.load(Ordering::Relaxed));
+        assert!(!gate.arm_if_epoch(&listening, &muted, inference_epoch));
+        assert!(gate.arm_if_epoch(&listening, &muted, gate.epoch.load(Ordering::Acquire)));
+    }
 
     #[test]
     fn stale_wake_score_cannot_reopen_gate_after_short_mute_and_unmute() {

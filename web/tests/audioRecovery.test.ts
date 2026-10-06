@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { voiceStore } from '../src/voice/state';
-import { applyConnectionSignal, applyNativeAudioStatus } from '../src/voice/connection';
+import { applyConnectionSignal, applyNativeAudioStatus, createNativeWakeCoordinator } from '../src/voice/connection';
 import { effectiveVoiceLifecycle, voiceIsReady } from '../src/voice/lifecycle';
 
 beforeEach(() => voiceStore.reset());
@@ -83,4 +83,28 @@ describe('native audio recovery truth', () => {
       capture_alive: true, detail: '', relaunch_required: false })).toEqual(running);
     expect(voiceStore.getSnapshot().micListening).toBeFalse();
   });
+  test('retained armed wake state waits for native audio health regardless of snapshot order', () => {
+    const coordinator = createNativeWakeCoordinator();
+    coordinator.applyWake({ state: 'armed', phrase: 'Hey Jarvis' });
+    expect(voiceStore.getSnapshot().activation).toBeNull();
+    coordinator.applyAudio({ socket_connected: true, capture_alive: true, detail: '', relaunch_required: false });
+    expect(voiceStore.getSnapshot().activation).toBe('armed');
+    coordinator.applyAudio({ socket_connected: false, capture_alive: true, detail: 'lost', relaunch_required: true });
+    expect(voiceStore.getSnapshot().activation).toBeNull();
+    coordinator.applyAudio({ socket_connected: true, capture_alive: true, detail: '', relaunch_required: false });
+    expect(voiceStore.getSnapshot().activation).toBe('armed');
+  });
+
+  test('callback recovery cannot resurrect a pre-loss listening snapshot', () => {
+    const coordinator = createNativeWakeCoordinator();
+    coordinator.applyAudio({ socket_connected: true, capture_alive: true, detail: '', relaunch_required: false });
+    coordinator.applyWake({ state: 'listening', phrase: 'Hey Jarvis' });
+    expect(voiceStore.getSnapshot().activation).toBe('listening');
+    coordinator.applyAudio({ socket_connected: true, capture_alive: false, detail: 'stopped', relaunch_required: true });
+    coordinator.applyAudio({ socket_connected: true, capture_alive: true, detail: '', relaunch_required: false });
+    expect(voiceStore.getSnapshot().activation).toBeNull();
+    coordinator.applyWake({ state: 'listening', phrase: 'Hey Jarvis' });
+    expect(voiceStore.getSnapshot().activation).toBe('listening');
+  });
+
 });

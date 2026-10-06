@@ -34,7 +34,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
-import { applyConnectionSignal, applyNativeAudioStatus } from './connection';
+import { applyConnectionSignal, createNativeWakeCoordinator } from './connection';
 import { widgetWorkspace } from '../widgets/store';
 import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
 import { logBus } from '../shared/logBus';
@@ -273,26 +273,7 @@ export function useVoiceBridge(): void {
     // readiness is independent of socket/capture readiness; it cannot establish
     // a live listening turn after an observed native loss.
     let wakeEventSeen = false;
-    let retainedWake: { state?: string; phrase?: string } | null = null;
-    let nativeLossSeen = false;
-    const applyWake = (payload: { state?: string; phrase?: string }) => {
-      retainedWake = payload;
-      const s = payload?.state;
-      const audio = voiceStore.getSnapshot().nativeAudio;
-      const ready = audio?.socket_connected && audio?.capture_alive;
-      const activation = s === 'starting' || s === 'failed'
-        ? s
-        : ready && (s === 'armed' || s === 'listening') ? s : null;
-      voiceStore.update({ activation, wakePhrase: payload?.phrase ?? null });
-    };
-    const applyAudio = (status: NonNullable<VoiceSnapshot['nativeAudio']>) => {
-      applyNativeAudioStatus(status);
-      if (!status.socket_connected || !status.capture_alive) {
-        nativeLossSeen = true;
-      } else if (retainedWake && (retainedWake.state !== 'listening' || !nativeLossSeen)) {
-        applyWake(retainedWake);
-      }
-    };
+    const { applyWake, applyAudio } = createNativeWakeCoordinator();
 
     // Register first, then read retained truth: mounting an event listener
     // says nothing about whether the sidecar or microphone is actually alive.

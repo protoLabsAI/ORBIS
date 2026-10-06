@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { DEFAULT_ACTIVATION, persistActivation, wakeReady } from '../src/shared/wakeword/activation';
+import { DEFAULT_ACTIVATION, persistActivation, persistDownloadedWakeSelection, wakeReady } from '../src/shared/wakeword/activation';
 import type { WakeModel } from '../src/lib/api';
 
 function model(id: string, kind: WakeModel['kind'], downloaded: boolean): WakeModel {
@@ -37,4 +37,21 @@ describe('wake-word activation', () => {
     expect(committed).toEqual(next);
     expect(writes).toEqual([{ command: 'set_activation_config', args: { style: 'wake_word', model: 'hey_orbis', threshold: 0.7, listenWindowS: 8 } }]);
   });
+  test('a completed download preserves a mode changed while native config is loading', async () => {
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let current: typeof DEFAULT_ACTIVATION = { ...DEFAULT_ACTIVATION, style: 'open_mic' };
+    const writes: Record<string, unknown>[] = [];
+    const completed = persistDownloadedWakeSelection('hey_orbis', async () => {
+      await readGate;
+      return current;
+    }, async (_command, args) => { writes.push(args); });
+    // The user opts out of open mic during download; completion selects the
+    // new phrase without restoring the earlier listening mode.
+    current = { ...DEFAULT_ACTIVATION, style: 'push_to_talk' };
+    releaseRead();
+    expect((await completed).style).toBe('push_to_talk');
+    expect(writes).toMatchObject([{ style: 'push_to_talk', model: 'hey_orbis' }]);
+  });
+
 });

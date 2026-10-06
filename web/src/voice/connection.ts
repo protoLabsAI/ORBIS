@@ -25,3 +25,30 @@ export function applyNativeAudioStatus(status: NonNullable<VoiceSnapshot['native
     voiceStore.update({ micListening: false, activation: null, state: 'idle' });
   }
 }
+
+
+/** Reconcile independently retained detector and native transport snapshots. */
+export function createNativeWakeCoordinator() {
+  let retainedWake: { state?: string; phrase?: string } | null = null;
+  let nativeLossSeen = false;
+  const applyWake = (payload: { state?: string; phrase?: string }) => {
+    retainedWake = payload;
+    const s = payload?.state;
+    const audio = voiceStore.getSnapshot().nativeAudio;
+    const ready = audio?.socket_connected && audio?.capture_alive;
+    const activation = s === 'starting' || s === 'failed'
+      ? s : ready && (s === 'armed' || s === 'listening') ? s : null;
+    voiceStore.update({ activation, wakePhrase: payload?.phrase ?? null });
+  };
+  return {
+    applyWake,
+    applyAudio(status: NonNullable<VoiceSnapshot['nativeAudio']>) {
+      applyNativeAudioStatus(status);
+      if (!status.socket_connected || !status.capture_alive) {
+        nativeLossSeen = true;
+      } else if (retainedWake && (retainedWake.state !== 'listening' || !nativeLossSeen)) {
+        applyWake(retainedWake);
+      }
+    },
+  };
+}

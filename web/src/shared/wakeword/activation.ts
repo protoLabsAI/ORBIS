@@ -36,3 +36,14 @@ export async function persistActivation(
   });
   return cfg;
 }
+
+
+/** Downloads may outlive user mode changes; select against current native truth. */
+export async function persistDownloadedWakeSelection(
+  model: string,
+  readLatest: () => Promise<ActivationConfig>,
+  write: (command: string, args: Record<string, unknown>) => Promise<unknown>,
+): Promise<ActivationConfig> {
+  const latest = await readLatest();
+  return persistActivation({ ...latest, model }, write);
+}

@@ -188,7 +188,6 @@ impl SocketServer {
                     }
                     msg = mic_rx.recv() => {
                         if msg.is_none() { return Ok(()); }
-                        if ever_connected { engine.stop_listening(); }
                         if !capture_alive {
                             emit(AudioStatus::new(false, true, ever_connected));
                         }
@@ -250,8 +249,8 @@ impl SocketServer {
                     }
                     _ = watchdog.tick() => {
                         if last_capture.elapsed() >= capture_timeout {
-                            engine.stop_audio();
                             if !capture_stalled {
+                                engine.stop_audio();
                                 capture_stalled = true;
                                 capture_alive = false;
                                 log::error!("[audio/socket] microphone frames stopped; relaunch required");

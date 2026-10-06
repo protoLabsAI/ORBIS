@@ -13,7 +13,7 @@ import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
 const fmtSize = (kb: number) =>
   kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
 
-import { DEFAULT_ACTIVATION as DEFAULTS, persistActivation, wakeReady, type ActivationConfig, type ActivationStyle as Style } from '@/shared/wakeword/activation';
+import { DEFAULT_ACTIVATION as DEFAULTS, persistActivation, persistDownloadedWakeSelection, wakeReady, type ActivationConfig, type ActivationStyle as Style } from '@/shared/wakeword/activation';
 
 const loadActivation = async (): Promise<ActivationConfig> => {
   const raw = await invoke<Partial<ActivationConfig>>('get_activation_config');
@@ -52,6 +52,7 @@ export function WakeWordSettings() {
     const [cat, act] = await Promise.all([loadCatalog(), loadActivation()]);
     setModels(cat.models);
     setCfg(act);
+    return act;
   };
 
   useEffect(() => {
@@ -108,9 +109,13 @@ export function WakeWordSettings() {
         await api.wakeword.download(dep.id);
       }
       await api.wakeword.download(id);
-      await refresh();
       const m = models.find((x) => x.id === id);
-      if (m?.kind === 'wake') await save({ model: id });
+      if (m?.kind === 'wake') {
+        setCfg(await persistDownloadedWakeSelection(id, refresh, invoke));
+        setNeedsRelaunch(true);
+      } else {
+        await refresh();
+      }
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {

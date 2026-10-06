@@ -38,6 +38,7 @@ const DOMAIN_OF: Record<string, Record<string, string>> = {
     'getting-started': 'start',
   },
   'how-to': {
+    'enable-wake-word': 'voice',
     'train-a-wake-word': 'voice',
     'choose-speech-to-text': 'voice',
     'choose-a-voice': 'voice',
@@ -77,6 +78,7 @@ const DOMAIN_OF: Record<string, Record<string, string>> = {
 // the `.orbis` format). Falls back to title-case for anything unlisted.
 const LABELS: Record<string, string> = {
   'getting-started': 'Getting started',
+  'enable-wake-word': 'Enable wake-word activation',
   'train-a-wake-word': 'Train a wake word',
   'choose-speech-to-text': 'Choose speech-to-text',
   'choose-a-voice': 'Choose a voice (TTS)',

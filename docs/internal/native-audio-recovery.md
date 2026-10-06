@@ -5,7 +5,9 @@ EOF, a write failure, or a one-second socket write timeout. The microphone
 receiver and wake detector belong to the engine lifetime, rather than the first
 connection. Microphone audio is drained while offline and queued frames are
 cleared before accepting a new session. Disconnect closes the listening gate
-and flushes pending playback. Reconnect sends the current hardware-AEC mode
+and flushes pending playback. Closing listening also advances the activation
+generation under the wake gate lock, so queued detector audio and scores from
+the old connection cannot arm a new session. Reconnect sends the current hardware-AEC mode
 again; it does not reopen a listening turn.
 
 `audio_status` and `orbis-audio-status` expose retained Rust truth:
