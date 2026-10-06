@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.2.172",
+    "date": "2026-10-06",
+    "changes": [
+      "Restore opt-in wake-word activation with verified model downloads, real model warmup, visible failure state, and hard-mute protection. Tap to talk remains the default; Hey Jarvis is the fresh phrase preference and Hey Orbis remains experimental.",
+      "Reaccept native audio socket connections, discard stale disconnected audio, detect stopped capture, and show explicit relaunch guidance after capture or backend loss.",
+      "Keep structured delegation progress, questions, cancellation, and terminal task results aligned with the authoritative protoAgent task lifecycle.",
+      "Prevent stale wake snapshots and detector generations from reopening listening after native audio loss; preserve activation edits made during model downloads.",
+      "Fix hook ordering in orb settings and improve mobile marketing navigation, onboarding, privacy explanations, and Mac download guidance.",
+      "Verify the candidate with 1,285 passing Python tests (2 optional skips), 48 native Rust/model tests, 56 frontend tests, production builds, and bundle integrity checks.",
+      "Public beta: live spoken/device acceptance remains outstanding; Hey Orbis stays experimental and wake activation stays opt-in."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.172/ORBIS-0.2.172-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.171",
     "date": "2026-09-03",
     "changes": [

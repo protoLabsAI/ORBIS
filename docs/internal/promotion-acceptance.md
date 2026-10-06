@@ -85,7 +85,8 @@ experimental until a recorded spoken pass supports stronger claims.
 
 ## Baseline observed on 2026-10-06
 
-The base checkout is `b9068ed` and the shipping release is v0.2.171. Its release,
+At the start of this pass, the base checkout was `b9068ed` and the shipping
+release was v0.2.171. Its release,
 desktop build, backend CI, frontend CI, lint CI, and marketing deployment were
 green. The advertised DMG returned HTTP 200. The installed v0.2.171 app passed
 Gatekeeper (`Notarized Developer ID`), stapler validation, and the static native
@@ -99,8 +100,25 @@ recognition pass was performed for that baseline. Those checks remain NOT RUN.
 
 ## Promotion gate
 
-Candidate code changes stay in draft until the relevant native rows are
-recorded and the visible UX is reviewed. Marketing copy stays accurate for the
-currently downloadable version; publish restored wake-word claims only after
-the corresponding tested app is downloadable. Follow the repository's required
-`QA panel` status check before any merge; do not bypass it.
+Release PRs follow the repository's required `QA panel` status check and CI;
+do not bypass them. The user authorized merging and publishing the reviewed
+public beta. Native acceptance remains a prerequisite for broader promotion
+and measured wake-recognition claims, rather than a draft-PR requirement.
+Marketing copy must describe the currently downloadable version accurately.
+
+## v0.2.172 public beta status
+
+The integrated changes landed in #732 after CI and team review. The tested
+source candidate was `1289351c3ae87272439fbbe6e937272013e1da34`; the squashed
+main commit `115f95a1bcd537f28b1f796b455364840118952f` has the same tree.
+Python tests: 1,285 passed, 2 optional skips. Native Rust/model tests: 48 passed.
+Frontend tests: 56 passed. Production builds, formatting, release-config and
+exact local bundle checks passed. The release workflow requires Developer ID
+signing, notarization, and validation of the exact shipped DMG.
+
+Team review found no blockers or majors. Its structural coverage was partial
+(16/31 eligible files); completion is tracked in #741. Other review follow-ups
+are #733–#744 and existing #491. Live spoken/device rows above remain NOT RUN
+and are tracked in #743. Wake activation remains opt-in, Hey Orbis experimental,
+and no measured spoken recognition claim is made. Stock wake-model licensing
+is displayed in the model picker. The baseline frontend lint debt remains #742.

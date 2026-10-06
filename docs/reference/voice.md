@@ -111,12 +111,12 @@ require a new native session, Settings instead offers **Relaunch ORBIS** for
 honor. Operators can trigger the same explicit, idempotent retry with
 `POST /api/voice/retry`; ORBIS never runs a blind retry loop.
 
-The October 2026 source candidate also monitors complete microphone-frame
-delivery and allows the native socket to accept another client after a
-disconnect, discarding stale audio. These recovery changes are pending native
-acceptance and are not included in the currently downloadable v0.2.171 app.
-Neither version automatically restarts a failed hardware stream or sidecar;
-use the recovery action shown by the app.
+The v0.2.172 public beta monitors complete microphone-frame delivery and allows
+the native socket to accept another client after a disconnect, discarding stale
+audio. Automated socket and capture-loss tests pass; live microphone, device
+changes, and sleep/wake acceptance remain outstanding. ORBIS does not
+automatically restart a failed hardware stream or sidecar; use the recovery
+action shown by the app.
 
 ## See also
 
