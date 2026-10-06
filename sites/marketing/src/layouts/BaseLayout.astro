@@ -11,7 +11,7 @@ interface Props {
 
 const {
   title,
-  description = 'ORBIS — voice-first AI companion. Wake word, speak, done. Runs on Windows, macOS, and Linux.',
+  description = 'ORBIS — a voice-first AI companion for Apple Silicon Mac. Talk naturally, personalize your orb, and delegate work to your agents. Free public beta.',
   ogImage = '/og-orbis.png',
 } = Astro.props;
 ---
@@ -35,7 +35,7 @@ const {
   </head>
   <body class="bg-[#09090b] text-zinc-200">
     <Nav />
-    <main class="pt-14">
+    <main class="pt-20 sm:pt-14">
       <slot />
     </main>
     <Footer />

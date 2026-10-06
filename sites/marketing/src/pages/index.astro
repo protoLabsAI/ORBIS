@@ -12,8 +12,8 @@ import { OrbHero } from '../components/OrbHero';
     <div class="flex flex-col items-center gap-6">
 
       <!-- Fixed-size orb slot: skeleton shows until R3F paints -->
-      <div id="orb-slot" class="relative flex items-center justify-center"
-           style="width: 480px; height: 480px; max-width: min(480px, calc(100vw - 3rem)); border-radius: 50%; box-shadow: 0 0 100px rgba(129,140,248,0.3), 0 0 40px rgba(244,114,182,0.15);">
+      <div id="orb-slot" class="relative flex items-center justify-center w-[320px] sm:w-[480px] aspect-square max-w-[calc(100vw-3rem)]"
+           style="border-radius: 50%; box-shadow: 0 0 100px rgba(129,140,248,0.3), 0 0 40px rgba(244,114,182,0.15);">
 
 
         <!-- Static skeleton visible before hydration -->
@@ -100,15 +100,15 @@ import { OrbHero } from '../components/OrbHero';
       {[
         {
           heading: 'Voice-native',
-          body: 'Say “Hey Orbis,” speak naturally, even interrupt her mid-sentence. No typing, no window-switching — just talk.',
+          body: 'Double-click your orb to talk, speak naturally, and interrupt a reply when you need to. Voice is at the center of the experience.',
         },
         {
           heading: 'On-device or cloud',
-          body: 'Local speech models by default (Apple MLX) — your conversations stay on your Mac — or bring your own cloud models. Your call.',
+          body: 'Use on-device speech and a local language model for local inference. You can also choose cloud speech, a hosted model, or remote agents.',
         },
         {
           heading: 'Delegates anywhere',
-          body: 'Route to any OpenAI-compatible agent, A2A endpoint, or local model. ORBIS orchestrates the right brain for the job.',
+          body: 'Hand substantial work to a separately running protoAgent hub or another configured agent. ORBIS brings the result back into your conversation.',
         },
       ].map(({ heading, body }) => (
         <div class="border border-white/5 rounded-xl p-6" style="background: rgba(255,255,255,0.02)">
@@ -123,12 +123,12 @@ import { OrbHero } from '../components/OrbHero';
   <section class="max-w-5xl mx-auto px-6 py-20 border-t border-white/5">
     <div class="text-center mb-12">
       <span class="text-accent font-mono text-sm uppercase tracking-widest block mb-3">How it works</span>
-      <h2 class="text-2xl md:text-3xl font-bold text-white">From wake word to answer in under two seconds.</h2>
+      <h2 class="text-2xl md:text-3xl font-bold text-white">Talk to your orb. Put your agents to work.</h2>
     </div>
 
     <div class="grid md:grid-cols-3 gap-8 relative">
       {[
-        { n: '1', heading: 'Wake', body: 'Say the wake word. ORBIS opens the pipeline.' },
+        { n: '1', heading: 'Start', body: 'Double-click the orb to start listening.' },
         { n: '2', heading: 'Speak', body: 'Ask anything. ORBIS routes to the right agent, model, or tool.' },
         { n: '3', heading: 'Done', body: 'Hear the response. No app-switching, no typing.' },
       ].map(({ n, heading, body }) => (

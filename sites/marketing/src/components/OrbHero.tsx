@@ -20,7 +20,7 @@ export function OrbHero() {
   }, []);
 
   useEffect(() => {
-    const update = () => setSize(window.innerWidth < 640 ? 320 : 480);
+    const update = () => setSize(Math.min(window.innerWidth - 48, window.innerWidth < 640 ? 320 : 480));
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
