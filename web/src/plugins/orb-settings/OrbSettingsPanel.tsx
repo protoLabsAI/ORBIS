@@ -124,7 +124,7 @@ export function OrbSettingsPanel() {
       ta.style.opacity = '0';
       document.body.appendChild(ta);
       ta.select();
-      try { ok = document.execCommand('copy'); } catch {}
+      try { ok = document.execCommand('copy'); } catch { /* Report failure below. */ }
       ta.remove();
     }
     setCopyLabel(ok ? 'Copied' : 'Copy failed');
@@ -161,17 +161,6 @@ export function OrbSettingsPanel() {
     setCustomName('');
   };
 
-  if (!variant) return null;
-
-  const paletteNames = Object.keys(variant.palettes);
-
-  // Resolve the active override bucket for the current context.
-  const activeBucket: Record<string, number | string | boolean | undefined> = (() => {
-    if (ctx.kind === 'state') return stateOverrides[ctx.state] ?? {};
-    if (ctx.kind === 'mood')  return moodOverrides[ctx.dim] ?? {};
-    return {};
-  })();
-
   const onStateDelta = useCallback(
     (key: string, delta: number) => {
       if (ctx.kind === 'state') setStateDelta(ctx.state, key, delta);
@@ -195,6 +184,17 @@ export function OrbSettingsPanel() {
     if (ctx.kind === 'base') return;
     resetBucket(ctx);
   };
+
+  if (!variant) return null;
+
+  const paletteNames = Object.keys(variant.palettes);
+
+  // Resolve the active override bucket for the current context.
+  const activeBucket: Record<string, number | string | boolean | undefined> = (() => {
+    if (ctx.kind === 'state') return stateOverrides[ctx.state] ?? {};
+    if (ctx.kind === 'mood')  return moodOverrides[ctx.dim] ?? {};
+    return {};
+  })();
 
   return (
     <CollapsiblePanelProvider storageKey="orbis.orbPanel">

@@ -14,7 +14,7 @@ The **Voice → Microphone** panel manages audio input.
 | --- | --- |
 | **Permission** | macOS mic access. If it's not granted, ORBIS shows a button to request it (or to open System Settings if it was previously denied). |
 | **Input device** | Choose which microphone to use. Shown only when the audio mode uses a selectable device; in voice-processing mode ORBIS follows the **macOS system input** instead. |
-| **Level meter** | A live meter — speak and confirm the bars move. Your single best "is the mic working?" check. |
+| **Level meter** | Confirms microphone activity. Moving bars alone do not prove audio reaches speech recognition or that the voice pipeline is ready. |
 
 ::: tip M-series internal mic
 The built-in mic on M-series Macs is quiet without hardware AGC. ORBIS applies
@@ -30,8 +30,8 @@ Config lives under `stt:` in `orbis.yaml`; the `STT_BACKEND` env var overrides
 
 | Backend | What it is | When to use |
 | --- | --- | --- |
-| **`local`** (Whisper) | In-process Whisper on Apple-Silicon (MPS). Segmented per turn — it transcribes after you stop talking, not while. Default. | The private, offline default. |
-| **`parakeet`** | NVIDIA Parakeet-TDT via Apple MLX (opt-in `[parakeet]` extra). Faster and far fewer silence-hallucinations than Whisper. ~600 MB model on first use; restart to apply. | Best local quality/speed if you can install the extra. |
+| **`local`** (Whisper) | In-process Whisper on Apple-Silicon (MPS). Segmented per turn — it transcribes after you stop talking, not while. Default for direct Python runs. | An on-device alternative to Parakeet. |
+| **`parakeet`** | NVIDIA Parakeet-TDT via Apple MLX. The packaged Mac app selects this for on-device speech. ~600 MB model on first use; restart to apply. Source installations need the `[parakeet]` extra. | The desktop on-device default. |
 | **`openai`** | An OpenAI-compatible Whisper endpoint. | You want a hosted transcriber. |
 | **protoLabs** | faster-whisper on the protoLabs gateway (same key as the LLM). | protoLabs-hosted setups. |
 
@@ -90,10 +90,11 @@ Direct `python app.py` runs without the native audio socket and reports a
 
 Public failure details and codes are deliberately stable and sanitized. The
 full exception remains in the private sidecar log. `action: retry` is emitted
-only before Rust has accepted the one-shot socket connection (model warm or
-connection failure). Once accepted, a later failure emits
-`action: relaunch_required`; retrying in-process would be misleading until the
-separate socket-supervision work lands. Cancelling startup prevents
+only for startup failures that can safely be retried before the native audio
+session starts, such as model warmup or initial connection failure. A later
+pipeline or backend loss requires `action: relaunch_required`; accepting a new
+socket connection does not rebuild the voice pipeline or restart the sidecar.
+Cancelling startup prevents
 Pipecat from starting, but Python cannot forcibly stop synchronous native model
 code already running inside `asyncio.to_thread`; process shutdown may therefore
 wait for that call to return.
@@ -104,11 +105,18 @@ setup remain available while local speech models warm. Until lifecycle reaches
 and microphone controls cannot begin a voice turn. A `failed` state remains
 visible rather than treating an acquired Mac microphone as a working voice
 pipeline. Correct the reported cause and use **Settings → Quick → Retry
-voice** only when the lifecycle advertises `action: retry`. Once the native
-socket has been consumed, Settings instead offers **Relaunch ORBIS** for
+voice** only when the lifecycle advertises `action: retry`. For failures that
+require a new native session, Settings instead offers **Relaunch ORBIS** for
 `action: relaunch_required`; it never sends a retry that the backend cannot
 honor. Operators can trigger the same explicit, idempotent retry with
 `POST /api/voice/retry`; ORBIS never runs a blind retry loop.
+
+The October 2026 source candidate also monitors complete microphone-frame
+delivery and allows the native socket to accept another client after a
+disconnect, discarding stale audio. These recovery changes are pending native
+acceptance and are not included in the currently downloadable v0.2.171 app.
+Neither version automatically restarts a failed hardware stream or sidecar;
+use the recovery action shown by the app.
 
 ## See also
 

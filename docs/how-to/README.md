@@ -5,6 +5,7 @@ Task-oriented — a recipe for a specific goal. These assume you've done the
 
 ### Voice & conversation
 
+- **[Enable wake-word activation](./enable-wake-word)** — download a verified phrase and opt into hands-free listening.
 - **[Train a wake word](./train-a-wake-word)** — teach ORBIS a custom wake phrase.
 - **[Choose a speech-to-text backend](./choose-speech-to-text)** — Whisper, Parakeet, hosted.
 - **[Choose a voice (TTS)](./choose-a-voice)** — backend + voice selection.

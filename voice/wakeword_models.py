@@ -17,6 +17,9 @@ just its own small classifier.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -27,13 +30,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Stock openWakeWord release (dscripka/openWakeWord) — the shared models + the
-# common pre-trained wake words. Pinned to a release tag for reproducibility.
-_OWW = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
-# The user's custom "Hey Orbis" model on Hugging Face.
-_HEY_ORBIS = "https://huggingface.co/protoLabsAI/hey-orbis-wakeword/resolve/main/hey_orbis.onnx"
-
-
 @dataclass
 class WakeModel:
     id: str
@@ -42,53 +38,23 @@ class WakeModel:
     filename: str
     url: str
     size_kb: int
-    #: "shared" = base dependency (melspec/embedding) every wake word needs;
-    #: "wake" = a per-phrase classifier the user can enable.
     kind: str
+    sha256: str
+    embedding_frames: int
+    score_start: int
+    license: str
+    source_url: str
     recommended: bool = False
 
 
-# The catalog. `hey_orbis` is the default/recommended; the stock oWW set gives
-# the user familiar phrases to try. The two `shared` entries are pulled in
-# automatically as dependencies of any wake word.
-_CATALOG: list[WakeModel] = [
-    WakeModel(
-        "melspectrogram", "Mel spectrogram", "Shared audio front-end (required).",
-        "melspectrogram.onnx", f"{_OWW}/melspectrogram.onnx", 1063, "shared",
-    ),
-    WakeModel(
-        "embedding", "Speech embedding", "Shared Google speech embedding (required).",
-        "embedding_model.onnx", f"{_OWW}/embedding_model.onnx", 1295, "shared",
-    ),
-    WakeModel(
-        "hey_orbis", "Hey Orbis", "ORBIS's own wake word (94% recall). Recommended.",
-        "hey_orbis.onnx", _HEY_ORBIS, 198, "wake", recommended=True,
-    ),
-    WakeModel(
-        "alexa", "Alexa", "Stock openWakeWord phrase.",
-        "alexa_v0.1.onnx", f"{_OWW}/alexa_v0.1.onnx", 834, "wake",
-    ),
-    WakeModel(
-        "hey_jarvis", "Hey Jarvis", "Stock openWakeWord phrase.",
-        "hey_jarvis_v0.1.onnx", f"{_OWW}/hey_jarvis_v0.1.onnx", 1242, "wake",
-    ),
-    WakeModel(
-        "hey_mycroft", "Hey Mycroft", "Stock openWakeWord phrase.",
-        "hey_mycroft_v0.1.onnx", f"{_OWW}/hey_mycroft_v0.1.onnx", 838, "wake",
-    ),
-    WakeModel(
-        "hey_rhasspy", "Hey Rhasspy", "Stock openWakeWord phrase.",
-        "hey_rhasspy_v0.1.onnx", f"{_OWW}/hey_rhasspy_v0.1.onnx", 199, "wake",
-    ),
-    WakeModel(
-        "timer", "Timer", "Stock openWakeWord phrase (\"set a timer\").",
-        "timer_v0.1.onnx", f"{_OWW}/timer_v0.1.onnx", 1702, "wake",
-    ),
-    WakeModel(
-        "weather", "Weather", "Stock openWakeWord phrase (\"what's the weather\").",
-        "weather_v0.1.onnx", f"{_OWW}/weather_v0.1.onnx", 1122, "wake",
-    ),
+# One pinned manifest shared with the Rust detector: filenames, shape and
+# checksums must agree for every selectable phrase.
+_CATALOG = [
+    WakeModel(**entry)
+    for entry in json.loads(Path(__file__).with_name("wakeword_catalog.json").read_text())
 ]
+_DOWNLOAD_LOCKS: dict[str, asyncio.Lock] = {}
+
 
 _BY_ID = {m.id: m for m in _CATALOG}
 
@@ -105,7 +71,10 @@ def models_dir() -> Path:
 
 def is_downloaded(m: WakeModel) -> bool:
     p = models_dir() / m.filename
-    return p.exists() and p.stat().st_size > 0
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest() == m.sha256
+    except OSError:
+        return False
 
 
 def catalog() -> list[dict]:
@@ -123,6 +92,15 @@ def get(model_id: str) -> WakeModel | None:
 
 
 async def iter_download(model_id: str) -> AsyncGenerator[dict, None]:
+    # The settings and quick panel can request the same asset concurrently.
+    # A single writer owns each partial file until verification/install.
+    lock = _DOWNLOAD_LOCKS.setdefault(model_id, asyncio.Lock())
+    async with lock:
+        async for progress in _iter_download(model_id):
+            yield progress
+
+
+async def _iter_download(model_id: str) -> AsyncGenerator[dict, None]:
     """Download one model, yielding ``{"downloaded", "total"}`` (bytes) as data
     arrives, and performing the atomic install on completion. Throttling is the
     caller's job. The streaming download endpoint drives this directly.
@@ -133,15 +111,18 @@ async def iter_download(model_id: str) -> AsyncGenerator[dict, None]:
     if m is None:
         raise ValueError(f"unknown wake model {model_id!r}")
     dest = models_dir() / m.filename
-    if dest.exists() and dest.stat().st_size > 0:
+    if is_downloaded(m):
         sz = dest.stat().st_size
         yield {"downloaded": sz, "total": sz}
         return
     partial = dest.with_suffix(dest.suffix + ".partial")
     have = partial.stat().st_size if partial.exists() else 0
     headers = {"Range": f"bytes={have}-"} if have else {}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(120.0, connect=15.0)) as client:
         async with client.stream("GET", m.url, headers=headers) as r:
+            if r.status_code == 416:
+                partial.unlink(missing_ok=True)
+                raise RuntimeError(f"{model_id}: incomplete download needs a retry")
             if r.status_code not in (200, 206):
                 raise RuntimeError(f"{model_id}: HTTP {r.status_code} from {m.url}")
             # Server ignored our Range — start fresh so we don't corrupt.
@@ -155,7 +136,10 @@ async def iter_download(model_id: str) -> AsyncGenerator[dict, None]:
                     f.write(chunk)
                     downloaded += len(chunk)
                     yield {"downloaded": downloaded, "total": total}
-    partial.rename(dest)
+    if hashlib.sha256(partial.read_bytes()).hexdigest() != m.sha256:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"{model_id}: model verification failed; retry the download")
+    partial.replace(dest)
     logger.info(f"[wakeword] downloaded {m.filename} → {dest}")
 
 

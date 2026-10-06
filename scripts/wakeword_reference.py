@@ -26,6 +26,7 @@ model was trained on that range.
 
 from __future__ import annotations
 
+import json
 import sys
 import wave
 from pathlib import Path
@@ -52,7 +53,12 @@ class WakeReference:
         p = lambda n: str(d / n)  # noqa: E731
         self._mel = ort.InferenceSession(p("melspectrogram.onnx"), providers=["CPUExecutionProvider"])
         self._emb = ort.InferenceSession(p("embedding_model.onnx"), providers=["CPUExecutionProvider"])
-        self._wake = ort.InferenceSession(p(f"{wake_model}.onnx"), providers=["CPUExecutionProvider"])
+        catalog = json.loads((Path(__file__).resolve().parents[1] / "voice/wakeword_catalog.json").read_text())
+        spec = next(m for m in catalog if m["id"] == wake_model and m["kind"] == "wake")
+        self.wake_window = spec["embedding_frames"]
+        self.score_start = spec["score_start"]
+        self.window_samples = 32000 + (self.wake_window - WAKE_WINDOW) * 1280
+        self._wake = ort.InferenceSession(p(spec["filename"]), providers=["CPUExecutionProvider"])
         self._mi = self._mel.get_inputs()[0].name
         self._ei = self._emb.get_inputs()[0].name
         self._wi = self._wake.get_inputs()[0].name
@@ -73,10 +79,12 @@ class WakeReference:
 
     def score(self, audio: np.ndarray) -> float | None:
         emb = self.embeddings(self.melspec(audio))
-        if len(emb) < WAKE_WINDOW:
+        if len(emb) < self.wake_window:
             return None
-        w = emb[-WAKE_WINDOW:][None, :, :].astype(np.float32)
-        return float(np.squeeze(self._wake.run(None, {self._wi: w})[0]))
+        w = emb[-self.wake_window:][None, :, :].astype(np.float32)
+        scores = self._wake.run(None, {self._wi: w})[0].reshape(-1)
+        # Timer is multiclass: index zero is background, 1..6 are phrases.
+        return float(scores[self.score_start:].max())
 
 
 def _load_wav(path: str) -> np.ndarray:

@@ -98,6 +98,7 @@ const HARDWARE_EXIT_CODE: i32 = 2;
 #[cfg(feature = "native-audio")]
 struct AudioEngineState {
     engine: Mutex<Option<Arc<audio::engine::AudioEngine>>>,
+    status: Mutex<audio::socket::AudioStatus>,
 }
 
 #[cfg(feature = "native-audio")]
@@ -105,6 +106,7 @@ impl AudioEngineState {
     fn new() -> Self {
         Self {
             engine: Mutex::new(None),
+            status: Mutex::new(audio::socket::AudioStatus::default()),
         }
     }
     fn store(&self, engine: Arc<audio::engine::AudioEngine>) {
@@ -437,12 +439,42 @@ fn try_start_native_engine(app: &AppHandle) {
                 let wake = wake_config(&app_handle);
                 // Accept loop runs in a background task.
                 tauri::async_runtime::spawn(async move {
-                    if let Err(e) = sock_server.accept_and_run(engine, mic_rx, wake).await {
+                    let status_app = app_handle.clone();
+                    let emit = move |status: audio::socket::AudioStatus| {
+                        if let Some(state) = status_app.try_state::<AudioEngineState>() {
+                            if let Ok(mut g) = state.status.lock() {
+                                *g = status.clone();
+                            }
+                        }
+                        let _ = status_app.emit("orbis-audio-status", status);
+                    };
+                    if let Err(e) = sock_server
+                        .accept_and_run(engine, mic_rx, wake, &emit)
+                        .await
+                    {
                         log::error!("[audio/socket] accept_and_run failed: {e}");
+                        emit(audio::socket::AudioStatus {
+                            detail: "Native audio stopped; relaunch ORBIS".into(),
+                            relaunch_required: true,
+                            ..Default::default()
+                        });
                     }
                 });
             }
-            Err(e) => log::error!("[audio] native engine failed to start: {e}"),
+            Err(e) => {
+                log::error!("[audio] native engine failed to start: {e}");
+                let status = audio::socket::AudioStatus {
+                    detail: "Native audio could not start; relaunch ORBIS".into(),
+                    relaunch_required: true,
+                    ..Default::default()
+                };
+                if let Some(state) = app_handle.try_state::<AudioEngineState>() {
+                    if let Ok(mut g) = state.status.lock() {
+                        *g = status.clone();
+                    }
+                }
+                let _ = app_handle.emit("orbis-audio-status", status);
+            }
         }
     });
 }
@@ -460,6 +492,12 @@ fn start_audio_engine(app: tauri::AppHandle) -> bool {
     app.try_state::<AudioEngineState>()
         .and_then(|s| s.engine.lock().ok().map(|g| g.is_some()))
         .unwrap_or(false)
+}
+
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn audio_status(state: tauri::State<AudioEngineState>) -> audio::socket::AudioStatus {
+    state.status.lock().map(|s| s.clone()).unwrap_or_default()
 }
 
 /// Return the names of all output devices on the host (HAL on macOS, CPAL
@@ -578,12 +616,16 @@ fn get_audio_levels(state: tauri::State<AudioEngineState>) -> AudioLevels {
 /// so the sidecar gets no audio until the user opts into a conversation.
 #[cfg(feature = "native-audio")]
 #[tauri::command]
-fn set_mic_listening(on: bool, state: tauri::State<AudioEngineState>) {
+fn set_mic_listening(on: bool, state: tauri::State<AudioEngineState>) -> Result<(), String> {
+    if on && !state.status.lock().map(|s| s.ready()).unwrap_or(false) {
+        return Err("Native audio unavailable; relaunch ORBIS if it does not recover".into());
+    }
     if let Ok(g) = state.engine.lock() {
         if let Some(e) = g.as_ref() {
             e.set_listening(on);
         }
     }
+    Ok(())
 }
 
 #[cfg(feature = "native-audio")]
@@ -850,6 +892,7 @@ struct Sidecar {
     /// set ONLY when it `setsid()`'d into its own session, so we reap a group
     /// we own. `None` ⇒ fall back to a direct-child kill (#485).
     pgid: Mutex<Option<i32>>,
+    shutting_down: std::sync::atomic::AtomicBool,
 }
 
 impl Sidecar {
@@ -857,6 +900,7 @@ impl Sidecar {
         Self {
             child: Mutex::new(None),
             pgid: Mutex::new(None),
+            shutting_down: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1735,19 +1779,64 @@ fn update_conversation_busy(event: &str, data: &str) {
 /// `orbis-sse` events. WKWebView won't stream a cross-origin EventSource
 /// on Tahoe, so Rust (reqwest) consumes the stream and re-emits each
 /// event; the frontend listens instead of opening its own EventSource.
+#[derive(Default)]
+struct SseConnectionState(Mutex<bool>);
+
+#[tauri::command]
+fn sse_connected(state: tauri::State<SseConnectionState>) -> bool {
+    state.0.lock().map(|g| *g).unwrap_or(false)
+}
+
+fn emit_sse_connection(app: &AppHandle, connected: bool) {
+    if let Some(state) = app.try_state::<SseConnectionState>() {
+        if let Ok(mut g) = state.0.lock() {
+            *g = connected;
+        }
+    }
+    let _ = app.emit(
+        "orbis-sse",
+        SsePayload {
+            event: if connected {
+                "__connected"
+            } else {
+                "__disconnected"
+            }
+            .into(),
+            data: "{}".into(),
+        },
+    );
+}
+
 async fn bridge_sse(app: AppHandle, base: String) {
     let url = format!("{}/api/events", base.trim_end_matches('/'));
     let client = reqwest::Client::new();
     loop {
-        match client.get(&url).send().await {
+        if app
+            .try_state::<BackendUrl>()
+            .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()))
+            .as_deref()
+            != Some(base.as_str())
+        {
+            return;
+        }
+        match client
+            .get(&url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
             Ok(mut resp) => {
-                let _ = app.emit(
-                    "orbis-sse",
-                    SsePayload {
-                        event: "__connected".into(),
-                        data: "{}".into(),
-                    },
-                );
+                // A process exit can race an in-flight HTTP connect. Never
+                // revive a connection after the supervisor invalidated it.
+                if app
+                    .try_state::<BackendUrl>()
+                    .and_then(|s| s.0.lock().ok().and_then(|g| g.clone()))
+                    .as_deref()
+                    != Some(base.as_str())
+                {
+                    return;
+                }
+                emit_sse_connection(&app, true);
                 let mut buf = String::new();
                 loop {
                     match resp.chunk().await {
@@ -1780,6 +1869,7 @@ async fn bridge_sse(app: AppHandle, base: String) {
             }
             Err(e) => log::warn!("[sse-bridge] connect failed: {e}"),
         }
+        emit_sse_connection(&app, false);
         tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
     }
 }
@@ -1854,6 +1944,7 @@ pub fn run() {
                     set_output_device,
                     get_audio_level,
                     get_audio_levels,
+                    audio_status,
                     get_audio_input_mode,
                     get_microphone_permission_status,
                     request_microphone_permission,
@@ -1862,11 +1953,13 @@ pub fn run() {
                     reveal_logs,
                     export_diagnostics,
                     backend_url,
+                    sse_connected,
                     set_mic_listening,
                     mic_listening,
                     set_mic_muted,
                     mic_muted,
                     get_activation_config,
+                    get_wake_state,
                     set_activation_config,
                     set_full_duplex,
                     get_discoverable,
@@ -1893,6 +1986,7 @@ pub fn run() {
                     reveal_logs,
                     export_diagnostics,
                     backend_url,
+                    sse_connected,
                     get_discoverable,
                     set_discoverable,
                     open_url,
@@ -1909,6 +2003,7 @@ pub fn run() {
         })
         .manage(Sidecar::new())
         .manage(BackendUrl::default())
+        .manage(SseConnectionState::default())
         .manage(BootState::default())
         .manage(DelegateHealthState::default())
         .manage(FleetAgents::default())
@@ -1935,6 +2030,7 @@ pub fn run() {
             #[cfg(feature = "native-audio")]
             {
                 app.manage(AudioEngineState::new());
+                app.manage(WakeStatus::default());
                 // Holds the deferred engine start until mic permission exists
                 // (first run grants it via the wizard). Bound by supervise_sidecar.
                 app.manage(PendingAudio::default());
@@ -2014,6 +2110,9 @@ pub fn run() {
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<Sidecar>() {
                     log::info!("app exit requested — killing sidecar");
+                    state
+                        .shutting_down
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     state.kill();
                 }
                 // Reap any fleet agents ORBIS launched (connect-only stay up).
@@ -2042,7 +2141,7 @@ pub fn run() {
 struct ActivationConfig {
     /// "push_to_talk" (default) | "wake_word" | "open_mic"
     style: String,
-    /// wake model id — the picker's `<id>.onnx` (e.g. "hey_orbis")
+    /// wake model catalog id (the manifest owns its filename and input shape)
     model: String,
     /// fire threshold 0..1
     threshold: f32,
@@ -2058,12 +2157,62 @@ impl Default for ActivationConfig {
     fn default() -> Self {
         Self {
             style: "push_to_talk".into(),
-            model: "hey_orbis".into(),
+            model: "hey_jarvis".into(),
             threshold: 0.5,
             listen_window_s: 12.0,
             full_duplex: false,
         }
     }
+}
+
+#[cfg(feature = "native-audio")]
+impl ActivationConfig {
+    fn validate(&self, models_dir: &std::path::Path) -> Result<(), String> {
+        if !matches!(
+            self.style.as_str(),
+            "push_to_talk" | "wake_word" | "open_mic"
+        ) {
+            return Err("Unknown activation style.".into());
+        }
+        if !self.threshold.is_finite() || !(0.1..=0.9).contains(&self.threshold) {
+            return Err("Wake sensitivity must be between 0.1 and 0.9.".into());
+        }
+        if !self.listen_window_s.is_finite() || !(4.0..=30.0).contains(&self.listen_window_s) {
+            return Err("Listen window must be between 4 and 30 seconds.".into());
+        }
+        if self.style == "wake_word" {
+            audio::wake_catalog::verify_models(models_dir, &self.model)?;
+        } else if !self.model.is_empty() {
+            audio::wake_catalog::wake_model(&self.model)?;
+        }
+        Ok(())
+    }
+}
+
+/// Retained because detector warmup can finish before the WebView subscribes.
+#[cfg(feature = "native-audio")]
+#[derive(Default)]
+struct WakeStatus(Mutex<serde_json::Value>);
+
+#[cfg(feature = "native-audio")]
+fn emit_wake_state(app: &AppHandle, state: &str, phrase: &str) {
+    use tauri::{Emitter, Manager};
+    let value = serde_json::json!({ "state": state, "phrase": phrase });
+    if let Some(status) = app.try_state::<WakeStatus>() {
+        if let Ok(mut current) = status.0.lock() {
+            *current = value.clone();
+        }
+    }
+    let _ = app.emit("wake-state", value);
+}
+
+#[cfg(feature = "native-audio")]
+#[tauri::command]
+fn get_wake_state(app: AppHandle) -> serde_json::Value {
+    use tauri::Manager;
+    app.try_state::<WakeStatus>()
+        .and_then(|s| s.0.lock().ok().map(|v| v.clone()))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(feature = "native-audio")]
@@ -2109,6 +2258,7 @@ fn set_activation_config(
         ..read_activation_config(&app)
     };
     let p = activation_config_path(&app).ok_or("no app data dir")?;
+    cfg.validate(&p.parent().ok_or("no app data dir")?.join("models/wakeword"))?;
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -2189,7 +2339,7 @@ fn wake_config(
     audio::wake_word::WakeConfig,
     audio::wake_word::WakeStateEmitter,
 )> {
-    use tauri::{Emitter, Manager};
+    use tauri::Manager;
     let cfg = read_activation_config(app);
     let env_on = std::env::var("ORBIS_WAKE_ENABLED").ok().as_deref() == Some("1");
     if cfg.style != "wake_word" && !env_on {
@@ -2212,13 +2362,18 @@ fn wake_config(
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(threshold);
-    let listen_window_s = listen_window_s.max(1.0);
+    let listen_window_s = listen_window_s.clamp(4.0, 30.0);
     log::info!(
         "[wake] enabled: model={model} threshold={threshold:.2} window={listen_window_s:.0}s"
     );
     // The display phrase travels with the state so the pill can show the chosen
     // wake word (e.g. "Hey Orbis") rather than a generic label.
-    let phrase = wake_phrase(&model);
+    let phrase = match model.as_str() {
+        "timer" => "One minute timer".into(),
+        "weather" => "What's the weather".into(),
+        _ => wake_phrase(&model),
+    };
+    emit_wake_state(app, "starting", &phrase);
     let app2 = app.clone();
     let emit: audio::wake_word::WakeStateEmitter = Box::new(move |s: &str| {
         if s == "listening" {
@@ -2228,10 +2383,7 @@ fn wake_config(
             let app3 = app2.clone();
             let _ = app2.run_on_main_thread(move || show_main_window(&app3));
         }
-        let _ = app2.emit(
-            "wake-state",
-            serde_json::json!({ "state": s, "phrase": phrase }),
-        );
+        emit_wake_state(&app2, s, &phrase);
     });
     Some((
         audio::wake_word::WakeConfig {
@@ -2467,6 +2619,7 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
     // actionable in the error dialog instead of "unknown error."
     let mut stderr_ring: VecDeque<String> = VecDeque::with_capacity(STDERR_RING_CAPACITY);
     let mut ready = false;
+    let mut terminated = false;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -2541,6 +2694,7 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
                 stderr_ring.push_back(line);
             }
             CommandEvent::Terminated(payload) => {
+                terminated = true;
                 let code = payload.code.unwrap_or(-1);
                 log::warn!("sidecar terminated with code {code}");
                 handle_termination(&app, code, &stderr_ring, ready);
@@ -2548,6 +2702,9 @@ async fn supervise_sidecar(app: AppHandle) -> Result<(), String> {
             }
             _ => {}
         }
+    }
+    if !terminated {
+        handle_termination(&app, -1, &stderr_ring, ready);
     }
     Ok(())
 }
@@ -2810,9 +2967,50 @@ fn handle_termination(
     stderr_ring: &VecDeque<String>,
     ready: bool,
 ) {
+    let shutting_down = app
+        .try_state::<Sidecar>()
+        .map(|s| s.shutting_down.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false);
+    if shutting_down {
+        return;
+    }
+    if let Some(state) = app.try_state::<BackendUrl>() {
+        if let Ok(mut g) = state.0.lock() {
+            *g = None;
+        }
+    }
+    emit_sse_connection(app, false);
     if ready {
-        // The sidecar reached ready state and later exited — the user
-        // probably quit; don't nag with a dialog.
+        #[cfg(feature = "native-audio")]
+        if let Some(state) = app.try_state::<AudioEngineState>() {
+            if let Ok(g) = state.engine.lock() {
+                if let Some(engine) = g.as_ref() {
+                    engine.set_listening(false);
+                    engine.flush_playback();
+                }
+            }
+            let status = audio::socket::AudioStatus {
+                detail: "Voice service stopped; relaunch ORBIS".into(),
+                relaunch_required: true,
+                ..Default::default()
+            };
+            if let Ok(mut g) = state.status.lock() {
+                *g = status.clone();
+            }
+            let _ = app.emit("orbis-audio-status", status);
+        }
+        let _ = app.emit(
+            "orbis-sse",
+            SsePayload {
+                event: "__backend_lost".into(),
+                data: "{}".into(),
+            },
+        );
+        // An in-place process restart would lose session/tool ownership. Keep
+        // recovery explicit until that lifecycle has a safe restart contract.
+        app.dialog().message("The voice service stopped. Relaunch ORBIS to recover. Your saved settings are kept.")
+            .title("ORBIS voice service stopped")
+            .kind(MessageDialogKind::Error).blocking_show();
         return;
     }
 
@@ -2871,6 +3069,32 @@ mod tests {
         ensure_tray_registration, get_audio_input_mode, parse_ready, redact_config, tray_tooltip,
         utc_timestamp, DelegateHealthState, SsePayload, TrayPresence, TrayRegistrationError,
     };
+
+    #[cfg(feature = "native-audio")]
+    #[test]
+    fn activation_is_opt_in_and_validates_ranges_and_model_readiness() {
+        use super::ActivationConfig;
+        let dir = std::env::temp_dir().join("orbis-missing-wake-models");
+        let mut cfg = ActivationConfig::default();
+        assert_eq!(cfg.style, "push_to_talk");
+        assert_eq!(cfg.model, "hey_jarvis");
+        assert!(cfg.validate(&dir).is_ok());
+        cfg.style = "wake_word".into();
+        assert!(cfg.validate(&dir).is_err());
+        cfg.style = "open_mic".into();
+        cfg.threshold = f32::NAN;
+        assert!(cfg.validate(&dir).is_err());
+        cfg.threshold = 0.5;
+        cfg.listen_window_s = 0.0;
+        assert!(cfg.validate(&dir).is_err());
+        cfg.listen_window_s = 12.0;
+        cfg.model = "../hey_orbis".into();
+        assert!(cfg.validate(&dir).is_err());
+        cfg.model.clear();
+        assert!(cfg.validate(&dir).is_ok());
+        cfg.style = "invalid".into();
+        assert!(cfg.validate(&dir).is_err());
+    }
 
     #[test]
     fn tray_registration_does_not_duplicate_an_existing_process_local_tray() {

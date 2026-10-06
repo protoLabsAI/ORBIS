@@ -267,13 +267,16 @@ class LocalAudioTransport(BaseTransport):
         if not self._connected:
             return
         self._connected = False
-        if self._reader_task:
-            self._reader_task.cancel()
+        self._aec_active = False
+        reader_task, self._reader_task = self._reader_task, None
+        # EOF is handled by the reader itself. Cancelling/awaiting that same
+        # task skips cleanup (or raises "Task cannot await on itself").
+        if reader_task and reader_task is not asyncio.current_task():
+            reader_task.cancel()
             try:
-                await self._reader_task
+                await reader_task
             except asyncio.CancelledError:
                 pass
-            self._reader_task = None
         if self._writer:
             try:
                 self._writer.close()
@@ -371,6 +374,7 @@ class LocalAudioTransport(BaseTransport):
                     )
         except Exception as e:
             logger.error(f"[local_transport] write error: {e}")
+            await self._disconnect()
 
     async def _send_control(self, code: int) -> None:
         """Write a control frame to the socket."""
@@ -382,6 +386,7 @@ class LocalAudioTransport(BaseTransport):
             await self._writer.drain()
         except Exception as e:
             logger.error(f"[local_transport] control write error: {e}")
+            await self._disconnect()
 
     async def _send_control_nowait(self, code: int) -> None:
         """Write a control frame without awaiting drain — safe to call from

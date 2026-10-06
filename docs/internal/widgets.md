@@ -97,6 +97,7 @@ What exists vs. what's new:
 
 - **Live stream = the SSE bus** (`voice/sse_bus.py`, `/api/events`). Proven,
   JSON named events: `bot-state`, `transcript`, `tool-call`, `delegation-progress`,
+  and structured `delegate.status` / `delegate.tool` / `delegate.delta`,
   `llm`, `session`. Add a React **`useSSEBus(eventName)`** hook so any widget
   subscribes declaratively. The bus has no per-topic filtering today (subscribe-to-
   all, queue drops at 64) — add a `topic`/`delegateId` field to events and
@@ -139,13 +140,19 @@ consumes, exactly like the agent's own messages. That's the whole "get into the
 flow" requirement, and it falls out naturally because ACP sessions and A2A
 contexts are already long-lived and multi-message.
 
-To make the **monitor** widgets real (watch Orbis↔delegate traffic), wire the
-already-existing-but-**unused** progress callbacks into structured SSE events:
-- ACP `AcpClient.prompt(progress_callback=...)` (`acp/client.py:275`) → publish
-  `delegate.message` / `delegate.tool` events instead of only narrating to voice.
-- A2A `A2AClient.send(progress_callback=...)` (`a2a_outbound.py:155`, currently
-  unused in dispatch) → publish `delegate.message` / `delegate.status`
-  (working / input-required / completed / failed).
+Phase C now translates the A2A stream's authoritative status, tool-call-v1, and
+worldstate-delta-v1 frames into structured SSE for the StatusPill and bounded
+logs. ORBIS owns that transport/presentation mapping; protoAgent remains the
+source of work state and tool/delta content. The richer **monitor** widgets still
+need durable history/filtering and the operator-injection plane:
+- ACP `AcpClient.prompt(progress_callback=...)` still publishes its human tool
+  titles through the compatibility `delegation-progress` event.
+- A2A `A2AClient.send(event_callback=...)` publishes `delegate.status`,
+  `delegate.tool`, and `delegate.delta`, keyed by delegate/task/session.
+- The client bounds extension payloads and dedupe memory. The UI reduces events
+  monotonically per task, tombstones terminal tasks, and clears unreconciled
+  progress on SSE reconnect/session end. Barge-in invalidates the owning callback
+  lease, so a durable remote task cannot repaint a canceled voice turn.
 - OpenAI delegates are one-shot (`agent/delegates.py:547`) — show request/response
   pairs only; no stream.
 
@@ -189,7 +196,8 @@ for UI); reminders & inbox CRUD; memory SQLite; voice HITL pipeline.
 2. Generic `open_widget_window` + `WidgetWindowRoot` routing by `?widget=` *(small)*.
 3. In-app **dock** + pop-out/dock-in toggle + workspace persistence *(medium)*.
 4. **Text-HITL**: `/api/operator/{answer,turn,inject}` + a text twin of AskGate *(medium, highest-leverage)*.
-5. Structured `delegate.*` SSE events from the wired-in ACP/A2A callbacks *(medium)*.
+5. Structured `delegate.*` SSE events from A2A callbacks *(Phase C slice done;
+   durable monitor history and ACP-native tool lifecycle remain Stage 5)*.
 6. `notes` table + `/api/notes` CRUD *(small)*.
 
 ---

@@ -14,7 +14,7 @@ import type { VoiceLifecycle } from './lifecycle';
 /** Wake-word activation state (Rust `wake-state` event). `null` when wake mode
  * is off (push-to-talk / open-mic). ARMED = detector running, waiting for the
  * phrase; LISTENING = phrase fired, window open. */
-export type ActivationState = 'armed' | 'listening' | null;
+export type ActivationState = 'starting' | 'armed' | 'listening' | 'failed' | null;
 
 export interface VoiceSnapshot {
   state: VoiceState;
@@ -32,9 +32,13 @@ export interface VoiceSnapshot {
   connected: boolean;
   /** Backend-owned truth for whether Pipecat can consume native audio. */
   voiceLifecycle: VoiceLifecycle | null;
+  /** Retained Rust socket/capture health, separate from Pipecat readiness. */
+  nativeAudio: { socket_connected: boolean; capture_alive: boolean; detail: string; relaunch_required: boolean } | null;
   lastUserTranscript: string | null;
   lastBotText: string | null;
   activeToolCall: { name: string; args: unknown } | null;
+  /** Correlation key for the delegate task currently owning the progress rail. */
+  delegationTaskKey: string | null;
   delegationProgress: string | null;
   delegationOutcome: 'success' | 'error' | null;
   sessionId: string | null;
@@ -51,9 +55,11 @@ const INITIAL: VoiceSnapshot = {
   micMuted: false,
   connected: false,
   voiceLifecycle: null,
+  nativeAudio: null,
   lastUserTranscript: null,
   lastBotText: null,
   activeToolCall: null,
+  delegationTaskKey: null,
   delegationProgress: null,
   delegationOutcome: null,
   sessionId: null,

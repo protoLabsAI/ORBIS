@@ -18,6 +18,9 @@
  *   session    { event: 'start'|'end', session_id?: string }
  *   tool-call  { event: 'start'|'end', name?, args?, outcome? }
  *   delegation-progress { type, source, text }
+ *   delegate.status { delegate_id, task_id?, session_id?, state, text? }
+ *   delegate.tool   { delegate_id, task_id?, session_id?, name, status }
+ *   delegate.delta  { delegate_id, task_id?, session_id?, deltas }
  *   widget     { action: 'open'|'close', id, props? } — render_widget tool
  *   orb-config { variant?, palette?, params? } — set_orb_visual tool
  *   persona-switched { slug, name, applies, notes, viz? } — persona change
@@ -27,20 +30,54 @@
  * pre-Tahoe it opened a browser EventSource directly. Both are gone.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
+import { applyConnectionSignal, createNativeWakeCoordinator } from './connection';
 import { widgetWorkspace } from '../widgets/store';
 import { applyParam, applyPreset, setVariant } from '../plugins/orb/broadcast';
+import { logBus } from '../shared/logBus';
+import {
+  initialDelegateLifecycle,
+  reduceDelegateEvent,
+} from './delegateEvents';
 
 interface SsePayload {
   event: string;
   data: string;
 }
 
-function handleSse(event: string, data: string): void {
-  if (event === '__connected') {
-    voiceStore.update({ connected: true });
+let delegateLifecycle = initialDelegateLifecycle();
+const MAX_PENDING_MIRRORS = 256;
+let pendingStructuredProgress: {
+  delegateId: string;
+  text: string;
+}[] = [];
+
+function clearDelegateLifecycle(patch: Partial<VoiceSnapshot> = {}): void {
+  delegateLifecycle = initialDelegateLifecycle();
+  pendingStructuredProgress = [];
+  voiceStore.update({
+    delegationTaskKey: null,
+    delegationProgress: null,
+    delegationOutcome: null,
+    ...patch,
+  });
+}
+
+function boundedSseText(value: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  let bounded = new TextDecoder().decode(encoder.encode(value.trim()).slice(0, maxBytes));
+  while (encoder.encode(bounded).length > maxBytes) bounded = bounded.slice(0, -1);
+  return bounded;
+}
+
+export function handleSse(event: string, data: string): void {
+  if (applyConnectionSignal(event)) {
+    // The bounded SSE bus has no replay cursor. Retain native mic truth but
+    // discard old task presentation until fresh authoritative events arrive.
+    clearDelegateLifecycle();
     return;
   }
 
@@ -67,13 +104,12 @@ function handleSse(event: string, data: string): void {
     case 'session': {
       const ev = parsed.event as 'start' | 'end' | undefined;
       if (ev === 'start') {
-        voiceStore.update({
-          connected: true,
+        clearDelegateLifecycle({
           sessionId: (parsed.session_id as string | undefined) ?? null,
           state: 'idle',
         });
       } else if (ev === 'end') {
-        voiceStore.update({ state: 'idle', sessionId: null });
+        clearDelegateLifecycle({ state: 'idle', sessionId: null });
       }
       break;
     }
@@ -82,22 +118,79 @@ function handleSse(event: string, data: string): void {
       if (ev === 'start' && parsed.name) {
         voiceStore.update({
           activeToolCall: { name: String(parsed.name), args: parseArgs(parsed.args) },
-          delegationProgress: null,
-          delegationOutcome: null,
+          ...(delegateLifecycle.activeTaskKey === null ? {
+            delegationTaskKey: null,
+            delegationProgress: null,
+            delegationOutcome: null,
+          } : {}),
         });
       } else if (ev === 'end') {
         voiceStore.update({
           activeToolCall: null,
-          delegationProgress: null,
-          delegationOutcome: (parsed.outcome as 'success' | 'error' | undefined) ?? 'success',
+          ...(delegateLifecycle.activeTaskKey === null ? {
+            delegationTaskKey: null,
+            delegationProgress: null,
+            delegationOutcome: voiceStore.getSnapshot().delegationOutcome
+              ?? (parsed.outcome as 'success' | 'error' | undefined)
+              ?? 'success',
+          } : {}),
         });
       }
       break;
     }
     case 'delegation-progress': {
       if (typeof parsed.text === 'string') {
-        voiceStore.update({ delegationProgress: parsed.text });
+        const text = boundedSseText(parsed.text, 1024);
+        const source = typeof parsed.source === 'string'
+          ? boundedSseText(parsed.source, 256)
+          : '';
+        const structuredMirrorIndex = pendingStructuredProgress.findIndex(
+          (progress) => progress.delegateId === source && progress.text === text,
+        );
+        if (structuredMirrorIndex !== -1) {
+          // The task-keyed structured reducer already decided whether this
+          // update owns the visible rail. Never let its task-blind compatibility
+          // mirror reverse that decision; suppress this one exact pair only.
+          pendingStructuredProgress.splice(structuredMirrorIndex, 1);
+          break;
+        }
+        voiceStore.update({
+          delegationProgress: source ? `${source}: ${text}` : text,
+        });
+        logBus.push({ source: 'delegate', level: 'info', message: text });
       }
+      break;
+    }
+    case 'delegate.status':
+    case 'delegate.tool':
+    case 'delegate.delta': {
+      const reduced = reduceDelegateEvent(delegateLifecycle, event, parsed);
+      delegateLifecycle = reduced.lifecycle;
+      const presentation = reduced.presentation;
+      const statusState = typeof parsed.state === 'string' ? parsed.state : '';
+      const rawText = typeof parsed.text === 'string' ? boundedSseText(parsed.text, 1024) : '';
+      const delegateId = typeof parsed.delegate_id === 'string'
+        ? boundedSseText(parsed.delegate_id, 256)
+        : '';
+      if (
+        event === 'delegate.status'
+        && rawText
+        && delegateId
+        && !['completed', 'failed', 'canceled'].includes(statusState)
+      ) {
+        pendingStructuredProgress.push({
+          delegateId,
+          text: rawText,
+        });
+        if (pendingStructuredProgress.length > MAX_PENDING_MIRRORS) {
+          pendingStructuredProgress.shift();
+        }
+      }
+      if (!presentation) break;
+      if (Object.keys(presentation.patch).length > 0) {
+        voiceStore.update(presentation.patch);
+      }
+      logBus.push({ source: 'delegate', ...presentation.log });
       break;
     }
     case 'widget': {
@@ -154,40 +247,60 @@ function handleSse(event: string, data: string): void {
 
 export function useVoiceBridge(): void {
   const unlistenRef = useRef<UnlistenFn | null>(null);
+  const unlistenAudioRef = useRef<UnlistenFn | null>(null);
   const unlistenWakeRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    let connectionEventSeen = false;
 
     listen<SsePayload>('orbis-sse', (e) => {
+      if (cancelled) return;
+      if (e.payload.event.startsWith('__')) connectionEventSeen = true;
       handleSse(e.payload.event, e.payload.data);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
+      .then(async (fn) => {
+        if (cancelled) { fn(); return; }
         unlistenRef.current = fn;
-        voiceStore.update({ connected: true });
+        const connected = await invoke<boolean>('sse_connected');
+        if (!cancelled && !connectionEventSeen) voiceStore.update({ connected });
       })
       .catch(() => {
         // listen() unavailable (non-Tauri dev) — voice state stays idle.
       });
 
-    // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
-    // independent of the Python SSE bridge (it fires while the mic is muted,
-    // before Python sees any audio). Payload: { state, phrase }.
+    // Keep the retained wake snapshot until native readiness arrives. Detector
+    // readiness is independent of socket/capture readiness; it cannot establish
+    // a live listening turn after an observed native loss.
+    let wakeEventSeen = false;
+    const { applyWake, applyRetainedWake, applyAudio } = createNativeWakeCoordinator();
+
+    // Register first, then read retained truth: mounting an event listener
+    // says nothing about whether the sidecar or microphone is actually alive.
+    let audioEventSeen = false;
+    listen<NonNullable<VoiceSnapshot['nativeAudio']>>('orbis-audio-status', (e) => {
+      if (cancelled) return;
+      audioEventSeen = true;
+      applyAudio(e.payload);
+    }).then(async (fn) => {
+      if (cancelled) { fn(); return; }
+      unlistenAudioRef.current = fn;
+      const status = await invoke<NonNullable<VoiceSnapshot['nativeAudio']>>('audio_status');
+      if (!cancelled && !audioEventSeen) applyAudio(status);
+    }).catch(() => {});
+
+    // Subscribe before reading retained state: a detector can warm up before
+    // the UI mounts. An event received during the read beats the older snapshot.
     listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
-      const s = e.payload?.state;
-      const a = s === 'armed' || s === 'listening' ? s : null;
-      voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
+      if (cancelled) return;
+      wakeEventSeen = true;
+      applyWake(e.payload);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
+      .then(async (fn) => {
+        if (cancelled) { fn(); return; }
         unlistenWakeRef.current = fn;
+        const retained = await invoke<{ state?: string; phrase?: string } | null>('get_wake_state');
+        if (!cancelled && !wakeEventSeen && retained) applyRetainedWake(retained);
       })
       .catch(() => {});
 
@@ -196,6 +309,10 @@ export function useVoiceBridge(): void {
       if (unlistenRef.current) {
         unlistenRef.current();
         unlistenRef.current = null;
+      }
+      if (unlistenAudioRef.current) {
+        unlistenAudioRef.current();
+        unlistenAudioRef.current = null;
       }
       if (unlistenWakeRef.current) {
         unlistenWakeRef.current();

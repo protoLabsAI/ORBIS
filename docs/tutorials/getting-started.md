@@ -4,9 +4,10 @@ This tutorial takes you from downloading ORBIS to a working voice companion
 that reminds you, hands work to an agent, and responds to an external ping. By
 the end you'll have *heard* each of ORBIS's signature behaviours.
 
-> **You'll need:** an Apple-Silicon Mac (M1 or later) on a recent macOS. That's
-> it — ORBIS is a regular Mac app you download and open; there's nothing to
-> build or clone.
+> **You'll need:** an Apple-Silicon Mac (M1 or later), macOS 13+, at least 8 GB
+> RAM and 5 GB free disk, and an internet connection for first-run downloads.
+> A local language model needs additional space; 16 GB RAM is recommended for
+> on-device inference. You can download and open the app without building it.
 
 ## 1. Download and install
 
@@ -16,11 +17,19 @@ the end you'll have *heard* each of ORBIS's signature behaviours.
 3. Open ORBIS from Applications. It's **signed and notarized by Apple**, so it
    opens cleanly — no right-click-to-open or Gatekeeper workarounds.
 
+The first launch installs the runtime, which can take a few minutes. Choosing
+on-device speech downloads roughly 900 MB of voice models during setup.
+Expect about 3 GB for the runtime and speech together; the suggested built-in
+MLX language model adds roughly 2.5 GB. Downloads need internet access even if
+you plan to use ORBIS offline afterward.
+
 On first launch ORBIS asks for **microphone access** — grant it. (If the orb
 can't hear you later, toggle ORBIS on under System Settings → Privacy &
 Security → Microphone.) A short **first-run setup** walks you through naming it,
 picking a voice, choosing your speech (on-device or cloud), and pointing it at a
-language model. When you finish, the orb appears — that's your companion, ready.
+language model. When you finish, the orb appears. Wait for the voice status to
+become ready before starting a conversation. If startup fails,
+**Settings → Quick** offers the available retry or relaunch action.
 
 > ORBIS needs a language model to think. The setup helps you connect one — a
 > cloud provider with your own key, or a local model. You can change it any time

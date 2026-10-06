@@ -24,6 +24,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::Serialize;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
@@ -107,7 +109,7 @@ pub fn decode_header(buf: &[u8; HEADER_LEN]) -> (u16, u16, u16, u16) {
     (direction, sample_rate, channels, num_samples)
 }
 
-/// The Unix socket server. Binds once, accepts one client (Python
+/// The Unix socket server. Binds once, serves one client at a time (Python
 /// sidecar). The single-client model matches Pipecat's single-pipeline
 /// assumption.
 pub struct SocketServer {
@@ -133,159 +135,270 @@ impl SocketServer {
         &self.path
     }
 
-    /// Accept one connection and run the bidirectional IPC loop.
-    ///
-    /// - Spawns a writer task: drains `mic_rx` and writes frames to the socket.
-    /// - Runs a reader loop in the current task: reads TTS frames and control
-    ///   frames from the socket and acts on them via `engine`.
-    ///
-    /// Returns when the connection closes or an unrecoverable error occurs.
+    /// Serve one sidecar at a time for the lifetime of the audio engine.
+    /// The receiver and wake detector survive reconnects; offline audio is
+    /// drained instead of replaying a stale microphone backlog into a new session.
     pub async fn accept_and_run(
         &self,
         engine: Arc<AudioEngine>,
-        mut mic_rx: mpsc::UnboundedReceiver<AudioMsg>,
+        mic_rx: mpsc::UnboundedReceiver<AudioMsg>,
         wake: Option<(
             super::wake_word::WakeConfig,
             super::wake_word::WakeStateEmitter,
         )>,
+        emit: impl Fn(AudioStatus),
     ) -> Result<(), String> {
-        log::info!("[audio/socket] waiting for Python to connect…");
-        let (stream, _addr) = self
-            .listener
-            .accept()
-            .await
-            .map_err(|e| format!("accept: {e}"))?;
-        log::info!("[audio/socket] Python connected");
-
-        let (mut reader, mut writer) = stream.into_split();
-
-        // Mic gate: push-to-talk (set_mic_listening) + half-duplex echo
-        // guard. Frames are still drained from the channel but dropped
-        // (not forwarded) when muted OR while she's speaking — so the
-        // sidecar never hears her own TTS (which bleeds into the laptop
-        // mic acoustically → would feed back as a user turn) or
-        // hallucinates on silence.
-        let eng = Arc::clone(&engine);
-
-        // Wake-word detector (only in wake_word activation mode). Runs on its
-        // own OS thread; the writer tees every mic frame to it BEFORE the gate,
-        // so it can listen for the phrase while the mic is otherwise muted.
         let det_tx = wake
             .map(|(cfg, emit)| super::wake_word::spawn_detector(cfg, Arc::clone(&engine), emit));
+        self.serve(
+            engine.as_ref(),
+            mic_rx,
+            det_tx,
+            emit,
+            Duration::from_secs(5),
+        )
+        .await
+    }
 
-        // Writer task: take mic frames from the channel and send to Python.
-        let write_task = tokio::spawn(async move {
-            // Last AEC/duplex mode reported to Python. `None` until the first
-            // frame, so the initial state is always sent; thereafter we only
-            // re-send on a transition (e.g. the VPIO→CPAL watchdog fallback).
-            let mut last_aec: Option<bool> = None;
-            while let Some(msg) = mic_rx.recv().await {
-                match msg {
-                    AudioMsg::MicFrame(samples) => {
-                        // Tell the sidecar the live AEC mode whenever it changes
-                        // — independent of mute/listening, so it always knows
-                        // whether listener-acks are safe to default on.
-                        let aec = eng.aec_active();
+    async fn serve(
+        &self,
+        engine: &impl AudioEndpoint,
+        mut mic_rx: mpsc::UnboundedReceiver<AudioMsg>,
+        det_tx: Option<std::sync::mpsc::Sender<Vec<i16>>>,
+        emit: impl Fn(AudioStatus),
+        capture_timeout: Duration,
+    ) -> Result<(), String> {
+        let mut capture_alive = false;
+        let mut ever_connected = false;
+        let mut capture_stalled = false;
+        let mut last_capture = tokio::time::Instant::now();
+        let mut watchdog = tokio::time::interval(capture_timeout / 5);
+        loop {
+            emit(if capture_stalled {
+                AudioStatus::stalled(false)
+            } else {
+                AudioStatus::new(false, capture_alive, ever_connected)
+            });
+            // Keep draining while disconnected: neither a dead receiver nor an
+            // unbounded backlog may outlive the first sidecar connection.
+            let stream = loop {
+                tokio::select! {
+                    accepted = self.listener.accept() => {
+                        break accepted.map_err(|e| format!("accept: {e}"))?.0;
+                    }
+                    msg = mic_rx.recv() => {
+                        if msg.is_none() { return Ok(()); }
+                        if !capture_alive {
+                            emit(AudioStatus::new(false, true, ever_connected));
+                        }
+                        capture_alive = true;
+                        capture_stalled = false;
+                        last_capture = tokio::time::Instant::now();
+                    }
+                    _ = watchdog.tick() => {
+                        if last_capture.elapsed() >= capture_timeout && !capture_stalled {
+                            capture_alive = false;
+                            capture_stalled = true;
+                            engine.stop_audio();
+                            emit(AudioStatus::stalled(false));
+                        }
+                    }
+                }
+            };
+            // Discard frames queued before accept. They belong to the previous
+            // connection (or pre-permission startup), never to this session.
+            while mic_rx.try_recv().is_ok() {}
+            ever_connected = true;
+            log::info!("[audio/socket] Python connected");
+            emit(if capture_stalled {
+                AudioStatus::stalled(true)
+            } else {
+                AudioStatus::new(true, capture_alive, true)
+            });
+            let (mut reader, mut writer) = stream.into_split();
+            // A persistent read future is essential: cancelling read_exact in
+            // select! on every mic tick would lose partial protocol headers.
+            let read_loop = read_playback(&mut reader, engine);
+            tokio::pin!(read_loop);
+            let mut last_aec = None;
+            loop {
+                tokio::select! {
+                    result = &mut read_loop => {
+                        log::info!("[audio/socket] connection closed: {result:?}");
+                        break;
+                    }
+                    msg = mic_rx.recv() => {
+                        let Some(AudioMsg::MicFrame(samples)) = msg else { return Ok(()); };
+                        last_capture = tokio::time::Instant::now();
+                        capture_stalled = false;
+                        if !capture_alive {
+                            capture_alive = true;
+                            emit(AudioStatus::new(true, true, true));
+                        }
+                        let aec = engine.aec_active();
                         if last_aec != Some(aec) {
-                            let flag = if aec { AUDIO_MODE_AEC } else { 0 };
-                            let ctrl = encode_control_flag(CTRL_AUDIO_MODE, flag);
-                            if writer.write_all(&ctrl).await.is_err() {
-                                break;
-                            }
+                            let ctrl = encode_control_flag(CTRL_AUDIO_MODE, if aec { AUDIO_MODE_AEC } else { 0 });
+                            if write_frame(&mut writer, &ctrl).await.is_err() { break; }
                             last_aec = Some(aec);
                         }
-                        // Hard mute (the mic button) is the top-level gate: when
-                        // muted, drop the frame entirely — no STT and no wake
-                        // detector, so it's truly silent (no "Hey Orbis", no
-                        // barge-in). Beats both the push-to-talk gate and wake.
-                        if eng.is_muted() {
-                            continue;
-                        }
-                        // Not muted: feed the detector regardless of the
-                        // push-to-talk gate so wake mode hears "Hey Orbis" while
-                        // idle. Cheap (~640 B).
-                        if let Some(ref dtx) = det_tx {
-                            let _ = dtx.send(samples.clone());
-                        }
-                        // Push-to-talk gate applies. The half-duplex echo mute
-                        // applies only in CPAL mode; in voice-processing mode the
-                        // VPIO unit cancels echo in hardware, so the mic stays
-                        // open during playback for real barge-in.
-                        if !eng.is_listening()
-                            || (eng.half_duplex() && eng.echo_guard_active(ECHO_GUARD_MS))
-                        {
-                            continue; // idle, or (half-duplex) she's speaking
-                        }
+                        if engine.is_muted() { continue; }
+                        if let Some(ref dtx) = det_tx { let _ = dtx.send(samples.clone()); }
+                        if !engine.is_listening() || engine.echo_muted() { continue; }
                         let frame = encode_frame(DIR_MIC_TO_PYTHON, MIC_SAMPLE_RATE, &samples);
-                        if writer.write_all(&frame).await.is_err() {
-                            break;
+                        if write_frame(&mut writer, &frame).await.is_err() { break; }
+                    }
+                    _ = watchdog.tick() => {
+                        if last_capture.elapsed() >= capture_timeout {
+                            if !capture_stalled {
+                                engine.stop_audio();
+                                capture_stalled = true;
+                                capture_alive = false;
+                                log::error!("[audio/socket] microphone frames stopped; relaunch required");
+                                emit(AudioStatus::stalled(true));
+                            }
                         }
                     }
                 }
             }
-        });
-
-        // Reader loop: receive TTS PCM and control frames from Python.
-        let mut header_buf = [0u8; HEADER_LEN];
-        let mut playback_frames_received = 0usize;
-        loop {
-            if reader.read_exact(&mut header_buf).await.is_err() {
-                break; // EOF or error → Python disconnected
-            }
-            let (direction, _sample_rate, _channels, num_samples) = decode_header(&header_buf);
-
-            let body_bytes = num_samples as usize * 2;
-            let mut body = vec![0u8; body_bytes];
-            if reader.read_exact(&mut body).await.is_err() {
-                break;
-            }
-
-            match direction {
-                DIR_PYTHON_TO_SPEAKER => {
-                    // TTS PCM — push to playback ring.
-                    let samples: Vec<i16> = body
-                        .chunks_exact(2)
-                        .map(|b| i16::from_le_bytes([b[0], b[1]]))
-                        .collect();
-                    playback_frames_received += 1;
-                    if playback_frames_received == 1 {
-                        log::info!(
-                            "[audio/socket] first playback frame received: samples={}",
-                            samples.len()
-                        );
-                    }
-                    engine.push_playback(&samples);
-                }
-                DIR_CONTROL => {
-                    if body.len() >= 2 {
-                        let code = u16::from_le_bytes([body[0], body[1]]);
-                        match code {
-                            CTRL_BARGE_IN => {
-                                log::info!("[audio/socket] barge-in interrupt — flushing playback");
-                                engine.flush_playback();
-                            }
-                            CTRL_TTS_END => {
-                                log::debug!("[audio/socket] TTS stream ended");
-                            }
-                            CTRL_STOP_LISTENING => {
-                                log::info!("[audio/socket] stop-listening — closing window");
-                                engine.set_listening(false);
-                            }
-                            _ => {
-                                log::warn!("[audio/socket] unknown control code 0x{code:04x}");
-                            }
-                        }
-                    }
-                }
-                other => {
-                    log::warn!("[audio/socket] unexpected direction 0x{other:04x}, skipping");
-                }
-            }
+            engine.stop_audio();
+            // Both stream halves drop here before another client is accepted.
         }
+    }
+}
 
-        write_task.abort();
-        log::info!("[audio/socket] connection closed");
-        Ok(())
+/// Retained Rust truth, independent of an HTTP/SSE connection or mic gate.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AudioStatus {
+    pub socket_connected: bool,
+    pub capture_alive: bool,
+    pub detail: String,
+    pub relaunch_required: bool,
+}
+
+impl Default for AudioStatus {
+    fn default() -> Self {
+        Self::new(false, false, false)
+    }
+}
+impl AudioStatus {
+    fn new(socket_connected: bool, capture_alive: bool, ever_connected: bool) -> Self {
+        let detail = if socket_connected && capture_alive {
+            ""
+        } else if !socket_connected && ever_connected {
+            "Voice connection lost; relaunch ORBIS if it does not recover"
+        } else {
+            "Starting native audio…"
+        };
+        Self {
+            socket_connected,
+            capture_alive,
+            detail: detail.into(),
+            relaunch_required: !socket_connected && ever_connected,
+        }
+    }
+    fn stalled(socket_connected: bool) -> Self {
+        Self {
+            socket_connected,
+            capture_alive: false,
+            detail: "Microphone input stopped; relaunch ORBIS".into(),
+            relaunch_required: true,
+        }
+    }
+    pub fn ready(&self) -> bool {
+        self.socket_connected && self.capture_alive
+    }
+}
+
+trait AudioEndpoint: Sync {
+    fn aec_active(&self) -> bool;
+    fn is_muted(&self) -> bool;
+    fn is_listening(&self) -> bool;
+    fn echo_muted(&self) -> bool;
+    fn stop_audio(&self);
+    fn stop_listening(&self);
+    fn push_playback(&self, samples: &[i16]);
+    fn flush_playback(&self);
+}
+impl AudioEndpoint for AudioEngine {
+    fn aec_active(&self) -> bool {
+        self.aec_active()
+    }
+    fn is_muted(&self) -> bool {
+        self.is_muted()
+    }
+    fn is_listening(&self) -> bool {
+        self.is_listening()
+    }
+    fn echo_muted(&self) -> bool {
+        self.half_duplex() && self.echo_guard_active(ECHO_GUARD_MS)
+    }
+    fn stop_audio(&self) {
+        self.set_listening(false);
+        self.flush_playback();
+    }
+    fn stop_listening(&self) {
+        self.set_listening(false);
+    }
+    fn push_playback(&self, samples: &[i16]) {
+        self.push_playback(samples);
+    }
+    fn flush_playback(&self) {
+        self.flush_playback();
+    }
+}
+
+async fn write_frame(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    bytes: &[u8],
+) -> Result<(), String> {
+    tokio::time::timeout(Duration::from_secs(1), writer.write_all(bytes))
+        .await
+        .map_err(|_| "audio socket write timed out".to_string())?
+        .map_err(|e| format!("audio socket write: {e}"))
+}
+
+async fn read_playback(
+    reader: &mut tokio::net::unix::OwnedReadHalf,
+    engine: &impl AudioEndpoint,
+) -> Result<(), String> {
+    let mut first_playback = true;
+    loop {
+        let mut header = [0u8; HEADER_LEN];
+        reader
+            .read_exact(&mut header)
+            .await
+            .map_err(|e| e.to_string())?;
+        let (direction, _, _, num_samples) = decode_header(&header);
+        let mut body = vec![0; num_samples as usize * 2];
+        reader
+            .read_exact(&mut body)
+            .await
+            .map_err(|e| e.to_string())?;
+        match direction {
+            DIR_PYTHON_TO_SPEAKER => {
+                let samples: Vec<i16> = body
+                    .chunks_exact(2)
+                    .map(|b| i16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                if first_playback {
+                    first_playback = false;
+                    log::info!(
+                        "[audio/socket] first playback frame received: samples={}",
+                        samples.len()
+                    );
+                }
+                engine.push_playback(&samples);
+            }
+            DIR_CONTROL if body.len() >= 2 => match u16::from_le_bytes([body[0], body[1]]) {
+                CTRL_BARGE_IN => {
+                    engine.flush_playback();
+                }
+                CTRL_STOP_LISTENING => engine.stop_listening(),
+                CTRL_TTS_END => (),
+                code => log::warn!("[audio/socket] unknown control code 0x{code:04x}"),
+            },
+            _ => log::warn!("[audio/socket] unexpected frame direction 0x{direction:04x}"),
+        }
     }
 }
 
@@ -348,5 +461,318 @@ mod tests {
             path_str.contains("orbis-audio-"),
             "expected 'orbis-audio-' in path, got {path_str}"
         );
+    }
+
+    #[derive(Default)]
+    struct FakeAudio {
+        listening: std::sync::atomic::AtomicBool,
+        muted: std::sync::atomic::AtomicBool,
+        playback: std::sync::Mutex<Vec<i16>>,
+        flushes: std::sync::atomic::AtomicUsize,
+    }
+    impl AudioEndpoint for FakeAudio {
+        fn aec_active(&self) -> bool {
+            false
+        }
+        fn is_muted(&self) -> bool {
+            self.muted.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn is_listening(&self) -> bool {
+            self.listening.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn echo_muted(&self) -> bool {
+            false
+        }
+        fn stop_listening(&self) {
+            self.listening
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn stop_audio(&self) {
+            self.stop_listening();
+            self.flush_playback();
+        }
+        fn push_playback(&self, samples: &[i16]) {
+            self.playback.lock().unwrap().extend(samples);
+        }
+        fn flush_playback(&self) {
+            self.playback.lock().unwrap().clear();
+            self.flushes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn test_server() -> SocketServer {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let path = PathBuf::from(format!(
+            "/tmp/orbis-recovery-{}-{id}.sock",
+            std::process::id()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        SocketServer { path, listener }
+    }
+    async fn health_until(
+        rx: &mut mpsc::UnboundedReceiver<AudioStatus>,
+        predicate: impl Fn(&AudioStatus) -> bool,
+    ) -> AudioStatus {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = rx.recv().await.unwrap();
+                if predicate(&status) {
+                    return status;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+    async fn read_wire(peer: &mut tokio::net::UnixStream) -> (u16, Vec<u8>) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let mut header = [0; HEADER_LEN];
+            peer.read_exact(&mut header).await.unwrap();
+            let (direction, _, _, samples) = decode_header(&header);
+            let mut body = vec![0; samples as usize * 2];
+            peer.read_exact(&mut body).await.unwrap();
+            (direction, body)
+        })
+        .await
+        .unwrap()
+    }
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn reconnect_preserves_receiver_drops_offline_audio_and_resends_mode() {
+        runtime().block_on(async {
+            let server = test_server();
+            let path = server.path.clone();
+            let audio = Arc::new(FakeAudio::default());
+            let eng = audio.clone();
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (health_tx, mut health_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                server
+                    .serve(
+                        eng.as_ref(),
+                        rx,
+                        None,
+                        |s| {
+                            let _ = health_tx.send(s);
+                        },
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let mut peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            health_until(&mut health_rx, |s| s.socket_connected).await;
+            tx.send(AudioMsg::MicFrame(vec![0; 320])).unwrap();
+            health_until(&mut health_rx, AudioStatus::ready).await;
+            assert_eq!(read_wire(&mut peer).await.0, DIR_CONTROL);
+            audio
+                .listening
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            tx.send(AudioMsg::MicFrame(vec![1; 320])).unwrap();
+            assert_eq!(read_wire(&mut peer).await.0, DIR_MIC_TO_PYTHON);
+            drop(peer);
+            health_until(&mut health_rx, |s| !s.socket_connected).await;
+            assert!(!audio.is_listening());
+            assert!(audio.flushes.load(std::sync::atomic::Ordering::SeqCst) > 0);
+            tx.send(AudioMsg::MicFrame(vec![99; 320])).unwrap();
+            tokio::task::yield_now().await;
+            let mut peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            health_until(&mut health_rx, |s| s.socket_connected).await;
+            audio
+                .listening
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            tx.send(AudioMsg::MicFrame(vec![2; 320])).unwrap();
+            let (dir, mode) = read_wire(&mut peer).await;
+            assert_eq!(dir, DIR_CONTROL);
+            assert_eq!(u16::from_le_bytes([mode[0], mode[1]]), CTRL_AUDIO_MODE);
+            let (dir, body) = read_wire(&mut peer).await;
+            assert_eq!(dir, DIR_MIC_TO_PYTHON);
+            assert_eq!(i16::from_le_bytes([body[0], body[1]]), 2);
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn silent_muted_frames_are_live_but_a_stopped_capture_closes_listening() {
+        runtime().block_on(async {
+            let server = test_server();
+            let path = server.path.clone();
+            let audio = Arc::new(FakeAudio::default());
+            audio.muted.store(true, std::sync::atomic::Ordering::SeqCst);
+            let eng = audio.clone();
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (health_tx, mut health_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                server
+                    .serve(
+                        eng.as_ref(),
+                        rx,
+                        None,
+                        |s| {
+                            let _ = health_tx.send(s);
+                        },
+                        Duration::from_millis(80),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let _peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            health_until(&mut health_rx, |s| s.socket_connected).await;
+            tx.send(AudioMsg::MicFrame(vec![0; 320])).unwrap();
+            health_until(&mut health_rx, AudioStatus::ready).await;
+            audio
+                .listening
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let failed = health_until(&mut health_rx, |s| {
+                s.detail.contains("Microphone input stopped")
+            })
+            .await;
+            assert!(failed.socket_connected);
+            assert!(!failed.capture_alive);
+            assert!(!audio.is_listening());
+            tx.send(AudioMsg::MicFrame(vec![0; 320])).unwrap();
+            health_until(&mut health_rx, AudioStatus::ready).await;
+            assert!(
+                !audio.is_listening(),
+                "recovered callbacks must not reopen a turn"
+            );
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn fragmented_playback_header_survives_mic_ticks() {
+        runtime().block_on(async {
+            let server = test_server();
+            let path = server.path.clone();
+            let audio = Arc::new(FakeAudio::default());
+            let eng = audio.clone();
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (health_tx, mut health_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                server
+                    .serve(
+                        eng.as_ref(),
+                        rx,
+                        None,
+                        |s| {
+                            let _ = health_tx.send(s);
+                        },
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let mut peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            health_until(&mut health_rx, |s| s.socket_connected).await;
+            let playback = encode_frame(DIR_PYTHON_TO_SPEAKER, 24_000, &[10, 20]);
+            peer.write_all(&playback[..3]).await.unwrap();
+            tx.send(AudioMsg::MicFrame(vec![0; 320])).unwrap();
+            health_until(&mut health_rx, AudioStatus::ready).await;
+            peer.write_all(&playback[3..]).await.unwrap();
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+                if !audio.playback.lock().unwrap().is_empty() {
+                    break;
+                }
+            }
+            assert_eq!(*audio.playback.lock().unwrap(), vec![10, 20]);
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn unresponsive_peer_has_a_bounded_write_failure() {
+        runtime().block_on(async {
+            let (socket, _unread_peer) = tokio::net::UnixStream::pair().unwrap();
+            let (_reader, mut writer) = socket.into_split();
+            let result = write_frame(&mut writer, &vec![0; 2 * 1024 * 1024]).await;
+            assert!(result.unwrap_err().contains("timed out"));
+        });
+    }
+
+    #[test]
+    fn no_first_capture_callback_reports_stalled_instead_of_waiting_forever() {
+        runtime().block_on(async {
+            let server = test_server();
+            let path = server.path.clone();
+            let audio = Arc::new(FakeAudio::default());
+            let (_tx, rx) = mpsc::unbounded_channel();
+            let (health_tx, mut health_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                server
+                    .serve(
+                        audio.as_ref(),
+                        rx,
+                        None,
+                        |s| {
+                            let _ = health_tx.send(s);
+                        },
+                        Duration::from_millis(80),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let _peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            let failed = health_until(&mut health_rx, |s| s.relaunch_required).await;
+            assert!(!failed.capture_alive);
+            assert!(failed.detail.contains("Microphone input stopped"));
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn initial_open_mic_survives_offline_drain_until_first_connection() {
+        runtime().block_on(async {
+            let server = test_server();
+            let path = server.path.clone();
+            let audio = Arc::new(FakeAudio::default());
+            audio
+                .listening
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let eng = audio.clone();
+            let (tx, rx) = mpsc::unbounded_channel();
+            let (health_tx, mut health_rx) = mpsc::unbounded_channel();
+            let task = tokio::spawn(async move {
+                server
+                    .serve(
+                        eng.as_ref(),
+                        rx,
+                        None,
+                        |s| {
+                            let _ = health_tx.send(s);
+                        },
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+            });
+            tx.send(AudioMsg::MicFrame(vec![99; 320])).unwrap();
+            health_until(&mut health_rx, |s| s.capture_alive && !s.socket_connected).await;
+            assert!(
+                audio.is_listening(),
+                "first boot preserves explicit open-mic activation"
+            );
+            let mut peer = tokio::net::UnixStream::connect(&path).await.unwrap();
+            health_until(&mut health_rx, AudioStatus::ready).await;
+            tx.send(AudioMsg::MicFrame(vec![2; 320])).unwrap();
+            assert_eq!(read_wire(&mut peer).await.0, DIR_CONTROL);
+            let (direction, body) = read_wire(&mut peer).await;
+            assert_eq!(direction, DIR_MIC_TO_PYTHON);
+            assert_eq!(i16::from_le_bytes([body[0], body[1]]), 2);
+            task.abort();
+            let _ = task.await;
+        });
     }
 }

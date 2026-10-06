@@ -1,5 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { useVoiceStateSelector } from '@/voice/hooks';
+import { useVoiceStateSelector, useEffectiveVoiceLifecycle } from '@/voice/hooks';
 import { statusBus } from '@/shared/statusBus';
 import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 
@@ -19,17 +19,18 @@ export function StatusPill() {
   const voiceState = useVoiceStateSelector((s) => s.state);
   const micListening = useVoiceStateSelector((s) => s.micListening);
   const micMuted = useVoiceStateSelector((s) => s.micMuted);
-  const voiceLifecycle = useVoiceStateSelector((s) => s.voiceLifecycle);
+  const voiceLifecycle = useEffectiveVoiceLifecycle();
   const activeToolCall = useVoiceStateSelector((s) => s.activeToolCall);
+  const delegationProgress = useVoiceStateSelector((s) => s.delegationProgress);
   const delegationOutcome = useVoiceStateSelector((s) => s.delegationOutcome);
   const lastOutcomeRef = useRef<typeof delegationOutcome>(null);
   const externalTransient = useSyncExternalStore(
     statusBus.subscribe,
     statusBus.getSnapshot,
   );
-  const delegationText = activeToolCall
+  const delegationText = delegationProgress ?? (activeToolCall
     ? formatActiveToolCall(activeToolCall)
-    : null;
+    : null);
 
   // Auto-expire the externally-pushed transient once its TTL hits.
   useEffect(() => {
@@ -54,17 +55,23 @@ export function StatusPill() {
   // precedence over the idle mic hint — while ORBIS is talking or thinking,
   // say so instead of "listening…". An active delegation/tool call is more
   // specific still, so it wins above this.
-  const text = externalTransient?.text
-    ?? (!voiceIsReady(voiceLifecycle) ? voiceLifecycleText(voiceLifecycle) : null)
+  const text = (!voiceIsReady(voiceLifecycle) ? voiceLifecycleText(voiceLifecycle) : null)
+    ?? externalTransient?.text
     ?? delegationText
     ?? (micMuted
       ? 'muted'
       : !connected
-      ? 'starting up…'
+      ? 'voice status reconnecting…'
       : voiceState === 'speaking'
         ? 'speaking…'
         : voiceState === 'thinking'
           ? 'thinking…'
+          : micListening
+            ? 'listening…'
+            : activation === 'starting'
+              ? 'loading wake word…'
+              : activation === 'failed'
+                ? 'wake word unavailable · double-click to talk · check Voice settings'
           : activation === 'armed'
             ? wakePhrase
               ? `“${wakePhrase}”`

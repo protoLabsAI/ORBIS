@@ -93,6 +93,7 @@ async def run_native_voice_lifecycle(
     session_initialized = False
     terminal = False
     phase = "warmup"
+    owner_task = asyncio.current_task()
     try:
         await lifecycle.transition("warming", "Loading voice models…")
         await run_blocking(warm)
@@ -101,6 +102,22 @@ async def run_native_voice_lifecycle(
         await lifecycle.transition("starting", "Starting voice pipeline…")
         transport = make_transport()
         set_transport(transport)
+
+        async def _on_disconnected(*_args) -> None:
+            nonlocal terminal
+            # Pipeline teardown also disconnects the socket. Only an unexpected
+            # loss invalidates readiness; normal owner cancellation is shutdown.
+            if terminal or (owner_task and owner_task.cancelling()):
+                return
+            terminal = True
+            await lifecycle.transition(
+                "failed", "Native audio disconnected; relaunch ORBIS",
+                code="transport_disconnected", action="relaunch_required",
+            )
+
+        event_handler = getattr(transport, "event_handler", None)
+        if event_handler is not None:
+            event_handler("on_client_disconnected")(_on_disconnected)
 
         async def _on_transport_connected() -> None:
             nonlocal phase
@@ -145,6 +162,8 @@ async def run_native_voice_lifecycle(
         set_pipeline_task(pipeline_task)
         await pipeline_task
 
+        if terminal:
+            return
         terminal = True
         detail = (
             "Voice pipeline stopped unexpectedly"
@@ -166,6 +185,8 @@ async def run_native_voice_lifecycle(
         # cancels itself is an unexpected terminal failure and must not leave
         # a stale `running` snapshot behind.
         if not asyncio.current_task().cancelling():
+            if lifecycle.snapshot() and lifecycle.snapshot().get("code") == "transport_disconnected":
+                return
             await lifecycle.transition(
                 "failed",
                 "Voice pipeline stopped unexpectedly",
@@ -181,6 +202,8 @@ async def run_native_voice_lifecycle(
                 pass
         raise
     except Exception:  # noqa: BLE001 — lifecycle must expose startup failure
+        if terminal:
+            return
         terminal = True
         # The full exception belongs in private sidecar logs. `/healthz` and
         # SSE are public surfaces, so expose only stable, actionable codes.

@@ -1,7 +1,7 @@
 # Building & forking ORBIS
 
-ORBIS ships to users as a **signed, notarized `.dmg`** — the repo is private and
-end users download the app, not the source (see
+ORBIS is **free and open source under Apache-2.0**, and ships to users as a
+**signed, notarized `.dmg`** (see
 [Getting started](docs/tutorials/getting-started.md)). This doc is for
 **contributors and forkers** building from source.
 
@@ -58,11 +58,14 @@ Once built, ORBIS runs **offline / standalone** — none of proto-labs' infra is
 required. Building from source may need network access for uncached tool and
 project dependencies.
 
-- **LLM** — defaults to `http://localhost:8100/v1`; point it at any
-  OpenAI-compatible endpoint, Ollama, or an MLX model during first-run setup or
+- **LLM** — choose an OpenAI-compatible endpoint, Ollama, a hosted provider,
+  or the built-in MLX model during first-run setup or
   `Settings → Brain`.
-- **Auth, Infisical, Stripe, Langfuse** — all optional. The paid-unlock gate
-  defaults to **open** (`ORBIS_GATE=open`), so customization is unlocked.
+- **Delegation** — the bundled `hub` connection points to a separately managed
+  protoAgent service on `127.0.0.1:7870`. Conversation does not require that
+  service; substantial delegated work does require a reachable agent.
+- **Auth, Infisical, Langfuse** — optional. Orb customization is free;
+  there is no paid-unlock gate.
 - Config is `config/*.yaml` + a gitignored `.env` (copy `.env.example`). No
   secret is committed; real secrets stay in your `.env` or Infisical.
 
@@ -80,7 +83,6 @@ your own:
 | Site + in-app URLs `orbis.protolabs.studio` | `sites/marketing/`, in-app help links in `web/src/plugins/...` |
 | Public DMG downloads — this repo's GitHub Releases (legacy `protoLabsAI/orbis-releases` for pre-v0.2.123 DMGs) | `.github/workflows/desktop-build.yml`, `sites/marketing/data/changelog.json` |
 | CI repo guards `github.repository == 'protoLabsAI/ORBIS'` | `.github/workflows/{desktop-build,release,docker-publish,prepare-release}.yml` — these **no-op on a fork** until changed |
-| Paywall (license pubkey + Stripe issuer) | `config/license_pubkey.pem`, repo var `ORBIS_LICENSE_PUBKEY`, `sites/license-issuer/`. To ship **free**: leave `ORBIS_GATE=open` and remove the Unlock UI. To run your own paid tier: `docs/internal/paywall-go-live-runbook.md`. |
 | Legacy key prefix `pv_ak_` | `auth/users.py`, `auth/infisical.py`, `web/src/plugins/settings-panel/ApiKeyField.tsx` |
 
 **Local builds need no Apple Developer account** — the script ad-hoc-signs. Only

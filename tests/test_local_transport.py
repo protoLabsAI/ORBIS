@@ -129,9 +129,17 @@ async def test_audio_mode_frame_activates_aec():
     transport._reader = reader
     transport._connected = True
 
-    await transport._reader_loop()
+    observed_aec = []
+    @transport.event_handler("on_client_disconnected")
+    async def disconnected(_transport, _client):
+        observed_aec.append(transport.is_aec_active())
 
-    assert transport.is_aec_active() is True
+    await transport._reader_loop()
+    await asyncio.sleep(0)  # Pipecat dispatches event handlers as tasks.
+
+    # An ended connection must not leave hardware AEC advertised as active.
+    assert observed_aec == [False]
+    assert transport.is_aec_active() is False
 
 
 @pytest.mark.asyncio
@@ -315,3 +323,52 @@ async def test_on_client_disconnected_fires():
         await server.wait_closed()
 
     assert disconnected.is_set()
+
+
+@pytest.mark.asyncio
+async def test_eof_reader_cleans_up_without_awaiting_itself():
+    transport = LocalAudioTransport(sock_path="/tmp/unused.sock")
+    reader = asyncio.StreamReader()
+    reader.feed_eof()
+    transport._reader = reader
+    transport._connected = True
+    disconnected = asyncio.Event()
+
+    @transport.event_handler("on_client_disconnected")
+    async def on_disconnect(_transport, _client):
+        disconnected.set()
+
+    task = asyncio.create_task(transport._reader_loop())
+    transport._reader_task = task
+    await asyncio.wait_for(task, 1)
+    assert task.exception() is None
+    assert disconnected.is_set()
+    assert transport._reader_task is None
+    assert transport._reader is None
+    assert transport.connected is False
+
+
+@pytest.mark.asyncio
+async def test_speaker_write_failure_invalidates_connection_once():
+    class BrokenWriter:
+        def write(self, _data):
+            raise BrokenPipeError()
+        def close(self):
+            pass
+        async def wait_closed(self):
+            pass
+
+    transport = LocalAudioTransport(sock_path="/tmp/unused.sock")
+    transport._writer = BrokenWriter()
+    transport._connected = True
+    events = []
+    @transport.event_handler("on_client_disconnected")
+    async def on_disconnect(_transport, _client):
+        events.append("disconnected")
+
+    await transport._send_pcm(b"\0\0", TTS_SAMPLE_RATE)
+    await transport._disconnect()
+    await asyncio.sleep(0)
+    assert transport.connected is False
+    assert transport._writer is None
+    assert events == ["disconnected"]

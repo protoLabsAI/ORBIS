@@ -13,23 +13,13 @@ import { WAKE_WORD_ENABLED } from '@/shared/wakeword/enabled';
 const fmtSize = (kb: number) =>
   kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`;
 
-type Style = 'push_to_talk' | 'wake_word' | 'open_mic';
+import { DEFAULT_ACTIVATION as DEFAULTS, persistActivation, persistDownloadedWakeSelection, wakeReady, type ActivationConfig, type ActivationStyle as Style } from '@/shared/wakeword/activation';
 
-interface ActivationConfig {
-  style: Style;
-  model: string;
-  threshold: number;
-  listen_window_s: number;
-  full_duplex: boolean;
-}
-
-const DEFAULTS: ActivationConfig = {
-  style: 'push_to_talk',
-  model: 'hey_orbis',
-  threshold: 0.5,
-  listen_window_s: 12,
-  full_duplex: false,
+const loadActivation = async (): Promise<ActivationConfig> => {
+  const raw = await invoke<Partial<ActivationConfig>>('get_activation_config');
+  return { ...DEFAULTS, ...raw };
 };
+const loadCatalog = () => api.wakeword.models();
 
 const STYLES: { id: Style; label: string; hint: string }[] = [
   { id: 'push_to_talk', label: 'Tap to talk', hint: 'Double-click the orb to talk (default).' },
@@ -51,79 +41,61 @@ export function WakeWordSettings() {
   const [models, setModels] = useState<WakeModel[]>([]);
   const [cfg, setCfg] = useState<ActivationConfig>(DEFAULTS);
   const [loading, setLoading] = useState(true);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [reload, setReload] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [needsRelaunch, setNeedsRelaunch] = useState(false);
   const progress = useWakewordDownloads();
 
-  const loadActivation = async (): Promise<ActivationConfig> => {
-    try {
-      const raw = (await invoke('get_activation_config')) as Partial<ActivationConfig> | null;
-      return { ...DEFAULTS, ...(raw ?? {}) };
-    } catch {
-      return DEFAULTS;
-    }
-  };
-
-  // Wake-word disabled: don't hit the model catalog at all (no load /
-  // no "hey_orbis" suggestion). Activation config still loads — it drives
-  // push-to-talk / open-mic too. See @/shared/wakeword/enabled.
-  const loadCatalog = (): Promise<{ models: WakeModel[] }> =>
-    WAKE_WORD_ENABLED ? api.wakeword.models() : Promise.resolve({ models: [] });
-
   const refresh = async () => {
     const [cat, act] = await Promise.all([loadCatalog(), loadActivation()]);
     setModels(cat.models);
     setCfg(act);
+    return act;
   };
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([loadCatalog(), loadActivation()])
+    Promise.allSettled([loadCatalog(), loadActivation()])
       .then(([cat, act]) => {
         if (cancelled) return;
-        setModels(cat.models);
-        setCfg(act);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String((e as Error).message ?? e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (act.status === 'fulfilled') { setCfg(act.value); setConfigLoaded(true); }
+        if (cat.status === 'fulfilled') setModels(cat.value.models);
+        const failure = cat.status === 'rejected' ? cat.reason : act.status === 'rejected' ? act.reason : null;
+        setError(failure ? String(failure) : null);
+        setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reload]);
 
   const wakeModels = models.filter((m) => m.kind === 'wake');
   const sharedDeps = models.filter((m) => m.kind === 'shared');
   const sharedReady = sharedDeps.length > 0 && sharedDeps.every((d) => d.downloaded);
-  const anyWakeReady = wakeModels.some((m) => m.downloaded);
+
 
   // Persist the full activation config (the Rust detector reads this).
   const save = async (patch: Partial<ActivationConfig>) => {
     const next = { ...cfg, ...patch };
-    setCfg(next);
+    setError(null);
     try {
-      await invoke('set_activation_config', {
-        style: next.style,
-        model: next.model,
-        threshold: next.threshold,
-        listenWindowS: next.listen_window_s,
-      });
+      setCfg(await persistActivation(next, invoke));
       setNeedsRelaunch(true);
+      return true;
     } catch (e) {
       setError(String((e as Error).message ?? e));
+      return false;
     }
   };
 
   // Full-duplex / barge-in applies LIVE (the engine reads it per frame) — its
   // own Tauri command, so no relaunch banner.
   const saveFullDuplex = async (on: boolean) => {
-    setCfg((c) => ({ ...c, full_duplex: on }));
     try {
       await invoke('set_full_duplex', { on });
+      setCfg((c) => ({ ...c, full_duplex: on }));
     } catch (e) {
       setError(String((e as Error).message ?? e));
     }
@@ -137,9 +109,13 @@ export function WakeWordSettings() {
         await api.wakeword.download(dep.id);
       }
       await api.wakeword.download(id);
-      await refresh();
       const m = models.find((x) => x.id === id);
-      if (m?.kind === 'wake' && !cfg.model) await save({ model: id });
+      if (m?.kind === 'wake') {
+        setCfg(await persistDownloadedWakeSelection(id, refresh, invoke));
+        setNeedsRelaunch(true);
+      } else {
+        await refresh();
+      }
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -150,8 +126,8 @@ export function WakeWordSettings() {
   const remove = async (id: string) => {
     setError(null);
     try {
+      if (cfg.model === id && !await save({ model: '', style: 'push_to_talk' })) return;
       await api.wakeword.remove(id);
-      if (cfg.model === id) await save({ model: '' });
       await refresh();
     } catch (e) {
       setError(String((e as Error).message ?? e));
@@ -167,19 +143,19 @@ export function WakeWordSettings() {
   }
 
   const wakeSelected = cfg.style === 'wake_word';
-  const canWake = sharedReady && anyWakeReady && Boolean(cfg.model);
+  const canWake = wakeReady(models, cfg.model);
+  const phrase = wakeModels.find((m) => m.id === cfg.model)?.name ?? 'wake word';
 
   return (
     <Panel title="Activation">
       <div className="space-y-3">
         <Hint className="-mt-1">How the mic goes hot. Wake word runs entirely on-device.</Hint>
 
-        {/* Style selector — wake_word hidden until the retrained model
-            ships (see @/shared/wakeword/enabled). */}
+        {/* Wake mode is opt-in and requires the selected model and shared files. */}
         <div className="space-y-1.5">
           {STYLES.filter((s) => WAKE_WORD_ENABLED || s.id !== 'wake_word').map((s) => {
             const isActive = cfg.style === s.id;
-            const disabled = s.id === 'wake_word' && !canWake;
+            const disabled = !configLoaded || (s.id === 'wake_word' && !canWake);
             return (
               <button
                 key={s.id}
@@ -210,7 +186,7 @@ export function WakeWordSettings() {
         </div>
         {WAKE_WORD_ENABLED && !canWake && (
           <Hint className="text-fg-faint">
-            Open “Wake words &amp; tuning” below to download a wake word and enable
+            Open “Wake words &amp; tuning” below to download and select a wake word to enable
             hands-free listening.
           </Hint>
         )}
@@ -236,7 +212,7 @@ export function WakeWordSettings() {
             />
             <Hint className="text-fg-faint">
               After the conversation goes quiet for this long, the mic closes back
-              to armed (“{cfg.model === 'hey_orbis' ? 'Hey Orbis' : 'wake word'}” reopens
+              to armed (“{phrase}” reopens
               it). She holds the window while thinking, working on a task, or speaking.
             </Hint>
           </label>
@@ -255,14 +231,12 @@ export function WakeWordSettings() {
             className="mt-0.5"
             checked={cfg.full_duplex}
             onCheckedChange={saveFullDuplex}
+            disabled={!configLoaded}
             aria-label="Allow interruptions (full-duplex)"
           />
         </div>
 
-        {/* Advanced — folded so the common push-to-talk / open-mic choice
-            isn't buried under wake-word setup + tuning. Whole block hidden
-            while wake word is disabled (no catalog, no "hey_orbis"
-            suggestion) — see @/shared/wakeword/enabled. */}
+        {/* Phrase downloads and advanced tuning. */}
         {WAKE_WORD_ENABLED && (
         <details className="group rounded-md border border-edge bg-raised/30">
           <summary className="flex cursor-pointer select-none items-center justify-between px-3 py-2 text-helper uppercase tracking-wider text-fg-muted hover:text-fg-body">
@@ -270,6 +244,7 @@ export function WakeWordSettings() {
             <span className="text-fg-faint transition-transform group-open:rotate-90">›</span>
           </summary>
           <div className="space-y-3 px-3 pb-3 pt-1">
+            <Hint>Hey Orbis is experimental. Try Hey Jarvis while we validate real microphone accuracy. Double-click the orb remains available if a phrase misses.</Hint>
 
         {/* Wake-word tuning — only relevant in wake-word style */}
         {wakeSelected && (
@@ -299,9 +274,9 @@ export function WakeWordSettings() {
         <div className="space-y-1.5">
           {wakeModels.map((m) => {
             const p = progress[m.id];
-            const downloading = busyId === m.id && (!p || (!p.done && !p.error));
+            const downloading = busyId === m.id;
             const isActive = cfg.model === m.id;
-            const selectable = m.downloaded && !isActive;
+            const selectable = configLoaded && sharedReady && m.downloaded && !isActive;
             return (
               <div
                 key={m.id}
@@ -334,6 +309,10 @@ export function WakeWordSettings() {
                       </span>
                     </div>
                     <Hint className="mt-0.5 line-clamp-2">{m.description}</Hint>
+                    <button type="button" className="mt-1 text-helper text-fg-subtle underline underline-offset-2 hover:text-fg-body"
+                      onClick={(e) => { e.stopPropagation(); invoke('open_url', { url: m.source_url }).catch(() => {}); }}>
+                      Source · {m.license}
+                    </button>
                     <div className="mt-2 flex items-center gap-2">
                       {m.downloaded ? (
                         <>
@@ -378,7 +357,7 @@ export function WakeWordSettings() {
                             e.stopPropagation();
                             download(m.id);
                           }}
-                          disabled={busyId !== null}
+                          disabled={busyId !== null || !configLoaded}
                         >
                           <Download /> Download
                         </Button>
@@ -415,9 +394,12 @@ export function WakeWordSettings() {
         )}
 
         {needsRelaunch && (
-          <Hint className="text-brand/70">Takes effect when ORBIS next launches.</Hint>
+          <Hint className="text-brand/70">Takes effect when ORBIS next launches. Removing the active phrase returns the next launch to Tap to talk.</Hint>
         )}
-        {error && <p className="text-xs text-danger">{error}</p>}
+        {error && <div role="alert" className="space-y-2">
+          <p className="text-xs text-danger">{error}</p>
+          <Button variant="outline" size="xs" onClick={() => setReload((n) => n + 1)}>Reload activation settings</Button>
+        </div>}
       </div>
     </Panel>
   );

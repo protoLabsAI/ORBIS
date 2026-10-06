@@ -106,8 +106,9 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
             'Download the .dmg above.',
             'Open it and drag ORBIS to Applications.',
             'Launch ORBIS — allow microphone access when prompted.',
-            'First launch unpacks the runtime and on-device voice models — about 3 GB, once. ORBIS can sit on “Starting ORBIS…” for a few minutes while it does. That is normal, not a hang.',
+            'First launch downloads and installs the runtime; choosing on-device speech adds its voice models. Allow about 3 GB and a few minutes, with an internet connection. A local language model needs additional disk space.',
             'The setup wizard walks through your mic, your voice, and connecting a language model.',
+            'When voice is ready, double-click the orb and ask “What can you do?” to have your first conversation.',
           ].map((step, i) => (
             <li class="flex gap-4 items-start">
               <span class="font-mono text-sm text-accent w-5 shrink-0 pt-0.5">{i + 1}</span>
@@ -121,14 +122,16 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
       <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
         <h2 class="text-lg font-semibold text-white mb-2">ORBIS brings the voice. You bring the model.</h2>
         <p class="text-zinc-400 text-sm mb-4">
-          Speech is fully on-device — ORBIS hears you with Parakeet and speaks with Kokoro, and neither
-          sends audio anywhere. The <strong class="text-zinc-200">language model is yours to choose</strong>,
-          so the setup wizard will ask you to connect one before ORBIS can hold a conversation.
+          Choose on-device speech during setup to hear with Parakeet and speak with Kokoro.
+          The <strong class="text-zinc-200">language model is yours to choose</strong>:
+          run one locally or connect a hosted provider before your first conversation.
+          Hosted speech, language models, and remote agents receive the data you send to them.
         </p>
         <ul class="space-y-1.5">
           {[
-            'Local and free — the wizard can install Ollama and pull a model for you. Nothing leaves your Mac.',
-            'Already running LM Studio, vLLM, or MLX? The wizard finds local endpoints automatically.',
+            'Built-in (MLX) — download a language model to run inside ORBIS on your Apple Silicon Mac. Allow roughly 2.5 GB more for the suggested model.',
+            'Ollama — the wizard can help install it and download a model, or connect to your existing Ollama or LM Studio server.',
+            'Other local servers — enter the URL for your vLLM or OpenAI-compatible endpoint.',
             'Any OpenAI-compatible API — paste the URL and your key.',
           ].map((item) => (
             <li class="text-zinc-400 text-sm flex items-start gap-2">
@@ -137,6 +140,16 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
             </li>
           ))}
         </ul>
+      </div>
+
+      <div class="border border-white/5 rounded-xl p-6 mb-10" style="background: rgba(255,255,255,0.02)">
+        <h2 class="text-lg font-semibold text-white mb-2">Want your orb to do substantial work?</h2>
+        <p class="text-zinc-400 text-sm">
+          Conversation works with your chosen language model. Delegation also needs a running agent:
+          the default protoAgent hub is a separately managed local service. Start it before asking
+          ORBIS to hand off a task, or add an agent you already use in Settings.
+          <a href="/docs/how-to/add-a-delegate" class="text-zinc-300 hover:text-zinc-100 underline underline-offset-2">Connect an agent →</a>
+        </p>
       </div>
 
       <!-- Signed + beta note -->
@@ -155,7 +168,8 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
           ORBIS is a native Apple-Silicon Mac app today. We want it everywhere —
           <strong class="text-zinc-200">iPhone, iPad, Windows, and Linux are all on the table</strong>, and
           the more people ask for a platform, the sooner it ships. Drop your email below and we’ll tell you
-          the moment ORBIS lands on your device — or build it from source today.
+          the moment ORBIS lands on your device. The native app currently requires an Apple-Silicon Mac,
+          including when building from source.
         </p>
       </div>
     </div>
