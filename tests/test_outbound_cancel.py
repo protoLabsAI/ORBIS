@@ -9,14 +9,21 @@ import agent.delegate_adapters as adapters
 import agent.user_state as us
 from a2a_outbound import A2AClient, A2ADispatchError
 from agent.delegates import Delegate
+from agent.delivery import DeliveryController
 from agent.outbound_cancel import cancel_latest_outbound
 from agent.user_state import DelegateAsk, register_delegate_ask_on_active
 from memory import Memory
 
 
-class _Delivery:
+class _Delivery(DeliveryController):
     def __init__(self):
+        super().__init__()
         self.spoken: list[tuple[str, str]] = []
+        self.events: list[dict] = []
+        self.set_message_emitter(self._capture_event)
+
+    async def _capture_event(self, event):
+        self.events.append(event)
 
     async def deliver(self, text, *, priority=None, source=""):
         self.spoken.append((source, text))
@@ -75,6 +82,10 @@ async def test_cancels_newest_live_task(mem, active_state, monkeypatch):
     assert mem.outbound.get("old")["status"] == "submitted"  # untouched
     assert active_state.active_delivery.spoken
     assert "stop" in active_state.active_delivery.spoken[0][1].lower()
+    assert active_state.active_delivery.events == [{
+        "type": "delegate.status", "delegate_id": "hub", "task_id": "new",
+        "state": "canceled",
+    }]
 
 
 @pytest.mark.asyncio
@@ -95,6 +106,7 @@ async def test_local_cancel_wins_when_remote_fails(mem, active_state, monkeypatc
     # Local row canceled regardless — the requery must never re-deliver this.
     assert mem.outbound.get("t-1")["status"] == "canceled"
     assert "didn't confirm" in active_state.active_delivery.spoken[0][1]
+    assert active_state.active_delivery.events[0]["state"] == "canceled"
 
 
 @pytest.mark.asyncio

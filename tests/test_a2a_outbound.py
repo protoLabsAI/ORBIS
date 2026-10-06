@@ -304,13 +304,14 @@ async def test_terminal_snapshot_emits_extensions_before_terminal(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_terminal_tombstone_drops_late_extension(monkeypatch) -> None:
-    from a2a.types import TaskState, TaskStatusUpdateEvent
+    from a2a.types import Part, TaskState, TaskStatusUpdateEvent
     from a2a_executor import _tool_call_part
 
     done = TaskStatusUpdateEvent(task_id="t")
     done.status.state = TaskState.TASK_STATE_COMPLETED
     late = TaskStatusUpdateEvent(task_id="t")
     late.status.state = TaskState.TASK_STATE_WORKING
+    late.status.message.parts.append(Part(text="late progress"))
     late.status.message.parts.append(_tool_call_part(
         "tool_start", {"id": "late", "name": "lookup", "input": {}},
     ))
@@ -322,10 +323,16 @@ async def test_terminal_tombstone_drops_late_extension(monkeypatch) -> None:
         ]),
     )
 
-    await client.send("q", event_callback=lambda event: _capture(events, event))
+    progress: list[str] = []
+    result = await client.send(
+        "q", event_callback=lambda event: _capture(events, event),
+        progress_callback=lambda text: _capture(progress, text),
+    )
 
     assert [event["type"] for event in events] == ["delegate.status"]
     assert events[0]["state"] == "completed"
+    assert result.state == "completed"
+    assert progress == []
 
 
 @pytest.mark.asyncio

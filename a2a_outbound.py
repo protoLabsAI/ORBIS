@@ -459,6 +459,11 @@ class A2AClient:
             nonlocal last_progress_at, last_progress
             ev_count = 0
             async for resp in client.send_message(request):
+                # Terminal state is authoritative for the result as well as
+                # presentation. Late stream frames must not regress the durable
+                # handle or bypass the tombstone through legacy progress.
+                if final_state in _TERMINAL:
+                    continue
                 which = resp.WhichOneof("payload") if hasattr(resp, "WhichOneof") else None
                 ev_count += 1
                 if which == "task" or (which is None and resp.HasField("task")):

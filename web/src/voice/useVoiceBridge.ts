@@ -47,15 +47,15 @@ interface SsePayload {
 }
 
 let delegateLifecycle = initialDelegateLifecycle();
-let lastStructuredProgress: {
+const MAX_PENDING_MIRRORS = 256;
+let pendingStructuredProgress: {
   delegateId: string;
-  taskKey: string;
   text: string;
-} | null = null;
+}[] = [];
 
 function clearDelegateLifecycle(patch: Partial<VoiceSnapshot> = {}): void {
   delegateLifecycle = initialDelegateLifecycle();
-  lastStructuredProgress = null;
+  pendingStructuredProgress = [];
   voiceStore.update({
     delegationTaskKey: null,
     delegationProgress: null,
@@ -118,16 +118,22 @@ export function handleSse(event: string, data: string): void {
       if (ev === 'start' && parsed.name) {
         voiceStore.update({
           activeToolCall: { name: String(parsed.name), args: parseArgs(parsed.args) },
-          delegationTaskKey: null,
-          delegationProgress: null,
-          delegationOutcome: null,
+          ...(delegateLifecycle.activeTaskKey === null ? {
+            delegationTaskKey: null,
+            delegationProgress: null,
+            delegationOutcome: null,
+          } : {}),
         });
       } else if (ev === 'end') {
         voiceStore.update({
           activeToolCall: null,
-          delegationTaskKey: null,
-          delegationProgress: null,
-          delegationOutcome: (parsed.outcome as 'success' | 'error' | undefined) ?? 'success',
+          ...(delegateLifecycle.activeTaskKey === null ? {
+            delegationTaskKey: null,
+            delegationProgress: null,
+            delegationOutcome: voiceStore.getSnapshot().delegationOutcome
+              ?? (parsed.outcome as 'success' | 'error' | undefined)
+              ?? 'success',
+          } : {}),
         });
       }
       break;
@@ -138,13 +144,14 @@ export function handleSse(event: string, data: string): void {
         const source = typeof parsed.source === 'string'
           ? boundedSseText(parsed.source, 256)
           : '';
-        const structuredMirror = lastStructuredProgress?.delegateId === source
-          && lastStructuredProgress.text === text;
-        if (structuredMirror) {
+        const structuredMirrorIndex = pendingStructuredProgress.findIndex(
+          (progress) => progress.delegateId === source && progress.text === text,
+        );
+        if (structuredMirrorIndex !== -1) {
           // The task-keyed structured reducer already decided whether this
           // update owns the visible rail. Never let its task-blind compatibility
           // mirror reverse that decision; suppress this one exact pair only.
-          lastStructuredProgress = null;
+          pendingStructuredProgress.splice(structuredMirrorIndex, 1);
           break;
         }
         voiceStore.update({
@@ -160,19 +167,26 @@ export function handleSse(event: string, data: string): void {
       const reduced = reduceDelegateEvent(delegateLifecycle, event, parsed);
       delegateLifecycle = reduced.lifecycle;
       const presentation = reduced.presentation;
-      if (!presentation) break;
       const statusState = typeof parsed.state === 'string' ? parsed.state : '';
+      const rawText = typeof parsed.text === 'string' ? boundedSseText(parsed.text, 1024) : '';
+      const delegateId = typeof parsed.delegate_id === 'string'
+        ? boundedSseText(parsed.delegate_id, 256)
+        : '';
       if (
         event === 'delegate.status'
-        && presentation.rawText
+        && rawText
+        && delegateId
         && !['completed', 'failed', 'canceled'].includes(statusState)
       ) {
-        lastStructuredProgress = {
-          delegateId: presentation.delegateId,
-          taskKey: presentation.taskKey,
-          text: presentation.rawText,
-        };
+        pendingStructuredProgress.push({
+          delegateId,
+          text: rawText,
+        });
+        if (pendingStructuredProgress.length > MAX_PENDING_MIRRORS) {
+          pendingStructuredProgress.shift();
+        }
       }
+      if (!presentation) break;
       if (Object.keys(presentation.patch).length > 0) {
         voiceStore.update(presentation.patch);
       }

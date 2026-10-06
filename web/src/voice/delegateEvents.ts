@@ -79,6 +79,8 @@ export function reduceDelegateEvent(
   };
   const isTombstoned = lifecycle.terminalTaskKeys.includes(taskKey);
   const knownTask = lifecycle.taskOrder.includes(taskKey);
+  const newestTaskKey = lifecycle.taskOrder.at(-1);
+  const canOwnVisibleState = !knownTask || newestTaskKey === taskKey;
 
   if (event === 'delegate.status') {
     const state = boundedText(payload.state, MAX_FIELD_BYTES) || 'unknown';
@@ -87,7 +89,7 @@ export function reduceDelegateEvent(
     if (isTombstoned) return { lifecycle, presentation: null };
 
     if (terminal) {
-      const ownsVisibleState = lifecycle.activeTaskKey === null
+      const ownsVisibleState = (lifecycle.activeTaskKey === null && canOwnVisibleState)
         || lifecycle.activeTaskKey === taskKey;
       return {
         lifecycle: {
@@ -118,7 +120,7 @@ export function reduceDelegateEvent(
     }
 
     const progress = rawText ? `${delegateId}: ${rawText}` : `${delegateId}: ${state}`;
-    const ownsVisibleState = lifecycle.activeTaskKey === null
+    const ownsVisibleState = (lifecycle.activeTaskKey === null && canOwnVisibleState)
       || lifecycle.activeTaskKey === taskKey
       || !knownTask;
     return {
@@ -152,7 +154,7 @@ export function reduceDelegateEvent(
     const status = boundedText(payload.status, MAX_FIELD_BYTES) || 'updated';
     const started = status === 'started';
     const ownsVisibleState = started && (
-      lifecycle.activeTaskKey === null
+      (lifecycle.activeTaskKey === null && canOwnVisibleState)
       || lifecycle.activeTaskKey === taskKey
       || !knownTask
     );
