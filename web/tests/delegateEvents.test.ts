@@ -71,6 +71,59 @@ describe('structured delegate event lifecycle', () => {
     }).presentation).toBeNull();
   });
 
+  test('older task cannot reclaim progress or outcome after a newer task finishes', () => {
+    let lifecycle = initialDelegateLifecycle();
+    for (const [task_id, state] of [['A', 'working'], ['B', 'working'], ['B', 'completed']]) {
+      ({ lifecycle } = apply(lifecycle, 'delegate.status', { delegate_id: 'hub', task_id, state }));
+    }
+    expect(apply(lifecycle, 'delegate.status', {
+      delegate_id: 'hub', task_id: 'A', state: 'working', text: 'late A',
+    }).presentation?.patch).toEqual({});
+    expect(apply(lifecycle, 'delegate.tool', {
+      delegate_id: 'hub', task_id: 'A', status: 'started', name: 'late lookup',
+    }).presentation?.patch).toEqual({});
+    expect(apply(lifecycle, 'delegate.status', {
+      delegate_id: 'hub', task_id: 'A', state: 'failed',
+    }).presentation?.patch).toEqual({});
+  });
+
+  test('local tool lifecycle preserves an authoritative background task', () => {
+    handleSse('__connected', '');
+    handleSse('delegate.status', JSON.stringify({
+      delegate_id: 'hub', task_id: 'background', state: 'working', text: 'researching',
+    }));
+    handleSse('tool-call', JSON.stringify({ event: 'start', name: 'check_inbox' }));
+    handleSse('tool-call', JSON.stringify({ event: 'end', name: 'check_inbox', outcome: 'error' }));
+    expect(voiceStore.getSnapshot()).toMatchObject({
+      delegationTaskKey: 'hub\u001ftask:background', delegationProgress: 'hub: researching',
+      delegationOutcome: null, activeToolCall: null,
+    });
+  });
+
+  test('late tombstoned status cannot resurrect progress through its legacy mirror', () => {
+    handleSse('__connected', '');
+    handleSse('delegate.status', JSON.stringify({
+      delegate_id: 'hub', task_id: 'done', state: 'completed',
+    }));
+    handleSse('delegate.status', JSON.stringify({
+      delegate_id: 'hub', task_id: 'done', state: 'working', text: 'late update',
+    }));
+    handleSse('delegation-progress', JSON.stringify({ source: 'hub', text: 'late update' }));
+    expect(voiceStore.getSnapshot()).toMatchObject({
+      delegationTaskKey: null, delegationProgress: null, delegationOutcome: 'success',
+    });
+  });
+
+  test('local tool completion preserves an authoritative delegate failure', () => {
+    handleSse('__connected', '');
+    handleSse('tool-call', JSON.stringify({ event: 'start', name: 'delegate_to' }));
+    handleSse('delegate.status', JSON.stringify({
+      delegate_id: 'hub', task_id: 'failed', state: 'failed',
+    }));
+    handleSse('tool-call', JSON.stringify({ event: 'end', name: 'delegate_to', outcome: 'success' }));
+    expect(voiceStore.getSnapshot().delegationOutcome).toBe('error');
+  });
+
   test('missing task id falls back to session then delegate identity', () => {
     expect(apply(initialDelegateLifecycle(), 'delegate.status', {
       delegate_id: 'hub', session_id: 'ctx', state: 'working',
@@ -134,5 +187,40 @@ describe('structured delegate event lifecycle', () => {
       delegationTaskKey: 'hub\u001ftask:B',
       delegationProgress: 'hub: B work',
     });
+  });
+
+  test('interleaved structured callbacks cannot conceal an older task mirror', () => {
+    handleSse('__connected', '');
+    for (const [task_id, text] of [['A', 'A'], ['B', 'B'], ['A', 'late A'], ['B', 'fresh B']]) {
+      handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id, state: 'working', text }));
+    }
+    handleSse('delegation-progress', JSON.stringify({ source: 'hub', text: 'late A' }));
+    expect(voiceStore.getSnapshot()).toMatchObject({
+      delegationTaskKey: 'hub\u001ftask:B', delegationProgress: 'hub: fresh B',
+    });
+  });
+
+  test('interleaved completed task callbacks cannot conceal a tombstoned mirror', () => {
+    handleSse('__connected', '');
+    handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'A', state: 'completed' }));
+    handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'A', state: 'working', text: 'late A' }));
+    handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'B', state: 'working', text: 'fresh B' }));
+    handleSse('delegation-progress', JSON.stringify({ source: 'hub', text: 'late A' }));
+    expect(voiceStore.getSnapshot()).toMatchObject({
+      delegationTaskKey: 'hub\u001ftask:B', delegationProgress: 'hub: fresh B',
+    });
+  });
+
+  test('repeated identical interleaved mirrors remain suppressed one per callback', () => {
+    handleSse('__connected', '');
+    handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'A', state: 'completed' }));
+    for (let i = 0; i < 3; i++) {
+      handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'A', state: 'working', text: 'late A' }));
+      handleSse('delegate.status', JSON.stringify({ delegate_id: 'hub', task_id: 'B', state: 'working', text: `fresh B ${i}` }));
+    }
+    for (let i = 0; i < 3; i++) {
+      handleSse('delegation-progress', JSON.stringify({ source: 'hub', text: 'late A' }));
+    }
+    expect(voiceStore.getSnapshot().delegationProgress).toBe('hub: fresh B 2');
   });
 });

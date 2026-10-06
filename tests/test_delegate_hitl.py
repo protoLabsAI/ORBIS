@@ -12,6 +12,7 @@ import agent.delegate_adapters as adapters
 import agent.user_state as us
 from agent.delegate_ask import answer_delegate_ask
 from agent.delegates import Delegate
+from agent.delivery import DeliveryController
 from agent.user_state import (
     DELEGATE_ASK_TTL_SECS,
     DelegateAsk,
@@ -21,9 +22,15 @@ from agent.user_state import (
 )
 
 
-class _Delivery:
+class _Delivery(DeliveryController):
     def __init__(self):
+        super().__init__()
         self.spoken: list[tuple[str, str]] = []
+        self.events: list[dict] = []
+        self.set_message_emitter(self._capture_event)
+
+    async def _capture_event(self, event):
+        self.events.append(event)
 
     async def deliver(self, text, *, priority=None, source=""):
         self.spoken.append((source, text))
@@ -181,3 +188,36 @@ async def test_unknown_delegate_is_spoken(active_state):
     await answer_delegate_ask(_ask("t-1"), "answer", _Empty())
     assert delivery.spoken
     assert "not configured" in delivery.spoken[0][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("superseded", [False, True])
+async def test_hitl_resume_progress_lease_ends_on_completion_or_supersession(
+    active_state, monkeypatch, superseded,
+):
+    delivery = active_state.active_delivery
+    callback = None
+    working = {
+        "type": "delegate.status", "delegate_id": "hub", "task_id": "t-1",
+        "state": "working", "text": "using your answer",
+    }
+    done = {**working, "state": "completed", "text": "done"}
+
+    class _StreamingClient:
+        async def send(self, query, *, event_callback=None, **kwargs):
+            nonlocal callback
+            callback = event_callback
+            assert callback is not None
+            await callback(working)
+            if superseded:
+                delivery.bump_barge()
+            await callback(done)
+            return _Res("completed", text="done")
+
+    monkeypatch.setattr(
+        adapters.get_adapter("a2a"), "client_for", lambda _d: _StreamingClient()
+    )
+    await answer_delegate_ask(_ask("t-1"), "blue", _Registry())
+    await callback(working)
+    assert delivery.events == ([working] if superseded else [working, done])
+    assert bool(delivery.spoken) is not superseded

@@ -26,7 +26,7 @@ async def cancel_latest_outbound(registry) -> str | None:
     Never raises; the confirm/failure is spoken via the active session's
     DeliveryController."""
     from .delegate_adapters import _outbound_dal, get_adapter
-    from .delegate_ask import _speak
+    from .delegate_ask import _active_delivery, _speak
     from .user_state import clear_delegate_ask
 
     dal = _outbound_dal()
@@ -50,6 +50,16 @@ async def cancel_latest_outbound(registry) -> str | None:
         dal.update(task_id, status="canceled")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[outbound-cancel] {task_id}: local update failed: {e}")
+    else:
+        # Mirror the authoritative LOCAL cancellation policy into presentation:
+        # even when the remote cannot confirm, this row no longer owns work
+        # delivery. The spoken confirmation below distinguishes that outcome.
+        delivery = _active_delivery()
+        if delivery is not None:
+            await delivery.note_delegate_event({
+                "type": "delegate.status", "delegate_id": name,
+                "task_id": task_id, "state": "canceled",
+            })
 
     delegate = registry.get(name) if registry is not None else None
     if delegate is None or delegate.type != "a2a":

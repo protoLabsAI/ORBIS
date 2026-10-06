@@ -71,6 +71,19 @@ async def answer_delegate_ask(ask: DelegateAsk, answer: str, registry) -> None:
         f"[delegate-ask] answering task={ask.task_id} delegate={ask.delegate} "
         f"answer={answer[:80]!r}"
     )
+    delivery = _active_delivery()
+    lease = delivery.begin_delegate_event_scope() if delivery is not None else None
+
+    def _superseded() -> bool:
+        return delivery is not None and (
+            _active_delivery() is not delivery
+            or not delivery.owns_delegate_event_scope(lease)
+        )
+
+    async def _delegate_event(event: dict) -> None:
+        if delivery is not None and not _superseded():
+            await delivery.note_delegate_event(event)
+
     try:
         client = get_adapter("a2a").client_for(delegate)
         res = await client.send(
@@ -78,14 +91,20 @@ async def answer_delegate_ask(ask: DelegateAsk, answer: str, registry) -> None:
             task_id=ask.task_id,
             context_id=ask.context_id,
             timeout=_ANSWER_TIMEOUT,
+            event_callback=_delegate_event if delivery is not None else None,
         )
+        superseded = _superseded()
     except (A2ADispatchError, Exception) as e:  # noqa: BLE001
         logger.warning(f"[delegate-ask] answer to {ask.delegate} failed: {e}")
-        await _speak(
-            f"I couldn't get your answer through to {ask.delegate} — {e}",
-            source=ask.delegate,
-        )
+        if not _superseded():
+            await _speak(
+                f"I couldn't get your answer through to {ask.delegate} — {e}",
+                source=ask.delegate,
+            )
         return
+    finally:
+        if delivery is not None and lease is not None:
+            delivery.end_delegate_event_scope(lease)
 
     dal = _outbound_dal()
     if dal is not None:
@@ -94,6 +113,11 @@ async def answer_delegate_ask(ask: DelegateAsk, answer: str, registry) -> None:
                        result=res.text or None)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[delegate-ask] outbound update failed: {e}")
+
+    # The task result remains durable after interruption, while its old voice
+    # turn no longer owns progress, a new ask, or spoken delivery.
+    if superseded:
+        return
 
     if res.input_required:
         # Another question — re-arm routing and speak it.
