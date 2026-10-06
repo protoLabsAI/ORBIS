@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { invoke } from '@tauri-apps/api/core';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { voiceStore } from '@/voice/state';
+import { useEffectiveVoiceLifecycle } from '@/voice/hooks';
 import { pushStatusTransient } from '@/sdk';
 import { api, type OrbisConfig, type PersonaEntry, type StarterOrb } from '@/lib/api';
 import { VerbositySelector } from '@/plugins/settings-panel/VerbositySelector';
@@ -50,10 +51,7 @@ export function QuickPanel() {
     voiceStore.subscribe,
     () => voiceStore.getSnapshot().micMuted,
   );
-  const lifecycle = useSyncExternalStore(
-    voiceStore.subscribe,
-    () => voiceStore.getSnapshot().voiceLifecycle,
-  );
+  const lifecycle = useEffectiveVoiceLifecycle();
   const voiceReady = voiceIsReady(lifecycle);
   const [voiceRecovery, setVoiceRecovery] = useState<'retry' | 'relaunch' | null>(null);
 

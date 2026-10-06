@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { Panel } from '@/components/ui/panel';
@@ -30,7 +30,7 @@ import {
   type MicrophonePermissionStatus,
 } from '@/shared/audio/microphonePermission';
 import { NativeLevelMeter } from '@/shared/audio/NativeLevelMeter';
-import { voiceStore } from '@/voice/state';
+import { useEffectiveVoiceLifecycle } from '@/voice/hooks';
 import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 
 /**
@@ -41,10 +41,7 @@ import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
  * date), so only native desktop audio remains.
  */
 export function MicSettings() {
-  const lifecycle = useSyncExternalStore(
-    voiceStore.subscribe,
-    () => voiceStore.getSnapshot().voiceLifecycle,
-  );
+  const lifecycle = useEffectiveVoiceLifecycle();
   const [devices, setDevices] = useState<string[]>([]);
   const [device, setDevice] = useState<string>('');
   const [permission, setPermission] =
