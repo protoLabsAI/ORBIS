@@ -2,9 +2,9 @@
 
 ORBIS detects wake words with [openWakeWord](https://github.com/dscripka/openWakeWord) —
 small, on-device models that run before the main speech pipeline. The picker in
-**Settings → Activation** ships "Hey Orbis" plus the stock openWakeWord set, but
+**Settings → Voice → Activation** ships "Hey Orbis" plus the stock openWakeWord set, but
 you can train a model for **any** phrase you like ("Hey Computer", your own
-name, …) and drop it in.
+name, …) and integrate it into a development build.
 
 A wake model is tiny (~200 KB–1.5 MB) and trains on **synthetic** speech, so you
 don't record anything yourself — a free Colab GPU does it in under an hour.
@@ -25,32 +25,25 @@ notebook:
 > Want the exact recipe we used for "Hey Orbis"? It's at
 > [`protoLabsAI/hey-orbis-wakeword`](https://huggingface.co/protoLabsAI/hey-orbis-wakeword).
 
-## 2. Install it in ORBIS
+## 2. Integrate it into ORBIS
 
-Your model rides on two **shared** front-end models (mel-spectrogram +
-embedding) that ORBIS already downloads for any wake word — you only add your
-classifier. Drop the file into the wake-word models directory:
+The shipped picker accepts the pinned built-in catalog. Dropping an arbitrary
+file into the models directory does **not** register it or make it selectable.
+Custom model import is not currently an app feature.
 
-```
-~/Library/Application Support/studio.protolabs.orbis/models/wakeword/
-```
-
-Put `your_phrase.onnx` there next to `melspectrogram.onnx` and
-`embedding_model.onnx` (download any built-in wake word once in Settings →
-Activation to fetch those two if you haven't). The file's name (minus `.onnx`)
-is its id, and ORBIS turns it into a display phrase — `hey_computer.onnx` →
-"Hey Computer".
+For a development build, add an entry to `voice/wakeword_catalog.json` with the
+classifier's filename, immutable download URL, SHA256, input embedding window
+and output scoring offset. Python downloads and Rust inference read this same
+manifest. Keep the shared mel-spectrogram and speech-embedding dependencies.
+Verify the input/output shape and Rust/Python score parity before exposing it
+in the picker, then run spoken positives and hard negatives to tune its
+threshold. Build the native app with the updated catalog.
 
 ## 3. Select + tune it
 
-1. **Settings → Activation** → choose the **Wake word** style and select your
-   model from the list.
-2. **Relaunch** — activation settings apply on the next launch.
-3. Say your phrase. The orb's status pill shows it while armed and flips to
-   listening when it fires.
-4. If it's unreliable, tune the **Sensitivity** slider (lower = fires more
-   easily) and **relaunch**. A clean utterance should score far above a
-   background of ~0.
+Follow [Enable wake-word activation](./enable-wake-word.md): download and select
+the catalog entry, enable Wake word, and relaunch. Sensitivity changes also
+apply on the next launch. Lower thresholds can increase false triggers.
 
 ## Troubleshooting
 
@@ -60,5 +53,6 @@ is its id, and ORBIS turns it into a display phrase — `hey_computer.onnx` →
   threshold. See [Voice isn't working](/how-to/voice-not-working).
 - **False fires.** Raise the sensitivity threshold, or pick a longer / more
   distinctive phrase and retrain.
-- **Won't load.** Make sure both shared models are present in the directory
-  above and the file is a valid openWakeWord `.onnx` (input `[1,16,96]`).
+- **Won't load.** Make sure both shared models are present in
+  `~/Library/Application Support/studio.protolabs.orbis/models/wakeword/`, the catalog checksum matches, and the classifier's input/output
+  shapes agree with its catalog entry.

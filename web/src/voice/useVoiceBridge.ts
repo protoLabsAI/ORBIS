@@ -30,8 +30,8 @@
  * pre-Tahoe it opened a browser EventSource directly. Both are gone.
  */
 
-import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { voiceStore, type VoiceSnapshot } from './state';
 import { applyConnectionSignal, applyNativeAudioStatus } from './connection';
@@ -269,37 +269,57 @@ export function useVoiceBridge(): void {
         // listen() unavailable (non-Tauri dev) — voice state stays idle.
       });
 
+    // Keep the retained wake snapshot until native readiness arrives. Detector
+    // readiness is independent of socket/capture readiness; it cannot establish
+    // a live listening turn after an observed native loss.
+    let wakeEventSeen = false;
+    let retainedWake: { state?: string; phrase?: string } | null = null;
+    let nativeLossSeen = false;
+    const applyWake = (payload: { state?: string; phrase?: string }) => {
+      retainedWake = payload;
+      const s = payload?.state;
+      const audio = voiceStore.getSnapshot().nativeAudio;
+      const ready = audio?.socket_connected && audio?.capture_alive;
+      const activation = s === 'starting' || s === 'failed'
+        ? s
+        : ready && (s === 'armed' || s === 'listening') ? s : null;
+      voiceStore.update({ activation, wakePhrase: payload?.phrase ?? null });
+    };
+    const applyAudio = (status: NonNullable<VoiceSnapshot['nativeAudio']>) => {
+      applyNativeAudioStatus(status);
+      if (!status.socket_connected || !status.capture_alive) {
+        nativeLossSeen = true;
+      } else if (retainedWake && (retainedWake.state !== 'listening' || !nativeLossSeen)) {
+        applyWake(retainedWake);
+      }
+    };
+
     // Register first, then read retained truth: mounting an event listener
     // says nothing about whether the sidecar or microphone is actually alive.
     let audioEventSeen = false;
     listen<NonNullable<VoiceSnapshot['nativeAudio']>>('orbis-audio-status', (e) => {
       if (cancelled) return;
       audioEventSeen = true;
-      applyNativeAudioStatus(e.payload);
+      applyAudio(e.payload);
     }).then(async (fn) => {
       if (cancelled) { fn(); return; }
       unlistenAudioRef.current = fn;
       const status = await invoke<NonNullable<VoiceSnapshot['nativeAudio']>>('audio_status');
-      if (!cancelled && !audioEventSeen) applyNativeAudioStatus(status);
+      if (!cancelled && !audioEventSeen) applyAudio(status);
     }).catch(() => {});
 
-    // Wake-word activation state — emitted Rust-side (audio/wake_word.rs),
-    // independent of the Python SSE bridge (it fires while the mic is muted,
-    // before Python sees any audio). Payload: { state, phrase }.
+    // Subscribe before reading retained state: a detector can warm up before
+    // the UI mounts. An event received during the read beats the older snapshot.
     listen<{ state?: string; phrase?: string }>('wake-state', (e) => {
       if (cancelled) return;
-      const audio = voiceStore.getSnapshot().nativeAudio;
-      if (audio && (!audio.socket_connected || !audio.capture_alive)) return;
-      const s = e.payload?.state;
-      const a = s === 'armed' || s === 'listening' ? s : null;
-      voiceStore.update({ activation: a, wakePhrase: e.payload?.phrase ?? null });
+      wakeEventSeen = true;
+      applyWake(e.payload);
     })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-          return;
-        }
+      .then(async (fn) => {
+        if (cancelled) { fn(); return; }
         unlistenWakeRef.current = fn;
+        const retained = await invoke<{ state?: string; phrase?: string } | null>('get_wake_state');
+        if (!cancelled && !wakeEventSeen && retained) applyWake(retained);
       })
       .catch(() => {});
 

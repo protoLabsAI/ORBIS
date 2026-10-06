@@ -27,6 +27,7 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
 use tract_onnx::prelude::*;
+use tract_onnx::tract_core::internal::format_err;
 
 use super::engine::AudioEngine;
 
@@ -88,36 +89,62 @@ pub struct WakeWord {
     last_score: f32,
     energy_floor: f32,
     mic_gain: f32,
+    window_samples: usize,
+    wake_window: usize,
+    score_start: usize,
 }
 
 impl WakeWord {
     /// Load `<wake>.onnx` + the shared melspec/embedding models from `dir`.
     pub fn load_from_dir(dir: &Path, wake_model: &str, threshold: f32) -> TractResult<Self> {
+        if !threshold.is_finite() || !(0.1..=0.9).contains(&threshold) {
+            return Err(format_err!("Wake sensitivity must be between 0.1 and 0.9."));
+        }
+        let spec =
+            super::wake_catalog::verify_models(dir, wake_model).map_err(|e| format_err!("{e}"))?;
+        let wake_window = spec.embedding_frames;
+        let score_start = spec.score_start;
+        let window_samples =
+            WINDOW_SAMPLES + wake_window.saturating_sub(WAKE_WINDOW) * TICK_SAMPLES;
         let mel = load_model(
             &dir.join("melspectrogram.onnx"),
-            &[1, WINDOW_SAMPLES as i32],
+            &[1, window_samples as i32],
         )?;
         // Batch all 16 embedding windows in ONE inference (input [16,76,32,1]),
         // not 16 sequential calls — the embedding's batch dim is dynamic and
         // this is ~16× fewer tract invocations.
         let emb = load_model(
             &dir.join("embedding_model.onnx"),
-            &[WAKE_WINDOW as i32, MEL_WINDOW as i32, MEL_BINS as i32, 1],
+            &[wake_window as i32, MEL_WINDOW as i32, MEL_BINS as i32, 1],
         )?;
         let wake = load_model(
-            &dir.join(format!("{wake_model}.onnx")),
-            &[1, WAKE_WINDOW as i32, EMB_DIM as i32],
+            &dir.join(spec.filename),
+            &[1, wake_window as i32, EMB_DIM as i32],
         )?;
+        // Exercise the complete graph off the audio thread before claiming
+        // ARMED. A loadable graph can still fail during its first inference.
+        score_window(
+            &mel,
+            &emb,
+            &wake,
+            &vec![0.0; window_samples],
+            wake_window,
+            score_start,
+        )?
+        .ok_or_else(|| format_err!("Wake model needs a longer input window."))?;
         Ok(Self {
             mel,
             emb,
             wake,
-            ring: VecDeque::with_capacity(WINDOW_SAMPLES + TICK_SAMPLES),
+            ring: VecDeque::with_capacity(window_samples + TICK_SAMPLES),
             threshold,
             rearmed: true,
             last_score: 0.0,
             energy_floor: DEFAULT_ENERGY_FLOOR,
             mic_gain: DEFAULT_MIC_GAIN,
+            window_samples,
+            wake_window,
+            score_start,
         })
     }
 
@@ -142,7 +169,7 @@ impl WakeWord {
     /// iteration so the next `tick_score` always sees the freshest 2 s.
     pub fn feed(&mut self, samples: &[i16]) {
         for &s in samples {
-            if self.ring.len() == WINDOW_SAMPLES {
+            if self.ring.len() == self.window_samples {
                 self.ring.pop_front();
             }
             self.ring.push_back(s);
@@ -154,7 +181,7 @@ impl WakeWord {
     /// after the score falls back below threshold). Call at the thread's
     /// natural cadence (~7/s) — pacing comes from how long the score takes.
     pub fn tick_score(&mut self) -> bool {
-        if self.ring.len() < WINDOW_SAMPLES {
+        if self.ring.len() < self.window_samples {
             return false;
         }
         // VAD gate: a quiet room never triggers the expensive pipeline.
@@ -180,7 +207,14 @@ impl WakeWord {
             .iter()
             .map(|&s| (s as f32 * scale).clamp(-32768.0, 32767.0))
             .collect();
-        match score_window(&self.mel, &self.emb, &self.wake, &audio) {
+        match score_window(
+            &self.mel,
+            &self.emb,
+            &self.wake,
+            &audio,
+            self.wake_window,
+            self.score_start,
+        ) {
             Ok(Some(score)) => {
                 self.last_score = score;
                 // Per-tick scores are a threshold-tuning aid — debug, not info,
@@ -218,6 +252,12 @@ impl WakeWord {
     /// signal the listening window uses to auto-close.
     pub fn is_recent_silence(&self) -> bool {
         self.recent_rms() < self.energy_floor
+    }
+
+    fn reset_audio(&mut self) {
+        self.ring.clear();
+        self.last_score = 0.0;
+        self.rearmed = true;
     }
 
     /// Re-arm the fire debounce after a listening window closes, so the next
@@ -341,6 +381,9 @@ pub fn spawn_detector(
     std::thread::Builder::new()
         .name("orbis-wakeword".into())
         .spawn(move || {
+            // Capture before warmup so a mute transition during loading is
+            // visible when we begin consuming live frames.
+            let mut mute_epoch = engine.mute_epoch();
             let mut det = match WakeWord::load_from_dir(
                 &config.models_dir,
                 &config.model,
@@ -349,6 +392,7 @@ pub fn spawn_detector(
                 Ok(d) => d,
                 Err(e) => {
                     log::error!("[wake] detector disabled — model load failed: {e}");
+                    emit("failed");
                     return;
                 }
             };
@@ -359,6 +403,9 @@ pub fn spawn_detector(
                 config.listen_window_s,
                 config.models_dir.display()
             );
+            // Warmup can take longer than the audio cadence. Old frames are
+            // never valid evidence for activation after the detector is ready.
+            while rx.try_recv().is_ok() {}
             emit("armed");
 
             // ARMED: score the ring for the phrase. LISTENING (post-fire): stop
@@ -374,6 +421,19 @@ pub fn spawn_detector(
             let window = Duration::from_secs_f32(config.listen_window_s.max(1.0));
 
             while let Ok(frame) = rx.recv() {
+                // Any mute transition invalidates queued/pre-mute audio, even
+                // if the mute was shorter than a model inference.
+                let current_epoch = engine.mute_epoch();
+                if engine.is_muted() || current_epoch != mute_epoch {
+                    while rx.try_recv().is_ok() {}
+                    det.reset_audio();
+                    state = State::Armed;
+                    mute_epoch = current_epoch;
+                    if !engine.is_muted() {
+                        emit("armed");
+                    }
+                    continue;
+                }
                 det.feed(&frame);
                 // Drain backlog so the next score sees the freshest audio (the
                 // recv/try_recv pacing self-limits to ~score-rate; no unbounded
@@ -394,7 +454,14 @@ pub fn spawn_detector(
                             last_voice = Instant::now();
                             state = State::Listening;
                         } else if det.tick_score() {
-                            engine.arm_listening_window();
+                            if engine.is_muted() || engine.mute_epoch() != mute_epoch {
+                                det.reset_audio();
+                                continue;
+                            }
+                            if !engine.arm_listening_window(mute_epoch) || engine.is_muted() {
+                                det.reset_audio();
+                                continue;
+                            }
                             emit("listening");
                             last_voice = Instant::now();
                             state = State::Listening;
@@ -458,7 +525,14 @@ fn window_rms(samples: impl Iterator<Item = i16>) -> f32 {
 
 /// Stateless pipeline — shared by the live detector and the oracle test.
 /// Audio is int16-range f32 (the melspec model was trained on that range).
-fn score_window(mel: &Model, emb: &Model, wake: &Model, audio: &[f32]) -> TractResult<Option<f32>> {
+fn score_window(
+    mel: &Model,
+    emb: &Model,
+    wake: &Model,
+    audio: &[f32],
+    wake_window: usize,
+    score_start: usize,
+) -> TractResult<Option<f32>> {
     // 1. melspectrogram: [1, N] → [1,1,F,32]; squeeze (0,1) → [F,32]; /10 + 2.
     let mel_in: Tensor =
         tract_ndarray::Array2::from_shape_vec((1, audio.len()), audio.to_vec())?.into();
@@ -476,18 +550,18 @@ fn score_window(mel: &Model, emb: &Model, wake: &Model, audio: &[f32]) -> TractR
     // run them as ONE batched [16,76,32,1] inference (identical to the oracle's
     // per-window loop — windows are independent — but ~16× fewer tract calls).
     let n_windows = (frames - MEL_WINDOW) / MEL_STEP + 1;
-    if n_windows < WAKE_WINDOW {
+    if n_windows < wake_window {
         return Ok(None);
     }
-    let mut batch = Vec::with_capacity(WAKE_WINDOW * MEL_WINDOW * MEL_BINS);
-    for k in 0..WAKE_WINDOW {
-        let start = (n_windows - WAKE_WINDOW + k) * MEL_STEP;
+    let mut batch = Vec::with_capacity(wake_window * MEL_WINDOW * MEL_BINS);
+    for k in 0..wake_window {
+        let start = (n_windows - wake_window + k) * MEL_STEP;
         for t in start..start + MEL_WINDOW {
             batch.extend_from_slice(&mel_norm[t * MEL_BINS..(t + 1) * MEL_BINS]);
         }
     }
     let emb_in: Tensor =
-        tract_ndarray::Array4::from_shape_vec((WAKE_WINDOW, MEL_WINDOW, MEL_BINS, 1), batch)?
+        tract_ndarray::Array4::from_shape_vec((wake_window, MEL_WINDOW, MEL_BINS, 1), batch)?
             .into();
     let emb_out = emb.run(tvec!(emb_in.into()))?;
     // [16,1,1,96] row-major → 16×96, already in window order → wake input.
@@ -495,14 +569,14 @@ fn score_window(mel: &Model, emb: &Model, wake: &Model, audio: &[f32]) -> TractR
 
     // 3. wake classifier: the 16 embeddings [1,16,96] → sigmoid 0..1.
     let wake_in: Tensor =
-        tract_ndarray::Array3::from_shape_vec((1, WAKE_WINDOW, EMB_DIM), embs)?.into();
+        tract_ndarray::Array3::from_shape_vec((1, wake_window, EMB_DIM), embs)?.into();
     let wake_out = wake.run(tvec!(wake_in.into()))?;
     let score = wake_out[0]
         .to_array_view::<f32>()?
         .iter()
+        .skip(score_start)
         .copied()
-        .next()
-        .unwrap_or(0.0);
+        .fold(0.0_f32, f32::max);
     Ok(Some(score))
 }
 
@@ -595,21 +669,78 @@ mod tests {
         let det = WakeWord::load_from_dir(&dir, "hey_orbis", 0.5).expect("load models");
 
         let zeros = vec![0.0f32; WINDOW_SAMPLES];
-        let z = score_window(&det.mel, &det.emb, &det.wake, &zeros)
-            .unwrap()
-            .unwrap();
+        let z = score_window(
+            &det.mel,
+            &det.emb,
+            &det.wake,
+            &zeros,
+            det.wake_window,
+            det.score_start,
+        )
+        .unwrap()
+        .unwrap();
         assert!((z - 0.000309).abs() < 5e-4, "zeros score {z} != ~0.000309");
 
         let sine: Vec<f32> = (0..WINDOW_SAMPLES)
             .map(|n| 10_000.0 * (2.0 * std::f32::consts::PI * 440.0 * n as f32 / 16_000.0).sin())
             .collect();
-        let s = score_window(&det.mel, &det.emb, &det.wake, &sine)
-            .unwrap()
-            .unwrap();
+        let s = score_window(
+            &det.mel,
+            &det.emb,
+            &det.wake,
+            &sine,
+            det.wake_window,
+            det.score_start,
+        )
+        .unwrap()
+        .unwrap();
         assert!(
             (s - 0.000420).abs() < 5e-4,
             "sine440 score {s} != ~0.000420"
         );
+    }
+
+    #[test]
+    fn every_catalog_phrase_matches_zero_input_oracle_and_resets_on_mute() {
+        let Some(dir) = models_dir() else {
+            return;
+        };
+        let cases = [
+            ("hey_orbis", 0.000308573_f32),
+            ("alexa", 0.000001103),
+            ("hey_jarvis", 0.000005037),
+            ("hey_mycroft", 0.0),
+            ("hey_rhasspy", 0.001702726),
+            ("timer", 0.000000398),
+            ("weather", 0.000001609),
+        ];
+        for (id, expected) in cases {
+            let mut det = WakeWord::load_from_dir(&dir, id, 0.5).expect(id);
+            let score = score_window(
+                &det.mel,
+                &det.emb,
+                &det.wake,
+                &vec![0.0; det.window_samples],
+                det.wake_window,
+                det.score_start,
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                (score - expected).abs() < 5e-4,
+                "{id}: {score} vs {expected}"
+            );
+            // Timer background probability must never activate the mic.
+            assert!(score < 0.1, "{id} falsely fired on silence");
+            det.feed(&vec![1_000; det.window_samples]);
+            det.rearmed = false;
+            det.last_score = 1.0;
+            det.reset_audio();
+            assert!(det.ring.is_empty());
+            assert!(det.rearmed);
+            assert_eq!(det.last_score, 0.0);
+            assert!(!det.tick_score(), "muted phrase was retained for replay");
+        }
     }
 
     /// Per-score latency. The detector runs on a DEDICATED thread that always
@@ -627,11 +758,26 @@ mod tests {
         };
         let det = WakeWord::load_from_dir(&dir, "hey_orbis", 0.5).expect("load models");
         let audio = vec![0.0f32; WINDOW_SAMPLES];
-        let _ = score_window(&det.mel, &det.emb, &det.wake, &audio); // warm up
+        let _ = score_window(
+            &det.mel,
+            &det.emb,
+            &det.wake,
+            &audio,
+            det.wake_window,
+            det.score_start,
+        ); // warm up
         let t0 = std::time::Instant::now();
         let iters = 20;
         for _ in 0..iters {
-            let _ = score_window(&det.mel, &det.emb, &det.wake, &audio).unwrap();
+            let _ = score_window(
+                &det.mel,
+                &det.emb,
+                &det.wake,
+                &audio,
+                det.wake_window,
+                det.score_start,
+            )
+            .unwrap();
         }
         let per = t0.elapsed() / iters;
         eprintln!(

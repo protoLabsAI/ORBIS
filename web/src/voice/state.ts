@@ -14,7 +14,7 @@ import type { VoiceLifecycle } from './lifecycle';
 /** Wake-word activation state (Rust `wake-state` event). `null` when wake mode
  * is off (push-to-talk / open-mic). ARMED = detector running, waiting for the
  * phrase; LISTENING = phrase fired, window open. */
-export type ActivationState = 'armed' | 'listening' | null;
+export type ActivationState = 'starting' | 'armed' | 'listening' | 'failed' | null;
 
 export interface VoiceSnapshot {
   state: VoiceState;

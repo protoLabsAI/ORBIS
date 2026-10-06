@@ -222,6 +222,8 @@ export interface WakeModel {
   kind: 'shared' | 'wake';
   recommended: boolean;
   downloaded: boolean;
+  license: string;
+  source_url: string;
 }
 
 export type PersonalityAxis = {
