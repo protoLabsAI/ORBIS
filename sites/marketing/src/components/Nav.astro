@@ -9,18 +9,18 @@ const links = [
 const currentPath = Astro.url.pathname;
 ---
 
-<nav class="fixed top-0 inset-x-0 z-50 h-14 border-b border-white/5 backdrop-blur-xl" style="background: rgba(9,9,11,0.80)">
-  <div class="max-w-5xl mx-auto px-6 h-full flex items-center justify-between">
+<nav aria-label="Main" class="fixed top-0 inset-x-0 z-50 h-20 sm:h-14 border-b border-white/5 backdrop-blur-xl" style="background: rgba(9,9,11,0.80)">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 h-full flex flex-col sm:flex-row items-center justify-center sm:justify-between gap-2 sm:gap-4">
     <a href="/" class="text-white font-semibold tracking-tight text-lg">ORBIS</a>
 
-    <div class="flex items-center gap-5 sm:gap-6">
+    <div class="flex items-center gap-4 sm:gap-6">
       {links.map(({ href, label, external }) => (
         <a
           href={href}
           target={external ? '_blank' : undefined}
           rel={external ? 'noopener noreferrer' : undefined}
           class={[
-            'text-sm transition-colors',
+            'text-xs sm:text-sm transition-colors',
             currentPath.startsWith(href) && href !== '/'
               ? 'text-white'
               : 'text-zinc-400 hover:text-zinc-200',

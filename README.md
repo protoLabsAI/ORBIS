@@ -14,9 +14,10 @@ agents, OpenAI-compatible endpoints). The differentiator is the
 *companion* layer — persistent memory, slow personality drift, moods,
 and a visible expressive form — around a thin voice-routing agent.
 
-Status: **active development.** Architecture is locked; feature work
-is underway. See [DECISIONS.md](./DECISIONS.md) for the frozen
-architectural snapshot.
+Status: **free public beta for Apple Silicon Mac.** Download the signed,
+notarized app at [orbis.protolabs.studio/download](https://orbis.protolabs.studio/download).
+See [getting started](./docs/tutorials/getting-started.md) for installation and
+your first conversation, or [DECISIONS.md](./DECISIONS.md) for the architecture.
 
 ## What ORBIS is
 
@@ -27,9 +28,9 @@ architectural snapshot.
 - **Router-first.** The orb's primary capability is delegating to
   your configured agents — it's the voice frontend for the AI stack
   you already have, not another agent framework.
-- **Companion-layer.** Persistent memory (SQLite-backed), slow-drift
-  personality axes, short-term mood state, soft-neglect behavior over
-  days-of-silence, visible personality panel for the user to peek at.
+- **Companion-layer.** Persistent conversational recall and persona settings,
+  with a customizable orb. Personality and mood machinery is available;
+  the emotional layer is disabled by default.
 - **Single-owner.** One instance, one owner. Multi-device access comes
   through native desktop ports after the Mac release path stabilizes.
   Not multi-tenant.
@@ -49,28 +50,30 @@ architectural snapshot.
 
 ## Running it (development)
 
-Requirements: Python 3.11+, Bun or npm, and an LLM endpoint. The
-desktop app's recommended path is the new **Built-in (MLX)** preset
-which runs Qwen3.5-4B (or any `mlx-community/...` model) in-process
-via Apple's MLX framework — zero extra install, ~2.5GB first-run
-download. Other choices in the wizard: Ollama, LM Studio, vLLM, or
-any of the OpenAI/Anthropic/Groq/DeepSeek/OpenRouter/Together/
-Mistral/Fireworks/Moonshot/xAI cloud providers. Everything —
-including Whisper STT + Kokoro TTS — runs on CPU by default, so no
-GPU is required outside of the LLM. A CUDA GPU is strongly
-recommended for the *non-Mac* dev path; Apple Silicon Macs use the
-unified-memory GPU automatically via MLX + Metal-accelerated Whisper.
-See [Docker — with / without GPU](#docker--with--without-gpu) below.
+Requirements: Apple Silicon Mac, Python **3.11** (matching the shipped sidecar),
+Bun, Rust for the native shell, and a language model. See [BUILDING.md](./BUILDING.md)
+for the complete native build setup. The wizard offers **Built-in (MLX)**,
+which runs Qwen3.5-4B in-process after a roughly 2.5 GB model download; it
+currently opens on the **Ollama** preset. You can also choose LM Studio, vLLM,
+a hosted provider, or another OpenAI-compatible endpoint.
+
+The native Mac build uses Parakeet speech recognition and Kokoro speech
+synthesis on-device. Python-only development defaults to Whisper unless
+configured otherwise. Cloud speech is optional. First-run runtime and speech
+downloads need internet access and about 3 GB of disk, with additional space
+for a local language model. Fully local inference can run offline afterward.
+The Docker development path supports NVIDIA GPU or CPU hosts; see below.
 
 ```bash
 # One-time
-cp .env.example .env       # optional — env vars for pro setups
+uv sync --python 3.11 --extra test --extra lint
+cp .env.example .env       # optional — fallback env vars and runtime tuning
 # config/orbis.yaml is auto-written by the first-run setup wizard
 
 # Fast backend/UI iteration
 cd web && bun install && bun run dev   # frontend on :5173
 # in a second shell:
-python app.py                          # backend on :7866
+.venv/bin/python app.py                # backend on :7866
 ```
 
 For the native shell and packaged sidecar flow, use the desktop docs:
@@ -80,11 +83,15 @@ scripts/preflight-native-audio-host.sh
 scripts/nuke-and-rebuild.sh --launch --tail
 ```
 
-On first boot, the **setup wizard** walks you through: name yourself +
-name the orb, pick an LLM provider (15 presets, with live "test
-connection" + model-list fetch + Ollama / LM Studio auto-detect if
-they're running), pick a starter orb, grant microphone access, hatch.
-Ends in the native app ready to talk.
+On first boot, the **setup wizard** walks through microphone permission,
+speech-model downloads, names, a language model, and a starter orb. The LLM
+step requires a successful connection check. After setup, wait for voice
+readiness and double-click the orb to talk.
+
+The bundled `hub` delegate targets protoAgent at `127.0.0.1:7870`.
+protoAgent is a separately managed service: start it before delegating work,
+or configure an agent you already run. ORBIS can hold a conversation without
+the hub, using its own chosen language model.
 
 ### Docker — with / without GPU
 
@@ -112,8 +119,7 @@ hint so the container boots without the toolkit:
 docker compose -f docker-compose.yml -f docker-compose.cpu.yml up
 ```
 
-Voice still works; it's just slower on CPU (see the latency numbers
-in the requirements note above). Fish TTS is opt-in via the `fish`
+Model inference is slower on CPU. Fish TTS is opt-in via the `fish`
 profile — unrelated to this GPU switch, see `docker-compose.yml` for
 that service.
 
@@ -158,22 +164,24 @@ ORBIS's voice agent has a deliberately small set of tools:
 - **`delegate_to(target, query)`** — hand off to one of your
   configured agents. A2A-compatible or OpenAI-compatible. Results
   stream back through the delivery controller and narrate naturally.
-- **`adjust_personality(axis, delta)`** — shift a personality axis
-  when you explicitly ask ("be more playful", "be less sarcastic").
+- **Reminders and inbox** — schedule, list, or cancel reminders and check
+  pending messages from your agents.
+- **Persona switching and personality adjustment** — select a configured
+  persona by voice or ask for a personality adjustment.
 
 Orb visual control is handled outside the agent's tool surface.
 
-Nothing else ships. Calculator, search, datetime — all subsumed by
-whatever agent you delegate to.
+Deeper tool use belongs to your delegates. The older in-process orchestration
+path remains during migration; the durable direction is the protoAgent hub.
 
 ## Memory
 
-SQLite single-file embedded store at `data/orbis.sqlite` (override
-with `ORBIS_DB_PATH`). Tables:
+SQLite stores conversational state locally in the app's persistent data
+directory (override with `ORBIS_DB_PATH`). Tables include:
 
 - `sessions` — one row per voice session (with FTS5 search)
-- `facts` — structured `(subject, relation, object)` with bi-temporal
-  validity + confidence. 90-day half-life decay curator runs weekly.
+- `facts` — structured storage retained during migration. Long-term knowledge
+  belongs to the protoAgent hub; conversational recall uses session summaries.
 - `personality_axes` — 10 slow-drift axes (playful↔serious,
   warm↔guarded, sarcastic↔sincere, verbose↔terse, hopeful↔cynical,
   grandiose↔grounded, probing↔incurious, philosophical↔pragmatic,
@@ -189,8 +197,9 @@ SQLite" shape — see [DECISIONS.md § Memory](./DECISIONS.md#memory).
 - `config/orbis.yaml` — persona (slug, name, system prompt, LLM
   knobs, filler verbosity), voice (TTS provider + voice id), orb
   (starter variant / palette / params). Copy from
-  `config/orbis.example.yaml`. Override `system_prompt` at the env
-  level with `SYSTEM_PROMPT`. Re-read via `POST /api/persona/reload`
+  `config/orbis.example.yaml`. Saved config is authoritative; environment
+  variables such as `SYSTEM_PROMPT` are fallbacks for omitted fields.
+  Re-read via `POST /api/persona/reload`
   or `POST /api/config` (which the drawer UI calls).
 - `config/starter_orbs.yaml` — the curated pool the setup wizard
   presents at first boot. Ship 8 by default; edit to taste.
@@ -245,5 +254,5 @@ out of the seed.
 
 [Apache License 2.0](./LICENSE) — © 2026 protolabs.studio. See [NOTICE](./NOTICE).
 Contributions are accepted under the same license (Apache-2.0 §5), so there's no
-separate CLA. The optional paid orb-customization unlock is a separate commercial
-entitlement enforced at runtime; the source itself is Apache-2.0.
+separate CLA. The app and orb customization are free; the paid entitlement
+system has been removed.
