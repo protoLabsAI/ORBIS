@@ -10,9 +10,9 @@ of the spoken output but are backend-specific:
 Three consumers:
 
   - `strip_tags(text)` — pure function; keep as utility.
-  - `ProsodyTextFilter` — pipecat `BaseTextFilter` passed to non-Fish TTS
-    services via their `text_filters=` kwarg. Strips tags from the text
-    handed to the synthesizer so Kokoro/OpenAI don't speak brackets.
+  - `ProsodyTextFilter` — pipecat text filter passed to non-Fish TTS services
+    via their `text_filters=` kwarg. Strips Markdown and tags from text handed
+    to the synthesizer so Kokoro/OpenAI don't speak asterisks or brackets.
   - `ProsodyTagStripper` — FrameProcessor placed after transport.output
     so TextFrames flowing to `assistant_agg` are clean, regardless of
     backend. Without it the LLM would see its own prosody markup in
@@ -26,7 +26,7 @@ import re
 
 from pipecat.frames.frames import Frame, TextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.utils.text.base_text_filter import BaseTextFilter
+from agent.speech_text import SpeechTextFilter
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,15 @@ def strip_tags(text: str) -> str:
     return out.strip(" \t")
 
 
-class ProsodyTextFilter(BaseTextFilter):
-    """Strips prosody tags from text headed INTO a TTS service. Plug into
-    non-Fish TTS services via the `text_filters=` kwarg so Kokoro / OpenAI
-    never see brackets or SSML."""
+class ProsodyTextFilter(SpeechTextFilter):
+    """Strip display Markdown and tags before non-Fish synthesis.
+
+    Plug into services via `text_filters=` so Kokoro / OpenAI never receive
+    formatting markers or Fish-specific prosody controls.
+    """
 
     async def filter(self, text: str) -> str:
-        return strip_tags(text)
+        return strip_tags(await super().filter(text))
 
 
 class ProsodyTagStripper(FrameProcessor):
@@ -76,5 +78,3 @@ class ProsodyTagStripper(FrameProcessor):
             if cleaned != frame.text:
                 frame.text = cleaned
         await self.push_frame(frame, direction)
-
-

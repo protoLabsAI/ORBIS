@@ -129,14 +129,13 @@ def _backend_style(tts_backend: str) -> str:
 # see tool_use_block. Verbosity now shapes the post-tool / plain response
 # length only; acknowledgement is the ack-layer's job, not the prompt's.)
 
-# CHI 2025 (Kim et al.): optimal spoken summary is 18-25 words; past 40
-# words, users barge in or skip 3× more often. Lead with the top fact,
-# offer a follow-up door instead of dumping details.
+# Shape delivery without forcing filler, a word-count minimum, or a question
+# after every answer. Longer explanations remain available when requested.
 _RESPONSE_LENGTH_BY_VERBOSITY: dict[Verbosity, str] = {
-    Verbosity.SILENT: "10 to 15 words. One sentence. Top fact only. No follow-up offer.",
-    Verbosity.BRIEF: "12 to 18 words. One short sentence. Top fact + optional 'want more?'.",
-    Verbosity.NARRATED: "18 to 25 words. Top fact + one supporting detail + 'want the details?' if relevant.",
-    Verbosity.CHATTY: "25 to 40 words. Top fact + two supporting details + a warm follow-up offer.",
+    Verbosity.SILENT: "A few words or one short sentence. Result only.",
+    Verbosity.BRIEF: "One short sentence, usually under 25 words.",
+    Verbosity.NARRATED: "One or two short sentences. Include only useful supporting detail.",
+    Verbosity.CHATTY: "A few short sentences. Expand when the user asks for detail.",
 }
 
 
@@ -288,40 +287,18 @@ def recall_block(summary: str = "", prior_sessions_xml: str = "") -> str:
 
 
 def plan_block(verbosity: Verbosity) -> str:
-    """Returns the PLANNING SIGNAL block appended to every persona's
-    system prompt. Asks the LLM to self-judge when a request warrants a
-    spoken plan preamble.
+    """No spoken plan preamble; acknowledgements belong to the ack layer.
 
-    CHI 2025 ("Think Aloud, Speak Aloud", Zhou et al.): spoken plan
-    preambles increased trust 0.6/5 for ≥3-step tasks but DECREASED
-    satisfaction on ≤2-step tasks (reads as patronizing). The block is
-    suppressed entirely under verbosity=silent.
+    Retain the call signature for existing prompt composers. The old plan
+    instructions contradicted tool_use_block and the terse persona.
     """
-    if verbosity is Verbosity.SILENT:
-        return ""
-    return """\
-## PLANNING SIGNAL — 3+ step tasks only
-
-If the user's request needs THREE OR MORE coordinated steps (multiple
-tool calls, a handoff to another agent, a compose-then-verify loop,
-anything you expect to take more than ~5 s of work), open your response
-with a SHORT plan line:
-
-  "Okay — I'll check X, then Y, then confirm."
-
-Rules:
-  - Skip the plan entirely for simple one- or two-step asks. Spelling
-    out a plan for "what's the weather?" feels patronizing.
-  - Cap the plan at ~15 words. Don't restate the user's question.
-  - Don't repeat the plan verbatim later in the response.
-"""
+    return ""
 
 
 def tool_response_block(verbosity: Verbosity) -> str:
     """Returns the POST-TOOL RESPONSE block appended to every persona's
     system prompt. Keeps spoken replies from tool results tight and voice-
-    appropriate — long prose reads as noise in audio, CHI 2025 found 3×
-    higher skip/barge-in rate past 40 words.
+    appropriate without turning a simple answer into a report.
     """
     length = _RESPONSE_LENGTH_BY_VERBOSITY[verbosity]
     return f"""\
@@ -332,9 +309,10 @@ SHORT and voice-first:
 
   - Length: {length}
   - Lead with the single most-relevant fact. No preamble.
-  - Never dump URLs, bullet lists, tables, or numbered steps — they read
-    as noise in audio. If the user wants detail, offer to pull it
-    ("want the details?" / "I can read the full list if you'd like").
+  - Use plain spoken prose, without Markdown, URLs, bullets, or tables.
+  - Summarize the result instead of reading an agent's report aloud.
+  - Stop after the answer. No routine follow-up offers or questions.
+    Give more detail when requested; ask only when you need clarification.
   - Cut courtesies ("I found the following information that you might
     find interesting…"). The user asked; they want the answer.
   - Prefer whole sentences over fragments.
