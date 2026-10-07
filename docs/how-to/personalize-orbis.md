@@ -18,18 +18,27 @@ The orb's voice comes from its **persona prompt** — a Markdown file
 (`persona.md` in the config dir). Edit it to retune tone and behaviour; keep it
 **voice-first** (short, spoken-natural, no markdown), since everything is read
 aloud. Point `persona.system_prompt_file` at a different file, or set an inline
-`system_prompt:` to override.
+`system_prompt:` instead, omitting the file setting.
+
+The default style is conversational: one short sentence, a second when useful,
+contractions, and no routine follow-up offers or plan narration. Ask for more
+detail when you want it. Custom personas keep their character, with a shared
+spoken-delivery rule that keeps answers in plain prose. Markdown formatting
+is also removed at the speech synthesis boundary.
 
 ## Tune how chatty it is
 
-How much the orb says while it's working — the little acknowledgements — is the
-**verbosity** setting in **Settings → Agent → Behavior** (or
+The **verbosity** setting shapes acknowledgements and the detail in normal
+spoken results. Find it in **Settings → Agent → Behavior** (or
 `persona.filler_verbosity` in config):
 
-- **Silent** — no acknowledgements.
-- **Brief** — a short "on it…" (the default).
-- **Narrated** — talks through what it's doing.
-- **Chatty** — the most talkative.
+- **Silent** — no acknowledgements; the result stays very short.
+- **Brief** — one short sentence for the result (the default).
+- **Narrated** — one or two sentences with useful supporting detail.
+- **Chatty** — a few short sentences.
+
+None of these modes adds a routine "want more?" question. You can still ask
+for an explanation or a longer answer.
 
 ## Reset memory
 

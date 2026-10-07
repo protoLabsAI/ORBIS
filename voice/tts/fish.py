@@ -32,6 +32,8 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
+from agent.speech_text import SpeechTextFilter
+
 logger = logging.getLogger(__name__)
 
 FISH_URL = os.environ.get("FISH_URL", "http://fish-speech:8092")
@@ -59,6 +61,8 @@ class FishAudioTTS(TTSService):
                 language=None,
             ),
         )
+        # Remove display Markdown while retaining Fish's native prosody tags.
+        kwargs.setdefault("text_filters", [SpeechTextFilter()])
         super().__init__(
             sample_rate=sample_rate,
             push_stop_frames=True,

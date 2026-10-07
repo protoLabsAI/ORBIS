@@ -806,6 +806,7 @@ def _effective_prompt(
     """
     from agent.personality import render_personality_block
     from agent.neglect import apply_soft_neglect
+    from agent.voice_style import SPOKEN_DELIVERY
     base = skill.system_prompt
     plan = plan_block(verbosity)
     recall = _recall_block(user_id)
@@ -890,6 +891,10 @@ def _effective_prompt(
         + (("\n\n" + personality) if personality else "")
         + (("\n\n## RETURN\n\n" + neglect_nudge) if neglect_nudge else "")
         + (("\n\n" + inbox_block) if inbox_block else "")
+        # Saved persona prompts and recalled reports can still be verbose or
+        # formatted for reading. Keep the delivery contract last on every
+        # initial prompt and hot refresh, without rewriting user configuration.
+        + "\n\n" + SPOKEN_DELIVERY
     )
 
 
