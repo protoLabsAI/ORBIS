@@ -67,7 +67,6 @@ jobs:
           platforms: linux/amd64
           push: false
           cache-from: type=gha,scope=orbis-docker,timeout=2m
-          # The CUDA layers can exceed the job budget while uploading cache
-          # after the image has passed its import gate. Cache is best-effort;
-          # build/import failures still fail this read-only verification job.
-          cache-to: type=gha,scope=orbis-docker,mode=max,timeout=2m,ignore-error=true
+          # Do not export the multi-GB CUDA cache from PR verification: even
+          # bounded requests can exceed the job budget after imports passed.
+          # Release/main image publishing maintains its own registry cache.
