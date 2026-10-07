@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.2.173",
+    "date": "2026-10-07",
+    "changes": [
+      "Shorter, more conversational replies: one short sentence by default, with more detail when you ask for it.",
+      "Remove Markdown formatting before speech synthesis across all voice backends, including streamed answers and direct announcements.",
+      "Keep saved personas' character while applying the same concise spoken style, without routine plan narration or follow-up offers."
+    ],
+    "dmgUrl": "https://github.com/protoLabsAI/ORBIS/releases/download/v0.2.173/ORBIS-0.2.173-aarch64-apple-darwin.dmg"
+  },
+  {
     "version": "v0.2.172",
     "date": "2026-10-06",
     "changes": [
