@@ -32,6 +32,7 @@ from agent.reasoning_gate import ReasoningTagGate
 from agent.spoken_logger import SpokenTextLogger
 from agent.session_store import drain_stashed_deliveries, save_summary, stash_delivery
 from agent.stall_watchdog import StallWatchdog
+from agent.tool_ack import ToolAckGate
 from agent.tools import ASYNC_TOOL_NAMES, latency_for, register_tools
 from agent.user_state import user_state_for
 from auth.context import current_session_id, current_user_id
@@ -649,6 +650,7 @@ async def run_bot(
             _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
             await sse_bus.publish("llm", {"event": "failover", "active": role})
 
+    tool_ack_gate = ToolAckGate()
     pipeline = Pipeline([
         transport.input(),
         # Echo-guard sits IMMEDIATELY after transport.input — drops mic
@@ -746,6 +748,10 @@ async def run_bot(
         # channel — spoken aloud that's our worst failure mode. Must sit
         # BEFORE SpokenTextLogger so [speak] records what was actually said.
         ReasoningTagGate(),
+        # A model preamble already acknowledges the action. Check queued
+        # opening acks here so they cannot double up with that speech or
+        # arrive after a response/interruption; keep replies streaming.
+        tool_ack_gate,
         # Observability chokepoint — logs every utterance headed into TTS
         # (streamed LLM narration + out-of-band fillers / opening acks /
         # DeliveryController / stall recovery) so no speech path is unlogged.
@@ -1016,7 +1022,7 @@ async def run_bot(
             line = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
         _opening_ack["last"] = line
         logger.info(f"[filler:opening] {line!r}")
-        await task.queue_frame(TTSSpeakFrame(line, append_to_context=False))
+        await task.queue_frame(tool_ack_gate.opening_frame(line))
 
     # Session tool log — what the agent actually DID, persisted into the
     # sessions.tool_calls column at disconnect (the column existed since
@@ -1073,7 +1079,8 @@ async def run_bot(
             # Instant opening acknowledgement (router-first D1 Phase 2).
             # Phase 1 removed the inline LLM preamble that used to cover this
             # moment, so a tool turn would otherwise be silent until the
-            # result. Speak ONE short ack the instant the call starts —
+            # result. Queue ONE short ack the instant the call starts —
+            # ToolAckGate suppresses it if the model already spoke this turn.
             # decoupled from the LLM (fired here, not narrated, so it can't
             # re-break tool emission) and AEC-safe because it triggers on a
             # definite tool-start signal, not VAD. Usually canned+instant;
@@ -1098,7 +1105,7 @@ async def run_bot(
                 _ack = opening_ack_line(tts_backend, exclude=_opening_ack["last"])
                 _opening_ack["last"] = _ack
                 logger.info(f"[filler:opening] {_ack!r}")
-                await task.queue_frame(TTSSpeakFrame(_ack, append_to_context=False))
+                await task.queue_frame(tool_ack_gate.opening_frame(_ack))
 
             # Any NON-FAST tool gets the spoken presence loop — crucially
             # INCLUDING async delegates. A delegate's note_progress is VISUAL-only
@@ -1134,8 +1141,8 @@ async def run_bot(
             # (delegate_dispatch can't be cancelled, but its result is dropped).
             delivery.bump_barge()
             # Cancel any opening ack still being generated so it can't speak
-            # over the user who just barged in (already-queued acks are out
-            # of our hands, but a pending micro-LLM line is killed here).
+            # over the user who just barged in. ToolAckGate rejects queued
+            # opening acks from the interrupted turn at the speech boundary.
             while ack_tasks:
                 ack_tasks.pop().cancel()
             await sse_bus.publish("tool-call", {"event": "end", "outcome": "error"})
