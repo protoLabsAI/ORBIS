@@ -240,7 +240,7 @@ def _parse_entry(raw: dict) -> Delegate | None:
     dtype = (raw.get("type") or "").lower()
     desc = (raw.get("description") or "").strip()
     if not name or not dtype or not desc:
-        logger.warning(f"[delegates] skipping entry missing name/type/description: {raw!r}")
+        logger.warning("[delegates] skipping entry missing name/type/description")
         return None
     from agent.delegate_adapters import get_adapter
     try:

@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -286,13 +287,16 @@ class A2AAdapter(DelegateAdapter):
                       placeholder="http://ava:3008/a2a",
                       help="JSON-RPC endpoint, typically ending in /a2a. "
                            "Supports ${VAR:-default}."),
-            FieldSpec("auth.scheme", "Auth scheme", "select",
+            FieldSpec("auth.scheme", "Authentication", "select",
                       options=["", "apiKey", "bearer"],
-                      help="How the delegate expects credentials, if any."),
-            FieldSpec("auth.credentialsEnv", "Credentials env var", "secret-env",
+                      help="Use bearer for protoAgent, or none for an open agent."),
+            FieldSpec("auth.credentials", "Access token", "secret",
+                      placeholder="Paste the token from protoAgent",
+                      help="Saved privately on this Mac. Takes effect immediately."),
+            FieldSpec("auth.credentialsEnv", "Environment variable (advanced)", "secret-env",
                       placeholder="AVA_API_KEY",
                       help="Name of the env var holding the secret. "
-                           "Set it in .env on the host."),
+                           "Use a variable name, not a token. Prefer Access token above."),
         ]
 
     def parse(self, raw: dict, name: str, description: str) -> Delegate | None:
@@ -300,14 +304,16 @@ class A2AAdapter(DelegateAdapter):
         if not url:
             logger.warning(f"[delegates] {name}: url required; skipping")
             return None
-        auth = raw.get("auth") or {}
+        try:
+            auth = self.validate(raw, name, description).get("auth") or {}
+        except DelegateValidationError:
+            logger.warning("[delegates] %s: invalid authentication configuration; edit in Settings", name)
+            return None
         scheme = auth.get("scheme")
         cred_env = auth.get("credentialsEnv")
-        cred = os.environ.get(cred_env) if cred_env else None
+        cred = auth.get("credentials") or (os.environ.get(cred_env) if cred_env else None)
         if cred_env and not cred:
-            logger.warning(
-                f"[delegates] {name}: auth env {cred_env!r} unset (unauthenticated)"
-            )
+            logger.warning("[delegates] %s: credential environment variable is unset; paste an Access token in Settings", name)
         return Delegate(
             name=name, description=description, type="a2a", url=url,
             auth_scheme=scheme,
@@ -327,18 +333,28 @@ class A2AAdapter(DelegateAdapter):
         if auth is not None:
             if not isinstance(auth, dict):
                 raise DelegateValidationError("`auth` must be an object when present")
-            scheme = auth.get("scheme")
+            scheme = auth.get("scheme") or None
             if scheme is not None and scheme not in ("apiKey", "bearer"):
                 raise DelegateValidationError(
                     f"`auth.scheme` must be 'apiKey' or 'bearer', got {scheme!r}"
                 )
-            cred_env = auth.get("credentialsEnv")
-            if cred_env is not None and not isinstance(cred_env, str):
-                raise DelegateValidationError(
-                    "`auth.credentialsEnv` must be a string env-var name"
-                )
+            cred_env = auth.get("credentialsEnv") or None
+            credential = auth.get("credentials")
+            if credential is not None and not isinstance(credential, str):
+                raise DelegateValidationError("Access token must be text")
+            if credential:
+                credential = credential.strip()
+                if credential.lower().startswith("bearer "):
+                    credential = credential[7:].strip()
+                if any(c.isspace() for c in credential):
+                    raise DelegateValidationError("Paste only the access token, without spaces or newlines")
+                # A pasted token replaces legacy environment-variable setup.
+                cred_env = None
+                scheme = scheme or "bearer"
+            if cred_env and (not isinstance(cred_env, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cred_env)):
+                raise DelegateValidationError("Environment variable expects a name such as PROTOAGENT_AUTH_TOKEN. Paste your token in Access token instead.")
             out["auth"] = {
-                k: v for k, v in {"scheme": scheme, "credentialsEnv": cred_env}.items()
+                k: v for k, v in {"scheme": scheme, "credentialsEnv": cred_env, "credentials": credential}.items()
                 if v is not None
             }
         headers = entry.get("headers")
@@ -515,32 +531,36 @@ class A2AAdapter(DelegateAdapter):
         return res.text
 
     async def probe(self, delegate: Delegate, *, timeout: float = 8.0) -> dict:
-        origin = delegate.origin()
-        if not origin:
-            return {"ok": False, "error": f"malformed url: {delegate.url!r}"}
-        card_url = f"{origin}/.well-known/agent-card.json"
-        headers = delegate.auth_headers()
+        if not delegate.origin():
+            return {"ok": False, "error": "Malformed URL. Enter the agent's A2A endpoint URL."}
+        if delegate.auth_scheme and not delegate.a2a_credential:
+            return {"ok": False, "error": "Access token missing. Paste the token from protoAgent, or set the advanced environment variable and restart ORBIS."}
+        # A public agent card proves discovery, not authentication. A random
+        # tasks/get is read-only and checks the SAME endpoint/headers as dispatch.
+        request_id = str(uuid.uuid4())
         t0 = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                r = await client.get(card_url, headers=headers)
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
-            return {"ok": False, "error": f"unreachable: {e}"}
-        except Exception as e:  # noqa: BLE001 — surface but don't raise
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                r = await client.post(delegate.url, headers=delegate.auth_headers(), json={
+                    "jsonrpc": "2.0", "id": request_id, "method": "tasks/get",
+                    "params": {"id": f"orbis-connection-test-{uuid.uuid4()}"},
+                })
+        except httpx.HTTPError:
+            return {"ok": False, "error": "Cannot reach the agent. Open protoAgent and check the endpoint URL."}
         latency_ms = int((time.monotonic() - t0) * 1000)
         if r.status_code in (401, 403):
-            return {
-                "ok": False, "error": "auth rejected",
-                "status": r.status_code, "latency_ms": latency_ms,
-            }
+            return {"ok": False, "error": "Authentication rejected. Paste the current access token from protoAgent and test again.", "status": r.status_code}
         if r.status_code != 200:
-            return {
-                "ok": False,
-                "error": f"agent card HTTP {r.status_code}",
-                "status": r.status_code, "latency_ms": latency_ms,
-            }
-        return {"ok": True, "latency_ms": latency_ms}
+            return {"ok": False, "error": f"A2A endpoint returned HTTP {r.status_code}. Check the URL ends in /a2a.", "status": r.status_code}
+        try:
+            body = r.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict) and body.get("jsonrpc") == "2.0" and body.get("id") == request_id:
+            error = body.get("error")
+            if isinstance(error, dict) and error.get("code") == -32001:
+                return {"ok": True, "latency_ms": latency_ms}
+        return {"ok": False, "error": "The endpoint did not confirm an authenticated A2A connection. Check its URL and protocol support."}
 
 
 # ---------------------------------------------------------------------------

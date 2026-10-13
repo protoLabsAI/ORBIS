@@ -261,7 +261,7 @@ export interface DelegateA2A {
   type: 'a2a';
   description: string;
   url: string;
-  auth?: { scheme?: 'apiKey' | 'bearer'; credentialsEnv?: string };
+  auth?: { scheme?: 'apiKey' | 'bearer'; credentialsEnv?: string; credentials?: string };
   headers?: Record<string, string>;
 }
 
@@ -332,7 +332,7 @@ export type DelegateTestResult = {
 export interface DelegateFieldSpec {
   key: string;
   label: string;
-  kind: 'text' | 'secret-env' | 'args' | 'path' | 'number' | 'textarea' | 'select';
+  kind: 'text' | 'secret' | 'secret-env' | 'args' | 'path' | 'number' | 'textarea' | 'select';
   required: boolean;
   placeholder?: string;
   help?: string;

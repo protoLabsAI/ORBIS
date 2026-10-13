@@ -65,6 +65,8 @@ def _decorate_delegates(entries: list[dict]) -> list[dict]:
     registry) + cached ``health`` — the shape the Settings UI expects. Used by
     the list AND the create/update responses so a freshly-saved delegate shows
     its real status immediately instead of a stale '⚠ unconfigured'."""
+    from agent.delegate_config_store import redact_entry
+
     parsed_names = set(app._DELEGATES.names())
     parsed_by_name = {d.name: d for d in app._DELEGATES.all()}
     out: list[dict] = []
@@ -73,7 +75,7 @@ def _decorate_delegates(entries: list[dict]) -> list[dict]:
         d = parsed_by_name.get(name) if isinstance(name, str) else None
         h = app._DELEGATES.health(name) if isinstance(name, str) else None
         out.append({
-            **entry,
+            **redact_entry(entry),
             "configured": name in parsed_names,
             "health": {
                 "ok": h.ok if h else None,
@@ -237,10 +239,11 @@ async def _probe_delegate(entry: dict) -> dict:
     from agent.delegate_config_store import (
         DelegateValidationError,
         validate_entry,
+        resolve_saved_credentials,
     )
     from agent.delegates import _parse_entry, probe
     try:
-        normalized = validate_entry(entry)
+        normalized = validate_entry(resolve_saved_credentials(entry))
     except DelegateValidationError as e:
         return {"ok": False, "error": str(e)}
     delegate = _parse_entry(normalized)

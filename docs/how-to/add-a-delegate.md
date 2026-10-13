@@ -17,8 +17,9 @@ Decide which kind you're adding:
   Code, Codex) ORBIS launches and drives by voice. It has its own guide:
   [Voice-drive a coding agent](/how-to/voice-drive-a-coding-agent).
 
-If the endpoint needs a secret, put it in your **`.env`** on the host first —
-the UI references the env-var *name*, never the value.
+For protoAgent, copy its access token if authentication is enabled. Paste the
+actual token into ORBIS’s **Access token** password field. ORBIS saves it privately
+on this Mac and applies it immediately; no environment file or restart is needed.
 
 ### The default protoAgent hub
 
@@ -49,13 +50,17 @@ from port 7871 once and never rewrites a customized entry.
    - **URL** — for A2A, the JSON-RPC endpoint (often ending in `/a2a`); for
      OpenAI-compat, the base URL ending in `/v1`.
 4. Fill in the type-specific fields:
-   - **A2A** — pick an **Auth scheme** (`apiKey`, `bearer`, or none) and, if
-     used, the **Credentials env var** holding the secret.
+   - **A2A** — paste the **Access token**. ORBIS selects bearer authentication
+     automatically when you supply a token. Leave authentication empty for an
+     open agent; select `apiKey` only for a legacy endpoint that requires it.
    - **OpenAI-compat** — the **Model** id and, if the endpoint needs auth, the
      **API key env var**. Optionally a **system prompt**.
-5. Click **Test** — ORBIS pings the endpoint and reports reachability and
-   latency *before* you save, so you can fix a typo without committing it.
-6. Click **Create**.
+5. Click **Connect** (or **Save and connect** when editing). ORBIS verifies
+   authentication with a read-only A2A request before saving. A public agent
+   card alone does not count as a successful connection.
+6. If a check fails, follow the error shown below the form. Use **Test** to
+   check again without saving. Saved tokens are hidden; editing the URL
+   requires entering the token again to avoid sending it to a different agent.
 
 ## Use it
 
@@ -66,9 +71,15 @@ across delegates in the background.
 
 ## Troubleshooting
 
-- **Test fails** — re-check the URL (A2A endpoints usually end in `/a2a`,
-  OpenAI in `/v1`) and that the credentials env var is set in `.env` on the
-  host.
+- **Authentication rejected** — paste the current protoAgent token into
+  **Access token**. Do not paste it into the advanced environment-variable field.
+- **Cannot reach the agent** — open protoAgent and check its endpoint URL
+  (usually `http://127.0.0.1:7870/a2a`).
+- **Advanced environment variables** — existing `credentialsEnv` setups remain
+  supported. This field takes a name such as `PROTOAGENT_AUTH_TOKEN`, not a key.
+  Desktop runtime variables live in
+  `~/Library/Application Support/studio.protolabs.orbis/.env` and require a
+  restart. Pasting an Access token replaces that reference without a restart.
 - **Marked "⚠ unconfigured"** in the list — the runtime rejected the entry; fix
   the config or it won't be offered to the model.
 - **The orb never picks it** — sharpen the **description**; that's the only
