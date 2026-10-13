@@ -1285,25 +1285,34 @@ class SseBusObserver(RTVIObserver):
 
 
 def prewarm_llm() -> None:
+    """Best-effort warmup of the configured chat-completions endpoint."""
     try:
-        httpx.post(
-            f"{LLM_URL}/chat/completions",
-            json={
-                "model": LLM_SERVED_NAME,
-                "messages": [{"role": "user", "content": "Hi"}],
-                "max_tokens": 1,
-                "temperature": 0,
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-            headers={"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {},
+        cfg = _resolve_skill_llm(_active_skill())
+        if (cfg.get("provider") or "").lower() in {"anthropic-oauth", "openai-codex", "mlx"} or cfg["url"].startswith("mlx://"):
+            # These adapters initialize their own protocol/auth. Posting a
+            # chat-completions request to an env-default gateway is unrelated
+            # to the selected model and used to emit a misleading startup 401.
+            logger.info("LLM prewarm skipped (provider initializes its own connection)")
+            return
+        payload = {
+            "model": cfg["model"],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 1,
+            "temperature": 0,
+        }
+        if cfg.get("extra_body"):
+            payload.update(cfg["extra_body"])
+        response = httpx.post(
+            f"{cfg['url'].rstrip('/')}/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {cfg['api_key']}"} if cfg.get("api_key") else {},
             timeout=30.0,
         )
+        response.raise_for_status()
         logger.info("LLM warm")
     except Exception as e:
-        # Expected when the configured LLM is a remote gateway that doesn't
-        # need (or want) a boot-time warmup ping, or a local vLLM that isn't
-        # up. Not warning-worthy — the LLM still works at request time.
-        logger.info(f"LLM prewarm skipped ({type(e).__name__})")
+        # Optional warmup must not block voice startup or expose credentials.
+        logger.info("LLM prewarm skipped (%s)", type(e).__name__)
 
 
 def prewarm_all(
