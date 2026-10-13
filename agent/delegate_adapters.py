@@ -475,6 +475,16 @@ class A2AAdapter(DelegateAdapter):
         if push_notification_url is None:
             push_notification_url = _default_push_url(delegate)
 
+        # Only our own callback gets the scoped local token. An explicit
+        # third-party URL must supply its own token; never leak the local one.
+        if push_notification_url and push_notification_url == _default_push_url(delegate):
+            from agent.callback_auth import callback_token
+            try:
+                push_notification_token = callback_token()
+            except (OSError, ValueError):
+                logger.warning("[delegates] callback credential unavailable; using response stream")
+                push_notification_url = None
+
         env_stream = os.environ.get("A2A_STREAM", "0") == "1"
         want_status = progress_callback is not None and await client.supports_streaming()
         if env_stream or want_status:
@@ -500,6 +510,8 @@ class A2AAdapter(DelegateAdapter):
                 _finalize(res)
                 return res.text
             except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
+                if getattr(e, "task_started", False):
+                    raise
                 logger.warning(
                     f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
                     "falling back to message/send"

@@ -99,6 +99,20 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith(_GUARDED_PREFIX):
             return await call_next(request)
 
+        # The notification token grants only callback delivery, including on
+        # an otherwise closed server. Never widen this to /a2a or a prefix.
+        if request.method == "POST" and request.url.path == "/a2a/callback":
+            presented = request.headers.get("X-A2A-Notification-Token", "")
+            if presented:
+                from agent.callback_auth import callback_token
+                try:
+                    expected = callback_token()
+                except (OSError, ValueError):
+                    return _unauthorized("Callback authentication unavailable")
+                if hmac.compare_digest(presented.encode(), expected.encode()):
+                    return await call_next(request)
+                return _unauthorized("Invalid callback token")
+
         # Closed by default — no credentials configured and not opted-open.
         if _CLOSED[0]:
             return _unauthorized("Unauthorized: A2A endpoint is not configured for access")
