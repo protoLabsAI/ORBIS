@@ -39,7 +39,7 @@ import httpx
 
 from a2a_outbound import (
     A2AClient,
-    A2ADispatchError,
+    A2ADispatchTimeout,
     DelegateEventCallback,
     ProgressCallback,
 )
@@ -509,13 +509,10 @@ class A2AAdapter(DelegateAdapter):
                 )
                 _finalize(res)
                 return res.text
-            except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
-                if getattr(e, "task_started", False):
-                    raise
-                logger.warning(
-                    f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
-                    "falling back to message/send"
-                )
+            except asyncio.TimeoutError as exc:
+                raise A2ADispatchTimeout(
+                    f"{delegate.name}: no response within {bound:.0f}s; request was not resent"
+                ) from exc
         res = await client.send(
             query, context_id=ctx, prefer_stream=False, timeout=timeout,
             event_callback=event_callback,

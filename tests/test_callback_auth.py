@@ -119,3 +119,24 @@ async def test_real_sdk_guard_rejection_runs_agent_once_via_stream(callback_env,
         result = await outbound.send('ping', push_notification_url='http://127.0.0.1:7866/a2a/callback')
     assert result.text == 'callback-free success'
     assert executions == ['ping']
+
+
+@pytest.mark.asyncio
+async def test_outer_stream_timeout_never_resends_work(monkeypatch):
+    import asyncio
+    from a2a_outbound import A2ADispatchTimeout
+    from agent.delegate_adapters import A2AAdapter
+    from agent.delegates import Delegate
+    monkeypatch.setenv('A2A_STREAM', '1')
+    monkeypatch.setenv('A2A_STREAM_TIMEOUT', '0.01')
+    calls = []
+    class Client:
+        async def send(self, query, **kwargs):
+            calls.append(query)
+            await asyncio.sleep(60)
+    adapter = A2AAdapter()
+    monkeypatch.setattr(adapter, 'client_for', lambda delegate: Client())
+    delegate = Delegate(name='hub', type='a2a', description='Brain', url='http://hub/a2a')
+    with pytest.raises(A2ADispatchTimeout, match='not resent'):
+        await adapter.dispatch(delegate, 'do something')
+    assert calls == ['do something']
