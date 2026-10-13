@@ -475,7 +475,7 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
   }, [draft, isEdit, onSaved, state]);
 
   return (
-    <div className="rounded-md border border-brand/30 bg-brand/5 p-3 space-y-3">
+    <fieldset disabled={saving || test === 'checking'} className="min-w-0 rounded-md border border-brand/30 bg-brand/5 p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs uppercase tracking-wider text-brand/80">
           {isEdit ? `Edit ${state.original.name}` : 'New delegate'}
@@ -574,7 +574,7 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
       </div>
 
       {error && <div className="text-xs text-danger">{error}</div>}
-    </div>
+    </fieldset>
   );
 }
 
