@@ -25,7 +25,7 @@ test('saved connection masks tokens and puts environment setup under advanced', 
   expect(html).toContain('Token saved');
   expect(html).not.toContain('__redacted__');
   expect(html).toContain('<details');
-  expect(html).toContain('Advanced: environment variables');
+  expect(html).toContain('Advanced connection settings');
   expect(html).toContain('Save and connect');
   expect(html).toContain('Remove saved token');
 });

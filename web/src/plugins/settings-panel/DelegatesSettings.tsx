@@ -506,7 +506,7 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
         ))}
       </div>
 
-      <Field label="Name" hint="Used in delegate_to(target=...). Lowercase, no spaces.">
+      <Field label="Name" hint="A short name to use when asking ORBIS to hand this agent work.">
         <input
           value={String(draft.name ?? '')}
           onChange={(e) => setField('name', e.target.value)}
@@ -519,7 +519,7 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
 
       <Field
         label="Description"
-        hint="The LLM reads this to pick between delegates — be specific."
+        hint="Describe what you want ORBIS to ask this agent to do."
       >
         <input
           value={String(draft.description ?? '')}
@@ -531,7 +531,7 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
       </Field>
 
       {/* Type-specific fields, driven entirely by the schema. */}
-      {activeSpec?.fields.filter((f) => f.kind !== 'secret-env').map((f) => (
+      {activeSpec?.fields.filter((f) => f.kind !== 'secret-env' && f.key !== 'auth.scheme').map((f) => (
         <DelegateField
           key={f.key}
           field={f}
@@ -540,11 +540,11 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
         />
       ))}
 
-      {activeSpec?.fields.some((f) => f.kind === 'secret-env') && (
+      {activeSpec?.fields.some((f) => f.kind === 'secret-env' || f.key === 'auth.scheme') && (
         <details className="text-xs text-fg-muted">
-          <summary className="cursor-pointer">Advanced: environment variables</summary>
+          <summary className="cursor-pointer">Advanced connection settings</summary>
           <div className="pt-2 space-y-2">
-            {activeSpec.fields.filter((f) => f.kind === 'secret-env').map((f) => (
+            {activeSpec.fields.filter((f) => f.kind === 'secret-env' || f.key === 'auth.scheme').map((f) => (
               <DelegateField key={f.key} field={f} value={getPath(draft, f.key)} onChange={(v) => setField(f.key, v)} />
             ))}
           </div>
@@ -625,7 +625,7 @@ function DelegateField({
         >
           {(field.options ?? []).map((opt) => (
             <option key={opt} value={opt}>
-              {opt === '' ? '(none)' : opt}
+              {opt === '' ? 'No authentication' : opt === 'bearer' ? 'Access token' : opt === 'apiKey' ? 'API key (legacy)' : opt}
             </option>
           ))}
         </select>

@@ -33,13 +33,13 @@ curl -fsS http://127.0.0.1:7870/.well-known/agent-card.json
 ```
 
 If ORBIS reports that protoAgent is unavailable after boot, start or restart
-that service and use **Settings → Agent → Delegates → hub → Test**. Removing or
+that service and use **Settings → Brain → Delegates → hub → Test**. Removing or
 customizing the hub is safe; ORBIS only migrates an untouched legacy default
 from port 7871 once and never rewrites a customized entry.
 
 ## Steps
 
-1. Open **Settings → Agent → Delegates** and click **Add delegate**.
+1. Open **Settings → Brain → Delegates** and click **Add delegate**.
 2. Pick the type — **A2A agent** or **OpenAI-compat**.
 3. Fill in the shared fields:
    - **Name** — lowercase, no spaces (e.g. `helm`). This is what the model uses
