@@ -93,6 +93,9 @@ REDACTED = "__redacted__"
 def redact_entry(entry: dict) -> dict:
     result = copy.deepcopy(entry)
     auth = result.get("auth") or {}
+    if not isinstance(auth, dict):
+        result["auth"] = {}
+        auth = result["auth"]
     if auth.get("credentials"):
         auth["credentials"] = REDACTED
     # Legacy invalid references may themselves be pasted secrets.

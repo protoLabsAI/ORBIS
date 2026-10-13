@@ -304,7 +304,7 @@ class DelegateRegistry:
         try:
             data = yaml.safe_load(self._path.read_text()) or {}
         except Exception as e:
-            logger.error(f"[delegates] failed to read {self._path}: {e}")
+            logger.error("[delegates] failed to read %s (%s)", self._path, type(e).__name__)
             return
         for raw in data.get("delegates", []) or []:
             entry = _parse_entry(raw)
