@@ -412,7 +412,17 @@ export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps)
   const activeSpec = specs.find((s) => s.type === draft.type) ?? specs[0];
 
   const setField = useCallback((key: string, value: unknown) => {
-    setDraft((prev) => setPath(prev, key, value));
+    setDraft((prev) => {
+      let next = setPath(prev, key, value);
+      if (key === 'auth.credentials' && value) {
+        next = setPath(next, 'auth.scheme', getPath(next, 'auth.scheme') || 'bearer');
+        next = setPath(next, 'auth.credentialsEnv', undefined);
+      } else if (key === 'auth.scheme' && !value) {
+        next = setPath(next, 'auth.credentials', '');
+        next = setPath(next, 'auth.credentialsEnv', undefined);
+      }
+      return next;
+    });
     setTest(null);
   }, []);
 
