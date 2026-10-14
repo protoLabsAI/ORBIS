@@ -31,11 +31,11 @@ async def test_send_enforces_timeout(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_ensure_client", _fake_ensure)
 
-    t0 = asyncio.get_event_loop().time()
+    t0 = asyncio.get_running_loop().time()
     with pytest.raises(A2ADispatchError, match="no response within"):
         await client.send("who's online?", timeout=0.2)
     # Bounded — it gave up near the timeout, not after the 30s hang.
-    assert asyncio.get_event_loop().time() - t0 < 5.0
+    assert asyncio.get_running_loop().time() - t0 < 5.0
 
 
 @pytest.mark.asyncio
@@ -437,3 +437,63 @@ def test_answer_text_prefers_artifact_when_present() -> None:
     task.artifacts.append(art)
     task.status.message.parts.append(Part(text="status answer"))
     assert _task_answer_text(task) == "artifact answer"
+
+
+@pytest.mark.asyncio
+async def test_callback_rejection_retries_once_without_push_before_execution(monkeypatch):
+    from a2a.utils.errors import InternalError
+    client = A2AClient(url='http://hub/a2a', name='hub')
+    requests = []
+
+    class Peer:
+        async def send_message(self, request):
+            requests.append((request.message.message_id, request.configuration.HasField('task_push_notification_config')))
+            if len(requests) == 1:
+                raise InternalError('push-notification callback url is not allowed: loopback')
+            for event in _stream_events('connected'):
+                yield event
+
+    async def ensure():
+        return Peer()
+    monkeypatch.setattr(client, '_ensure_client', ensure)
+    result = await client.send('ping', push_notification_url='http://127.0.0.1:7866/a2a/callback')
+    assert result.text == 'connected'
+    assert len(requests) == 2
+    assert requests[0] == (requests[1][0], True)
+    assert requests[1][1] is False
+
+
+@pytest.mark.asyncio
+async def test_callback_error_after_task_started_never_replays(monkeypatch):
+    from a2a.utils.errors import InternalError
+    client = A2AClient(url='http://hub/a2a', name='hub')
+    calls = []
+    class Peer:
+        async def send_message(self, request):
+            calls.append(request)
+            yield _stream_events('connected')[0]
+            raise InternalError('push-notification callback url is not allowed: loopback')
+    async def ensure():
+        return Peer()
+    monkeypatch.setattr(client, '_ensure_client', ensure)
+    with pytest.raises(A2ADispatchError) as error:
+        await client.send('ping', push_notification_url='http://127.0.0.1:7866/a2a/callback')
+    assert error.value.task_started
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_callback_auth_failure_is_not_downgraded(monkeypatch):
+    client = A2AClient(url='http://hub/a2a', name='hub')
+    calls = []
+    class Peer:
+        async def send_message(self, request):
+            calls.append(request)
+            raise RuntimeError('401 Unauthorized')
+            yield
+    async def ensure():
+        return Peer()
+    monkeypatch.setattr(client, '_ensure_client', ensure)
+    with pytest.raises(A2ADispatchError, match='401'):
+        await client.send('ping', push_notification_url='http://127.0.0.1:7866/a2a/callback')
+    assert len(calls) == 1

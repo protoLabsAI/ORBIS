@@ -78,3 +78,19 @@ across delegates in the background.
 
 - [Agent reference → Delegates](/reference/agent#delegates)
 - [The agent model](/explanation/the-agent-model)
+
+## Local result delivery
+
+For a protoAgent on the same Mac, ORBIS registers its callback automatically
+with a private token that only authorizes result delivery. You do not need to
+configure ORBIS's operator key or edit environment variables for callbacks.
+
+A protoAgent that blocks localhost callbacks can still serve ORBIS: if callback
+registration is rejected before work starts, ORBIS retries without that optional
+registration and receives the response through the existing connection. It does
+not change protoAgent's network policy. Durable task handles remain available
+for requery after reconnect when callbacks are unavailable.
+
+Advanced deployments can still set `A2A_PUSH_URL` and `A2A_PUSH_TOKEN`. An explicit
+external callback URL uses the supplied token; ORBIS never sends its automatically
+generated local callback token to a different callback destination.

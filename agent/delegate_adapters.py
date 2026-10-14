@@ -39,7 +39,7 @@ import httpx
 
 from a2a_outbound import (
     A2AClient,
-    A2ADispatchError,
+    A2ADispatchTimeout,
     DelegateEventCallback,
     ProgressCallback,
 )
@@ -382,8 +382,8 @@ class A2AAdapter(DelegateAdapter):
         push_notification_token: str | None = None,
     ) -> str:
         """Observability shell around the A2A round-trip (#683 Phase E): one
-        ``delegate.dispatch`` span covering the full send, including the
-        streaming→sync fallback. The trace itself rides the wire via the
+        ``delegate.dispatch`` span covering the full send, including any
+        explicitly rejected optional callback retry. The trace itself rides the wire via the
         per-request httpx hook (``a2a_outbound._stamp_trace_headers``),
         which stamps the Langfuse-* + W3C ``traceparent`` headers from
         ``propagation_headers()`` on every outbound request. The span is a
@@ -415,9 +415,10 @@ class A2AAdapter(DelegateAdapter):
     ) -> str:
         """Reliable synchronous ``message/send`` by default; opt into streaming
         (progress narration) with ``A2A_STREAM=1`` or a ``progress_callback`` +
-        a card that advertises ``streaming``. Any stream error/timeout falls
-        back to one synchronous ``message/send``. (Moved verbatim from the old
-        ``_dispatch_a2a``; see that history for the hang-guard rationale.)"""
+        a card that advertises ``streaming``. Never resend after a transport
+        error or timeout: the peer may have accepted work before we received
+        its first event. A2AClient retries only an explicit pre-execution
+        rejection of optional push configuration, within the same deadline."""
         client = self.client_for(delegate)
         ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
 
@@ -475,6 +476,16 @@ class A2AAdapter(DelegateAdapter):
         if push_notification_url is None:
             push_notification_url = _default_push_url(delegate)
 
+        # Only our own callback gets the scoped local token. An explicit
+        # third-party URL must supply its own token; never leak the local one.
+        if push_notification_url and push_notification_url == _default_push_url(delegate):
+            from agent.callback_auth import callback_token
+            try:
+                push_notification_token = callback_token()
+            except (OSError, ValueError):
+                logger.warning("[delegates] callback credential unavailable; using response stream")
+                push_notification_url = None
+
         env_stream = os.environ.get("A2A_STREAM", "0") == "1"
         want_status = progress_callback is not None and await client.supports_streaming()
         if env_stream or want_status:
@@ -499,11 +510,10 @@ class A2AAdapter(DelegateAdapter):
                 )
                 _finalize(res)
                 return res.text
-            except (A2ADispatchError, asyncio.TimeoutError, httpx.HTTPError) as e:
-                logger.warning(
-                    f"[delegates] {delegate.name} streaming failed/timed out ({e}); "
-                    "falling back to message/send"
-                )
+            except asyncio.TimeoutError as exc:
+                raise A2ADispatchTimeout(
+                    f"{delegate.name}: no response within {bound:.0f}s; request was not resent"
+                ) from exc
         res = await client.send(
             query, context_id=ctx, prefer_stream=False, timeout=timeout,
             event_callback=event_callback,
