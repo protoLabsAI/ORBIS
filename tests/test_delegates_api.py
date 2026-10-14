@@ -13,8 +13,9 @@ Atomic-write semantics covered separately at the config-store layer
 
 from __future__ import annotations
 
-import httpx
 import json
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -418,3 +419,56 @@ def test_public_card_cannot_mask_rejected_rpc(client, respx_mock):
     assert not result['ok']
     assert result['status'] == 401
     assert not card.called
+
+
+@pytest.mark.parametrize('url', ['http://127.0.0.1:7870/a2a', 'http://192.168.1.20/a2a'])
+def test_owner_can_connect_local_agents_without_redirecting_secrets(client, respx_mock, url):
+    target = respx_mock.post(url).respond(307, headers={'Location': 'http://other/a2a'}, text='private peer response')
+    redirected = respx_mock.post('http://other/a2a').respond(200)
+    response = client.post('/api/delegates/test', json={
+        'name': 'local', 'type': 'a2a', 'description': 'Local brain', 'url': url,
+        'auth': {'credentials': 'private-token'},
+    })
+    assert target.called
+    assert not redirected.called
+    assert not response.json()['ok']
+    assert 'private peer response' not in response.text
+    assert 'private-token' not in response.text
+
+
+def test_probe_unexpected_error_is_actionable_and_private(client, monkeypatch):
+    import agent.delegates
+    async def broken(*args, **kwargs):
+        raise RuntimeError('private-token')
+    monkeypatch.setattr(agent.delegates, 'probe', broken)
+    response = client.post('/api/delegates/test', json={
+        'name': 'local', 'type': 'a2a', 'description': 'Brain', 'url': 'http://localhost/a2a',
+    })
+    assert response.status_code == 200
+    assert not response.json()['ok']
+    assert 'try again' in response.json()['error']
+    assert 'private-token' not in response.text
+
+
+def test_discovery_excludes_default_ports(client, monkeypatch):
+    from agent import discovery
+    from agent.delegates import Delegate
+    monkeypatch.setattr(app_module._DELEGATES, 'all', lambda: [
+        Delegate(name='http', type='a2a', description='Brain', url='http://peer/a2a'),
+        Delegate(name='https', type='a2a', description='Brain', url='https://secure/a2a'),
+    ])
+    async def discover(*, known):
+        assert ('peer', 80) in known
+        assert ('secure', 443) in known
+        return []
+    monkeypatch.setattr(discovery, 'discover', discover)
+    assert client.get('/api/delegates/discover').json() == {'discovered': []}
+
+
+@pytest.mark.parametrize('method,path', [('get', '/api/delegates'), ('put', '/api/delegates/hub'), ('delete', '/api/delegates/hub')])
+def test_corrupt_settings_return_structured_error(client, isolated_delegates_yaml, method, path):
+    isolated_delegates_yaml.write_text('delegates: [')
+    kwargs = {'json': {}} if method == 'put' else {}
+    response = getattr(client, method)(path, **kwargs)
+    assert response.status_code >= 400
+    assert 'invalid YAML' in response.json()['error']

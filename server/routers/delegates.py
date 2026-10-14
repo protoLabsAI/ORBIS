@@ -161,11 +161,11 @@ async def update_delegate_endpoint(
             },
         )
     body["name"] = name
-    if not any(e.get("name") == name for e in read_delegates()):
-        return JSONResponse(
-            status_code=404, content={"error": f"delegate {name!r} not found"},
-        )
     try:
+        if not any(e.get("name") == name for e in read_delegates()):
+            return JSONResponse(
+                status_code=404, content={"error": f"delegate {name!r} not found"},
+            )
         entries = upsert_delegate(body)
     except DelegateValidationError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
@@ -176,9 +176,11 @@ async def update_delegate_endpoint(
 
 @router.delete("/api/delegates/{name}")
 async def delete_delegate_endpoint(name: str, user: User = Depends(require_user)):
-    from agent.delegate_config_store import delete_delegate
+    from agent.delegate_config_store import DelegateValidationError, delete_delegate
     try:
         entries = delete_delegate(name)
+    except DelegateValidationError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
     except KeyError:
         return JSONResponse(
             status_code=404, content={"error": f"delegate {name!r} not found"},
@@ -201,6 +203,12 @@ async def delegate_types_endpoint(user: User = Depends(require_user)):
 
 @router.post("/api/delegates/test")
 async def test_delegate_endpoint(body: dict, user: User = Depends(require_user)):
+    """Test an owner-selected endpoint, including localhost/LAN protoAgents.
+
+    Local addresses are intentional in this single-owner desktop app. Saved
+    secrets remain bound to their exact endpoint; the A2A probe never follows
+    redirects or returns remote response bodies.
+    """
     return await _probe_delegate(body or {})
 
 
@@ -228,8 +236,9 @@ async def discover_delegates_endpoint(user: User = Depends(require_user)):
             continue
         try:
             parsed = urlparse(d.url)
-            if parsed.hostname and parsed.port:
-                known.add((parsed.hostname, parsed.port))
+            port = parsed.port or {"http": 80, "https": 443}.get(parsed.scheme)
+            if parsed.hostname and port:
+                known.add((parsed.hostname, port))
         except ValueError:
             continue
     return {"discovered": await discovery.discover(known=known)}
@@ -249,4 +258,9 @@ async def _probe_delegate(entry: dict) -> dict:
     delegate = _parse_entry(normalized)
     if delegate is None:
         return {"ok": False, "error": "registry rejected normalized entry"}
-    return await probe(delegate)
+    try:
+        return await probe(delegate)
+    except Exception as exc:  # noqa: BLE001
+        # Exception text can contain credentials or a remote response body.
+        logger.warning("[delegates/test] probe failed: %s", type(exc).__name__)
+        return {"ok": False, "error": "Connection test failed. Check the agent is running and try again."}

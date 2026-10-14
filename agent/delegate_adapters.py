@@ -540,7 +540,7 @@ class A2AAdapter(DelegateAdapter):
         request_id = str(uuid.uuid4())
         t0 = time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
                 r = await client.post(delegate.url, headers=delegate.auth_headers(), json={
                     "jsonrpc": "2.0", "id": request_id, "method": "tasks/get",
                     "params": {"id": f"orbis-connection-test-{uuid.uuid4()}"},

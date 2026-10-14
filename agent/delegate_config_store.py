@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -65,10 +66,14 @@ def read_delegates(path: str | Path | None = None) -> list[dict]:
         return []
     try:
         data = yaml.safe_load(p.read_text()) or {}
+    except OSError as e:
+        raise DelegateValidationError("Cannot read delegate settings. Check file permissions and try again.") from e
     except yaml.YAMLError as e:
         # Don't silently truncate the user's config — surface the parse
         # error so the API caller can decide what to do.
         raise DelegateValidationError(f"Cannot read delegate settings in {p}: invalid YAML") from e
+    if not isinstance(data, dict):
+        raise DelegateValidationError("Delegate settings must be a YAML mapping.")
     raw = data.get("delegates")
     if raw is None:
         return []
@@ -99,7 +104,6 @@ def redact_entry(entry: dict) -> dict:
     if auth.get("credentials"):
         auth["credentials"] = REDACTED
     # Legacy invalid references may themselves be pasted secrets.
-    import re
     ref = auth.get("credentialsEnv")
     if ref and (not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ref)):
         auth["credentialsEnv"] = ""
