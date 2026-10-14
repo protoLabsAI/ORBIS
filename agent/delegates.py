@@ -240,7 +240,7 @@ def _parse_entry(raw: dict) -> Delegate | None:
     dtype = (raw.get("type") or "").lower()
     desc = (raw.get("description") or "").strip()
     if not name or not dtype or not desc:
-        logger.warning(f"[delegates] skipping entry missing name/type/description: {raw!r}")
+        logger.warning("[delegates] skipping entry missing name/type/description")
         return None
     from agent.delegate_adapters import get_adapter
     try:
@@ -304,7 +304,7 @@ class DelegateRegistry:
         try:
             data = yaml.safe_load(self._path.read_text()) or {}
         except Exception as e:
-            logger.error(f"[delegates] failed to read {self._path}: {e}")
+            logger.error("[delegates] failed to read %s (%s)", self._path, type(e).__name__)
             return
         for raw in data.get("delegates", []) or []:
             entry = _parse_entry(raw)

@@ -67,14 +67,16 @@ Three types:
 | **Description** | all | The LLM reads this to choose between delegates — be specific. |
 | **URL** | A2A · OpenAI | A2A: the JSON-RPC endpoint (often `/a2a`). OpenAI: the base URL ending in `/v1`. |
 | **Auth scheme** | A2A | `apiKey` (X-API-Key) or `bearer`, or none for a public endpoint. |
-| **Credentials env var** | A2A | Name of the env var holding the secret (set it in `.env`). |
+| **Access token** | A2A | Paste the actual token; saved privately and applied immediately. |
+| **Environment variable (advanced)** | A2A | Optional variable name for existing deployments. |
 | **Model** | OpenAI | Provider model id. |
 | **API key env var** | OpenAI | Optional; for endpoints that need auth. |
 | **Command** | ACP | The agent binary to launch (e.g. `proto`, `opencode`). |
 | **Args** | ACP | Args that start it in ACP mode (e.g. `["--acp"]`, `["acp"]`). |
 | **Workdir** | ACP | The directory the agent is responsible for — its session working directory. |
 
-No secrets cross the wire from the UI — the schema only references env-var
+A2A access tokens can be pasted in Settings and are stored in owner-only
+`delegates.yaml`; API responses redact them. Legacy configuration references env-var
 **names**; the values come from the process environment.
 
 ### ACP coding agents

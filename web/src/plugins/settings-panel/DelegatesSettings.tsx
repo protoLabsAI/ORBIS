@@ -22,9 +22,8 @@ import {
  * capabilities + field schema), so adding a delegate type needs no change
  * here — its tile + fields appear from the contract.
  *
- * No credentials cross the wire. The schema only references env-var *names*
- * (`credentialsEnv` / `api_key_env`); the actual values come from the process
- * environment at registry-parse time.
+ * Access tokens are write-only password fields; saved values are redacted.
+ * Environment-variable references remain available under Advanced settings.
  */
 export function DelegatesSettings() {
   const [items, setItems] = useState<DelegateWithStatus[] | null>(null);
@@ -81,8 +80,8 @@ export function DelegatesSettings() {
     <Panel title="Delegates">
       <div className="space-y-3">
         <p className="text-sm text-fg-muted -mt-1">
-          Sub-agents the orb can route to. The LLM picks one based on its
-          description when it decides delegation is the right call.
+          Connect protoAgent so ORBIS can hand it work. Discover a running agent,
+          paste its access token if required, and connect.
         </p>
 
         {error && <div className="text-xs text-danger break-words">{error}</div>}
@@ -118,6 +117,11 @@ export function DelegatesSettings() {
                   <div className="text-sm text-fg-muted mt-0.5 line-clamp-2">
                     {entry.description}
                   </div>
+                  {entry.health?.ok === false && (
+                    <div className="text-xs text-danger mt-1 break-words">
+                      {entry.health.last_error || 'Connection failed. Edit this agent to reconnect.'}
+                    </div>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
                   <button
@@ -385,7 +389,7 @@ interface EditorProps {
   onSaved: (next: DelegateWithStatus[]) => void;
 }
 
-function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
+export function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
   const isEdit = state.kind === 'edit';
   const [draft, setDraft] = useState<Draft>(() => {
     if (isEdit) return { ...state.original } as Draft;
@@ -408,7 +412,17 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
   const activeSpec = specs.find((s) => s.type === draft.type) ?? specs[0];
 
   const setField = useCallback((key: string, value: unknown) => {
-    setDraft((prev) => setPath(prev, key, value));
+    setDraft((prev) => {
+      let next = setPath(prev, key, value);
+      if (key === 'auth.credentials' && value) {
+        next = setPath(next, 'auth.scheme', getPath(next, 'auth.scheme') || 'bearer');
+        next = setPath(next, 'auth.credentialsEnv', undefined);
+      } else if (key === 'auth.scheme' && !value) {
+        next = setPath(next, 'auth.credentials', '');
+        next = setPath(next, 'auth.credentialsEnv', undefined);
+      }
+      return next;
+    });
     setTest(null);
   }, []);
 
@@ -444,6 +458,11 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
     setSaving(true);
     try {
       const entry = draft as unknown as Delegate;
+      if (entry.type === 'a2a') {
+        const connection = await api.delegates.test(entry);
+        setTest(connection);
+        if (!connection.ok) return;
+      }
       const r = isEdit
         ? await api.delegates.update(state.original.name, entry)
         : await api.delegates.create(entry);
@@ -456,7 +475,7 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
   }, [draft, isEdit, onSaved, state]);
 
   return (
-    <div className="rounded-md border border-brand/30 bg-brand/5 p-3 space-y-3">
+    <fieldset disabled={saving || test === 'checking'} className="min-w-0 rounded-md border border-brand/30 bg-brand/5 p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs uppercase tracking-wider text-brand/80">
           {isEdit ? `Edit ${state.original.name}` : 'New delegate'}
@@ -487,7 +506,7 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
         ))}
       </div>
 
-      <Field label="Name" hint="Used in delegate_to(target=...). Lowercase, no spaces.">
+      <Field label="Name" hint="A short name to use when asking ORBIS to hand this agent work.">
         <input
           value={String(draft.name ?? '')}
           onChange={(e) => setField('name', e.target.value)}
@@ -500,7 +519,7 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
 
       <Field
         label="Description"
-        hint="The LLM reads this to pick between delegates — be specific."
+        hint="Describe what you want ORBIS to ask this agent to do."
       >
         <input
           value={String(draft.description ?? '')}
@@ -512,7 +531,7 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
       </Field>
 
       {/* Type-specific fields, driven entirely by the schema. */}
-      {activeSpec?.fields.map((f) => (
+      {activeSpec?.fields.filter((f) => f.kind !== 'secret-env' && f.key !== 'auth.scheme').map((f) => (
         <DelegateField
           key={f.key}
           field={f}
@@ -521,22 +540,33 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
         />
       ))}
 
-      {/* Test + save row. Probe works for every type (a2a card / openai ping /
+      {activeSpec?.fields.some((f) => f.kind === 'secret-env' || f.key === 'auth.scheme') && (
+        <details className="text-xs text-fg-muted">
+          <summary className="cursor-pointer">Advanced connection settings</summary>
+          <div className="pt-2 space-y-2">
+            {activeSpec.fields.filter((f) => f.kind === 'secret-env' || f.key === 'auth.scheme').map((f) => (
+              <DelegateField key={f.key} field={f} value={getPath(draft, f.key)} onChange={(v) => setField(f.key, v)} />
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Test + save row. Probe works for every type (authenticated A2A / openai ping /
           acp PATH+workdir), so Test is available across the board. */}
       <div className="flex items-center gap-2 pt-1">
         <Button variant="secondary" size="sm" onClick={onTest} disabled={test === 'checking'}>
           {test === 'checking' ? 'Testing…' : 'Test'}
         </Button>
-        <Button size="sm" onClick={onSave} disabled={saving}>
-          {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create'}
+        <Button size="sm" onClick={onSave} disabled={saving || test === 'checking'}>
+          {saving ? 'Connecting…' : isEdit ? 'Save and connect' : 'Connect'}
         </Button>
         {test && test !== 'checking' && (
           test.ok ? (
             <span className="text-xs text-success">
-              ✓ Reachable{test.latency_ms !== undefined && ` (${test.latency_ms} ms)`}
+              ✓ Connected{test.latency_ms !== undefined && ` (${test.latency_ms} ms)`}
             </span>
           ) : (
-            <span className="text-xs text-danger truncate max-w-[55%]">
+            <span className="text-xs text-danger break-words">
               ✗ {test.error ?? 'unknown error'}
             </span>
           )
@@ -544,7 +574,7 @@ function DelegateEditor({ state, specs, onCancel, onSaved }: EditorProps) {
       </div>
 
       {error && <div className="text-xs text-danger">{error}</div>}
-    </div>
+    </fieldset>
   );
 }
 
@@ -566,6 +596,24 @@ function DelegateField({
 }) {
   const label = field.required ? field.label : `${field.label} (optional)`;
 
+  if (field.kind === 'secret') {
+    const saved = value === '__redacted__';
+    return (
+      <Field label={label} hint={saved ? 'Token saved. Leave unchanged to keep it, or paste a replacement.' : field.help}>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={saved ? '' : String(value ?? '')}
+          placeholder={saved ? 'Token saved' : field.placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          className={INPUT_CLS}
+          spellCheck={false}
+        />
+        {saved && <button type="button" className="text-xs text-fg-muted" onClick={() => onChange('')}>Remove saved token</button>}
+      </Field>
+    );
+  }
+
   if (field.kind === 'select') {
     return (
       <Field label={label} hint={field.help}>
@@ -577,7 +625,7 @@ function DelegateField({
         >
           {(field.options ?? []).map((opt) => (
             <option key={opt} value={opt}>
-              {opt === '' ? '(none)' : opt}
+              {opt === '' ? 'No authentication' : opt === 'bearer' ? 'Access token' : opt === 'apiKey' ? 'API key (legacy)' : opt}
             </option>
           ))}
         </select>
