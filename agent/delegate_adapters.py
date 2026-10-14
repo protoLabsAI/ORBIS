@@ -382,8 +382,8 @@ class A2AAdapter(DelegateAdapter):
         push_notification_token: str | None = None,
     ) -> str:
         """Observability shell around the A2A round-trip (#683 Phase E): one
-        ``delegate.dispatch`` span covering the full send, including the
-        streaming→sync fallback. The trace itself rides the wire via the
+        ``delegate.dispatch`` span covering the full send, including any
+        explicitly rejected optional callback retry. The trace itself rides the wire via the
         per-request httpx hook (``a2a_outbound._stamp_trace_headers``),
         which stamps the Langfuse-* + W3C ``traceparent`` headers from
         ``propagation_headers()`` on every outbound request. The span is a
@@ -415,9 +415,10 @@ class A2AAdapter(DelegateAdapter):
     ) -> str:
         """Reliable synchronous ``message/send`` by default; opt into streaming
         (progress narration) with ``A2A_STREAM=1`` or a ``progress_callback`` +
-        a card that advertises ``streaming``. Any stream error/timeout falls
-        back to one synchronous ``message/send``. (Moved verbatim from the old
-        ``_dispatch_a2a``; see that history for the hang-guard rationale.)"""
+        a card that advertises ``streaming``. Never resend after a transport
+        error or timeout: the peer may have accepted work before we received
+        its first event. A2AClient retries only an explicit pre-execution
+        rejection of optional push configuration, within the same deadline."""
         client = self.client_for(delegate)
         ctx = uuid.uuid4().hex  # fresh per dispatch — one-shot, no multi-turn
 

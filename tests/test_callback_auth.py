@@ -82,7 +82,8 @@ async def test_adapter_only_sends_scoped_token_to_own_callback(callback_env, mon
 
 
 @pytest.mark.asyncio
-async def test_started_stream_failure_is_not_redispatched(callback_env, monkeypatch):
+@pytest.mark.parametrize("task_observed", [False, True])
+async def test_stream_failure_is_not_redispatched(callback_env, monkeypatch, task_observed):
     from a2a_outbound import A2ADispatchError
     from agent.delegate_adapters import A2AAdapter
     from agent.delegates import Delegate
@@ -91,7 +92,8 @@ async def test_started_stream_failure_is_not_redispatched(callback_env, monkeypa
     class Client:
         async def send(self, query, **kwargs):
             calls.append(kwargs)
-            raise A2ADispatchError('stream disconnected', task_started=True)
+            # Work may be accepted before its first event reaches ORBIS.
+            raise A2ADispatchError('stream disconnected', task_started=task_observed)
     adapter = A2AAdapter()
     monkeypatch.setattr(adapter, 'client_for', lambda delegate: Client())
     delegate = Delegate(name='hub', type='a2a', description='Brain', url='http://hub/a2a')

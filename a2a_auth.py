@@ -119,7 +119,9 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
 
         # X-API-Key (legacy) — enforced only when configured.
         api_key = _API_KEY[0]
-        if api_key and request.headers.get("x-api-key") != api_key:
+        if api_key and not hmac.compare_digest(
+            request.headers.get("x-api-key", "").encode(), api_key.encode(),
+        ):
             return _unauthorized("Unauthorized")
 
         # Bearer — enforced only when configured.

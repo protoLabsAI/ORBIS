@@ -31,11 +31,11 @@ async def test_send_enforces_timeout(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_ensure_client", _fake_ensure)
 
-    t0 = asyncio.get_event_loop().time()
+    t0 = asyncio.get_running_loop().time()
     with pytest.raises(A2ADispatchError, match="no response within"):
         await client.send("who's online?", timeout=0.2)
     # Bounded — it gave up near the timeout, not after the 30s hang.
-    assert asyncio.get_event_loop().time() - t0 < 5.0
+    assert asyncio.get_running_loop().time() - t0 < 5.0
 
 
 @pytest.mark.asyncio
