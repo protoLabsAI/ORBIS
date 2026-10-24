@@ -25,6 +25,8 @@ from agent.echo_guard import EchoGuardObserver, EchoGuardSuppressor
 from agent.latency import LatencyObserver
 from agent.filler import Latency, Verbosity
 from agent.llm_error_announcer import LLMErrorAnnouncer
+from agent.llm_status import configured_now, llm_status
+from agent.turn_observer import TurnObserver
 from agent.micro_ack import MicroAckInjector, opening_ack_line
 from agent.orchestrate import run_orchestration
 from agent.prosody import ProsodyTagStripper
@@ -636,6 +638,7 @@ async def run_bot(
     # a configured backup, the switcher routes frames to the active LLM
     # and fails over on auth, provider availability, or provider capacity
     # errors. Application, invalid-request, and unknown errors propagate.
+    llm_status.bind(_llm_members, configured_now)  # voice doctor (/api/voice/doctor)
     if len(_llm_members) == 1:
         pipeline_llm = llm
     else:
@@ -648,6 +651,7 @@ async def run_bot(
             role = "primary" if idx == 0 else f"backup#{idx}"
             logger.warning("[llm] failover → now using %s (%s)", role, service.name)
             _METRICS["llm_failovers_total"] = _METRICS.get("llm_failovers_total", 0) + 1
+            llm_status.record_failover(idx)
             await sse_bus.publish("llm", {"event": "failover", "active": role})
 
     tool_ack_gate = ToolAckGate()
@@ -799,6 +803,13 @@ async def run_bot(
         [LatencyObserver()]
         if os.environ.get("LOG_LATENCY", "1").lower() in ("1", "true", "on")
         else []
+    )
+
+    # Per-turn id on every log line + one [turn] summary line per turn.
+    _latency_observers.append(
+        TurnObserver(
+            session_id=getattr(turn_tracer, "session_id", None), brief=llm_status.brief
+        )
     )
 
     task = PipelineTask(

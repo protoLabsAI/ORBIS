@@ -175,7 +175,14 @@ _emit_boot("import", "Loading speech + voice engines…")
 from voice.stt import prewarm as prewarm_stt, stt_emits_audio_tags
 from voice.tts import TTS_BACKEND, prewarm as prewarm_tts
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+# `[t=N]` is the per-turn correlation id (agent/turn_observer.py); '-' outside a turn.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s [t=%(turn)s] %(message)s",
+)
+from agent.turn_observer import install_turn_log_filter  # noqa: E402
+
+install_turn_log_filter()
 logger = logging.getLogger("orbis")
 
 # Quiet the per-inference noise that floods the sidecar log and buries the
@@ -1363,6 +1370,9 @@ def prewarm_all(
     if include_llm:
         stages.append(("llm", "Warming up the language model…", prewarm_llm))
 
+    from agent.boot_banner import StageTimer
+
+    timer = StageTimer()
     for stage, detail, fn in stages:
         is_local = (stage == "stt" and _local_stt) or (stage == "tts" and _local_tts)
         if is_local and not _opted_in:
@@ -1370,12 +1380,16 @@ def prewarm_all(
             _emit_boot(stage, "On-device speech loads on first use…")
             continue
         _emit_boot(stage, detail)
+        _t0 = time.monotonic()
         try:
             fn()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"prewarm {stage} failed: {e}")
             if strict_local and is_local:
                 raise
+        finally:
+            timer.record(stage, _t0)
+    timer.log_total()
     _emit_boot("ready", "Ready")
 
 
@@ -1450,6 +1464,9 @@ async def lifespan(app: FastAPI):
     _native_pipeline_task = None
     _native_transport = None
     _voice_lifecycle.reset()
+    from agent.boot_banner import log_config_banner
+
+    log_config_banner()
     direct_prewarm_task: asyncio.Task | None = None
     llm_prewarm_task: asyncio.Task | None = None
 

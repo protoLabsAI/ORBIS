@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import logging
 
-from pipecat.frames.frames import MetricsFrame
+from pipecat.frames.frames import ErrorFrame, MetricsFrame
 from pipecat.metrics.metrics import TTFAMetricsData, TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
+from pipecat.services.llm_service import LLMService
+
+from agent.llm_status import llm_status
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,9 @@ class LatencyObserver(BaseObserver):
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
+        if isinstance(frame, ErrorFrame):
+            await self._on_error(frame)
+            return
         if not isinstance(frame, MetricsFrame):
             return
         fid = getattr(frame, "id", id(frame))
@@ -58,3 +64,24 @@ class LatencyObserver(BaseObserver):
                 )
             elif isinstance(m, TTFBMetricsData):
                 logger.info("[latency] %s ttfb=%.3fs", m.processor, m.value)
+                if "LLM" in str(m.processor).upper():
+                    llm_status.record_ttfb(m.value)
+
+    async def _on_error(self, frame: ErrorFrame) -> None:
+        """Drop the open ttfb measurement when an LLM request fails.
+
+        Pipecat arms the LLM ttfb clock before the HTTP call and only stops it
+        on the first output token. A request that errors (e.g. a 400) never
+        produces one, so the clock stays armed and the next output — possibly
+        30s later, from a retry or failover — is reported as this request's
+        ttfb. An errored request has no ttfb.
+        """
+        proc = frame.processor
+        if not isinstance(proc, LLMService):
+            return
+        cancel = getattr(proc, "cancel_ttfb_metrics", None)
+        if cancel is not None:
+            try:
+                await cancel()
+            except Exception:  # noqa: BLE001 — observer must never break the pipeline
+                logger.debug("[latency] cancel_ttfb_metrics failed", exc_info=True)

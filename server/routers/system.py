@@ -17,7 +17,9 @@ import time
 from fastapi import APIRouter, Depends
 
 import app
+from agent.boot_banner import config_banner
 from agent.echo_guard import ECHO_GUARD_MS, HALF_DUPLEX
+from agent.llm_status import llm_status
 from agent.persona import get_active_persona
 from agent.user_state import active_user_states
 from auth import require_user, user_registry
@@ -49,7 +51,11 @@ async def health():
             _delegate_health_payload(d, public=True) for d in app._DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
-        "voice": {"lifecycle": app._voice_lifecycle.snapshot()},
+        "voice": {
+            "lifecycle": app._voice_lifecycle.snapshot(),
+            # Host-only: /healthz is unauthenticated. Full detail is /api/voice/doctor.
+            "llm": llm_status.snapshot(public=True),
+        },
         "audio": {
             "transport": "native",
             **app.audio_runtime_info(),
@@ -98,6 +104,8 @@ async def events(user: User = Depends(require_user)):
         voice-lifecycle  {"state": "warming"|"starting"|"running"|"failed",
                           "detail": "...", "code"?: "...",
                           "action"?: "retry"|"relaunch_required"} (retained)
+        llm-status  host-only LLM voice-doctor snapshot (configured/running/
+                    last_ok_at/last_error/failovers/drift), retained, on change
     """
     from fastapi.responses import StreamingResponse
     return StreamingResponse(
@@ -182,6 +190,12 @@ def build_diagnostics_report() -> dict:
     except Exception as e:
         report["runtime"] = {"error": f"runtime probe failed: {e}"}
 
+    # --- which config file is live + env fallbacks in effect --------------
+    try:
+        report["config_banner"] = config_banner()
+    except Exception as e:
+        report["config_banner"] = {"error": f"config banner failed: {e}"}
+
     # --- metrics counters -----------------------------------------------
     try:
         from agent import metrics as _metrics_mod
@@ -212,6 +226,15 @@ def build_diagnostics_report() -> dict:
     }
 
     return report
+
+
+@router.get("/api/voice/doctor")
+async def voice_doctor(user: User = Depends(require_user)):
+    """LLM voice doctor: configured vs running service, last ok/error, failovers,
+    config drift. Authenticated because it includes the endpoint URL; the API
+    key is never held by the status object. ``/healthz.voice.llm`` is the
+    host-only public copy."""
+    return llm_status.snapshot()
 
 
 @router.get("/api/diagnostics")
