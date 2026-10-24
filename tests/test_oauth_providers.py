@@ -620,11 +620,22 @@ def test_anthropic_stream_path_merges_oauth_betas(anthropic_llm):
 
     async def _api_call(**params):
         seen.update(params)
-        return "stream"
+        return _FakeStream()
+
+    class _FakeStream:
+        def __aiter__(self):
+            return self._gen()
+
+        async def _gen(self):
+            yield "event"
+
+    async def _run():
+        stream = await anthropic_llm._create_message_stream(_api_call, params)
+        return [e async for e in stream]
 
     params = {"betas": ["interleaved-thinking-2025-05-14"], "messages": []}
-    out = asyncio.run(anthropic_llm._create_message_stream(_api_call, params))
-    assert out == "stream"
+    out = asyncio.run(_run())
+    assert out == ["event"]  # stop_reason wrapper passes events through
     assert set(OAUTH_BETAS) <= set(seen["betas"])
     assert "interleaved-thinking-2025-05-14" in seen["betas"]
 
