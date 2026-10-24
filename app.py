@@ -365,9 +365,39 @@ def _resolve_skill_llm(skill) -> dict:
     # main conversation still runs on the gateway. All three fields fall back
     # to the main endpoint, so unset = previous behavior (gateway).
     micro_url = skill_llm.get("micro_url") or os.environ.get("LLM_MICRO_URL") or url
-    micro_model = (
-        skill_llm.get("micro_model") or os.environ.get("LLM_MICRO_MODEL") or model
-    )
+    # A micro model id only means something at the endpoint it was named for.
+    # The env LLM_MICRO_MODEL (a gateway alias like `protolabs/fast`) is
+    # therefore honored only when a micro URL is ALSO set; otherwise it would
+    # be sent to the main endpoint (e.g. api.anthropic.com → 404) and every
+    # generated filler/ack would silently fall back to canned lines.
+    micro_has_own_url = bool(skill_llm.get("micro_url") or os.environ.get("LLM_MICRO_URL"))
+    env_micro_model = os.environ.get("LLM_MICRO_MODEL") if micro_has_own_url else None
+    if os.environ.get("LLM_MICRO_MODEL") and not micro_has_own_url:
+        logger.info(
+            "[llm] ignoring LLM_MICRO_MODEL=%r: LLM_MICRO_URL is unset, so the "
+            "micro tier shares the main endpoint and uses the main model",
+            os.environ["LLM_MICRO_MODEL"],
+        )
+    micro_model = skill_llm.get("micro_model") or env_micro_model or model
+    if provider == "anthropic-oauth" and micro_url == url and "/" in micro_model:
+        # Mirrors voice/llm/anthropic_oauth.py: a gateway alias is meaningless
+        # to Anthropic. Use the main (Claude) model rather than 404 every ack.
+        logger.warning(
+            "[llm] micro_model=%r is a gateway alias but the micro tier shares "
+            "the anthropic-oauth endpoint — using main model %r",
+            micro_model,
+            model,
+        )
+        micro_model = model
+    micro_host = (urlparse(micro_url).hostname or "").lower()
+    if "/" in micro_model and micro_host.endswith(("anthropic.com", "openai.com")):
+        logger.warning(
+            "[llm] micro_model=%r looks like a gateway alias but micro_url host "
+            "%s is not a gateway — fillers/acks will 404 and fall back to canned "
+            "lines. Set llm.micro_url to the gateway or use a native model id.",
+            micro_model,
+            micro_host,
+        )
     micro_api_key = (
         skill_llm.get("micro_api_key")
         or os.environ.get("LLM_MICRO_API_KEY")

@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test:boot": "bun test tests/bootStatusRuntime.test.ts tests/voiceReadinessComponents.test.tsx",
     "test:delegate-events": "bun test tests/delegateEvents.test.ts",
+    "test:thinking": "bun test tests/thinkingEscalation.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

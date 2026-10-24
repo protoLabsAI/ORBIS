@@ -159,3 +159,36 @@ def test_progress_fallback_lines_cover_generator_failure():
     for i in range(len(PROGRESS_FALLBACK_LINES)):
         line = progress_fallback_line("hub", pick=i)
         assert line and "hub" in line
+
+
+# --- plain turns (no tool): slow first token / empty turn -------------------
+
+from agent.presence import plan_plain_turn  # noqa: E402
+
+
+def test_plain_fast_turn_needs_no_recovery():
+    kinds = [e.kind for e in plan_plain_turn(first_token_at=1.0)]
+    assert kinds == ["result"]
+
+
+def test_plain_slow_first_token_gets_stall_line_within_sla():
+    ev = plan_plain_turn(first_token_at=15.0)
+    assert [e.kind for e in ev] == ["stall", "result"]
+    assert passes_sla(ev)
+
+
+def test_plain_empty_turn_recovers_when_the_llm_ends():
+    ev = plan_plain_turn(first_token_at=2.0, empty=True)
+    assert [e.kind for e in ev] == ["recovery"]
+    assert passes_sla(ev)
+
+
+def test_plain_frozen_endpoint_still_gets_a_sign_of_life():
+    ev = plan_plain_turn(first_token_at=None)
+    assert [e.kind for e in ev] == ["stall"]
+    assert max_dead_air(ev)[0] <= PRESENCE_FLOOR_SECS
+
+
+def test_plain_micro_ack_only_when_output_is_late():
+    assert "ack" not in [e.kind for e in plan_plain_turn(first_token_at=1.0, micro_ack_at=2.5)]
+    assert "ack" in [e.kind for e in plan_plain_turn(first_token_at=9.0, micro_ack_at=2.5)]

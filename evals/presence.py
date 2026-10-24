@@ -27,7 +27,13 @@ import argparse
 import sys
 
 from agent.filler import Latency, Settings
-from agent.presence import PRESENCE_FLOOR_SECS, PresenceEvent, max_dead_air, plan_presence
+from agent.presence import (
+    PRESENCE_FLOOR_SECS,
+    PresenceEvent,
+    max_dead_air,
+    plan_plain_turn,
+    plan_presence,
+)
 from agent.tools import ASYNC_TOOL_NAMES, latency_for
 
 # completion_at / visual_at are seconds after the tool call starts. `visual_at`
@@ -62,6 +68,23 @@ PROFILES: list[dict] = [
 ]
 
 
+# Plain turns (no tool call): user stops speaking -> slow / empty / frozen LLM.
+# first_token_at is seconds after the user stops; None = never arrives.
+# micro_ack_at is set only for profiles where the ack is enabled (it is off by
+# default in native mode without AEC), so most profiles rely on the watchdog.
+PLAIN_PROFILES: list[dict] = [
+    {"id": "plain_fast", "first_token_at": 1.0, "note": "normal turn — no recovery needed"},
+    {"id": "plain_slow_first_token", "first_token_at": 15.0,
+     "note": "HTTP 200 but first token at 15s — stall watchdog speaks at 8s"},
+    {"id": "plain_slow_with_ack", "first_token_at": 15.0, "micro_ack_at": 2.5,
+     "note": "same, with micro-ack enabled (AEC active)"},
+    {"id": "plain_empty_turn", "first_token_at": 2.0, "empty": True,
+     "note": "LLM ends with no text/tool call — recovery line the moment it ends"},
+    {"id": "plain_frozen", "first_token_at": None,
+     "note": "endpoint never answers — stall line at 8s (UI escalates to 'no response' at 20s)"},
+]
+
+
 def _derive(p: dict) -> tuple[Latency, bool]:
     """tier + is_async: explicit override (hypothetical tools) else from real code."""
     tier = p.get("tier") or latency_for(p["tool"])
@@ -71,7 +94,7 @@ def _derive(p: dict) -> tuple[Latency, bool]:
 
 def _timeline(events: list[PresenceEvent]) -> str:
     # ◇ = visual-only (StatusPill, silent); the rest are audible.
-    glyph = {"ack": "▸", "progress": "·", "visual": "◇", "result": "✓"}
+    glyph = {"ack": "▸", "progress": "·", "visual": "◇", "result": "✓", "stall": "!", "recovery": "!"}
     return "  ".join(f"{glyph.get(e.kind, '?')}{e.at:g}s {e.kind}" for e in events)
 
 
@@ -83,7 +106,7 @@ def main() -> None:
     args = ap.parse_args()
 
     profiles = [p for p in PROFILES if args.scenario in p["id"]]
-    if not profiles:
+    if not profiles and not any(args.scenario in p["id"] for p in PLAIN_PROFILES):
         sys.exit(f"no profiles match {args.scenario!r}")
 
     settings = Settings()
@@ -111,6 +134,25 @@ def main() -> None:
         print(f"    {_timeline(events)}")
         if not ok:
             print(f"    └ {gap:.1f}s silence from {a:g}s→{b:g}s — {p['note']}")
+
+    plain = [p for p in PLAIN_PROFILES if args.scenario in p["id"]]
+    if plain:
+        print("\nplain turns (no tool):")
+        for p in plain:
+            events = plan_plain_turn(
+                first_token_at=p["first_token_at"],
+                empty=p.get("empty", False),
+                micro_ack_at=p.get("micro_ack_at"),
+            )
+            gap, a, b = max_dead_air(events)
+            ok = gap <= args.floor
+            fails += not ok
+            print(f"{p['id']:<24} {'':<6} {'':<6} {'':>6} {gap:>7.1f}s  "
+                  + ("ok" if ok else "DEAD AIR"))
+            print(f"    {_timeline(events)}")
+            if not ok:
+                print(f"    └ {gap:.1f}s silence from {a:g}s→{b:g}s — {p['note']}")
+        profiles = profiles + plain
 
     n = len(profiles)
     print(f"\n{n - fails}/{n} within the {args.floor:g}s presence floor"
