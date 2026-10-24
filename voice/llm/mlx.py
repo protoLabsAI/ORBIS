@@ -134,7 +134,7 @@ class MLXLLMService(BaseOpenAILLMService):
 
     async def get_chat_completions(self, context):  # type: ignore[override]
         adapter = self.get_llm_adapter()
-        params = adapter.get_llm_invocation_params(
+        params = await adapter.get_llm_invocation_params(
             context,
             system_instruction=self._settings.system_instruction,
             convert_developer_to_user=not self.supports_developer_role,

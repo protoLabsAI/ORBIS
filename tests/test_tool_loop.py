@@ -267,8 +267,11 @@ def test_ollama_applies_the_guard(monkeypatch) -> None:
         base_url="http://127.0.0.1:11434/v1", model="m",
         settings=OpenAILLMService.Settings(model="m"),
     )
+    async def _async_params(*a, **k):
+        return _params(_history(3))
+
     monkeypatch.setattr(svc, "get_llm_adapter", lambda: SimpleNamespace(
-        get_llm_invocation_params=lambda *a, **k: _params(_history(3))
+        get_llm_invocation_params=_async_params
     ))
     seen: dict = {}
 

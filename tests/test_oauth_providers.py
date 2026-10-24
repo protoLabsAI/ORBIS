@@ -15,6 +15,7 @@ layers, no network anywhere (httpx is monkeypatched at the module seam):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import threading
@@ -781,9 +782,9 @@ def _stalled_context():
 
 
 def test_anthropic_adapter_applies_the_guard(anthropic_llm):
-    params = anthropic_llm.get_llm_adapter().get_llm_invocation_params(
+    params = asyncio.run(anthropic_llm.get_llm_adapter().get_llm_invocation_params(
         _stalled_context(), enable_prompt_caching=False, system_instruction=None
-    )
+    ))
     # identity is the exact first system block
     assert params["system"][0] == IDENTITY_BLOCK
     # 3 identical round-trips = STOP: note appended + tools off, natively
