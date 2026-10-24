@@ -28,6 +28,7 @@ import logging
 
 from pipecat.frames.frames import (
     Frame,
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMTextFrame,
     TextFrame,
@@ -62,7 +63,7 @@ class SpokenTextLogger(FrameProcessor):
                 # (async tool results / inbox), backchannel, stall recovery.
                 text = (getattr(frame, "text", "") or "").strip()
                 if text:
-                    logger.info(f"[speak] out-of-band → {text!r}")
+                    logger.info(f"[speak] out-of-band chars={len(text)} → {text!r}")
             elif isinstance(frame, LLMTextFrame):
                 # Streamed LLM narration token — accumulate; flush at end.
                 if frame.text:
@@ -71,11 +72,22 @@ class SpokenTextLogger(FrameProcessor):
                 spoken = "".join(self._llm_buf).strip()
                 self._llm_buf = []
                 if spoken:
-                    logger.info(f"[speak] llm → {spoken!r}")
+                    logger.info(f"[speak] llm chars={len(spoken)} → {spoken!r}")
+            elif isinstance(frame, InterruptionFrame):
+                # The response was cut off before its end frame. Log what was
+                # headed to TTS so a truncated line is explained, not mistaken
+                # for a short answer.
+                spoken = "".join(self._llm_buf).strip()
+                self._llm_buf = []
+                if spoken:
+                    logger.info(
+                        f"[speak] interrupted after {len(spoken)} chars "
+                        f"interrupted=true llm → {spoken!r}"
+                    )
             elif isinstance(frame, TextFrame):
                 # Bare non-LLM text bound for TTS (rare). Catch-all so no
                 # speech-bound text escapes the log.
                 text = (frame.text or "").strip()
                 if text:
-                    logger.info(f"[speak] text → {text!r}")
+                    logger.info(f"[speak] text chars={len(text)} → {text!r}")
         await self.push_frame(frame, direction)
