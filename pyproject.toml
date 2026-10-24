@@ -8,7 +8,12 @@ dependencies = [
     # provider (Claude subscription via OAuth — voice/llm/anthropic_oauth.py).
     # 1.8.1 adds ErrorCategory + processor usability, which the fallback LLM
     # policy uses to distinguish provider outages from application errors.
-    "pipecat-ai[silero,openai,anthropic]>=1.8.1,<2",
+    # >=1.13: LLMAdapter.get_llm_invocation_params became `async` (sync form
+    # deprecated, removed in 2.0); our adapter overrides/callers in voice/llm/
+    # use the async form, which the 1.12 services do not await. <1.14: pipecat
+    # minors have changed adapter/service APIs under us (1.13 broke CI and
+    # fresh pyapp installs) — bump the cap deliberately after a full test run.
+    "pipecat-ai[silero,openai,anthropic]>=1.13.0,<1.14",
     # Local model runtimes — used by Whisper STT + Kokoro TTS. Heavy
     # but baseline; users who only want cloud STT/TTS can skip by
     # installing a slim variant (future work).

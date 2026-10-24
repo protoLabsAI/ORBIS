@@ -140,7 +140,7 @@ class CodexLLMService(OpenAIResponsesHttpLLMService):
         creds = await asyncio.to_thread(resolve_codex_oauth)
         self._client.api_key = creds.access_token
         adapter = self.get_llm_adapter()
-        invocation_params = adapter.get_llm_invocation_params(
+        invocation_params = await adapter.get_llm_invocation_params(
             context, system_instruction=system_instruction or self._settings.system_instruction
         )
         params = self._build_response_params(invocation_params)

@@ -153,8 +153,8 @@ if AnthropicLLMService is not None:
         request carries the identity prefix.
         """
 
-        def get_llm_invocation_params(self, context, *args, **kwargs):
-            params = super().get_llm_invocation_params(context, *args, **kwargs)
+        async def get_llm_invocation_params(self, context, *args, **kwargs):
+            params = await super().get_llm_invocation_params(context, *args, **kwargs)
             params["system"] = _with_identity_prefix(params.get("system"))
 
             # Tool-loop guard (agent/tool_loop.py): detection runs on the

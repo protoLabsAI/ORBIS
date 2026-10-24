@@ -153,7 +153,7 @@ class OllamaLLMService(BaseOpenAILLMService):
         returns an async-iterable of OpenAI-shaped chunks built from
         Ollama's native NDJSON stream."""
         adapter = self.get_llm_adapter()
-        params = adapter.get_llm_invocation_params(
+        params = await adapter.get_llm_invocation_params(
             context,
             system_instruction=self._settings.system_instruction,
             convert_developer_to_user=not self.supports_developer_role,
