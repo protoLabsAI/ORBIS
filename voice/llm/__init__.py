@@ -230,6 +230,46 @@ def is_apple_silicon() -> bool:
     return _IS_APPLE_SILICON
 
 
+def adapter_kind(
+    *,
+    base_url: str,
+    provider: str | None = None,
+    model: str = "",
+    router_model: str | None = None,
+    content_model: str | None = None,
+) -> str:
+    """Which adapter ``make_llm`` would build for this config, as a stable
+    label: ``anthropic-oauth`` | ``openai-codex`` | ``mlx`` | ``ollama`` |
+    ``two-model`` | ``openai``. Mirrors make_llm's selection precedence (kept
+    next to it so they change together) without constructing anything — the
+    live-swap path uses it to refuse an in-place swap that would need a
+    different service class."""
+    if base_url and base_url.startswith("mlx://"):
+        provider = provider or "mlx"
+    resolved = (provider or _detect_provider(base_url) or "openai").lower()
+    if resolved in ("anthropic-oauth", "openai-codex", "mlx", "ollama"):
+        return resolved
+    if (router_model or model) != (content_model or model):
+        return "two-model"
+    return "openai"
+
+
+def live_adapter_kind(svc: Any) -> str:
+    """Inverse of :func:`adapter_kind` for an already-built service."""
+    name = type(svc).__name__
+    if name == "AnthropicOAuthLLMService":
+        return "anthropic-oauth"
+    if name == "CodexLLMService":
+        return "openai-codex"
+    if "MLX" in name:
+        return "mlx"
+    if name == "OllamaLLMService":
+        return "ollama"
+    if name == "TwoModelOpenAILLMService":
+        return "two-model"
+    return "openai"
+
+
 def _detect_provider(base_url: str) -> str | None:
     """Return ``"ollama"`` if the URL looks like an Ollama instance,
     else ``None`` (caller falls back to OpenAI-compat). Pure URL-shape

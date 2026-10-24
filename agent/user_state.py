@@ -82,6 +82,9 @@ class UserState:
     active_session_id: str | None = None
     active_tts: Any | None = None  # live TTS service (for runtime voice switch)
     active_llm: Any | None = None  # live LLM service (for runtime model swap)
+    # What the live LLM was built with that can't be swapped in place
+    # (provider / extra_body / failover backup) — see app._llm_build_snapshot.
+    active_llm_build: dict | None = None
 
     # HITL: a background orchestration run waiting on the user's spoken answer.
     pending_ask: PendingAsk | None = None

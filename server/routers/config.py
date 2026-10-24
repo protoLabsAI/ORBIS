@@ -13,7 +13,7 @@ from agent.persona import reload_persona
 from auth import require_user
 from auth.users import User
 from voice.stt import STT_BACKEND
-from app import _reconfigure_live_llm
+from app import _reconfigure_live_llm, _resolve_skill_llm, logger
 
 
 router = APIRouter()
@@ -62,24 +62,47 @@ async def put_config(patch: dict, user: User = Depends(require_user)):
     Drops unknown keys with a warning. Raises 400 on typed failures
     (invalid tts_backend, non-numeric temperature, etc.).
     """
-    from agent.config_store import merge_patch
+    from agent.config_store import (
+        applies_map,
+        merge_patch_with_warnings,
+        read_config,
+        redact_secrets,
+    )
 
+    previous = read_config()
     try:
-        normalized = merge_patch(patch)
+        normalized, warnings = merge_patch_with_warnings(patch)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     persona = reload_persona()
+    applies = applies_map(previous, normalized)
     # Hot-swap the live LLM (no restart) when the llm block changed — mirrors
-    # the runtime TTS-voice swap. MLX (in-process) can't retarget live, so
-    # `llm_applied_live` stays False there and the UI keeps the restart hint.
-    applied_live = False
+    # the runtime TTS-voice swap. The swap is refused (and says why) whenever
+    # it could not truthfully take effect; see _reconfigure_live_llm. It is
+    # given the RESOLVED config so api_key_env / env fallbacks / extra_body
+    # derive exactly as at pipeline build.
+    llm_apply: dict | None = None
     if isinstance(patch, dict) and "llm" in patch:
-        new_llm = normalized.get("llm") if isinstance(normalized, dict) else None
-        res = _reconfigure_live_llm(new_llm or {}, user_id="default")
-        applied_live = bool(res.get("ok"))
+        try:
+            llm_apply = _reconfigure_live_llm(
+                _resolve_skill_llm(persona), user_id="default"
+            )
+        except Exception as exc:  # noqa: BLE001 — surface, never 500 a saved config
+            logger.warning(f"[llm] live reconfigure raised: {exc}")
+            llm_apply = {"applied": "failed", "reason": str(exc)}
+        applies["llm"] = llm_apply["applied"]
     return {
         "ok": True,
-        "config": normalized,
+        # Redacted exactly like GET — never echo stored provider keys.
+        "config": redact_secrets(normalized),
         "persona": persona.slug,
-        "llm_applied_live": applied_live,
+        # Back-compat boolean; `llm_apply` carries the real outcome + reason.
+        "llm_applied_live": bool(llm_apply and llm_apply["applied"] == "live"),
+        "llm_apply": (
+            {"applied": llm_apply["applied"], "reason": llm_apply["reason"]}
+            if llm_apply
+            else None
+        ),
+        "applies": applies,
+        "warnings": warnings,
     }

@@ -1309,10 +1309,13 @@ def prewarm_llm() -> None:
             timeout=30.0,
         )
         response.raise_for_status()
-        logger.info("LLM warm")
+        logger.info("LLM warm host=%s status=%s", urlparse(cfg["url"]).hostname, response.status_code)
     except Exception as e:
-        # Optional warmup must not block voice startup or expose credentials.
-        logger.info("LLM prewarm skipped (%s)", type(e).__name__)
+        # Optional warmup must not block voice startup or expose credentials
+        # (host + status only — never the URL path, query or key).
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        host = urlparse(cfg["url"]).hostname if "cfg" in locals() else "?"
+        logger.info("LLM prewarm skipped (%s) host=%s status=%s", type(e).__name__, host, status)
 
 
 def prewarm_all(
@@ -1688,75 +1691,152 @@ def _apply_persona_switch(persona) -> dict:
     }
 
 
-def _reconfigure_live_llm(llm_cfg: dict, *, user_id: str | None = None) -> dict:
+def _llm_build_snapshot(llm_cfg: dict, fallback_cfg: dict | None) -> dict:
+    """The parts of the LLM config that are FIXED into the live service /
+    failover switcher at pipeline build and cannot be swapped in place.
+    Recorded on the session (``UserState.active_llm_build``) so a later
+    config save can tell whether a live swap would be truthful."""
+    fb = None
+    if fallback_cfg:
+        fb = {
+            k: fallback_cfg.get(k)
+            for k in ("url", "model", "api_key", "provider", "extra_body")
+        }
+    return {
+        "provider": llm_cfg.get("provider") or None,
+        "extra_body": llm_cfg.get("extra_body") or None,
+        "fallback": fb,
+    }
+
+
+_NO_FALLBACK_GIVEN = object()
+
+
+def _llm_result(applied: str, reason: str = "", **extra) -> dict:
+    """Structured outcome of a live LLM reconfigure. ``applied`` is
+    ``live`` (took effect on the next turn), ``restart`` (saved, but the
+    running service can't take it), ``next_session`` (saved; no live
+    session to change) or ``failed``. ``ok``/``needs_restart``/``error``
+    are kept for older callers."""
+    return {
+        "applied": applied,
+        "reason": reason,
+        "ok": applied == "live",
+        "needs_restart": applied == "restart",
+        **({"error": reason} if reason and applied != "live" else {}),
+        **extra,
+    }
+
+
+def _reconfigure_live_llm(
+    llm_cfg: dict,
+    *,
+    user_id: str | None = None,
+    fallback_cfg: object = _NO_FALLBACK_GIVEN,
+) -> dict:
     """Reconfigure the LIVE LLM service in place so a model/endpoint change
     applies to the next turn — no pipeline rebuild, no audio reconnect. Mirrors
     the runtime TTS-voice swap (_switch_live_voice) and the delegate-roster
     refresh: the codebase hot-swaps session config rather than restarting.
 
-    Works for OpenAI-compatible services (cloud gateways, Ollama). In-process
-    MLX can't be retargeted to a remote endpoint in place, so those changes
-    still need a restart (``needs_restart``). Never raises — the caller surfaces
-    the status as ``llm_applied_live``.
+    ``llm_cfg`` must be the RESOLVED config (``_resolve_skill_llm`` output),
+    never raw yaml, so api_key_env / env fallbacks / thinking-suppression
+    ``extra_body`` are derived exactly as at pipeline build.
+
+    A swap is only performed when it will actually take effect. It is refused
+    (``applied == "restart"``, with a reason) when the adapter class would
+    differ from the live one, when an Ollama URL changed (the native adapter
+    pins its root at construction), or when provider / extra_body / failover
+    backup changed (fixed at pipeline build). Every branch logs. Never raises.
     """
     state = user_state_for(user_id or _A2A_USER_ID)
+    # The filler / ack micro tier is rebuilt lazily from the resolved config,
+    # so reset it on every save (also what the persona hot-swap does).
+    state.filler_generator = None
+
     svc = state.active_llm
     if svc is None:
-        return {"ok": False, "error": "no live LLM session"}
+        reason = "no live voice session; applies when voice starts"
+        logger.info(f"[llm] reconfigure deferred: {reason}")
+        return _llm_result("next_session", reason)
+
+    from voice.llm import adapter_kind, live_adapter_kind
+    from voice.llm.ollama import OllamaLLMService
+
     name = type(svc).__name__
-    if "MLX" in name:
-        return {
-            "ok": False,
-            "needs_restart": True,
-            "error": "MLX runs in-process; restart to switch models",
-        }
-    # OAuth subscription providers (anthropic-oauth / openai-codex) run on a
-    # different pipecat service class than the OpenAI-compat path, so crossing
-    # that boundary needs a pipeline rebuild — same contract as MLX. Within the
-    # same provider, a model change applies in place (both services read
-    # settings.model per request; auth is re-resolved per turn by the adapter).
-    _oauth_live = {
-        "anthropic-oauth": "AnthropicOAuthLLMService",
-        "openai-codex": "CodexLLMService",
-    }
-    provider = str(llm_cfg.get("provider") or "").strip().lower()
-    if provider in _oauth_live or name in _oauth_live.values():
-        if _oauth_live.get(provider) != name:
-            return {
-                "ok": False,
-                "needs_restart": True,
-                "error": "switching to or from a subscription provider needs a restart",
-            }
-        model = str(llm_cfg.get("model") or "").strip()
-        settings = getattr(svc, "_settings", None)
-        if model and settings is not None and hasattr(settings, "model"):
-            settings.model = model
-        logger.info(f"[llm] live reconfigure → {name} model={model} (oauth)")
-        return {"ok": True, "model": model, "url": llm_cfg.get("url")}
     model = str(llm_cfg.get("model") or "").strip()
     url = llm_cfg.get("url")
-    api_key = llm_cfg.get("api_key") or ""
+    live_kind = live_adapter_kind(svc)
+    new_kind = adapter_kind(
+        base_url=str(url or ""),
+        provider=llm_cfg.get("provider"),
+        model=model,
+        router_model=llm_cfg.get("router_model"),
+        content_model=llm_cfg.get("content_model"),
+    )
+
+    def _refuse(reason: str) -> dict:
+        logger.info(f"[llm] live reconfigure refused ({name}): {reason}")
+        return _llm_result("restart", reason)
+
+    if live_kind == "mlx":
+        return _refuse("MLX runs in-process; restart to switch models")
+    if new_kind != live_kind:
+        return _refuse(
+            f"switching the model backend ({live_kind} to {new_kind}) needs a restart"
+        )
+
+    build = state.active_llm_build
+    if build is not None:
+        if (llm_cfg.get("provider") or None) != build.get("provider"):
+            return _refuse("the provider changed")
+        if (llm_cfg.get("extra_body") or None) != build.get("extra_body"):
+            return _refuse("request options (extra_body) changed")
+        fb = (
+            _resolve_fallback_llm(_active_skill())
+            if fallback_cfg is _NO_FALLBACK_GIVEN
+            else fallback_cfg
+        )
+        if _llm_build_snapshot(llm_cfg, fb)["fallback"] != build.get("fallback"):
+            return _refuse("the failover backup changed")
+
+    if live_kind == "ollama":
+        old_root = getattr(svc, "_ollama_root", None)
+        if old_root is not None and OllamaLLMService._derive_root(str(url or "")) != old_root:
+            return _refuse("the Ollama endpoint changed")
+
     try:
-        # url / key — recreate the AsyncOpenAI client (OpenAILLMService.create_client).
-        if url and hasattr(svc, "create_client"):
-            svc._client = svc.create_client(
-                api_key=api_key or "not-needed", base_url=str(url)
-            )
-        # model — base_llm reads self._settings.model per request.
         settings = getattr(svc, "_settings", None)
-        if model and settings is not None and hasattr(settings, "model"):
-            settings.model = model
-        # two-model routing tiers (router decides / content narrates); collapse
-        # to the chosen model unless an explicit split is in the config.
-        if hasattr(svc, "_router_model"):
-            svc._router_model = str(llm_cfg.get("router_model") or model)
-        if hasattr(svc, "_content_model"):
-            svc._content_model = str(llm_cfg.get("content_model") or model)
+        if live_kind in ("anthropic-oauth", "openai-codex"):
+            # OAuth subscription providers: same service class, so a model
+            # change applies in place (both read settings.model per request;
+            # auth is re-resolved per turn by the adapter).
+            if model and settings is not None and hasattr(settings, "model"):
+                settings.model = model
+            logger.info(f"[llm] live reconfigure → {name} model={model} (oauth)")
+        else:
+            api_key = llm_cfg.get("api_key") or ""
+            # url / key — recreate the AsyncOpenAI client. Not for Ollama:
+            # its native adapter talks to _ollama_root through its own client
+            # (an unchanged root was verified above, so there is nothing to swap).
+            if live_kind != "ollama" and url and hasattr(svc, "create_client"):
+                svc._client = svc.create_client(
+                    api_key=api_key or "not-needed", base_url=str(url)
+                )
+            # model — base_llm reads self._settings.model per request.
+            if model and settings is not None and hasattr(settings, "model"):
+                settings.model = model
+            # two-model routing tiers (router decides / content narrates);
+            # collapse to the chosen model unless an explicit split is set.
+            if hasattr(svc, "_router_model"):
+                svc._router_model = str(llm_cfg.get("router_model") or model)
+            if hasattr(svc, "_content_model"):
+                svc._content_model = str(llm_cfg.get("content_model") or model)
+            logger.info(f"[llm] live reconfigure → {name} url={url} model={model}")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[llm] live reconfigure failed: {e}")
-        return {"ok": False, "error": str(e)}
-    logger.info(f"[llm] live reconfigure → {name} url={url} model={model}")
-    return {"ok": True, "model": model, "url": url}
+        return _llm_result("failed", str(e))
+    return _llm_result("live", "", model=model, url=url)
 
 
 def _serve_react() -> bool:

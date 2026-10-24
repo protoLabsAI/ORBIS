@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { api, type OrbisConfig } from '@/lib/api';
 import {
   LLM_PRESETS,
@@ -17,18 +18,22 @@ type TestState =
   | { kind: 'ok'; latency: number }
   | { kind: 'error'; message: string };
 
+type ApplyKind = 'live' | 'restart' | 'next_session' | 'failed';
+
 type SaveState =
   | { kind: 'idle' }
   | { kind: 'saving' }
-  | { kind: 'saved'; live: boolean }
+  | { kind: 'saved'; applied: ApplyKind; reason: string; warnings: string[] }
   | { kind: 'error'; message: string };
 
 /**
  * LLM settings — edit the router-brain provider without re-running the
  * setup wizard. Persists via POST /api/config, which hot-swaps the live LLM
  * service in place (model + client) so the change applies to the next turn
- * with no restart. In-process MLX can't retarget live (the response's
- * `llm_applied_live` is false), so those changes still need a restart.
+ * with no restart when it can. The response's `llm_apply` says whether it did
+ * (`live`) or why not (`restart` + reason: MLX, an adapter change, an Ollama
+ * URL change, ...), and `warnings` carries coherence notes. A restart verdict
+ * stays on screen with a Restart button; it is never auto-cleared.
  *
  * Shows the same minimal "featured" preset surface as the wizard's LLM
  * step, with an expander for the long-tail of OpenAI-compatible
@@ -185,16 +190,27 @@ export function LLMSettings() {
       // leave a stale `provider:` in orbis.yaml (merge keeps, null deletes).
       (llm as Record<string, unknown>).provider = isOauth ? (current.provider ?? null) : null;
       const res = await api.putConfig({ llm });
-      setSave({ kind: 'saved', live: res.llm_applied_live === true });
+      const applied: ApplyKind =
+        res.llm_apply?.applied ?? (res.llm_applied_live ? 'live' : 'restart');
+      setSave({
+        kind: 'saved',
+        applied,
+        reason: res.llm_apply?.reason ?? '',
+        warnings: res.warnings ?? [],
+      });
       if (apiKey.trim()) {
         setKeyIsSet(true);
         setApiKey('');
       }
       if (saveResetTimerRef.current) clearTimeout(saveResetTimerRef.current);
-      saveResetTimerRef.current = setTimeout(
-        () => setSave({ kind: 'idle' }),
-        2000,
-      );
+      // Only a clean live apply is a transient toast. Restart verdicts,
+      // failures and warnings stay until the next save.
+      if (applied === 'live' && !(res.warnings?.length)) {
+        saveResetTimerRef.current = setTimeout(
+          () => setSave({ kind: 'idle' }),
+          2000,
+        );
+      }
     } catch (e) {
       setSave({ kind: 'error', message: String((e as Error).message ?? e) });
     }
@@ -358,10 +374,32 @@ export function LLMSettings() {
               ✗ {test.message}
             </span>
           )}
-          {save.kind === 'saved' && (
+          {save.kind === 'saved' && save.applied === 'live' && (
+            <span className="text-xs text-success">✓ Saved — applied live</span>
+          )}
+          {save.kind === 'saved' && save.applied === 'next_session' && (
             <span className="text-xs text-success">
-              {save.live ? '✓ Saved — applied live' : '✓ Saved · restart to apply'}
+              ✓ Saved{save.reason ? ` — ${save.reason}` : ''}
             </span>
+          )}
+          {save.kind === 'saved' && save.applied === 'restart' && (
+            <span className="text-xs text-fg-muted">
+              ✓ Saved · restart to apply{save.reason ? ` — ${save.reason}` : ''}
+            </span>
+          )}
+          {save.kind === 'saved' && save.applied === 'failed' && (
+            <span className="text-xs text-danger">
+              ✓ Saved, but applying live failed{save.reason ? ` — ${save.reason}` : ''}; restart to apply
+            </span>
+          )}
+          {save.kind === 'saved' && (save.applied === 'restart' || save.applied === 'failed') && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => { relaunch().catch(() => setError('ORBIS could not relaunch')); }}
+            >
+              Restart ORBIS
+            </Button>
           )}
           {save.kind === 'error' && (
             <span className="text-xs text-danger truncate max-w-[55%]">
@@ -369,6 +407,14 @@ export function LLMSettings() {
             </span>
           )}
         </div>
+
+        {save.kind === 'saved' && save.warnings.length > 0 && (
+          <ul className="space-y-1 text-xs text-fg-muted">
+            {save.warnings.map((w) => (
+              <li key={w}>⚠ {w}</li>
+            ))}
+          </ul>
+        )}
 
         {error && <div className="text-xs text-danger">{error}</div>}
       </div>
