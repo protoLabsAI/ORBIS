@@ -21,11 +21,15 @@ import asyncio
 import logging
 import os
 import struct
+import time
 
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
     InputAudioRawFrame,
+    InterruptionFrame,
     OutputAudioRawFrame,
     StartFrame,
 )
@@ -144,22 +148,96 @@ class LocalAudioInputTransport(FrameProcessor):
 # ---------------------------------------------------------------------------
 
 class LocalAudioOutputTransport(FrameProcessor):
-    """Receives TTS PCM frames and writes them to the Rust socket."""
+    """Receives TTS PCM frames and writes them to the Rust socket.
+
+    Also owns the bot-speaking signal: a plain FrameProcessor has no
+    ``BaseOutputTransport`` machinery, so without this nothing in the pipeline
+    ever saw ``BotStartedSpeakingFrame`` / ``BotStoppedSpeakingFrame`` (echo
+    guard, barge-in gate, micro-ack, min-words interruption all key off them).
+    The socket protocol has no playback-end report from Rust, so the end of
+    playback is derived from the audio duration written: Rust drains the ring in
+    real time, hence ``playout_end = max(now, playout_end) + duration``.
+    """
+
+    # Extra wait after the computed playout end before declaring the bot done,
+    # covering ring/device latency (the Rust ring is not reported back).
+    _TAIL_S = 0.15
 
     def __init__(self, transport: "LocalAudioTransport", **kwargs):
         super().__init__(**kwargs)
         self._transport = transport
+        self._bot_speaking = False
+        self._playout_end = 0.0  # time.monotonic() when queued audio finishes
+        self._last_audio_at: float | None = None
+        self._stop_task: asyncio.Task | None = None
+
+    @property
+    def bot_speaking(self) -> bool:
+        return self._bot_speaking
+
+    @property
+    def ms_since_last_audio(self) -> float | None:
+        """Milliseconds since TTS audio was last written (None if never)."""
+        if self._last_audio_at is None:
+            return None
+        return (time.monotonic() - self._last_audio_at) * 1000.0
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         if isinstance(frame, OutputAudioRawFrame):
+            await self._note_audio(frame)
             await self._transport._send_pcm(frame.audio, frame.sample_rate)
+        elif isinstance(frame, InterruptionFrame):
+            # The Rust ring is flushed on barge-in (NativeBargeInObserver), so
+            # the remaining queued audio will never play.
+            await self._end_speaking("interruption")
         elif isinstance(frame, (EndFrame, CancelFrame)):
+            await self._end_speaking("end")
             # Signal TTS end to Rust before propagating.
             await self._transport._send_control(CTRL_TTS_END)
             await self.push_frame(frame, direction)
             return
         await self.push_frame(frame, direction)
+
+    async def _note_audio(self, frame: OutputAudioRawFrame) -> None:
+        now = time.monotonic()
+        channels = max(int(getattr(frame, "num_channels", 1) or 1), 1)
+        rate = max(int(frame.sample_rate or 0), 1)
+        duration = len(frame.audio) / (2 * channels * rate)
+        self._playout_end = max(now, self._playout_end) + duration
+        self._last_audio_at = now
+        if not self._bot_speaking:
+            self._bot_speaking = True
+            logger.debug("[bot-speaking] started")
+            # broadcast_frame takes the frame CLASS and builds one per direction.
+            await self.broadcast_frame(BotStartedSpeakingFrame)
+            self._stop_task = asyncio.create_task(
+                self._stop_when_drained(), name="orbis-bot-speaking-stop"
+            )
+
+    async def _stop_when_drained(self) -> None:
+        try:
+            while True:
+                remaining = self._playout_end + self._TAIL_S - time.monotonic()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            return
+        self._stop_task = None
+        await self._end_speaking("drained")
+
+    async def _end_speaking(self, reason: str) -> None:
+        task, self._stop_task = self._stop_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        if not self._bot_speaking:
+            return
+        self._bot_speaking = False
+        self._playout_end = 0.0
+        logger.debug(f"[bot-speaking] stopped ({reason})")
+        # broadcast_frame takes the frame CLASS and builds one per direction.
+        await self.broadcast_frame(BotStoppedSpeakingFrame)
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +309,16 @@ class LocalAudioTransport(BaseTransport):
         the mic from the bot's own speaker bleed.
         """
         return self._aec_active
+
+    @property
+    def bot_speaking(self) -> bool:
+        """Whether TTS audio is (approximately) still playing out."""
+        return self._output_proc.bot_speaking
+
+    @property
+    def ms_since_last_bot_audio(self) -> float | None:
+        """Milliseconds since TTS audio was last written to Rust, or None."""
+        return self._output_proc.ms_since_last_audio
 
     @property
     def speaker_frames_sent(self) -> int:

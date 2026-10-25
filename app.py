@@ -705,7 +705,7 @@ def _filler_gen_for(user_id: str) -> FillerGenerator:
 # (PYAPP_PROJECT_FEATURES in .github/workflows/desktop-build.yml) and the
 # local rebuild does too. Semantic end-of-turn discriminates a real turn-end
 # from a mid-thought pause / echo bleed, so we no longer wait out a fixed
-# silence hangover (see VAD_STOP_SECS drop to 0.2 in voice/pipeline.py). Set
+# silence hangover (see VAD_STOP_SECS in voice/pipeline.py). Set
 # SMART_TURN=off to fall back to naive VAD endpointing.
 # ---------------------------------------------------------------------------
 
@@ -734,28 +734,40 @@ def _build_audio_in_filter():
 
 
 def _build_user_turn_strategies():
-    """Return a `UserTurnStrategies` object wrapping a smart-turn analyzer,
-    or None for naive VAD-only behaviour. Smart-turn discriminates real
-    turn-ends from mid-thought pauses + echo bleed."""
+    """Return a `UserTurnStrategies` object, or None for pipecat's defaults.
+
+    - stop: a smart-turn analyzer discriminates real turn-ends from
+      mid-thought pauses + echo bleed (SMART_TURN).
+    - start: noise must not interrupt the bot — see voice/turn_start.py.
+      BARGE_IN_MIN_WORDS (default 2, 0 = pipecat defaults) is the word count
+      needed to interrupt a bot that is audibly speaking.
+    """
+    from voice.turn_start import build_start_strategies
+
+    start = build_start_strategies()
+    stop = None
     if SMART_TURN in ("local", "v3"):
         try:
             from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (
                 LocalSmartTurnAnalyzerV3,
             )
             from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
-            from pipecat.turns.user_turn_strategies import UserTurnStrategies
         except ImportError as e:
             logger.error(
                 "SMART_TURN=local but pipecat[local-smart-turn] not installed: %s", e
             )
-            return None
-        logger.info("Turn analyzer: LocalSmartTurnAnalyzerV3 (bundled CPU model)")
-        return UserTurnStrategies(
-            stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
-        )
-    if SMART_TURN != "off":
+        else:
+            logger.info("Turn analyzer: LocalSmartTurnAnalyzerV3 (bundled CPU model)")
+            stop = [TurnAnalyzerUserTurnStopStrategy(turn_analyzer=LocalSmartTurnAnalyzerV3())]
+    elif SMART_TURN != "off":
         logger.warning(f"Unknown SMART_TURN={SMART_TURN!r}; disabling")
-    return None
+    if start is None and stop is None:
+        return None
+    if start is not None:
+        logger.info("[tuning] barge-in requires >=%s words (BARGE_IN_MIN_WORDS)", start[1]._min_words)
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+    return UserTurnStrategies(start=start, stop=stop)
 
 
 # Echo-guard state — shared across observer and suppressor for THIS session.

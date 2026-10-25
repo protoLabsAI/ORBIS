@@ -23,7 +23,12 @@ import time
 import weakref
 from typing import TYPE_CHECKING
 
-from pipecat.frames.frames import CancelFrame, InterruptionFrame
+from pipecat.frames.frames import (
+    CancelFrame,
+    InterimTranscriptionFrame,
+    InterruptionFrame,
+    TranscriptionFrame,
+)
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
 if TYPE_CHECKING:
@@ -54,15 +59,33 @@ class NativeBargeInObserver(BaseObserver):
         # Weak ref so observer doesn't hold the transport alive.
         self._transport_ref: weakref.ref["LocalAudioTransport"] = weakref.ref(transport)
         self._last_flush = 0.0
+        # Length of the most recent transcript text, for interruption logs.
+        self._last_transcript_len = 0
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
+        if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            self._last_transcript_len = len((frame.text or "").strip())
         if isinstance(frame, (InterruptionFrame, CancelFrame)):
             now = time.monotonic()
             if now - self._last_flush < self._DEBOUNCE_S:
                 return  # same interrupt fanning out across the pipeline
             self._last_flush = now
+            if isinstance(frame, InterruptionFrame):
+                self._log_interruption()
             await self._flush(reason=type(frame).__name__)
+
+    def _log_interruption(self) -> None:
+        """INFO line so cut-off speech can be traced to its trigger."""
+        transport = self._transport_ref()
+        speaking = getattr(transport, "bot_speaking", None)
+        since = getattr(transport, "ms_since_last_bot_audio", None)
+        since_s = "n/a" if since is None else f"{since:.0f}"
+        logger.info(
+            f"[interrupt] bot_speaking={speaking} last_bot_audio_ms={since_s} "
+            f"transcript_chars={self._last_transcript_len}"
+        )
+        self._last_transcript_len = 0
 
     async def _flush(self, reason: str) -> None:
         transport = self._transport_ref()
