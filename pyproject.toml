@@ -21,6 +21,11 @@ dependencies = [
     "transformers>=4.46",
     "accelerate",
     "kokoro>=0.9",
+    # preshed 3.0.14 breaks spaCy's tokenizer load (OverflowError in
+    # Tokenizer._flush_specials), which kills kokoro/misaki G2P and so voice
+    # warmup. 3.0.13 is what uv.lock already holds; the sidecar resolves open
+    # ranges at install time, so the pin has to live here.
+    "preshed<3.0.14",
     # Web + I/O
     "fastapi",
     "uvicorn[standard]",
