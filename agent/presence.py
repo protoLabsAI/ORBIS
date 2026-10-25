@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .filler import Latency, Settings
+from .stall_watchdog import DEFAULT_STALL_SECS
 
 # The opening ack is queued SYNCHRONOUSLY (canned, instant) the moment a non-fast
 # tool starts, so it reaches the user almost immediately — model a small TTS
@@ -88,13 +89,15 @@ def progress_fallback_line(who: str, *, pick: int = 0) -> str:
 # Kinds of event the user actually HEARS — the only ones that count against the
 # dead-air SLA. "visual" (a delegate's streamed note_progress on the StatusPill)
 # is a real sign of life but a silent one, so it does not.
-AUDIO_KINDS = frozenset({"ack", "progress", "yield", "result"})
+AUDIO_KINDS = frozenset({"ack", "progress", "yield", "result", "stall", "recovery"})
 
 
 @dataclass(frozen=True)
 class PresenceEvent:
     at: float  # seconds after the tool call started
-    kind: str  # "ack" | "progress" | "yield" | "result" (audio) | "visual" (StatusPill only)
+    # "ack" | "progress" | "yield" | "result" | "stall" | "recovery" (audio) |
+    # "visual" (StatusPill only)
+    kind: str
     label: str
 
 
@@ -162,6 +165,42 @@ def plan_presence(
             events.append(PresenceEvent(vt, "visual", f"StatusPill update @ {vt:g}s"))
 
     events.append(PresenceEvent(completion_at, "result", "answer delivered"))
+    return sorted(events, key=lambda e: e.at)
+
+
+def plan_plain_turn(
+    *,
+    first_token_at: float | None,
+    empty: bool = False,
+    stall_secs: float = DEFAULT_STALL_SECS,
+    micro_ack_at: float | None = None,
+) -> list[PresenceEvent]:
+    """Audible timeline of a PLAIN turn (no tool call), measured from the moment
+    the user stops speaking.
+
+    - ``first_token_at``: when the LLM's first text arrives (``None`` = never,
+      a frozen endpoint). Only real output counts — pipecat's
+      ``LLMFullResponseStartFrame`` fires before the HTTP call.
+    - ``empty``: the LLM *finishes* at ``first_token_at`` having produced no
+      text / tool call (HTTP 200, empty completion) — the StallWatchdog speaks
+      a recovery line at that moment instead of waiting out the timer.
+    - ``micro_ack_at``: the micro-ack trigger (only when the ack is enabled;
+      it is off by default in native mode without AEC).
+
+    Mirrors ``agent/stall_watchdog.py`` (single fire at ``stall_secs``, empty-turn
+    guard) and ``agent/micro_ack.py`` (fires only if no output yet).
+    """
+    events: list[PresenceEvent] = []
+    arrives = first_token_at is not None
+    if micro_ack_at is not None and (not arrives or first_token_at > micro_ack_at):
+        events.append(PresenceEvent(micro_ack_at, "ack", "micro-ack"))
+    if arrives and empty:
+        events.append(PresenceEvent(first_token_at, "recovery", "empty-turn recovery"))
+    else:
+        if not arrives or first_token_at > stall_secs:
+            events.append(PresenceEvent(stall_secs, "stall", "stall recovery"))
+        if arrives:
+            events.append(PresenceEvent(first_token_at, "result", "answer starts"))
     return sorted(events, key=lambda e: e.at)
 
 

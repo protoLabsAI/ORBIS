@@ -14,10 +14,18 @@ LLM call) — the whole point is that the LLM may be the thing that's stuck.
 
 **Placement matters: this MUST sit downstream of the LLM service.** It arms
 on ``UserStoppedSpeakingFrame`` (which flows downstream to any position) and
-cancels on the LLM's own output (``LLMFullResponseStartFrame`` /
-``LLMTextFrame`` / ``FunctionCallsStartedFrame``), which only flow downstream
-from the LLM. Placed *before* the LLM it never sees those cancel frames and
-fires on every turn.
+cancels on the LLM's own *real output* (``LLMTextFrame`` /
+``FunctionCallsStartedFrame`` / bot speech), which only flow downstream from
+the LLM. Placed *before* the LLM it never sees those cancel frames and fires on
+every turn.
+
+``LLMFullResponseStartFrame`` is deliberately NOT a cancel signal: pipecat's
+LLM service pushes it BEFORE the HTTP call (see ``llm_error_announcer``), so
+cancelling on it disarmed the watchdog on every turn and a slow first token
+left the user in silent "thinking". Second guard: a turn whose
+``LLMFullResponseEndFrame`` arrives with no text / tool call / speech since the
+user stopped (HTTP 200 but empty completion) gets a recovery line immediately
+rather than waiting out the timer.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     Frame,
     FunctionCallsStartedFrame,
-    LLMFullResponseStartFrame,
+    LLMFullResponseEndFrame,
     LLMTextFrame,
     InterruptionFrame,
     TTSSpeakFrame,
@@ -43,6 +51,9 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from .user_state import turn_cancelled_since
 
 logger = logging.getLogger(__name__)
+
+# Default silence (seconds after the user stops) before the recovery line.
+DEFAULT_STALL_SECS = 8.0
 
 # Canned recovery lines — varied so a repeat stall doesn't say the same
 # thing. Real words (Kokoro-safe); Fish gets the [softly] prefix at emit.
@@ -61,6 +72,11 @@ _STALL_LINES: tuple[str, ...] = (
 # sub-threshold utterance) can't slip a recovery line into dead air.
 _CANCEL_QUIET_GRACE = 8.0
 
+# Spoken when the LLM finished a turn without producing anything.
+_EMPTY_TURN_LINES: tuple[str, ...] = (
+    "Sorry, I lost my train of thought — could you say that again?",
+)
+
 
 class StallWatchdog(FrameProcessor):
     """Speaks a recovery line if the agent goes silent after the user's turn."""
@@ -68,7 +84,7 @@ class StallWatchdog(FrameProcessor):
     def __init__(
         self,
         *,
-        stall_secs: float = 8.0,
+        stall_secs: float = DEFAULT_STALL_SECS,
         enabled: bool = True,
         tts_backend: str = "kokoro",
     ) -> None:
@@ -79,17 +95,31 @@ class StallWatchdog(FrameProcessor):
         self._timer: asyncio.Task | None = None
         self._responding = False  # any sign of work since the user stopped
         self._last_line: str | None = None
+        self._turn_open = False  # a user turn ended and awaits its reply
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
+        await self._observe(frame)
+        await self.push_frame(frame, direction)
 
+    async def _observe(self, frame: Frame) -> None:
         if isinstance(frame, UserStoppedSpeakingFrame):
             self._responding = False
+            self._turn_open = True
             self._arm()
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            # Response finished. If nothing real came out of it for an open
+            # user turn, the user would sit in "thinking" — say so now.
+            if self._turn_open and not self._responding:
+                self._turn_open = False
+                self._cancel()
+                await self._speak_empty_turn()
+            else:
+                self._turn_open = False
         elif isinstance(
             frame,
             (
-                LLMFullResponseStartFrame,
+                TTSSpeakFrame,
                 LLMTextFrame,
                 BotStartedSpeakingFrame,
                 FunctionCallsStartedFrame,
@@ -103,9 +133,21 @@ class StallWatchdog(FrameProcessor):
             # Next turn started, or the turn was aborted (a "cancel" / "stop
             # listening" swallowed upstream by CancelGate) — stand down so we
             # don't speak a recovery line into an intentionally-empty turn.
+            self._turn_open = False
             self._cancel()
 
-        await self.push_frame(frame, direction)
+    async def _speak_empty_turn(self) -> None:
+        if not self._enabled:
+            return
+        if turn_cancelled_since(time.monotonic() - _CANCEL_QUIET_GRACE):
+            return
+        line = random.choice(_EMPTY_TURN_LINES)
+        if self._tts_backend == "fish":
+            line = f"[softly] {line}"
+        logger.warning(f"[stall] LLM turn ended with no output — recovery: {line!r}")
+        await self.push_frame(
+            TTSSpeakFrame(line, append_to_context=False), FrameDirection.DOWNSTREAM
+        )
 
     def _arm(self) -> None:
         self._cancel()
@@ -145,6 +187,9 @@ class StallWatchdog(FrameProcessor):
             logger.warning(
                 f"[stall] no response in {self._stall_secs}s — recovery: {line!r}"
             )
+            # The user is about to hear this line; a late empty completion on
+            # the same turn must not speak a second one on top of it.
+            self._responding = True
             await self.push_frame(
                 TTSSpeakFrame(line, append_to_context=False),
                 FrameDirection.DOWNSTREAM,

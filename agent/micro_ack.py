@@ -155,6 +155,11 @@ def opening_ack_line(tts_backend: str, *, exclude: str | None = None) -> str:
 # timer re-arms and fires an ack into the silence at end-of-turn.
 _POST_BOT_GRACE_S: float = 1.5
 
+# After a failed/empty micro-LLM generation, skip generation (emit the canned
+# pool line immediately) for this long, so a dead micro endpoint can't add its
+# timeout to every ack.
+_GEN_BREAKER_S: float = 60.0
+
 
 class MicroAckInjector(FrameProcessor):
     """Emits a short ack if the pipeline hasn't produced audio within
@@ -227,6 +232,9 @@ class MicroAckInjector(FrameProcessor):
         # _last_ack_at / _min_interval.
         self._function_calls_in_progress = 0
         self._timer: asyncio.Task | None = None
+        # Circuit breaker for the micro-LLM generator: monotonic time until
+        # which generation is skipped (canned ack immediately) after a miss.
+        self._gen_disabled_until = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -283,22 +291,28 @@ class MicroAckInjector(FrameProcessor):
 
     def _arm_timer(self) -> None:
         if not self._enabled:
+            logger.debug("[micro-ack] not armed: disabled")
             return
         # No AEC → the mic hears the bot's tail; an ack would fire on her own
         # bleed. Skip until the engine confirms hardware AEC.
         if self._aec_gate is not None and not self._aec_gate():
+            logger.debug("[micro-ack] not armed: AEC gate closed")
             return
         now = time.monotonic()
         if self._bot_speaking:
+            logger.debug("[micro-ack] not armed: bot speaking")
             return
         if self._llm_responding:
             # LLM is mid-stream; whatever we push lands behind its
             # TextFrames in TTS.
+            logger.debug("[micro-ack] not armed: LLM already responding")
             return
         if now < self._post_bot_grace_until:
             # End-of-turn audio bleed re-tripped VAD; don't ack.
+            logger.debug("[micro-ack] not armed: post-bot grace")
             return
         if now - self._last_ack_at < self._min_interval:
+            logger.debug("[micro-ack] not armed: min interval")
             return
         self._cancel_timer()
         self._timer = asyncio.create_task(self._fire_after_delay())
@@ -352,6 +366,7 @@ class MicroAckInjector(FrameProcessor):
         if (
             self._generator is not None
             and self._llm_chance > 0
+            and time.monotonic() >= self._gen_disabled_until
             and random.random() < self._llm_chance
         ):
             try:
@@ -362,6 +377,11 @@ class MicroAckInjector(FrameProcessor):
             if phrase:
                 self._last_phrase = phrase
                 return phrase
+            # Dead / slow micro endpoint: don't make the next acks wait on it.
+            self._gen_disabled_until = time.monotonic() + _GEN_BREAKER_S
+            logger.info(
+                f"[micro-ack] micro LLM miss — canned acks for {_GEN_BREAKER_S:g}s"
+            )
         return self._pick()
 
     def _pick(self) -> str:

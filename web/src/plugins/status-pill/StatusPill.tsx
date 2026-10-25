@@ -2,6 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useVoiceStateSelector, useEffectiveVoiceLifecycle } from '@/voice/hooks';
 import { statusBus } from '@/shared/statusBus';
 import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
+import { useThinkingText } from '@/voice/thinkingEscalation';
 
 /**
  * Bottom-of-screen status hint.
@@ -28,6 +29,8 @@ export function StatusPill() {
     statusBus.subscribe,
     statusBus.getSnapshot,
   );
+  // Elapsed-time escalation so a slow LLM doesn't sit on a static "thinking…".
+  const thinkingLabel = useThinkingText(voiceState === 'thinking');
   const delegationText = delegationProgress ?? (activeToolCall
     ? formatActiveToolCall(activeToolCall)
     : null);
@@ -65,7 +68,7 @@ export function StatusPill() {
       : voiceState === 'speaking'
         ? 'speaking…'
         : voiceState === 'thinking'
-          ? 'thinking…'
+          ? thinkingLabel
           : micListening
             ? 'listening…'
             : activation === 'starting'

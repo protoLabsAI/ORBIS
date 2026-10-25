@@ -255,13 +255,35 @@ def test_micro_model_from_persona(helper) -> None:
     assert cfg["micro_model"] == "protolabs/micro"
 
 
-def test_micro_model_from_env(helper, monkeypatch) -> None:
+def test_micro_model_from_env_requires_micro_url(helper, monkeypatch) -> None:
     monkeypatch.setenv("LLM_MICRO_MODEL", "tiny-1")
+    monkeypatch.setenv("LLM_MICRO_URL", "http://127.0.0.1:11434/v1")
     cfg = helper(_skill())
     assert cfg["micro_model"] == "tiny-1"
 
 
+def test_env_micro_model_ignored_without_micro_url(helper, monkeypatch) -> None:
+    # The gateway alias must not be sent to the main (non-gateway) endpoint.
+    monkeypatch.setenv("LLM_MICRO_MODEL", "protolabs/fast")
+    cfg = helper(_skill(url="https://api.anthropic.com", model="claude-haiku-4-5"))
+    assert cfg["micro_url"] == cfg["url"]
+    assert cfg["micro_model"] == "claude-haiku-4-5"
+
+
+def test_oauth_gateway_alias_micro_model_falls_back_to_main(helper) -> None:
+    cfg = helper(
+        _skill(
+            url="https://api.anthropic.com",
+            model="claude-sonnet-4-5",
+            provider="anthropic-oauth",
+            micro_model="protolabs/fast",
+        )
+    )
+    assert cfg["micro_model"] == "claude-sonnet-4-5"
+
+
 def test_persona_micro_model_beats_env(helper, monkeypatch) -> None:
+    monkeypatch.setenv("LLM_MICRO_URL", "http://127.0.0.1:11434/v1")
     monkeypatch.setenv("LLM_MICRO_MODEL", "tiny-env")
     cfg = helper(_skill(micro_model="tiny-persona"))
     assert cfg["micro_model"] == "tiny-persona"

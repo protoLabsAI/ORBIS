@@ -317,3 +317,35 @@ async def test_choose_never_calls_llm_at_zero_chance() -> None:
     inj._llm_chance = 0.0
     assert await inj._choose() in set(_KOKORO_ACKS)
     assert gen.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_skips_dead_micro_llm(injector_factory) -> None:
+    """A failed micro-LLM generation trips the breaker: the next acks emit the
+    canned line immediately instead of awaiting the dead endpoint again."""
+    calls = 0
+
+    class _Dead:
+        async def micro_ack(self, **kw):
+            nonlocal calls
+            calls += 1
+            return None
+
+    inj = injector_factory()
+    inj._generator = _Dead()
+    inj._llm_chance = 1.0
+    first = await inj._choose()
+    assert first and calls == 1
+    second = await inj._choose()
+    assert second and calls == 1  # breaker open: generator not consulted
+
+
+@pytest.mark.asyncio
+async def test_arm_logs_why_it_did_not_fire(injector_factory, caplog) -> None:
+    import logging
+
+    inj = injector_factory(aec_gate=lambda: False)
+    with caplog.at_level(logging.DEBUG, logger="agent.micro_ack"):
+        inj._arm_timer()
+    assert inj._timer is None
+    assert "AEC gate closed" in caplog.text

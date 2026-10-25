@@ -700,28 +700,6 @@ async def run_bot(
             enabled=bg_cfg["enabled"],
             **({"grace_ms": int(bg_cfg["grace_ms"])} if "grace_ms" in bg_cfg else {}),
         ),
-        # Micro-ack injector — if the main pipeline hasn't produced audio
-        # within ~2500 ms (default; per-persona override via
-        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
-        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
-        # Cancels when the bot actually starts speaking. Vapi Fill
-        # Injection pattern.
-        MicroAckInjector(
-            tts_backend=tts_backend,
-            enabled=ma_cfg["enabled"],
-            # Live verbosity getter — a /api/verbosity flip to SILENT
-            # silences the acoustic ack on the very next turn without
-            # a session reconnect. Closure captures user_state, which
-            # is the same object the API mutates.
-            verbosity_getter=lambda: user_state.filler_settings.verbosity,
-            # Occasional LLM-generated acks for variety (orbis-29e) — same
-            # micro generator the fillers + announcer use.
-            generator=_filler_gen_for(user_id),
-            # Same live AEC gate as the backchannel: default-on only when
-            # hardware AEC protects the mic from the bot's own tail.
-            aec_gate=ma_gate,
-            **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
-        ),
         # Stall watchdog (E2) — if the agent produces no sign of work within
         # STALL_SECS of the user's turn ending (frozen LLM/TTS), speak one
         # canned recovery line so the user isn't left in dead air. Coarse +
@@ -741,6 +719,32 @@ async def run_bot(
             stall_secs=float(os.environ.get("STALL_SECS", "8")),
             enabled=os.environ.get("STALL_WATCHDOG", "1") == "1",
             tts_backend=tts_backend,
+        ),
+        # Micro-ack injector — if the main pipeline hasn't produced audio
+        # within ~2500 ms (default; per-persona override via
+        # behavior.micro_ack.first_ms) of UserStoppedSpeaking, emit a
+        # quiet "mm" / "hm" so the agent feels responsive on slow turns.
+        # Cancels when the bot actually starts speaking. Vapi Fill
+        # Injection pattern. Placed AFTER the LLM (next to the StallWatchdog,
+        # and after it so the watchdog never mistakes the ack's own
+        # TTSSpeakFrame for real output): before the LLM it never saw
+        # LLMTextFrame / LLMFullResponseEndFrame / FunctionCallsStartedFrame,
+        # so its cancel logic was dead and the ack could queue behind the reply.
+        MicroAckInjector(
+            tts_backend=tts_backend,
+            enabled=ma_cfg["enabled"],
+            # Live verbosity getter — a /api/verbosity flip to SILENT
+            # silences the acoustic ack on the very next turn without
+            # a session reconnect. Closure captures user_state, which
+            # is the same object the API mutates.
+            verbosity_getter=lambda: user_state.filler_settings.verbosity,
+            # Occasional LLM-generated acks for variety (orbis-29e) — same
+            # micro generator the fillers + announcer use.
+            generator=_filler_gen_for(user_id),
+            # Same live AEC gate as the backchannel: default-on only when
+            # hardware AEC protects the mic from the bot's own tail.
+            aec_gate=ma_gate,
+            **({"trigger_ms": int(ma_cfg["first_ms"])} if "first_ms" in ma_cfg else {}),
         ),
         # Last-line defense against speaking leaked chain-of-thought: strips
         # <think>/<scratch_pad>-style blocks from streamed LLM text, even
