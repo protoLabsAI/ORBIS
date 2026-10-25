@@ -141,6 +141,10 @@ def all_oauth_status() -> list[dict]:
 # Fallback Claude ids if the live /models probe fails (offline, or the OAuth
 # token can't list). Kept short and current; the live probe is preferred.
 _ANTHROPIC_FALLBACK_MODELS = [
+    "claude-fable-5-1",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
     "claude-opus-4-1",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",

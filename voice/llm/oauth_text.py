@@ -261,7 +261,12 @@ class OAuthTextClient:
     async def _create_anthropic(self, model, messages, max_tokens, tools, tool_choice):
         from anthropic import AsyncAnthropic
 
-        from voice.llm.anthropic_oauth import OAUTH_BETAS, oauth_default_headers
+        from voice.llm.anthropic_oauth import (
+            OAUTH_BETAS,
+            claude_max_tokens,
+            claude_thinking_param,
+            oauth_default_headers,
+        )
 
         # TTL-cached (resolution can shell out to the macOS Keychain); with a
         # token already installed, a transient resolve failure keeps it rather
@@ -284,10 +289,12 @@ class OAuthTextClient:
             self._sdk_client.auth_token = creds.access_token
 
         payload = anthropic_payload(messages, tools, tool_choice)
+        thinking = claude_thinking_param(model)
         resp = await self._sdk_client.beta.messages.create(
             model=model,
-            max_tokens=int(max_tokens) if max_tokens else 1024,
+            max_tokens=claude_max_tokens(max_tokens),
             betas=list(OAUTH_BETAS),
+            **({"thinking": thinking} if thinking else {}),
             **payload,
         )
         text = "".join(

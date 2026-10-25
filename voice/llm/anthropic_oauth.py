@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 from typing import Any
 
@@ -49,6 +50,63 @@ CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for C
 _SIGNED_OUT_SENTINEL = "signed-out"
 
 _version_cache: str | None = None
+
+# Floor for ``max_tokens`` on Claude. The persona default (150) is a brevity
+# knob for OpenAI-style gateways; on Claude 5 the model's between-tool updates
+# come back as thinking blocks that count against the cap, and a stream cut at
+# max_tokens mid-``tool_use`` block silently drops the tool call. Brevity is
+# enforced by the prompt/verbosity setting, so the API cap only needs to be a
+# safety net.
+CLAUDE_MAX_TOKENS_FLOOR = 1024
+
+# stop_reasons that are a normal end of a turn — anything else is worth a log line.
+_NORMAL_STOP_REASONS = frozenset({"end_turn", "tool_use"})
+
+
+def _claude_generation(model: str) -> int | None:
+    """Major version of a Claude model id (``claude-sonnet-5-5`` -> 5), else None.
+
+    Searched rather than anchored so dated / vendor-prefixed ids still match;
+    pre-4 ids (``claude-3-5-sonnet``) put the version before the family name and
+    don't match, which is fine — they are older than anything this gates.
+    """
+    m = re.search(r"(?:sonnet|haiku|opus|fable)-(\d{1,2})(?!\d)", (model or "").lower())
+    return int(m.group(1)) if m else None
+
+
+def claude_thinking_param(model: str) -> dict[str, str] | None:
+    """The explicit ``thinking`` request param a model needs, or None for none.
+
+    Claude 5+ rejects ``{"type": "disabled"}`` (400: send ``between_tools``
+    instead) — and pipecat injects exactly that for ``sonnet-N`` N>=5 whenever
+    no thinking config is set. So set it ourselves for 5+; 4.x is left alone
+    (thinking is off by default there and ``between_tools`` is not valid).
+    """
+    gen = _claude_generation(model)
+    return {"type": "between_tools"} if gen is not None and gen >= 5 else None
+
+
+def claude_max_tokens(configured: Any) -> int:
+    """``max_tokens`` for a Claude request: the configured value, floored."""
+    n = int(configured) if isinstance(configured, (int, float)) and configured else 0
+    return max(n, CLAUDE_MAX_TOKENS_FLOOR)
+
+
+async def _log_stop_reason(stream, model: str):
+    """Pass a streaming response through, logging an abnormal ``stop_reason``.
+
+    Lowest-level seam pipecat offers: its ``_process_context`` consumes the
+    stream inline, so we wrap the iterator instead of re-implementing the loop.
+    """
+    async for event in stream:
+        if getattr(event, "type", None) == "message_delta":
+            reason = getattr(getattr(event, "delta", None), "stop_reason", None)
+            if reason and reason not in _NORMAL_STOP_REASONS:
+                out = getattr(getattr(event, "usage", None), "output_tokens", None)
+                logger.info(
+                    f"[anthropic-oauth] stop_reason={reason} output_tokens={out} model={model}"
+                )
+        yield event
 
 
 def _claude_code_version() -> str:
@@ -232,7 +290,8 @@ if AnthropicLLMService is not None:
             await self._refresh_auth()
             betas = [b for b in (params.get("betas") or []) if b not in OAUTH_BETAS]
             params["betas"] = [*betas, *OAUTH_BETAS]
-            return await super()._create_message_stream(api_call, params)
+            stream = await super()._create_message_stream(api_call, params)
+            return _log_stop_reason(stream, params.get("model", ""))
 
         async def run_inference(self, *args, **kwargs):
             await self._refresh_auth()
@@ -261,9 +320,13 @@ def build_anthropic_oauth_llm(*, model: str, settings) -> Any:
             "Claude model id (e.g. 'claude-sonnet-4-5', 'claude-opus-4-1')."
         )
     max_tokens = getattr(settings, "max_tokens", None)
+    thinking = claude_thinking_param(name)
     svc_settings = AnthropicOAuthLLMService.Settings(
         model=name,
-        max_tokens=int(max_tokens) if isinstance(max_tokens, (int, float)) else 4096,
+        max_tokens=claude_max_tokens(max_tokens) if max_tokens else 4096,
+        # Claude 5+ must be told how to run without thinking (pipecat's own
+        # default, type "disabled", is a 400 there); 4.x omits the field.
+        **({"thinking": AnthropicLLMService.ThinkingConfig(**thinking)} if thinking else {}),
         # NOTE: temperature is deliberately NOT forwarded — current Claude
         # models reject it ("`temperature` is deprecated for this model") and
         # it isn't a knob worth breaking every turn over.

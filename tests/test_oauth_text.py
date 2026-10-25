@@ -153,7 +153,8 @@ def test_anthropic_roundtrip(monkeypatch):
     assert client._sdk_client.auth_token == "tok-live"
     assert seen["betas"] == list(OAUTH_BETAS)
     assert seen["system"][0] == {"type": "text", "text": CLAUDE_CODE_SYSTEM_PREFIX}
-    assert seen["max_tokens"] == 64
+    assert seen["max_tokens"] == 1024  # floored: 64 would truncate thinking + tool_use
+    assert "thinking" not in seen  # 4.x: nothing to send
     assert "temperature" not in seen and "extra_body" not in seen
     # response: OpenAI-shaped duck the consumers can read
     msg = r.choices[0].message
