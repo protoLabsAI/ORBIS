@@ -187,6 +187,9 @@ class StallWatchdog(FrameProcessor):
             logger.warning(
                 f"[stall] no response in {self._stall_secs}s — recovery: {line!r}"
             )
+            # The user is about to hear this line; a late empty completion on
+            # the same turn must not speak a second one on top of it.
+            self._responding = True
             await self.push_frame(
                 TTSSpeakFrame(line, append_to_context=False),
                 FrameDirection.DOWNSTREAM,

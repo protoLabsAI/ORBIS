@@ -128,6 +128,16 @@ async def test_slow_first_token_fires_recovery() -> None:
 
 
 @pytest.mark.asyncio
+async def test_late_empty_completion_after_stall_fire_stays_quiet() -> None:
+    w = _Cap(stall_secs=0.01, enabled=True)
+    await w._observe(UserStoppedSpeakingFrame())
+    await w._observe(LLMFullResponseStartFrame())
+    await w._timer
+    await w._observe(LLMFullResponseEndFrame())
+    assert len(w.pushed) == 1
+
+
+@pytest.mark.asyncio
 async def test_empty_turn_speaks_recovery_without_context() -> None:
     w = _Cap(stall_secs=10, enabled=True)
     await w._observe(UserStoppedSpeakingFrame())
