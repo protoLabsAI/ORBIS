@@ -39,12 +39,15 @@ from pipecat.frames.frames import (
     Frame,
     FunctionCallsStartedFrame,
     InterruptionFrame,
+    LLMFullResponseStartFrame,
     LLMTextFrame,
     TTSSpeakFrame,
     UserStartedSpeakingFrame,
 )
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.services.llm_service import LLMService
+
+from agent.llm_status import llm_status
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +156,8 @@ class LLMErrorAnnouncer(BaseObserver):
         self._last_spoke_at = float("-inf")
         self._last_failover_at = float("-inf")
         self._failover_streak = 0
+        # When the in-flight LLM request began (monotonic), for elapsed-to-error.
+        self._llm_started_at: float | None = None
         # The SAME ErrorFrame is observed once per upstream hop (transport →
         # … → LLM is many pushes); announce per frame, not per hop. Bounded so
         # a long session can't grow it.
@@ -177,6 +182,8 @@ class LLMErrorAnnouncer(BaseObserver):
 
     async def on_push_frame(self, data: FramePushed) -> None:
         frame = data.frame
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._llm_started_at = time.monotonic()
         if isinstance(frame, ErrorFrame):
             self._on_error(frame)
         elif isinstance(frame, _CANCEL_FRAMES):
@@ -202,8 +209,18 @@ class LLMErrorAnnouncer(BaseObserver):
         ):
             self._failover_streak = 2
         error_class = classify_llm_error(frame.error, frame.exception)
+        elapsed = (
+            "-"
+            if self._llm_started_at is None
+            else f"{time.monotonic() - self._llm_started_at:.2f}s"
+        )
+        brief = llm_status.brief()
+        request_id = getattr(frame.exception, "request_id", None)
+        llm_status.record_error(error_class, frame.error, exception=frame.exception)
         logger.warning(
-            f"[llm-error] {error_class}: {frame.error!r} — "
+            f"[llm-error] {error_class}: {frame.error!r} — elapsed={elapsed} "
+            f"host={brief.get('host') or '-'} model={brief.get('model') or '-'} "
+            f"request_id={request_id or '-'} — "
             f"announcing in {self._debounce_secs}s unless output follows"
         )
         self._pending_class = error_class
