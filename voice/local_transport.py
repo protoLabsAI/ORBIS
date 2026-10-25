@@ -209,6 +209,7 @@ class LocalAudioOutputTransport(FrameProcessor):
         if not self._bot_speaking:
             self._bot_speaking = True
             logger.debug("[bot-speaking] started")
+            # broadcast_frame takes the frame CLASS and builds one per direction.
             await self.broadcast_frame(BotStartedSpeakingFrame)
             self._stop_task = asyncio.create_task(
                 self._stop_when_drained(), name="orbis-bot-speaking-stop"
@@ -235,6 +236,7 @@ class LocalAudioOutputTransport(FrameProcessor):
         self._bot_speaking = False
         self._playout_end = 0.0
         logger.debug(f"[bot-speaking] stopped ({reason})")
+        # broadcast_frame takes the frame CLASS and builds one per direction.
         await self.broadcast_frame(BotStoppedSpeakingFrame)
 
 
