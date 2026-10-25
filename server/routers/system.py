@@ -40,7 +40,7 @@ router = APIRouter()
 async def health():
     """Public — no auth. Reports process-wide shape, not per-user state."""
     stt_config, tts_config = resolve_speech_config(get_active_persona())
-    return {
+    report = {
         "status": "ok",
         "stt_backend": stt_config["backend"],
         "tts_backend": tts_config["backend"],
@@ -51,11 +51,7 @@ async def health():
             _delegate_health_payload(d, public=True) for d in app._DELEGATES.all()
         ],
         "persona": get_active_persona().slug,
-        "voice": {
-            "lifecycle": app._voice_lifecycle.snapshot(),
-            # Host-only: /healthz is unauthenticated. Full detail is /api/voice/doctor.
-            "llm": llm_status.snapshot(public=True),
-        },
+        "voice": {"lifecycle": app._voice_lifecycle.snapshot()},
         "audio": {
             "transport": "native",
             **app.audio_runtime_info(),
@@ -86,6 +82,9 @@ async def health():
             "smart_turn": SMART_TURN,
         },
     }
+    # Host-only: /healthz is unauthenticated. Full detail is /api/voice/doctor.
+    report["voice"]["llm"] = llm_status.snapshot(public=True)
+    return report
 
 
 @router.get("/api/events")
