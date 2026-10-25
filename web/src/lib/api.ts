@@ -124,6 +124,23 @@ export type PersonaSwitchResult = {
   viz: { variant?: string; palette?: string; params?: Record<string, unknown> };
 };
 
+/** When a saved change takes effect (server: agent/config_store.py _APPLIES). */
+export type AppliesKind = 'live' | 'restart' | 'next_session' | 'failed';
+
+export type PutConfigResponse = {
+  ok?: boolean;
+  config?: OrbisConfig;
+  persona?: string;
+  /** Back-compat; prefer `llm_apply`. */
+  llm_applied_live?: boolean;
+  /** Outcome of the live LLM swap (present when the llm block was patched). */
+  llm_apply?: { applied: AppliesKind; reason: string } | null;
+  /** Per changed block: when it takes effect. */
+  applies?: Partial<Record<'persona' | 'voice' | 'llm' | 'stt', AppliesKind>>;
+  /** Non-fatal coherence notes about the saved config. */
+  warnings?: string[];
+};
+
 export type OrbisConfig = {
   persona?: {
     slug?: string;
@@ -487,7 +504,7 @@ export const api = {
   starterOrbs: () => get<StarterOrbsResponse>('/api/starter_orbs'),
   config: () => get<{ config: OrbisConfig }>('/api/config'),
   putConfig: (patch: OrbisConfig) =>
-    postJSON<{ ok?: boolean; config?: OrbisConfig; persona?: string; llm_applied_live?: boolean }>('/api/config', patch),
+    postJSON<PutConfigResponse>('/api/config', patch),
   diagnostics: () => get<DiagnosticsReport>('/api/diagnostics'),
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>

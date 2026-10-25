@@ -74,6 +74,7 @@ from app import (
     _extract_summary_text,
     _filler_gen_for,
     _get_text_client,
+    _llm_build_snapshot,
     _reconfigure_live_llm,
     _resolve_behavior_block,
     _resolve_fallback_llm,
@@ -1162,6 +1163,7 @@ async def run_bot(
         state.active_tracer = turn_tracer
         state.active_tts = tts  # for runtime voice switching via /api/tts/voice
         state.active_llm = llm  # for runtime model swap via POST /api/config
+        state.active_llm_build = _llm_build_snapshot(llm_cfg, _fallback_cfg)
         sid = turn_tracer.session_id if hasattr(turn_tracer, "session_id") else ""
         state.active_session_id = sid
         current_session_id.set(sid)
@@ -1284,6 +1286,7 @@ async def run_bot(
             state.active_tts = None
         if state.active_llm is llm:
             state.active_llm = None
+            state.active_llm_build = None
         if state.active_tracer is turn_tracer:
             state.active_tracer = None
             _tracing.set_active_tracer(None, user_id=user_id)

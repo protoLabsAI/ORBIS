@@ -509,16 +509,107 @@ def write_config(data: dict, path: str | Path | None = None) -> dict:
     return normalized
 
 
-def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
+# ---------------------------------------------------------------------------
+# Cross-field coherence (llm block)
+# ---------------------------------------------------------------------------
+
+# Keys that only make sense against the endpoint they were configured for.
+# When provider/url change, stale values here silently point the new
+# endpoint at the old one's models, auth env var, or request-body quirks.
+_ENDPOINT_DEPENDENT_LLM_KEYS = (
+    "micro_url", "micro_model", "micro_api_key",
+    "router_model", "content_model",
+    "extra_body", "api_key_env", "fallback",
+)
+_OAUTH_PROVIDERS = {"anthropic-oauth", "openai-codex"}
+_VENDOR_HOSTS = {"api.anthropic.com", "api.openai.com"}
+
+
+def _host_of(url: str) -> str:
+    from urllib.parse import urlparse
+
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _check_llm_coherence(cfg: dict) -> tuple[list[str], list[str]]:
+    """Cross-field sanity check of a (merged) config's ``llm`` block.
+
+    Returns ``(errors, warnings)``. Errors are combinations that can never
+    work (the save is rejected); warnings are suspicious but possibly
+    deliberate (the save succeeds and the UI shows them).
+    """
+    llm = cfg.get("llm") if isinstance(cfg, dict) else None
+    if not isinstance(llm, dict):
+        return [], []
+    errors: list[str] = []
+    warnings: list[str] = []
+    provider = str(llm.get("provider") or "").strip().lower()
+    model = str(llm.get("model") or "").strip()
+    url = str(llm.get("url") or "").strip()
+    host = _host_of(url)
+
+    if provider == "anthropic-oauth" and "/" in model:
+        errors.append(
+            f"llm.model {model!r} looks like a gateway alias; the Claude "
+            "subscription provider needs a Claude model id (e.g. claude-sonnet-4-5)"
+        )
+    if model.lower().startswith("protolabs/") and host in _VENDOR_HOSTS:
+        errors.append(
+            f"llm.model {model!r} is a protoLabs gateway alias, but llm.url "
+            f"points at {host}, which does not serve it"
+        )
+
+    if provider == "openai" and model.lower().startswith("claude"):
+        warnings.append(
+            f"llm.model {model!r} is a Claude model but the provider is "
+            "openai-compatible; check the URL serves it"
+        )
+    if provider == "ollama" and url and not (":11434" in url or "ollama" in host):
+        warnings.append(
+            f"llm.provider is ollama but {url!r} does not look like an Ollama "
+            "endpoint (expected port 11434)"
+        )
+    if not url and provider not in _OAUTH_PROVIDERS and provider != "mlx":
+        warnings.append(
+            "llm.url is empty; ORBIS will fall back to the LLM_URL environment "
+            "default, which is probably not what you want"
+        )
+    if url.startswith("mlx://") and provider and provider != "mlx":
+        warnings.append(
+            f"llm.url is mlx:// but llm.provider is {provider!r}; the explicit "
+            "provider wins and the in-process model will not be used"
+        )
+    return errors, warnings
+
+
+def _norm_url(v: Any) -> str:
+    return str(v or "").strip().rstrip("/")
+
+
+def _norm_provider(v: Any) -> str:
+    return str(v or "").strip().lower()
+
+
+def merge_patch_with_warnings(
+    patch: dict, path: str | Path | None = None
+) -> tuple[dict, list[str]]:
     """Read current config, shallow-merge ``patch`` onto it per
-    top-level block, validate, write. Returns the post-write normalized
-    dict.
+    top-level block, validate, write. Returns ``(normalized, warnings)``.
 
     Shallow-merge: `patch["persona"]["name"]` overrides just the name;
     other persona fields are preserved. Missing blocks in the patch
     are untouched in the file.
+
+    A provider/url change drops endpoint-dependent llm keys (micro tier,
+    router/content models, extra_body, api_key_env, fallback) that the same
+    patch did not set, and an incoherent llm block is rejected (ValueError)
+    or reported via ``warnings``.
     """
     current = read_config(path)
+    warnings: list[str] = []
     merged: dict[str, Any] = dict(current)
     for block_key in ("persona", "voice", "llm", "stt", "orb", "wakeword", "setup", "agent"):
         if block_key not in patch:
@@ -547,8 +638,101 @@ def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
                 if isinstance(fb_existing, dict) and fb_existing.get("api_key"):
                     fb_patch["api_key"] = fb_existing["api_key"]
             block_patch["fallback"] = fb_patch
+        if block_key == "llm":
+            endpoint_changed = (
+                "url" in block_patch
+                and _norm_url(block_patch["url"]) != _norm_url(existing.get("url"))
+            ) or (
+                "provider" in block_patch
+                and _norm_provider(block_patch["provider"])
+                != _norm_provider(existing.get("provider"))
+            )
+            if endpoint_changed:
+                dropped = [
+                    k for k in _ENDPOINT_DEPENDENT_LLM_KEYS
+                    if k in existing and k not in block_patch
+                ]
+                if dropped:
+                    existing = {k: v for k, v in existing.items() if k not in dropped}
+                    warnings.append(
+                        "Endpoint changed; cleared settings tied to the old "
+                        f"endpoint: {', '.join(dropped)}"
+                    )
         merged[block_key] = {**existing, **block_patch}
-    return write_config(merged, path)
+    if "llm" in patch:
+        errors, coherence_warnings = _check_llm_coherence(merged)
+        if errors:
+            raise ValueError("; ".join(errors))
+        warnings.extend(coherence_warnings)
+    return write_config(merged, path), warnings
+
+
+def merge_patch(patch: dict, path: str | Path | None = None) -> dict:
+    """:func:`merge_patch_with_warnings` for callers that don't surface
+    warnings. Returns the post-write normalized dict."""
+    return merge_patch_with_warnings(patch, path)[0]
+
+
+# ---------------------------------------------------------------------------
+# When does a saved change take effect?
+# ---------------------------------------------------------------------------
+
+APPLIES_LIVE = "live"
+APPLIES_NEXT_SESSION = "next_session"
+APPLIES_RESTART = "restart"
+_APPLIES_RANK = {APPLIES_LIVE: 0, APPLIES_NEXT_SESSION: 1, APPLIES_RESTART: 2}
+
+# Single source of truth for "how does this key take effect". Verified
+# against the code paths:
+#   * llm.model/url/api_key/router/content: app._reconfigure_live_llm swaps
+#     them in place IF the adapter class is unchanged (it refuses with a
+#     restart reason otherwise, and that per-save verdict overrides this).
+#   * llm.micro_*: only read by the lazy FillerGenerator, which every llm
+#     save resets, so the next filler/ack uses the new tier.
+#   * llm.provider/extra_body/fallback: fixed into the service + failover
+#     switcher at pipeline build.
+#   * persona prompt/name: composed at session start.
+#   * persona temperature/max_tokens, voice engine, stt: baked into the
+#     pipeline (Settings objects / services) at build. PUT /api/config does
+#     not live-swap the TTS voice, so voice.voice is next-session too.
+_APPLIES: dict[tuple[str, str], str] = {
+    **{("llm", k): APPLIES_LIVE for k in (
+        "model", "url", "api_key", "api_key_env", "router_model",
+        "content_model", "micro_url", "micro_model", "micro_api_key",
+    )},
+    **{("llm", k): APPLIES_RESTART for k in ("provider", "extra_body", "fallback")},
+    **{("persona", k): APPLIES_NEXT_SESSION for k in (
+        "name", "user_name", "system_prompt", "system_prompt_file",
+        "filler_verbosity",
+    )},
+    ("persona", "temperature"): APPLIES_RESTART,
+    ("persona", "max_tokens"): APPLIES_RESTART,
+    ("voice", "tts_backend"): APPLIES_RESTART,
+    ("voice", "tts_url"): APPLIES_RESTART,
+    ("voice", "tts_model"): APPLIES_RESTART,
+    ("voice", "tts_api_key"): APPLIES_RESTART,
+    ("voice", "voice"): APPLIES_NEXT_SESSION,
+    **{("stt", k): APPLIES_RESTART for k in _ALLOWED_STT_KEYS},
+}
+
+
+def applies_map(old: dict, new: dict) -> dict[str, str]:
+    """Per top-level block: when the keys that actually changed between
+    ``old`` and ``new`` take effect (worst case wins). Blocks with no
+    changed, classified key are omitted."""
+    out: dict[str, str] = {}
+    for block in ("persona", "voice", "llm", "stt"):
+        o = old.get(block) if isinstance(old.get(block), dict) else {}
+        n = new.get(block) if isinstance(new.get(block), dict) else {}
+        for key in set(o) | set(n):
+            if o.get(key) == n.get(key):
+                continue
+            verdict = _APPLIES.get((block, key))
+            if verdict is None:
+                continue
+            if block not in out or _APPLIES_RANK[verdict] > _APPLIES_RANK[out[block]]:
+                out[block] = verdict
+    return out
 
 
 def redact_secrets(cfg: dict) -> dict:
