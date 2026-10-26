@@ -46,6 +46,48 @@ logger = logging.getLogger(__name__)
 _RECOVERY_LINE = "Sorry — that one got garbled on my end. Say it again?"
 
 
+_NORMAL_FINISH = {"stop", "tool_calls", "function_call"}
+
+
+async def _log_stream_end(stream, model: str):
+    """Pass chunks through unchanged; WARN when the stream ended abnormally.
+
+    A reply that stops mid-sentence is otherwise indistinguishable from a
+    normal ``end_turn`` in the logs. Three shapes matter: a ``finish_reason``
+    other than stop/tool_calls (``length`` = budget hit, ``content_filter``),
+    EOF with no finish_reason at all (the gateway dropped the stream), and a
+    cancelled stream (barge-in) — the last is expected, so it logs at INFO.
+    """
+    finish = None
+    chars = 0
+    finished_cleanly = False
+    try:
+        async for chunk in stream:
+            for choice in chunk.choices or []:
+                if choice.finish_reason:
+                    finish = choice.finish_reason
+                delta = getattr(choice, "delta", None)
+                chars += len(getattr(delta, "content", None) or "")
+            yield chunk
+        finished_cleanly = True
+    except GeneratorExit:
+        logger.info("[llm-stream] cancelled model=%s after %d chars (barge-in?)", model, chars)
+        raise
+    finally:
+        if finished_cleanly:
+            if finish is None:
+                logger.warning(
+                    "[llm-stream] ended with NO finish_reason model=%s after %d chars "
+                    "— gateway dropped the stream; the reply may be cut off",
+                    model, chars,
+                )
+            elif finish not in _NORMAL_FINISH:
+                logger.warning(
+                    "[llm-stream] finish_reason=%s model=%s after %d chars "
+                    "— reply was cut off", finish, model, chars,
+                )
+
+
 class GuardedOpenAILLMService(OpenAILLMService):
     """``OpenAILLMService`` + the tool-loop guard + dead-turn recovery.
     Behaviourally identical on any healthy turn."""
@@ -58,6 +100,12 @@ class GuardedOpenAILLMService(OpenAILLMService):
         self, params_from_context: OpenAILLMInvocationParams
     ) -> dict:
         return apply_tool_loop_guard(super().build_chat_completion_params(params_from_context))
+
+    async def get_chat_completions(self, context):
+        return _log_stream_end(await super().get_chat_completions(context), self._settings_model())
+
+    def _settings_model(self) -> str:
+        return str(getattr(getattr(self, "_settings", None), "model", None) or "?")
 
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         # Streamed answer text is the ONLY output signal visible here: tool

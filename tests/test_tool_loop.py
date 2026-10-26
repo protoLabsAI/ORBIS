@@ -296,3 +296,65 @@ def test_mlx_applies_the_guard() -> None:
     src = Path("voice/llm/mlx.py").read_text()
     body = src.split("async def get_chat_completions", 1)[1].split("\nasync def ", 1)[0]
     assert "apply_tool_loop_guard(params, supports_tool_choice=False)" in body
+
+
+# --- stream-end logging ----------------------------------------------------
+
+import logging
+from types import SimpleNamespace
+
+import pytest
+
+from voice.llm.guarded import _log_stream_end
+
+
+def _chunk(text=None, finish=None):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=text), finish_reason=finish)]
+    )
+
+
+async def _agen(*chunks):
+    for c in chunks:
+        yield c
+
+
+async def _drain(stream):
+    return [c async for c in stream]
+
+
+@pytest.mark.asyncio
+async def test_clean_stop_logs_nothing(caplog):
+    with caplog.at_level(logging.INFO, logger="voice.llm.guarded"):
+        out = await _drain(_log_stream_end(_agen(_chunk("hi"), _chunk(None, "stop")), "m"))
+    assert len(out) == 2
+    assert not [r for r in caplog.records if "[llm-stream]" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_eof_without_finish_reason_warns(caplog):
+    with caplog.at_level(logging.INFO, logger="voice.llm.guarded"):
+        await _drain(_log_stream_end(_agen(_chunk("Want me to")), "m"))
+    (rec,) = [r for r in caplog.records if "[llm-stream]" in r.getMessage()]
+    assert rec.levelno == logging.WARNING
+    assert "NO finish_reason" in rec.getMessage() and "10 chars" in rec.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_length_finish_reason_warns(caplog):
+    with caplog.at_level(logging.INFO, logger="voice.llm.guarded"):
+        await _drain(_log_stream_end(_agen(_chunk("abc"), _chunk(None, "length")), "m"))
+    (rec,) = [r for r in caplog.records if "[llm-stream]" in r.getMessage()]
+    assert "finish_reason=length" in rec.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_is_info_not_warning(caplog):
+    stream = _log_stream_end(_agen(_chunk("abc"), _chunk("def")), "m")
+    with caplog.at_level(logging.INFO, logger="voice.llm.guarded"):
+        async for _ in stream:
+            break
+        await stream.aclose()
+    (rec,) = [r for r in caplog.records if "[llm-stream]" in r.getMessage()]
+    assert rec.levelno == logging.INFO and "cancelled" in rec.getMessage()
