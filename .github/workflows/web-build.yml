@@ -38,3 +38,6 @@ jobs:
 
       - name: Type-check + build
         run: bun run build
+
+      - name: Delegate connection UI regression
+        run: bun test tests/delegateConnection.test.tsx

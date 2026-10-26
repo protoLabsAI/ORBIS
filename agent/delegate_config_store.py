@@ -9,17 +9,17 @@ Safety:
   - Schema validation on write — same rules as
     ``agent/delegates.py:_parse_entry`` apply so a malformed UI POST
     can't brick the next boot's registry load
-  - **No credentials are ever stored or returned.** The schema only
-    references env-var *names* (``credentialsEnv`` / ``api_key_env``);
-    the actual values are pulled from the process environment at
-    registry-parse time. This makes the entire YAML safe to round-trip
-    through the API without redaction.
+  - Access tokens are stored in the owner-only (0600) YAML, like provider
+    keys in orbis.yaml. API responses redact them; redacted edits keep the
+    saved secret only for the same endpoint and authentication scheme.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -66,10 +66,14 @@ def read_delegates(path: str | Path | None = None) -> list[dict]:
         return []
     try:
         data = yaml.safe_load(p.read_text()) or {}
+    except OSError as e:
+        raise DelegateValidationError("Cannot read delegate settings. Check file permissions and try again.") from e
     except yaml.YAMLError as e:
         # Don't silently truncate the user's config — surface the parse
         # error so the API caller can decide what to do.
-        raise DelegateValidationError(f"YAML parse error in {p}: {e}") from e
+        raise DelegateValidationError(f"Cannot read delegate settings in {p}: invalid YAML") from e
+    if not isinstance(data, dict):
+        raise DelegateValidationError("Delegate settings must be a YAML mapping.")
     raw = data.get("delegates")
     if raw is None:
         return []
@@ -86,6 +90,58 @@ def read_delegates(path: str | Path | None = None) -> list[dict]:
                 f"[delegate_config_store] skipping non-dict entry: {entry!r}"
             )
     return out
+
+
+REDACTED = "__redacted__"
+
+
+def redact_entry(entry: dict) -> dict:
+    result = copy.deepcopy(entry)
+    auth = result.get("auth") or {}
+    if not isinstance(auth, dict):
+        result["auth"] = {}
+        auth = result["auth"]
+    if auth.get("credentials"):
+        auth["credentials"] = REDACTED
+    # Legacy invalid references may themselves be pasted secrets.
+    ref = auth.get("credentialsEnv")
+    if ref and (not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ref)):
+        auth["credentialsEnv"] = ""
+    if result.get("headers"):
+        result["headers"] = {k: REDACTED for k in result["headers"]}
+    return result
+
+
+def resolve_saved_credentials(entry: dict, path: str | Path | None = None) -> dict:
+    """Resolve UI sentinels for editing/testing without returning stored keys.
+
+    Never carry a saved credential to a changed URL or auth scheme. Explicit
+    empty values clear it; clients omitting an existing credential keep it.
+    """
+    result = copy.deepcopy(entry)
+    if not isinstance(result, dict):
+        return result
+    old = next((e for e in read_delegates(path) if e.get("name") == result.get("name")), {})
+    auth = result.get("auth")
+    if isinstance(auth, dict):
+        old_auth = old.get("auth") or {}
+        keep = auth.get("credentials") == REDACTED or (
+            "credentials" not in auth and old_auth.get("credentials") and not auth.get("credentialsEnv")
+        )
+        if keep:
+            if result.get("url") != old.get("url") or auth.get("scheme") != old_auth.get("scheme"):
+                raise DelegateValidationError("Endpoint or authentication changed. Paste the access token again to connect to this agent.")
+            if not old_auth.get("credentials"):
+                raise DelegateValidationError("No saved access token. Paste a token to connect.")
+            auth["credentials"] = old_auth["credentials"]
+    headers = result.get("headers")
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if value == REDACTED:
+                if result.get("url") != old.get("url") or key not in (old.get("headers") or {}):
+                    raise DelegateValidationError("Endpoint changed. Enter the custom authentication headers again.")
+                headers[key] = old["headers"][key]
+    return result
 
 
 def validate_entry(entry: dict) -> dict:
@@ -187,7 +243,7 @@ def upsert_delegate(
     the same on disk — the API surface chooses the HTTP verb based on
     whether the name already exists.
     """
-    normalized = validate_entry(entry)
+    normalized = validate_entry(resolve_saved_credentials(entry, path))
     current = read_delegates(path)
     out: list[dict] = [e for e in current if e.get("name") != normalized["name"]]
     out.append(normalized)

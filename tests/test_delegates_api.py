@@ -13,6 +13,8 @@ Atomic-write semantics covered separately at the config-store layer
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -40,6 +42,12 @@ def isolated_delegates_yaml(tmp_path, monkeypatch):
 @pytest.fixture
 def client(isolated_delegates_yaml):
     return TestClient(app)
+
+
+def _task_not_found(request):
+    body = json.loads(request.content)
+    assert body["method"] == "tasks/get"
+    return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32001, "message": "Task not found"}})
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +271,7 @@ def test_delete_missing_returns_404(client, isolated_delegates_yaml):
 
 
 def test_test_a2a_happy_path(client, isolated_delegates_yaml, respx_mock):
-    respx_mock.get("http://ava:3008/.well-known/agent-card.json").respond(
-        status_code=200,
-        json={"name": "ava", "version": "1.0.0"},
-    )
+    respx_mock.post("http://ava:3008/a2a").mock(side_effect=_task_not_found)
     r = client.post(
         "/api/delegates/test",
         json={
@@ -283,7 +288,7 @@ def test_test_a2a_happy_path(client, isolated_delegates_yaml, respx_mock):
 
 
 def test_test_a2a_auth_rejected(client, isolated_delegates_yaml, respx_mock):
-    respx_mock.get("http://ava:3008/.well-known/agent-card.json").respond(
+    respx_mock.post("http://ava:3008/a2a").respond(
         status_code=401,
     )
     r = client.post(
@@ -298,11 +303,11 @@ def test_test_a2a_auth_rejected(client, isolated_delegates_yaml, respx_mock):
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
-    assert "auth" in body["error"]
+    assert "Authentication" in body["error"]
 
 
 def test_test_a2a_unreachable(client, isolated_delegates_yaml, respx_mock):
-    respx_mock.get("http://ava:3008/.well-known/agent-card.json").mock(
+    respx_mock.post("http://ava:3008/a2a").mock(
         side_effect=httpx.ConnectError("connection refused"),
     )
     r = client.post(
@@ -316,7 +321,7 @@ def test_test_a2a_unreachable(client, isolated_delegates_yaml, respx_mock):
     )
     body = r.json()
     assert body["ok"] is False
-    assert "unreachable" in body["error"]
+    assert "Cannot reach" in body["error"]
 
 
 def test_test_openai_routes_to_llm_probe(client, isolated_delegates_yaml, respx_mock):
@@ -350,3 +355,120 @@ def test_test_schema_rejection_returns_ok_false(client, isolated_delegates_yaml)
     )
     body = r.json()
     assert body["ok"] is False
+
+
+def test_access_token_lifecycle_is_private_and_live(client, isolated_delegates_yaml, respx_mock):
+    payload = {'name': 'hub', 'type': 'a2a', 'description': 'Local brain', 'url': 'http://hub/a2a',
+               'auth': {'credentials': 'Bearer test-private-token'}}
+    created = client.post('/api/delegates', json=payload)
+    assert created.status_code == 200
+    assert 'test-private-token' not in created.text
+    assert isolated_delegates_yaml.stat().st_mode & 0o777 == 0o600
+    assert app_module._DELEGATES.get('hub').auth_headers()['Authorization'] == 'Bearer test-private-token'
+    saved = client.get('/api/delegates').json()['delegates'][0]
+    assert saved['auth']['credentials'] == '__redacted__'
+    route = respx_mock.post('http://hub/a2a').mock(side_effect=_task_not_found)
+    assert client.post('/api/delegates/test', json=saved).json()['ok']
+    assert route.calls[0].request.headers['Authorization'] == 'Bearer test-private-token'
+    saved['description'] = 'Updated description'
+    assert client.put('/api/delegates/hub', json=saved).status_code == 200
+    assert app_module._DELEGATES.get('hub').a2a_credential == 'test-private-token'
+    saved['url'] = 'http://other-agent/a2a'
+    rejected = client.post('/api/delegates/test', json=saved).json()
+    assert not rejected['ok']
+    assert 'Paste the access token again' in rejected['error']
+    assert client.put('/api/delegates/hub', json=saved).status_code == 400
+    saved['url'] = 'http://hub/a2a'
+    saved['auth']['credentials'] = ''
+    saved['auth']['scheme'] = None
+    assert client.put('/api/delegates/hub', json=saved).status_code == 200
+    assert not app_module._DELEGATES.get('hub').a2a_credential
+
+
+def test_pasted_secret_in_env_field_rejected_without_echo(client, isolated_delegates_yaml, caplog):
+    secret = '126e5a54-test-private-token'
+    entry = {'name': 'hub', 'type': 'a2a', 'description': 'Brain', 'url': 'http://hub/a2a',
+             'auth': {'scheme': 'bearer', 'credentialsEnv': secret}}
+    response = client.post('/api/delegates', json=entry)
+    assert response.status_code == 400
+    assert 'Access token' in response.json()['error']
+    assert secret not in response.text
+    assert not isolated_delegates_yaml.exists()
+    from agent.delegates import _parse_entry
+    assert _parse_entry(entry) is None
+    assert secret not in caplog.text
+
+
+def test_missing_environment_credential_never_reports_connected(client, monkeypatch):
+    monkeypatch.delenv('ORBIS_TEST_MISSING_KEY', raising=False)
+    result = client.post('/api/delegates/test', json={
+        'name': 'hub', 'type': 'a2a', 'description': 'Brain', 'url': 'http://hub/a2a',
+        'auth': {'scheme': 'bearer', 'credentialsEnv': 'ORBIS_TEST_MISSING_KEY'},
+    }).json()
+    assert not result['ok']
+    assert 'Access token missing' in result['error']
+
+
+def test_public_card_cannot_mask_rejected_rpc(client, respx_mock):
+    card = respx_mock.get('http://hub/.well-known/agent-card.json').respond(200, json={'name': 'hub'})
+    respx_mock.post('http://hub/a2a').respond(401)
+    result = client.post('/api/delegates/test', json={
+        'name': 'hub', 'type': 'a2a', 'description': 'Brain', 'url': 'http://hub/a2a',
+        'auth': {'credentials': 'wrong-token'},
+    }).json()
+    assert not result['ok']
+    assert result['status'] == 401
+    assert not card.called
+
+
+@pytest.mark.parametrize('url', ['http://127.0.0.1:7870/a2a', 'http://192.168.1.20/a2a'])
+def test_owner_can_connect_local_agents_without_redirecting_secrets(client, respx_mock, url):
+    target = respx_mock.post(url).respond(307, headers={'Location': 'http://other/a2a'}, text='private peer response')
+    redirected = respx_mock.post('http://other/a2a').respond(200)
+    response = client.post('/api/delegates/test', json={
+        'name': 'local', 'type': 'a2a', 'description': 'Local brain', 'url': url,
+        'auth': {'credentials': 'private-token'},
+    })
+    assert target.called
+    assert not redirected.called
+    assert not response.json()['ok']
+    assert 'private peer response' not in response.text
+    assert 'private-token' not in response.text
+
+
+def test_probe_unexpected_error_is_actionable_and_private(client, monkeypatch):
+    import agent.delegates
+    async def broken(*args, **kwargs):
+        raise RuntimeError('private-token')
+    monkeypatch.setattr(agent.delegates, 'probe', broken)
+    response = client.post('/api/delegates/test', json={
+        'name': 'local', 'type': 'a2a', 'description': 'Brain', 'url': 'http://localhost/a2a',
+    })
+    assert response.status_code == 200
+    assert not response.json()['ok']
+    assert 'try again' in response.json()['error']
+    assert 'private-token' not in response.text
+
+
+def test_discovery_excludes_default_ports(client, monkeypatch):
+    from agent import discovery
+    from agent.delegates import Delegate
+    monkeypatch.setattr(app_module._DELEGATES, 'all', lambda: [
+        Delegate(name='http', type='a2a', description='Brain', url='http://peer/a2a'),
+        Delegate(name='https', type='a2a', description='Brain', url='https://secure/a2a'),
+    ])
+    async def discover(*, known):
+        assert ('peer', 80) in known
+        assert ('secure', 443) in known
+        return []
+    monkeypatch.setattr(discovery, 'discover', discover)
+    assert client.get('/api/delegates/discover').json() == {'discovered': []}
+
+
+@pytest.mark.parametrize('method,path', [('get', '/api/delegates'), ('put', '/api/delegates/hub'), ('delete', '/api/delegates/hub')])
+def test_corrupt_settings_return_structured_error(client, isolated_delegates_yaml, method, path):
+    isolated_delegates_yaml.write_text('delegates: [')
+    kwargs = {'json': {}} if method == 'put' else {}
+    response = getattr(client, method)(path, **kwargs)
+    assert response.status_code >= 400
+    assert 'invalid YAML' in response.json()['error']

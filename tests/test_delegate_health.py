@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import json
+
 import httpx
 import pytest
 
@@ -24,6 +26,12 @@ from agent.delegates import (
 )
 
 
+def _task_not_found(request):
+    body = json.loads(request.content)
+    assert body["method"] == "tasks/get"
+    return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32001, "message": "Task not found"}})
+
+
 # ---------------------------------------------------------------------------
 # probe() — a2a path
 # ---------------------------------------------------------------------------
@@ -31,9 +39,7 @@ from agent.delegates import (
 
 @pytest.mark.asyncio
 async def test_probe_a2a_happy(respx_mock):
-    respx_mock.get("http://ava:3008/.well-known/agent-card.json").respond(
-        status_code=200, json={"name": "ava"},
-    )
+    respx_mock.post("http://ava:3008/a2a").mock(side_effect=_task_not_found)
     delegate = Delegate(
         name="ava", description="hi", type="a2a",
         url="http://ava:3008/a2a",
@@ -45,7 +51,7 @@ async def test_probe_a2a_happy(respx_mock):
 
 @pytest.mark.asyncio
 async def test_probe_a2a_auth_rejected(respx_mock):
-    respx_mock.get("http://ava:3008/.well-known/agent-card.json").respond(
+    respx_mock.post("http://ava:3008/a2a").respond(
         status_code=401,
     )
     delegate = Delegate(
@@ -55,19 +61,19 @@ async def test_probe_a2a_auth_rejected(respx_mock):
     )
     r = await probe(delegate)
     assert r["ok"] is False
-    assert "auth" in r["error"]
+    assert "Authentication" in r["error"]
     assert r["status"] == 401
 
 
 @pytest.mark.asyncio
 async def test_probe_a2a_unreachable(respx_mock):
-    respx_mock.get("http://ava/.well-known/agent-card.json").mock(
+    respx_mock.post("http://ava/a2a").mock(
         side_effect=httpx.ConnectError("connection refused"),
     )
     delegate = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
     r = await probe(delegate)
     assert r["ok"] is False
-    assert "unreachable" in r["error"]
+    assert "Cannot reach" in r["error"]
 
 
 @pytest.mark.asyncio
@@ -76,16 +82,14 @@ async def test_probe_a2a_malformed_url():
     delegate = Delegate(name="bad", description="hi", type="a2a", url="not a url")
     r = await probe(delegate)
     assert r["ok"] is False
-    assert "malformed" in r["error"]
+    assert "Malformed" in r["error"]
 
 
 @pytest.mark.asyncio
 async def test_probe_a2a_sends_auth_header(respx_mock):
     """Bearer scheme produces the right header so the probe matches
     what dispatch would actually use."""
-    route = respx_mock.get("http://ava/.well-known/agent-card.json").respond(
-        status_code=200, json={"name": "ava"},
-    )
+    route = respx_mock.post("http://ava/a2a").mock(side_effect=_task_not_found)
     delegate = Delegate(
         name="ava", description="hi", type="a2a", url="http://ava/a2a",
         auth_scheme="bearer", a2a_credential="secret-token",
@@ -99,12 +103,12 @@ async def test_probe_a2a_non_200_distinct_from_auth(respx_mock):
     """A 502 from the agent card endpoint is reported with the status
     code so the UI can distinguish "delegate is rebooting" from "key
     is wrong"."""
-    respx_mock.get("http://ava/.well-known/agent-card.json").respond(status_code=502)
+    respx_mock.post("http://ava/a2a").respond(status_code=502)
     delegate = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
     r = await probe(delegate)
     assert r["ok"] is False
     assert r["status"] == 502
-    assert "agent card HTTP" in r["error"]
+    assert "HTTP 502" in r["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +253,7 @@ def test_reload_keeps_health_when_only_description_changes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_loop_records_results_and_can_be_cancelled(respx_mock):
-    respx_mock.get("http://ava/.well-known/agent-card.json").respond(
-        status_code=200, json={"name": "ava"},
-    )
+    respx_mock.post("http://ava/a2a").mock(side_effect=_task_not_found)
     reg = DelegateRegistry(None)
     reg._items["ava"] = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
 
@@ -277,9 +279,7 @@ async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
     """If probing one delegate raises, the loop keeps going for the
     others and records the failure for the broken one."""
     metrics.reset()
-    respx_mock.get("http://good/.well-known/agent-card.json").respond(
-        status_code=200, json={"name": "good"},
-    )
+    respx_mock.post("http://good/a2a").mock(side_effect=_task_not_found)
     reg = DelegateRegistry(None)
     reg._items["good"] = Delegate(
         name="good", description="ok", type="a2a", url="http://good/a2a",
@@ -317,7 +317,7 @@ async def test_loop_survives_one_delegate_crashing(respx_mock, monkeypatch):
 @pytest.mark.asyncio
 async def test_default_loop_preserves_fleet_boot_grace(respx_mock):
     """The normal fleet loop must not touch delegates during startup."""
-    respx_mock.get("http://ava/.well-known/agent-card.json").respond(
+    respx_mock.post("http://ava/a2a").respond(
         status_code=503, text="warming up",
     )
     reg = DelegateRegistry(None)
@@ -503,9 +503,7 @@ async def test_startup_probe_skips_remote_named_hub(monkeypatch):
 async def test_loop_initial_delay_blocks_first_probe(respx_mock):
     """A non-zero initial delay means the cache stays empty until it
     elapses — operators can opt into this for a large remote fleet."""
-    respx_mock.get("http://ava/.well-known/agent-card.json").respond(
-        status_code=200, json={"name": "ava"},
-    )
+    respx_mock.post("http://ava/a2a").mock(side_effect=_task_not_found)
     reg = DelegateRegistry(None)
     reg._items["ava"] = Delegate(name="ava", description="hi", type="a2a", url="http://ava/a2a")
 
