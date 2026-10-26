@@ -3,6 +3,8 @@ import { useVoiceStateSelector, useEffectiveVoiceLifecycle } from '@/voice/hooks
 import { statusBus } from '@/shared/statusBus';
 import { voiceIsReady, voiceLifecycleText } from '@/voice/lifecycle';
 import { useThinkingText } from '@/voice/thinkingEscalation';
+import { useToolActivityText } from '@/voice/toolActivity';
+import { delegationTasks, liveCount } from '@/voice/delegationTasks';
 
 /**
  * Bottom-of-screen status hint.
@@ -31,9 +33,11 @@ export function StatusPill() {
   );
   // Elapsed-time escalation so a slow LLM doesn't sit on a static "thinking…".
   const thinkingLabel = useThinkingText(voiceState === 'thinking');
-  const delegationText = delegationProgress ?? (activeToolCall
-    ? formatActiveToolCall(activeToolCall)
-    : null);
+  const liveDelegations = liveCount(
+    useSyncExternalStore(delegationTasks.subscribe, delegationTasks.getSnapshot),
+  );
+  const toolText = useToolActivityText(activeToolCall, liveDelegations);
+  const delegationText = delegationProgress ?? toolText;
 
   // Auto-expire the externally-pushed transient once its TTL hits.
   useEffect(() => {
@@ -97,28 +101,4 @@ export function StatusPill() {
       {text}
     </div>
   );
-}
-
-function formatActiveToolCall(
-  call: { name: string; args: unknown },
-): string {
-  if (call.name === 'delegate_to') {
-    const target = readDelegateTarget(call.args);
-    // Just the target — the per-tool stream (which can be 6 tools deep in
-    // parallel) goes to the logs panel, not smeared across the status line.
-    return target ? `asking ${target}…` : 'delegating…';
-  }
-  if (call.name === 'adjust_personality') {
-    return 'adjusting personality…';
-  }
-  if (call.name === 'check_inbox') {
-    return 'checking inbox…';
-  }
-  return `${call.name}…`;
-}
-
-function readDelegateTarget(args: unknown): string | null {
-  if (typeof args !== 'object' || args === null) return null;
-  const target = (args as { target?: unknown }).target;
-  return typeof target === 'string' && target.length > 0 ? target : null;
 }
