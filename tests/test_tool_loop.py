@@ -326,3 +326,32 @@ def test_floor_does_not_mutate_input():
     src = {"tools": [{"x": 1}], "max_tokens": 150}
     floor_tool_max_tokens(src)
     assert src["max_tokens"] == 150
+
+
+# --- mid-context system messages -------------------------------------------
+
+
+def test_demote_midcontext_system_to_user() -> None:
+    from voice.llm.guarded import demote_midcontext_system
+
+    msgs = [
+        {"role": "system", "content": "persona"},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "[audio] calm"},
+        {"role": "user", "content": "again"},
+    ]
+    out = demote_midcontext_system({"messages": msgs})
+    assert [m["role"] for m in out["messages"]] == ["system", "user", "user", "user"]
+    assert out["messages"][2]["content"] == "[audio] calm"
+    assert msgs[2]["role"] == "system"  # input not mutated
+
+
+def test_demote_keeps_leading_system_block_and_clean_input() -> None:
+    from voice.llm.guarded import demote_midcontext_system
+
+    p = {"messages": [
+        {"role": "system", "content": "a"},
+        {"role": "system", "content": "b"},
+        {"role": "user", "content": "hi"},
+    ]}
+    assert demote_midcontext_system(p) is p
