@@ -46,6 +46,26 @@ logger = logging.getLogger(__name__)
 _RECOVERY_LINE = "Sorry — that one got garbled on my end. Say it again?"
 
 
+# Tool-call arguments count against max_tokens. The persona default of 150 is
+# right for a spoken sentence but truncates a delegate_to(query=...) mid-JSON
+# (live 2026-10-26: 150 tokens cut the call to 24 chars of args; the full
+# query needed ~480). So when tools are on offer, never go below this.
+TOOL_MAX_TOKENS_FLOOR = 1024
+_TOKEN_KEYS = ("max_tokens", "max_completion_tokens")
+
+
+def floor_tool_max_tokens(params: dict) -> dict:
+    """Raise a too-small token cap on a request that offers tools."""
+    if not params.get("tools"):
+        return params
+    out = dict(params)
+    for key in _TOKEN_KEYS:
+        val = out.get(key)
+        if isinstance(val, (int, float)) and 0 < val < TOOL_MAX_TOKENS_FLOOR:
+            out[key] = TOOL_MAX_TOKENS_FLOOR
+    return out
+
+
 class GuardedOpenAILLMService(OpenAILLMService):
     """``OpenAILLMService`` + the tool-loop guard + dead-turn recovery.
     Behaviourally identical on any healthy turn."""
@@ -57,7 +77,8 @@ class GuardedOpenAILLMService(OpenAILLMService):
     def build_chat_completion_params(
         self, params_from_context: OpenAILLMInvocationParams
     ) -> dict:
-        return apply_tool_loop_guard(super().build_chat_completion_params(params_from_context))
+        params = super().build_chat_completion_params(params_from_context)
+        return floor_tool_max_tokens(apply_tool_loop_guard(params))
 
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         # Streamed answer text is the ONLY output signal visible here: tool
