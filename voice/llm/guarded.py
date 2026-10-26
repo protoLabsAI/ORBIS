@@ -66,6 +66,33 @@ def floor_tool_max_tokens(params: dict) -> dict:
     return out
 
 
+def demote_midcontext_system(params: dict) -> dict:
+    """Send any ``role: system`` message after the first non-system one as
+    ``role: user``.
+
+    Components inject per-turn context mid-conversation as system messages
+    (``AudioTagsTap``'s ``[audio]`` line). The protoLabs gateway 400s on that
+    ("System message must be at the beginning"), and its whole fallback chain
+    fails the same way, so the turn dies after the tools already ran (live
+    2026-10-26). The leading system block is untouched.
+    """
+    msgs = params.get("messages")
+    if not isinstance(msgs, list):
+        return params
+    seen_other = False
+    out = []
+    changed = False
+    for m in msgs:
+        role = m.get("role") if isinstance(m, dict) else None
+        if role == "system" and seen_other:
+            m = {**m, "role": "user"}
+            changed = True
+        elif role != "system":
+            seen_other = True
+        out.append(m)
+    return {**params, "messages": out} if changed else params
+
+
 class GuardedOpenAILLMService(OpenAILLMService):
     """``OpenAILLMService`` + the tool-loop guard + dead-turn recovery.
     Behaviourally identical on any healthy turn."""
@@ -78,6 +105,7 @@ class GuardedOpenAILLMService(OpenAILLMService):
         self, params_from_context: OpenAILLMInvocationParams
     ) -> dict:
         params = super().build_chat_completion_params(params_from_context)
+        params = demote_midcontext_system(params)
         return floor_tool_max_tokens(apply_tool_loop_guard(params))
 
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
