@@ -296,3 +296,33 @@ def test_mlx_applies_the_guard() -> None:
     src = Path("voice/llm/mlx.py").read_text()
     body = src.split("async def get_chat_completions", 1)[1].split("\nasync def ", 1)[0]
     assert "apply_tool_loop_guard(params, supports_tool_choice=False)" in body
+
+
+# --- tool-call token floor ---------------------------------------------------
+
+from voice.llm.guarded import TOOL_MAX_TOKENS_FLOOR, floor_tool_max_tokens
+
+
+def test_floor_raises_small_cap_when_tools_offered():
+    out = floor_tool_max_tokens({"tools": [{"x": 1}], "max_tokens": 150})
+    assert out["max_tokens"] == TOOL_MAX_TOKENS_FLOOR
+
+
+def test_floor_covers_max_completion_tokens():
+    out = floor_tool_max_tokens({"tools": [{"x": 1}], "max_completion_tokens": 200})
+    assert out["max_completion_tokens"] == TOOL_MAX_TOKENS_FLOOR
+
+
+def test_floor_leaves_larger_cap_and_no_tools_alone():
+    big = {"tools": [{"x": 1}], "max_tokens": 4096}
+    assert floor_tool_max_tokens(big) == big
+    plain = {"max_tokens": 150}
+    assert floor_tool_max_tokens(plain) == plain
+    unset = {"tools": [{"x": 1}]}
+    assert floor_tool_max_tokens(unset) == unset
+
+
+def test_floor_does_not_mutate_input():
+    src = {"tools": [{"x": 1}], "max_tokens": 150}
+    floor_tool_max_tokens(src)
+    assert src["max_tokens"] == 150
