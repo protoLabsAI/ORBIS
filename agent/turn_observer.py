@@ -42,6 +42,7 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import TTFAMetricsData, TTFBMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
@@ -89,6 +90,7 @@ class _Turn:
         self.n = n
         self.started = started
         self.user_stop: float | None = None
+        self.vad_stop: float | None = None
         self.stt_at: float | None = None
         self.stt_chars = 0
         self.llm_start: float | None = None
@@ -149,6 +151,8 @@ class TurnObserver(BaseObserver):
             self._on_user_started(now)
         elif t is None:
             return
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            t.vad_stop = now
         elif isinstance(frame, UserStoppedSpeakingFrame):
             t.user_stop = now
         elif isinstance(frame, TranscriptionFrame):
@@ -234,8 +238,13 @@ class TurnObserver(BaseObserver):
         if forced_stop == "interrupted" and t.error_pending:
             stop = "error"
 
+        # Batch STT hands the transcript to the turn strategy, which only then
+        # emits UserStoppedSpeakingFrame, so user_stop is ~0 or slightly after
+        # the transcript. VAD stop is the last frame before STT starts.
         stt = (
-            None if t.user_stop is None or t.stt_at is None else t.stt_at - t.user_stop
+            None
+            if t.vad_stop is None or t.stt_at is None
+            else max(t.stt_at - t.vad_stop, 0.0)
         )
         llm_total = (
             None
@@ -273,6 +282,7 @@ class TurnObserver(BaseObserver):
 _HANDLED = (
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
     TranscriptionFrame,
     LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,

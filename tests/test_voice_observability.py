@@ -19,6 +19,7 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.metrics.metrics import TTFAMetricsData, TTFBMetricsData
 from pipecat.observers.base_observer import FramePushed
@@ -119,7 +120,8 @@ async def test_turn_summary_line_assembled(caplog):
             clock,
             [
                 (0, UserStartedSpeakingFrame()),
-                (1.0, UserStoppedSpeakingFrame()),
+                (1.0, VADUserStoppedSpeakingFrame()),
+                (0, UserStoppedSpeakingFrame()),
                 (1.0, TranscriptionFrame("hello there how are", "u", "t")),
                 (0.1, LLMFullResponseStartFrame()),
                 (0.9, LLMTextFrame("Hi! ")),
@@ -402,3 +404,29 @@ def test_diagnostics_includes_config_banner(client):
     c, _ = client
     banner = c.get("/api/diagnostics").json()["config_banner"]
     assert {"path", "mtime", "env_fallbacks_used", "version"} <= set(banner)
+
+
+@pytest.mark.asyncio
+async def test_stt_time_is_measured_from_vad_stop_not_turn_stop(caplog) -> None:
+    """Batch STT: the transcript lands *before* UserStoppedSpeakingFrame, so
+    anchoring on the latter reported ``stt=-0.00s``."""
+    clock = _Clock()
+    obs = TurnObserver(clock=clock)
+    with caplog.at_level(logging.INFO, logger="agent.turn_observer"):
+        await _run(
+            obs,
+            clock,
+            [
+                (0, UserStartedSpeakingFrame()),
+                (1.0, VADUserStoppedSpeakingFrame()),
+                (0.4, TranscriptionFrame("hello", "u", "t")),
+                (0, UserStoppedSpeakingFrame()),
+                (0.1, LLMFullResponseStartFrame()),
+                (0.1, LLMTextFrame("Hi.")),
+                (0.1, LLMFullResponseEndFrame()),
+                (0.1, BotStartedSpeakingFrame()),
+                (0.1, BotStoppedSpeakingFrame()),
+            ],
+        )
+    (rec,) = _turn_lines(caplog)
+    assert "stt=0.40s(5ch)" in rec.getMessage()
