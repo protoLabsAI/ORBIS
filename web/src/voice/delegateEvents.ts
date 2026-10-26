@@ -36,7 +36,7 @@ export function initialDelegateLifecycle(): DelegateLifecycleState {
   return { activeTaskKey: null, taskOrder: [], terminalTaskKeys: [] };
 }
 
-function eventIdentity(payload: Record<string, unknown>): {
+export function eventIdentity(payload: Record<string, unknown>): {
   delegateId: string;
   taskKey: string;
   taskId: string;

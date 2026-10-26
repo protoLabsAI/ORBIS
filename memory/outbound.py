@@ -118,6 +118,28 @@ class OutboundTasksDAL:
         )
         return list(cur.fetchall())
 
+    def recent(self, limit: int = 20, *, terminal_hours: int = 24) -> list[sqlite3.Row]:
+        """Live tasks plus recently-terminal ones, newest-updated first.
+
+        Feeds the delegations widget. Bounded: ``limit`` is clamped to
+        1..100, and terminal rows older than ``terminal_hours`` are left
+        out (live rows are always included, even if stale — ``prune()``
+        owns expiring them).
+        """
+        limit = max(1, min(int(limit), 100))
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=terminal_hours)).isoformat()
+        cur = self.conn.execute(
+            f"""
+            SELECT * FROM outbound_tasks
+            WHERE status IN ({','.join('?' * len(LIVE_STATUSES))})
+               OR updated_at >= ?
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (*LIVE_STATUSES, cutoff, limit),
+        )
+        return list(cur.fetchall())
+
     def prune(self, *, keep_days: int = 7, live_ttl_hours: int = 24) -> int:
         """Housekeeping: delete terminal rows older than ``keep_days``;
         expire live rows not updated within ``live_ttl_hours`` (a remote

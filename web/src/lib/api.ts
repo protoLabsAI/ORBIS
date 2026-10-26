@@ -19,6 +19,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { authHeaders } from '@/auth/apiKey';
 import { logBus } from '@/shared/logBus';
+import type { DelegationRow } from '@/voice/delegationTasks';
 
 /**
  * Resolve the sidecar's loopback base URL.
@@ -509,6 +510,8 @@ export const api = {
   personality: () => get<PersonalityState>('/api/personality'),
   selectStarter: (slug: string) =>
     postJSON<{ ok: boolean; starter: StarterOrb }>('/api/orb/select_starter', { slug }),
+  delegations: (limit = 20) =>
+    get<{ tasks: DelegationRow[] }>(`/api/delegations?limit=${limit}`),
   personas: () => get<PersonasResponse>('/api/personas'),
   setActivePersona: (slug: string) =>
     postJSON<PersonaSwitchResult>('/api/personas/active', { slug }),

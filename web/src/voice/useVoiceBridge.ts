@@ -42,6 +42,7 @@ import {
   initialDelegateLifecycle,
   reduceDelegateEvent,
 } from './delegateEvents';
+import { delegationTasks } from './delegationTasks';
 
 interface SsePayload {
   event: string;
@@ -164,6 +165,9 @@ export function handleSse(event: string, data: string): void {
     case 'delegate.status':
     case 'delegate.tool':
     case 'delegate.delta': {
+      // Per-task list for the delegations widget (independent of the
+      // single-task progress rail below).
+      delegationTasks.ingest(event, parsed);
       const reduced = reduceDelegateEvent(delegateLifecycle, event, parsed);
       delegateLifecycle = reduced.lifecycle;
       const presentation = reduced.presentation;

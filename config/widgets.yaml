@@ -16,3 +16,7 @@ widgets:
     props:
       - name: location
         description: a city name
+
+  - id: delegations
+    title: Delegations
+    description: live and recently finished tasks handed off to other agents, with status and elapsed time
