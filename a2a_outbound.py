@@ -69,7 +69,11 @@ _STATE_NAMES = {
 
 
 class A2ADispatchError(Exception):
-    """Outbound A2A failure. The caller speaks the message back to the user."""
+    """Outbound A2A failure. A started task must never be blindly replayed."""
+
+    def __init__(self, message: str, *, task_started: bool = False):
+        super().__init__(message)
+        self.task_started = task_started
 
 
 class A2ADispatchTimeout(A2ADispatchError):
@@ -382,6 +386,7 @@ class A2AClient:
         message_text = ""
         final_state = None
         resolved_task_id = task_id
+        received_event = False
         resolved_ctx = ctx
         last_progress_at = 0.0
         last_progress = ""
@@ -456,9 +461,10 @@ class A2AClient:
         async def _consume() -> None:
             nonlocal final_task, artifact_text, status_text, message_text
             nonlocal final_state, resolved_task_id, resolved_ctx
-            nonlocal last_progress_at, last_progress
+            nonlocal last_progress_at, last_progress, received_event
             ev_count = 0
             async for resp in client.send_message(request):
+                received_event = True
                 # Terminal state is authoritative for the result as well as
                 # presentation. Late stream frames must not regress the durable
                 # handle or bypass the tombstone through legacy progress.
@@ -561,19 +567,37 @@ class A2AClient:
                         message_text += _part_text(p)
                     await _emit_parts(resp.message.parts)
 
+        async def _consume_with_optional_push() -> None:
+            try:
+                await _consume()
+            except Exception as exc:
+                from a2a.utils.errors import InternalError, PushNotificationNotSupportedError
+                # These SDK errors are raised during push registration, before
+                # execution. Do not retry timeouts, auth errors, or any stream
+                # that already produced an event: that could duplicate work.
+                rejected_push = isinstance(exc, PushNotificationNotSupportedError) or (
+                    isinstance(exc, InternalError)
+                    and str(exc).startswith("push-notification callback url is not allowed:")
+                )
+                if not push_notification_url or received_event or task_id or not rejected_push:
+                    raise
+                logger.info("[a2a/%s] peer declined optional callbacks; using response stream", self.name)
+                request.configuration.ClearField("task_push_notification_config")
+                await _consume()
+
         # Enforce the wall-clock bound. A buffer-then-answer gateway (Ava routes
         # through the fleet) can hold the response; without this the await could
         # wedge the caller — which, on the voice loop, looked like ORBIS "going
         # silent" mid-turn. The async/orchestrate paths run this in the
         # background, so the cap just stops a runaway task, never the voice loop.
         try:
-            await asyncio.wait_for(_consume(), timeout=timeout)
+            await asyncio.wait_for(_consume_with_optional_push(), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise A2ADispatchTimeout(
-                f"{self.name}: no response within {timeout:.0f}s"
+                f"{self.name}: no response within {timeout:.0f}s", task_started=received_event or bool(task_id)
             ) from exc
         except Exception as exc:  # noqa: BLE001
-            raise A2ADispatchError(f"{self.name}: send failed: {exc}") from exc
+            raise A2ADispatchError(f"{self.name}: send failed: {exc}", task_started=received_event or bool(task_id)) from exc
 
         # Latest state seen across ALL events wins — in the streaming shape the
         # initial `task` is `submitted`, and the terminal state arrives later as
