@@ -18,6 +18,12 @@ const EXACT: Record<string, string | ((args: Args) => string)> = {
   check_inbox: 'checking inbox',
   adjust_personality: 'adjusting personality',
   set_orb_visual: 'restyling the orb',
+  switch_persona: 'switching persona',
+  orchestrate: 'working on it',
+  schedule_reminder: 'setting a reminder',
+  schedule_recurring_reminder: 'setting a reminder',
+  list_reminders: 'checking reminders',
+  cancel_reminder: 'cancelling a reminder',
   delegate_to: (args) => {
     const target = readString(args, 'target');
     return target ? `asking ${target}` : 'delegating';
@@ -114,5 +120,5 @@ export function useToolActivityText(
       if (interval !== undefined) window.clearInterval(interval);
     };
   }, [call]);
-  return call ? toolActivityText(call.name, call.args, elapsed,liveDelegations) : null;
+  return call ? toolActivityText(call.name, call.args, elapsed, liveDelegations) : null;
 }

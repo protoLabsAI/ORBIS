@@ -12,6 +12,14 @@ describe('humanizeToolCall', () => {
     expect(humanizeToolCall('adjust_personality')).toBe('adjusting personality');
   });
 
+  test('every shipped voice tool has a sensible phrase', () => {
+    expect(humanizeToolCall('cancel_reminder')).toBe('cancelling a reminder');
+    expect(humanizeToolCall('list_reminders')).toBe('checking reminders');
+    expect(humanizeToolCall('schedule_reminder')).toBe('setting a reminder');
+    expect(humanizeToolCall('switch_persona')).toBe('switching persona');
+    expect(humanizeToolCall('orchestrate')).toBe('working on it');
+  });
+
   test('delegate_to names its target, else generic', () => {
     expect(humanizeToolCall('delegate_to', { target: 'protoagent' })).toBe('asking protoagent');
     expect(humanizeToolCall('delegate_to', {})).toBe('delegating');
