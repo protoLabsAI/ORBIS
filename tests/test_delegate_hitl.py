@@ -221,3 +221,16 @@ async def test_hitl_resume_progress_lease_ends_on_completion_or_supersession(
     await callback(working)
     assert delivery.events == ([working] if superseded else [working, done])
     assert bool(delivery.spoken) is not superseded
+
+
+def test_input_required_result_is_framed_for_the_llm() -> None:
+    from types import SimpleNamespace
+
+    from agent.delegate_adapters import _spoken_result
+
+    ask = SimpleNamespace(input_required=True, text="Approve shell command?")
+    out = _spoken_result(ask)
+    assert out.endswith("Approve shell command?")
+    assert "next spoken reply" in out
+    done = SimpleNamespace(input_required=False, text="all good")
+    assert _spoken_result(done) == "all good"
