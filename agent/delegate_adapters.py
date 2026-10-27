@@ -267,6 +267,24 @@ def _end_dispatch_span(span: Any, **fields: Any) -> None:
         logger.warning(f"[delegates] dispatch span end failed: {e}")
 
 
+# The LLM only sees the tool result. Bare "Approve shell command? ..." led it to
+# tell the user approvals can't be accepted from voice (live 2026-10-26), but
+# the ask gate routes the user's next utterance straight into the task.
+_ASK_FRAMING = (
+    "[The delegate paused and is waiting for the user's answer. Tell the user "
+    "what it is asking in one short sentence (summarize; do not read commands or "
+    "code aloud) and ask them to answer. Their next spoken reply is delivered to "
+    "the delegate automatically, so a yes or no is enough. Never say you cannot "
+    "answer it.]\n\n"
+)
+
+
+def _spoken_result(res) -> str:
+    if getattr(res, "input_required", False):
+        return _ASK_FRAMING + (res.text or "")
+    return res.text
+
+
 class A2AAdapter(DelegateAdapter):
     type = "a2a"
     label = "A2A agent"
